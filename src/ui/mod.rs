@@ -37,6 +37,7 @@ use crate::reports;
 use crate::scanner;
 
 use app::{EyeAnimation, EyeFrame, OperationState, OperationType, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
+use helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
 use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 // ============================================================================
@@ -796,88 +797,6 @@ fn render_eye(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         .style(Style::default().fg(Color::Cyan))
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(eye_para, area);
-}
-
-/// Truncate a file path for display, UTF-8 safe
-fn truncate_path_display(path: &str, max_len: usize) -> String {
-    if path.chars().count() <= max_len {
-        return path.to_string();
-    }
-
-    // Take the last max_len-3 characters
-    let chars: Vec<char> = path.chars().collect();
-    let start = chars.len().saturating_sub(max_len - 3);
-    let truncated: String = chars[start..].iter().collect();
-    format!("...{}", truncated)
-}
-
-/// Format bytes using binary SI units (KiB, MiB, GiB, TiB)
-fn format_bytes_binary(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    const TIB: f64 = GIB * 1024.0;
-
-    let bytes_f = bytes as f64;
-    if bytes_f >= TIB {
-        format!("{:.2} TiB", bytes_f / TIB)
-    } else if bytes_f >= GIB {
-        format!("{:.2} GiB", bytes_f / GIB)
-    } else if bytes_f >= MIB {
-        format!("{:.1} MiB", bytes_f / MIB)
-    } else if bytes_f >= KIB {
-        format!("{:.0} KiB", bytes_f / KIB)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-/// Format ETA as mm:ss or h:mm:ss
-fn format_eta(seconds: u64) -> String {
-    if seconds >= 3600 {
-        let hours = seconds / 3600;
-        let mins = (seconds % 3600) / 60;
-        let secs = seconds % 60;
-        format!("{}:{:02}:{:02}", hours, mins, secs)
-    } else {
-        let mins = seconds / 60;
-        let secs = seconds % 60;
-        format!("{}:{:02}", mins, secs)
-    }
-}
-
-/// Calculate rolling average throughput in MiB/s from recent samples
-/// Uses samples from the last `window_secs` seconds
-fn calculate_rolling_throughput(samples: &VecDeque<(Instant, u64)>, window_secs: u64) -> Option<f64> {
-    if samples.len() < 2 {
-        return None;
-    }
-
-    let now = Instant::now();
-    let window_start = now - std::time::Duration::from_secs(window_secs);
-
-    // Find samples within the window
-    let samples_in_window: Vec<_> = samples
-        .iter()
-        .filter(|(t, _)| *t >= window_start)
-        .collect();
-
-    if samples_in_window.len() < 2 {
-        return None;
-    }
-
-    let first = samples_in_window.first()?;
-    let last = samples_in_window.last()?;
-
-    let time_diff = last.0.duration_since(first.0).as_secs_f64();
-    if time_diff < 0.1 {
-        return None;
-    }
-
-    let bytes_diff = last.1.saturating_sub(first.1);
-    let mib_per_sec = (bytes_diff as f64 / (1024.0 * 1024.0)) / time_diff;
-
-    Some(mib_per_sec)
 }
 
 // ============================================================================

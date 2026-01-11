@@ -959,6 +959,252 @@ impl App {
             }
         }
 
+        // Phase 1.5: FINGERPRINT DEDUP DIR SELECT INPUT HANDLERS
+        if let MenuState::FingerprintDedupDirSelect {
+            ref mut current_input,
+            ref mut selected_dirs,
+            ref mut error_message,
+        } = self.current_view
+        {
+            match key.code {
+                KeyCode::Char(c) => {
+                    current_input.push(c);
+                    *error_message = None; // Clear error on new input
+                    return;
+                }
+                KeyCode::Backspace => {
+                    current_input.pop();
+                    *error_message = None;
+                    return;
+                }
+                KeyCode::Enter => {
+                    if current_input.is_empty() {
+                        // Empty input - confirm and proceed
+                        if selected_dirs.is_empty() {
+                            *error_message = Some("No directories selected".to_string());
+                            return;
+                        }
+
+                        // Start conflict resolution
+                        if let Some(cfg) = &self.config {
+                            let corpus_root = cfg.corpus_root.clone();
+                            let lost_found_root = match &cfg.lost_files_dir {
+                                Some(path) => path.clone(),
+                                None => {
+                                    *error_message = Some(
+                                        "FATAL: lost-files directory not configured".to_string(),
+                                    );
+                                    return;
+                                }
+                            };
+
+                            // Find conflict sets
+                            match config::get_db_path() {
+                                Ok(db_path) => match Database::open(&db_path) {
+                                    Ok(db) => {
+                                        match crate::deduplication::find_fingerprint_duplicates(
+                                            &db,
+                                            selected_dirs,
+                                            &corpus_root,
+                                        ) {
+                                            Ok(conflict_sets) => {
+                                                if conflict_sets.is_empty() {
+                                                    self.status_message = Some(
+                                                        "No duplicate fingerprints found"
+                                                            .to_string(),
+                                                    );
+                                                    self.current_view = MenuState::CorpusTriageMenu;
+                                                    self.menu_state.select(Some(0));
+                                                    return;
+                                                }
+
+                                                let total_sets = conflict_sets.len();
+                                                self.current_view =
+                                                    MenuState::FingerprintDedupResolve {
+                                                        conflict_sets,
+                                                        current_set_idx: 0,
+                                                        session_stats:
+                                                            crate::deduplication::SessionStats {
+                                                                total_sets,
+                                                                ..Default::default()
+                                                            },
+                                                        input_buffer: String::new(),
+                                                        corpus_root,
+                                                        lost_found_root,
+                                                    };
+                                                return;
+                                            }
+                                            Err(e) => {
+                                                *error_message =
+                                                    Some(format!("Error finding duplicates: {}", e));
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        *error_message =
+                                            Some(format!("Database error: {}", e));
+                                        return;
+                                    }
+                                },
+                                Err(e) => {
+                                    *error_message = Some(format!("Config error: {}", e));
+                                    return;
+                                }
+                            }
+                        } else {
+                            *error_message = Some("Config not loaded".to_string());
+                            return;
+                        }
+                    } else {
+                        // Validate and add directory
+                        let path = PathBuf::from(current_input.as_str());
+
+                        // Check if path exists
+                        if !path.exists() {
+                            *error_message = Some(format!("Path does not exist: {:?}", path));
+                            return;
+                        }
+
+                        // Check if path is within corpus root
+                        if let Some(cfg) = &self.config {
+                            if !path.starts_with(&cfg.corpus_root) {
+                                *error_message = Some(format!(
+                                    "Path must be within corpus root: {:?}",
+                                    cfg.corpus_root
+                                ));
+                                return;
+                            }
+
+                            // Add to list
+                            selected_dirs.push(path);
+                            current_input.clear();
+                            *error_message = None;
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Phase 1.6: FINGERPRINT DEDUP RESOLVE HANDLERS
+        // Need to handle state transitions specially to avoid borrow conflicts
+        let should_transition_to_stats = if let MenuState::FingerprintDedupResolve {
+            conflict_sets,
+            current_set_idx,
+            session_stats,
+            input_buffer,
+            corpus_root,
+            lost_found_root,
+        } = &mut self.current_view
+        {
+            match key.code {
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    input_buffer.push(c);
+                    return;
+                }
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    // Skip current conflict
+                    session_stats.skipped_count += 1;
+                    *current_set_idx += 1;
+
+                    // Check if done
+                    *current_set_idx >= conflict_sets.len()
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    // Quit early and show stats
+                    true
+                }
+                KeyCode::Enter => {
+                    // Process selection
+                    if let Ok(selection) = input_buffer.parse::<usize>() {
+                        if *current_set_idx >= conflict_sets.len() {
+                            return;
+                        }
+
+                        let current_set = &conflict_sets[*current_set_idx];
+
+                        // Validate selection (1-indexed)
+                        if selection < 1 || selection > current_set.conflict_dirs.len() {
+                            self.status_message =
+                                Some(format!("Invalid selection: {}", selection));
+                            input_buffer.clear();
+                            return;
+                        }
+
+                        // Get winner directory (convert to 0-indexed)
+                        let winner_dir = current_set.conflict_dirs[selection - 1].clone();
+                        let current_set_clone = current_set.clone();
+                        let corpus_root_clone = corpus_root.clone();
+                        let lost_found_clone = lost_found_root.clone();
+
+                        // Resolve conflict
+                        let should_transition = match crate::deduplication::resolve_conflict_set(
+                            &current_set_clone,
+                            &winner_dir,
+                            &corpus_root_clone,
+                            &lost_found_clone,
+                        ) {
+                            Ok(stats) => {
+                                session_stats.resolved_count += 1;
+                                session_stats.files_moved += stats.files_moved;
+                                session_stats.files_kept += stats.files_kept;
+
+                                // Move to next conflict
+                                *current_set_idx += 1;
+
+                                // Check if done
+                                *current_set_idx >= conflict_sets.len()
+                            }
+                            Err(e) => {
+                                self.status_message =
+                                    Some(format!("Error resolving conflict: {}", e));
+                                false
+                            }
+                        };
+
+                        input_buffer.clear();
+                        should_transition
+                    } else {
+                        self.status_message = Some("Invalid input".to_string());
+                        input_buffer.clear();
+                        false
+                    }
+                }
+                KeyCode::Backspace => {
+                    input_buffer.pop();
+                    return;
+                }
+                KeyCode::Esc => {
+                    // Show stats for partial session
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+
+        // Now handle the state transition if needed
+        if should_transition_to_stats {
+            if let MenuState::FingerprintDedupResolve {
+                session_stats,
+                lost_found_root,
+                ..
+            } = &self.current_view
+            {
+                let stats_clone = session_stats.clone();
+                let lost_found_clone = lost_found_root.clone();
+
+                self.current_view = MenuState::FingerprintDedupStats {
+                    stats: stats_clone,
+                    lost_found_path: lost_found_clone,
+                };
+            }
+            return;
+        }
+
         // Phase 2: Handle SaveConfirmationModal keyboard input
         if let MenuState::SaveConfirmationModal {
             ref mut selected_button,

@@ -3,7 +3,7 @@
 //! Provides fingerprint-based deduplication for surgical duplicate removal
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,123 @@ pub struct SessionStats {
     pub skipped_count: usize,
     pub files_moved: usize,
     pub files_kept: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectoryCluster {
+    pub directories: Vec<String>,           // Directory names in this cluster
+    pub shared_fingerprints: Vec<String>,   // Fingerprints shared by these dirs
+    pub track_count: usize,                 // Total tracks across all dirs in cluster
+    pub example_track: String,              // Sample filename for display
+}
+
+/// Compute non-transitive directory clusters from conflict sets
+/// Returns clusters sorted by: directory count desc, then track count desc
+///
+/// A cluster is formed by directories that share duplicate fingerprints.
+/// Uses BFS to find connected components in the directory overlap graph.
+/// Non-transitive: only direct connections matter (A-B and B-C don't imply A-C).
+pub fn compute_directory_clusters(
+    conflict_sets: &[ConflictSet],
+) -> Vec<DirectoryCluster> {
+    // Step 1: Build adjacency map (dir -> set of other dirs it shares dupes with)
+    let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for conflict_set in conflict_sets {
+        let dirs = &conflict_set.conflict_dirs;
+
+        // Add each pair of directories as adjacent
+        for i in 0..dirs.len() {
+            for j in i+1..dirs.len() {
+                adjacency.entry(dirs[i].clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(dirs[j].clone());
+
+                adjacency.entry(dirs[j].clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(dirs[i].clone());
+            }
+        }
+    }
+
+    // Step 2: Find connected components (non-transitive clustering)
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut clusters: Vec<DirectoryCluster> = Vec::new();
+
+    for dir in adjacency.keys() {
+        if visited.contains(dir) {
+            continue;
+        }
+
+        // BFS to find all connected directories
+        let mut cluster_dirs: HashSet<String> = HashSet::new();
+        let mut queue: VecDeque<String> = VecDeque::new();
+
+        queue.push_back(dir.clone());
+        visited.insert(dir.clone());
+
+        while let Some(current) = queue.pop_front() {
+            cluster_dirs.insert(current.clone());
+
+            if let Some(neighbors) = adjacency.get(&current) {
+                for neighbor in neighbors {
+                    if !visited.contains(neighbor) {
+                        visited.insert(neighbor.clone());
+                        queue.push_back(neighbor.clone());
+                    }
+                }
+            }
+        }
+
+        // Step 3: Find shared fingerprints for this cluster
+        let mut shared_fingerprints = Vec::new();
+        let mut track_count = 0;
+        let mut example_track = None;
+
+        for conflict_set in conflict_sets {
+            // Check if this conflict_set involves any dirs in this cluster
+            let involves_cluster = conflict_set.conflict_dirs.iter()
+                .any(|d| cluster_dirs.contains(d));
+
+            if involves_cluster {
+                shared_fingerprints.push(conflict_set.fingerprint.clone());
+
+                // Count tracks
+                for (dir, tracks) in &conflict_set.tracks_by_dir {
+                    if cluster_dirs.contains(dir) {
+                        track_count += tracks.len();
+
+                        if example_track.is_none() && !tracks.is_empty() {
+                            example_track = Some(
+                                tracks[0].path
+                                    .rsplit('/')
+                                    .next()
+                                    .unwrap_or("unknown")
+                                    .to_string()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        clusters.push(DirectoryCluster {
+            directories: cluster_dirs.into_iter().collect(),
+            shared_fingerprints,
+            track_count,
+            example_track: example_track.unwrap_or_else(|| "unknown".to_string()),
+        });
+    }
+
+    // Step 4: Sort clusters by directory count desc, then track count desc
+    clusters.sort_by(|a, b| {
+        match b.directories.len().cmp(&a.directories.len()) {
+            std::cmp::Ordering::Equal => b.track_count.cmp(&a.track_count),
+            other => other,
+        }
+    });
+
+    clusters
 }
 
 /// Find all fingerprint duplicates in selected directories

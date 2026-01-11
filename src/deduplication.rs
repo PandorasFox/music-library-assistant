@@ -157,6 +157,120 @@ fn extract_conflict_key(path: &Path, corpus_root: &Path, divergence_idx: usize) 
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Auto-remove inferior bitrate duplicates
+/// Returns: (tracks_moved_count, tracks_skipped_due_to_missing_bitrate)
+///
+/// This function processes fingerprint duplicates and automatically moves
+/// lower-quality versions to lost+found. If any track in a fingerprint group
+/// is missing bitrate data, the entire group is skipped and left for manual resolution.
+pub fn auto_remove_inferior_bitrates(
+    tracks: &[Track],
+    corpus_root: &Path,
+    lost_found_root: &Path,
+) -> Result<(usize, usize)> {
+    let mut moved_count = 0;
+    let mut skipped_count = 0;
+
+    // Group tracks by exact fingerprint
+    let mut by_fingerprint: HashMap<String, Vec<&Track>> = HashMap::new();
+    for track in tracks {
+        if let Some(fp) = &track.fingerprint {
+            if !fp.is_empty() {
+                by_fingerprint.entry(fp.clone()).or_insert_with(Vec::new).push(track);
+            }
+        }
+    }
+
+    // For each fingerprint group
+    for (fingerprint, group) in by_fingerprint {
+        if group.len() < 2 {
+            continue; // No duplicates
+        }
+
+        // Check if all tracks have bitrate data
+        let all_have_bitrate = group.iter().all(|t| t.bitrate_kbps.is_some());
+
+        if !all_have_bitrate {
+            // Skip this group - log it
+            skipped_count += group.len() - 1;
+            let track_paths: Vec<_> = group.iter().map(|t| &t.path).collect();
+            config::log_message(&format!(
+                "Bitrate auto-removal skipped (missing data): {} tracks with fingerprint {}... paths: {:?}",
+                group.len(),
+                &fingerprint[..20.min(fingerprint.len())],
+                track_paths
+            ))?;
+            continue;
+        }
+
+        // Find highest bitrate
+        let max_bitrate = group.iter()
+            .filter_map(|t| t.bitrate_kbps)
+            .max()
+            .unwrap(); // Safe: we checked all_have_bitrate
+
+        // Keep highest bitrate track(s), move rest to lost-files
+        for track in group {
+            if track.bitrate_kbps.unwrap() < max_bitrate {
+                // Move to lost-files/fingerprint-dupes-auto/
+                match move_to_lost_found_auto(track, corpus_root, lost_found_root) {
+                    Ok(_) => {
+                        moved_count += 1;
+                        config::log_message(&format!(
+                            "Auto-removed inferior bitrate: {} ({}kbps < {}kbps max)",
+                            track.path,
+                            track.bitrate_kbps.unwrap(),
+                            max_bitrate
+                        ))?;
+                    }
+                    Err(e) => {
+                        config::log_message(&format!(
+                            "Failed to auto-remove {}: {}",
+                            track.path, e
+                        ))?;
+                        // Continue with other files even if one fails
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((moved_count, skipped_count))
+}
+
+/// Move file to lost-files/fingerprint-dupes-auto/ preserving structure
+/// Used for automatic inferior-bitrate removal
+fn move_to_lost_found_auto(
+    track: &Track,
+    corpus_root: &Path,
+    lost_found_root: &Path,
+) -> Result<()> {
+    let source_path = Path::new(&track.path);
+
+    // Compute relative path from corpus root
+    let relative_path = source_path.strip_prefix(corpus_root)
+        .context("Track path not within corpus root")?;
+
+    // Target: lost-files/fingerprint-dupes-auto/<relative-path>
+    let target_dir = lost_found_root.join("fingerprint-dupes-auto");
+    let target_path = target_dir.join(relative_path);
+
+    // Create parent directories
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent)
+            .context("Failed to create auto-removal directory")?;
+    }
+
+    // Try rename first (fast), fallback to copy+delete
+    fs::rename(source_path, &target_path).or_else(|_| {
+        fs::copy(source_path, &target_path)
+            .context("Failed to copy file")?;
+        fs::remove_file(source_path)
+            .context("Failed to remove original file")?;
+        Ok(())
+    })
+}
+
 /// Resolve a conflict by moving losers to lost+found
 /// Returns statistics about the operation
 pub fn resolve_conflict_set(

@@ -32,9 +32,8 @@ use std::time::Instant;
 
 use crate::config::{self, Config};
 use crate::db::{Database, DecisionStack};
+use crate::ops::{reports, scanner};
 use crate::progress::ScanMessage;
-use crate::reports;
-use crate::scanner;
 
 use app::{EyeAnimation, EyeFrame, OperationState, OperationType, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};

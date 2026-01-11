@@ -10,15 +10,12 @@
 //! - Deployment: Publishing to browsable libraries
 //! - Operations: Low-level maintenance
 
-mod changes;
 mod config;
 mod db;
 mod deduplication;
-mod deploy;
 mod metadata;
+mod ops;
 mod progress;
-mod reports;
-mod scanner;
 mod ui;
 
 use anyhow::Result;

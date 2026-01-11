@@ -697,7 +697,7 @@ fn group_by_deployment_path<'a>(
     let mut groups: HashMap<String, Vec<&'a Track>> = HashMap::new();
 
     for track in tracks {
-        let deploy_path = crate::deploy::compute_deployment_path(track);
+        let deploy_path = super::deploy::compute_deployment_path(track);
         let key = deploy_path.to_string_lossy().to_string();
         groups.entry(key).or_default().push(track);
     }

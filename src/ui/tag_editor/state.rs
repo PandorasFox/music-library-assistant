@@ -1,0 +1,536 @@
+//! Tag Editor State Management
+//!
+//! Core state structure and conversion functions.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use crate::db::Track;
+use crate::metadata;
+
+use super::types::{
+    DuplicateGroupInfo, FieldEditState, GroupedChange, TagChange, TagField,
+};
+
+/// Tag editor navigation state
+#[derive(Debug)]
+pub struct TagEditorState {
+    /// Tracks being edited
+    pub tracks: Vec<Track>,
+    /// Tag fields for each track (current state)
+    pub tag_fields: Vec<Vec<TagField>>,
+    /// Original state for change preview
+    pub original_tag_fields: Vec<Vec<TagField>>,
+    /// Currently selected track index
+    pub current_track_idx: usize,
+    /// Currently selected field index within track
+    pub current_field_idx: usize,
+    /// Current edit mode
+    pub field_edit_state: FieldEditState,
+    /// Buffer for editing tag name
+    pub name_buffer: String,
+    /// Buffer for editing tag value
+    pub value_buffer: String,
+    /// Original name before editing started
+    pub original_name: String,
+    /// Original value before editing started
+    pub original_value: String,
+    /// Duplicate groups being worked through
+    pub duplicate_groups: Vec<DuplicateGroupInfo>,
+    /// Current group index if in duplicate workflow
+    pub current_group_idx: Option<usize>,
+    /// Whether focus is on value (true) or name (false) when editing
+    pub focus_on_value: bool,
+}
+
+impl TagEditorState {
+    /// Create a new tag editor state for the given tracks
+    pub fn new(tracks: Vec<Track>, duplicate_groups: Vec<DuplicateGroupInfo>) -> Self {
+        let tag_fields: Vec<Vec<TagField>> = tracks.iter().map(track_to_tag_fields).collect();
+        let original_tag_fields = tag_fields.clone();
+
+        Self {
+            tracks,
+            tag_fields,
+            original_tag_fields,
+            current_track_idx: 0,
+            current_field_idx: 0,
+            field_edit_state: FieldEditState::NonEditable,
+            name_buffer: String::new(),
+            value_buffer: String::new(),
+            original_name: String::new(),
+            original_value: String::new(),
+            duplicate_groups,
+            current_group_idx: None,
+            focus_on_value: true,
+        }
+    }
+
+    /// Create a tag editor state for a duplicate workflow
+    pub fn new_for_duplicate_workflow(
+        groups: Vec<DuplicateGroupInfo>,
+        starting_group_idx: usize,
+    ) -> Option<Self> {
+        if groups.is_empty() || starting_group_idx >= groups.len() {
+            return None;
+        }
+
+        let tracks = groups[starting_group_idx].tracks.clone();
+        let tag_fields: Vec<Vec<TagField>> = tracks.iter().map(track_to_tag_fields).collect();
+        let original_tag_fields = tag_fields.clone();
+
+        Some(Self {
+            tracks,
+            tag_fields,
+            original_tag_fields,
+            current_track_idx: 0,
+            current_field_idx: 0,
+            field_edit_state: FieldEditState::NonEditable,
+            name_buffer: String::new(),
+            value_buffer: String::new(),
+            original_name: String::new(),
+            original_value: String::new(),
+            duplicate_groups: groups,
+            current_group_idx: Some(starting_group_idx),
+            focus_on_value: true,
+        })
+    }
+
+    // ========================================================================
+    // Navigation
+    // ========================================================================
+
+    pub(super) fn move_up(&mut self) {
+        if self.field_edit_state != FieldEditState::NonEditable {
+            self.commit_current_buffer();
+        }
+        if self.current_field_idx > 0 {
+            self.current_field_idx -= 1;
+            self.load_buffers();
+        }
+    }
+
+    pub(super) fn move_down(&mut self) {
+        if self.field_edit_state != FieldEditState::NonEditable {
+            self.commit_current_buffer();
+        }
+        let max_fields = self.tag_fields.get(self.current_track_idx).map(|f| f.len()).unwrap_or(0);
+        if self.current_field_idx < max_fields.saturating_sub(1) {
+            self.current_field_idx += 1;
+            self.load_buffers();
+        }
+    }
+
+    /// Returns true if we're at the last track (signal to show save modal)
+    pub(super) fn next_track(&mut self) -> bool {
+        if self.field_edit_state != FieldEditState::NonEditable {
+            self.commit_current_buffer();
+        }
+        self.field_edit_state = FieldEditState::NonEditable;
+
+        if self.current_track_idx < self.tracks.len().saturating_sub(1) {
+            self.current_track_idx += 1;
+            self.current_field_idx = 0;
+            self.load_buffers();
+            false
+        } else {
+            // At last track - signal end
+            true
+        }
+    }
+
+    pub(super) fn prev_track(&mut self) {
+        if self.field_edit_state != FieldEditState::NonEditable {
+            self.commit_current_buffer();
+        }
+        self.field_edit_state = FieldEditState::NonEditable;
+
+        if self.current_track_idx > 0 {
+            self.current_track_idx -= 1;
+            self.current_field_idx = 0;
+            self.load_buffers();
+        }
+    }
+
+    // ========================================================================
+    // Buffer Management
+    // ========================================================================
+
+    pub(super) fn load_buffers(&mut self) {
+        if let Some(fields) = self.tag_fields.get(self.current_track_idx) {
+            if let Some(field) = fields.get(self.current_field_idx) {
+                self.name_buffer = field.name.clone();
+                self.value_buffer = field.value.clone();
+                self.original_name = field.name.clone();
+                self.original_value = field.value.clone();
+            }
+        }
+    }
+
+    pub(super) fn commit_current_buffer(&mut self) {
+        if let Some(fields) = self.tag_fields.get_mut(self.current_track_idx) {
+            if let Some(field) = fields.get_mut(self.current_field_idx) {
+                match self.field_edit_state {
+                    FieldEditState::EditingName => {
+                        field.name = self.name_buffer.clone();
+                    }
+                    FieldEditState::EditingValue => {
+                        field.value = self.value_buffer.clone();
+                    }
+                    FieldEditState::NonEditable => {}
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Editing
+    // ========================================================================
+
+    pub(super) fn handle_enter(&mut self) {
+        let fields = match self.tag_fields.get(self.current_track_idx) {
+            Some(f) => f,
+            None => return,
+        };
+        let field = match fields.get(self.current_field_idx) {
+            Some(f) => f,
+            None => return,
+        };
+
+        if field.name == "New Tag" {
+            // Create new tag
+            self.create_new_tag();
+        } else if self.field_edit_state == FieldEditState::NonEditable {
+            // Enter edit mode
+            self.field_edit_state = if self.focus_on_value {
+                FieldEditState::EditingValue
+            } else {
+                FieldEditState::EditingName
+            };
+            self.load_buffers();
+        } else {
+            // Commit and exit edit mode
+            self.commit_current_buffer();
+            self.field_edit_state = FieldEditState::NonEditable;
+        }
+    }
+
+    pub(super) fn create_new_tag(&mut self) {
+        let new_field = TagField {
+            name: "new_tag".to_string(),
+            value: String::new(),
+            editable: true,
+            is_unique_per_track: false,
+        };
+
+        // Insert before "New Tag" placeholder
+        if let Some(fields) = self.tag_fields.get_mut(self.current_track_idx) {
+            let insert_pos = fields.len().saturating_sub(1);
+            fields.insert(insert_pos, new_field);
+            self.current_field_idx = insert_pos;
+        }
+
+        // Enter edit mode for name
+        self.field_edit_state = FieldEditState::EditingName;
+        self.name_buffer = "new_tag".to_string();
+        self.value_buffer.clear();
+        self.focus_on_value = false;
+    }
+
+    pub(super) fn insert_char(&mut self, c: char) {
+        match self.field_edit_state {
+            FieldEditState::EditingName => {
+                self.name_buffer.push(c);
+            }
+            FieldEditState::EditingValue => {
+                self.value_buffer.push(c);
+            }
+            FieldEditState::NonEditable => {}
+        }
+    }
+
+    pub(super) fn delete_char(&mut self) {
+        match self.field_edit_state {
+            FieldEditState::EditingName => {
+                self.name_buffer.pop();
+            }
+            FieldEditState::EditingValue => {
+                self.value_buffer.pop();
+            }
+            FieldEditState::NonEditable => {}
+        }
+    }
+
+    pub(super) fn fill_to_all(&mut self) -> bool {
+        let (field_name, field_value, is_unique) = {
+            let fields = match self.tag_fields.get(self.current_track_idx) {
+                Some(f) => f,
+                None => return false,
+            };
+            let field = match fields.get(self.current_field_idx) {
+                Some(f) => f,
+                None => return false,
+            };
+            if field.is_unique_per_track || field.value.is_empty() || field.name == "New Tag" {
+                return false;
+            }
+            (field.name.clone(), field.value.clone(), field.is_unique_per_track)
+        };
+
+        if is_unique {
+            return false;
+        }
+
+        // Apply to all tracks
+        for fields in &mut self.tag_fields {
+            for field in fields {
+                if field.name == field_name && !field.is_unique_per_track {
+                    field.value = field_value.clone();
+                }
+            }
+        }
+
+        true
+    }
+
+    pub(super) fn clear_current_field(&mut self) {
+        match self.field_edit_state {
+            FieldEditState::EditingName => {
+                self.name_buffer.clear();
+            }
+            FieldEditState::EditingValue => {
+                self.value_buffer.clear();
+            }
+            FieldEditState::NonEditable => {
+                // Clear the field value directly
+                if let Some(fields) = self.tag_fields.get_mut(self.current_track_idx) {
+                    if let Some(field) = fields.get_mut(self.current_field_idx) {
+                        field.value.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Change Tracking
+    // ========================================================================
+
+    /// Check if there are any changes to save
+    pub fn has_changes(&self) -> bool {
+        !compute_changes(&self.original_tag_fields, &self.tag_fields).is_empty()
+    }
+
+    /// Get changes for preview
+    pub fn get_changes_for_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
+        let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+        group_common_changes(&changes)
+    }
+}
+
+// ============================================================================
+// Conversion Functions
+// ============================================================================
+
+/// Convert a Track to editable tag fields.
+///
+/// Priority order: track_number, title, artist, album, album_artist, date, genre, isrc
+/// Optimized for compilation tagging workflow (common: track_number -> title -> artist)
+/// Read-only fields (path, file_type, duration, bitrate) are NOT included.
+pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
+    let path = Path::new(&track.path);
+
+    // Try to read all tags from the file (as Vec to preserve duplicates)
+    let all_tags_vec: Vec<(String, String)> = match metadata::read_all_tags(path) {
+        Ok(tags) => tags,
+        Err(_) => {
+            // If reading fails, fall back to database fields only
+            let mut vec = Vec::new();
+            if let Some(ref artist) = track.artist {
+                vec.push(("artist".to_string(), artist.clone()));
+            }
+            if let Some(ref album) = track.album {
+                vec.push(("album".to_string(), album.clone()));
+            }
+            if let Some(ref album_artist) = track.album_artist {
+                vec.push(("album_artist".to_string(), album_artist.clone()));
+            }
+            if let Some(ref title) = track.title {
+                vec.push(("title".to_string(), title.clone()));
+            }
+            if let Some(track_num) = track.track_number {
+                vec.push(("track_number".to_string(), track_num.to_string()));
+            }
+            if let Some(ref isrc) = track.isrc {
+                vec.push(("isrc".to_string(), isrc.clone()));
+            }
+            vec
+        }
+    };
+
+    let mut tag_fields = Vec::new();
+
+    // Priority fields in specific order (name, is_unique_per_track)
+    // Optimized for compilation tagging: track_number -> title -> artist
+    let priority_fields = vec![
+        ("track_number", true), // Unique per track
+        ("title", true),        // Unique per track
+        ("artist", false),
+        ("album", false),
+        ("album_artist", false), // Can have multiple values
+        ("date", false),
+        ("genre", false),
+        ("isrc", false),
+    ];
+
+    // Add priority fields first (handle album_artist specially for multiple values)
+    for (field_name, is_unique) in &priority_fields {
+        let matching_values: Vec<String> = all_tags_vec
+            .iter()
+            .filter(|(k, _)| k == field_name)
+            .map(|(_, v)| v.clone())
+            .collect();
+
+        if field_name == &"album_artist" {
+            // Allow multiple album_artist entries
+            if matching_values.is_empty() {
+                // Add one empty field if none exist
+                tag_fields.push(TagField {
+                    name: field_name.to_string(),
+                    value: String::new(),
+                    editable: true,
+                    is_unique_per_track: *is_unique,
+                });
+            } else {
+                // Add all existing album_artist values
+                for value in matching_values {
+                    tag_fields.push(TagField {
+                        name: field_name.to_string(),
+                        value,
+                        editable: true,
+                        is_unique_per_track: *is_unique,
+                    });
+                }
+            }
+        } else {
+            // Single value for other fields (use first if multiple exist)
+            if *is_unique && matching_values.len() > 1 {
+                let _ = crate::config::log_message(&format!(
+                    "Warning: Multiple {} tags found ({}), using first value",
+                    field_name,
+                    matching_values.len()
+                ));
+            }
+            tag_fields.push(TagField {
+                name: field_name.to_string(),
+                value: matching_values.first().cloned().unwrap_or_default(),
+                editable: true,
+                is_unique_per_track: *is_unique,
+            });
+        }
+    }
+
+    // Add other tags alphabetically (excluding priority fields and read-only fields)
+    let skip_fields: HashSet<&str> = priority_fields
+        .iter()
+        .map(|(name, _)| *name)
+        .chain(
+            ["bitrate", "sample_rate", "duration", "path", "file_type"]
+                .iter()
+                .copied(),
+        )
+        .collect();
+
+    let mut other_tags: Vec<_> = all_tags_vec
+        .iter()
+        .filter(|(key, _)| !skip_fields.contains(key.as_str()))
+        .collect();
+    other_tags.sort_by_key(|(key, _)| key.as_str());
+
+    for (key, value) in other_tags {
+        tag_fields.push(TagField {
+            name: key.clone(),
+            value: value.clone(),
+            editable: true,
+            is_unique_per_track: false,
+        });
+    }
+
+    // Add "New Tag" line as last interactable field
+    tag_fields.push(TagField {
+        name: "New Tag".to_string(),
+        value: "[Press Enter to create]".to_string(),
+        editable: true,
+        is_unique_per_track: false,
+    });
+
+    tag_fields
+}
+
+/// Compute all changes between original and current tag fields
+pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) -> Vec<TagChange> {
+    let mut changes = Vec::new();
+
+    for (track_idx, (orig_fields, curr_fields)) in original.iter().zip(current.iter()).enumerate() {
+        // Compare field by field
+        for (orig_field, curr_field) in orig_fields.iter().zip(curr_fields.iter()) {
+            // Skip "New Tag" placeholder
+            if orig_field.name == "New Tag" || curr_field.name == "New Tag" {
+                continue;
+            }
+
+            // Detect changes in value
+            if orig_field.value != curr_field.value {
+                changes.push(TagChange {
+                    track_idx,
+                    field_name: curr_field.name.clone(),
+                    old_value: orig_field.value.clone(),
+                    new_value: curr_field.value.clone(),
+                });
+            }
+        }
+    }
+
+    changes
+}
+
+/// Group changes that are identical across multiple tracks
+pub fn group_common_changes(changes: &[TagChange]) -> (Vec<GroupedChange>, Vec<TagChange>) {
+    // Group by (field_name, old_value, new_value)
+    let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
+
+    for change in changes {
+        let key = (
+            change.field_name.clone(),
+            change.old_value.clone(),
+            change.new_value.clone(),
+        );
+        groups.entry(key).or_default().push(change.track_idx);
+    }
+
+    // Split into grouped (2+ tracks) and single-track changes
+    let mut grouped = Vec::new();
+    let mut singles = Vec::new();
+
+    for ((field_name, old_value, new_value), track_indices) in groups {
+        if track_indices.len() > 1 {
+            grouped.push(GroupedChange {
+                field_name,
+                old_value,
+                new_value,
+                track_indices,
+            });
+        } else {
+            // Find the original TagChange for this single track
+            let track_idx = track_indices[0];
+            if let Some(change) = changes
+                .iter()
+                .find(|c| c.track_idx == track_idx && c.field_name == field_name)
+            {
+                singles.push(change.clone());
+            }
+        }
+    }
+
+    (grouped, singles)
+}

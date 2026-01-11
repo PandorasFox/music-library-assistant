@@ -3,6 +3,7 @@
 //! Modular UI components for the Music Library Assistant.
 
 pub mod app;
+pub mod dedup_flow;
 pub mod dialogue;
 pub mod helpers;
 pub mod main_menu;
@@ -31,7 +32,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crate::config::{self, Config};
-use crate::db::{Database, DecisionStack};
+use crate::db::Database;
 use crate::ops::{reports, scanner};
 use crate::progress::ScanMessage;
 
@@ -50,6 +51,7 @@ enum UiMode {
     TagEditor,
     Dialogue,
     DialogueSummary,
+    ClusterDialogue,
 }
 
 /// Main application state
@@ -64,6 +66,7 @@ struct App {
     tag_editor: Option<tag_editor::TagEditorState>,
     dialogue: Option<dialogue::DialogueState>,
     dialogue_summary: Option<dialogue::DialogueSummaryState>,
+    cluster_dialogue: Option<dedup_flow::ClusterDialogueState>,
 
     // Background operations
     operation: Option<OperationState>,
@@ -91,6 +94,7 @@ impl App {
             tag_editor: None,
             dialogue: None,
             dialogue_summary: None,
+            cluster_dialogue: None,
             operation: None,
             operation_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
@@ -121,6 +125,12 @@ impl App {
                 if let Some(ref mut summary) = self.dialogue_summary {
                     let result = summary.handle_key(key);
                     self.handle_dialogue_result(result);
+                }
+            }
+            UiMode::ClusterDialogue => {
+                if let Some(ref mut cluster_dlg) = self.cluster_dialogue {
+                    let action = cluster_dlg.handle_key(key);
+                    self.handle_cluster_dialogue_action(action);
                 }
             }
         }
@@ -363,7 +373,9 @@ impl App {
     }
 
     fn start_decision_flow(&mut self) {
-        // Decision flow uses fingerprint duplicates - load from deduplication module
+        // Use fingerprint-based deduplication with directory set clustering
+        use crate::deduplication::find_fingerprint_duplicates;
+
         let db_path = match config::get_db_path() {
             Ok(p) => p,
             Err(e) => {
@@ -379,53 +391,44 @@ impl App {
             }
         };
 
-        // Build decision stack from unresolved fingerprint duplicates
-        match db.get_unresolved_duplicate_groups() {
-            Ok(group_ids) if !group_ids.is_empty() => {
-                use crate::db::{Decision, DecisionCategory, DecisionPriority};
-
-                let mut decisions = Vec::new();
-                for group_id in group_ids.iter().take(50) { // Limit to 50 for now
-                    match db.get_duplicate_group_tracks(*group_id) {
-                        Ok(tracks) if tracks.len() >= 2 => {
-                            let affected_paths: Vec<String> = tracks.iter().map(|t| t.path.clone()).collect();
-                            decisions.push(Decision {
-                                id: group_id.to_string(),
-                                priority: DecisionPriority::Medium,
-                                category: DecisionCategory::FingerprintDuplicate,
-                                summary: format!("{} duplicate files detected", tracks.len()),
-                                details: format!("Group {} contains {} potential duplicates", group_id, tracks.len()),
-                                affected_paths,
-                                recommendation: Some("Keep highest quality version".to_string()),
-                                pending_changes: Vec::new(), // Changes generated on accept
-                                impact_summary: format!("{} files affected", tracks.len()),
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-
-                if decisions.is_empty() {
-                    self.status_message = Some("No pending decisions".to_string());
-                    return;
-                }
-
-                let stack = DecisionStack {
-                    decisions,
-                    current_index: 0,
-                    resolved: Vec::new(),
-                    ignore_patterns: Vec::new(),
-                };
-                self.dialogue = Some(dialogue::DialogueState::new(stack));
-                self.mode = UiMode::Dialogue;
+        let corpus_root = self.config.corpus_root.clone();
+        let lost_files_root = match &self.config.lost_files_dir {
+            Some(path) => path.clone(),
+            None => {
+                self.status_message = Some("lost-files-dir not configured".to_string());
+                return;
             }
-            Ok(_) => {
-                self.status_message = Some("No pending decisions".to_string());
-            }
+        };
+
+        // Find all fingerprint duplicates
+        let conflict_sets = match find_fingerprint_duplicates(
+            &db,
+            &[corpus_root.clone()],
+            &corpus_root,
+        ) {
+            Ok(sets) => sets,
             Err(e) => {
-                self.status_message = Some(format!("Error loading decisions: {}", e));
+                self.status_message = Some(format!("Error finding duplicates: {}", e));
+                return;
             }
+        };
+
+        if conflict_sets.is_empty() {
+            self.status_message = Some("No fingerprint duplicates found".to_string());
+            return;
         }
+
+        // Create session ID
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        // Create cluster dialogue state
+        self.cluster_dialogue = Some(dedup_flow::ClusterDialogueState::new(
+            conflict_sets,
+            session_id,
+            corpus_root.to_string_lossy().to_string(),
+            lost_files_root.to_string_lossy().to_string(),
+        ));
+        self.mode = UiMode::ClusterDialogue;
     }
 
     fn handle_tag_editor_action(&mut self, action: tag_editor::TagEditorAction) {
@@ -481,6 +484,37 @@ impl App {
                 self.dialogue = None;
                 self.dialogue_summary = None;
                 self.mode = UiMode::MainMenu;
+            }
+        }
+    }
+
+    fn handle_cluster_dialogue_action(&mut self, action: dedup_flow::ClusterDialogueAction) {
+        match action {
+            dedup_flow::ClusterDialogueAction::None => {}
+            dedup_flow::ClusterDialogueAction::Continue => {}
+            dedup_flow::ClusterDialogueAction::ShowBulkPrompt => {
+                // TODO: Phase 4 - transition to bulk prompt
+                self.status_message = Some("Bulk prompt (TODO - Phase 4)".to_string());
+            }
+            dedup_flow::ClusterDialogueAction::ShowSessionReview => {
+                // TODO: Phase 5 - transition to session review
+                if let Some(ref cluster_dlg) = self.cluster_dialogue {
+                    let total = cluster_dlg.session.total_pending_changes();
+                    self.status_message = Some(format!(
+                        "Session review (TODO - Phase 5): {} pending changes",
+                        total
+                    ));
+                }
+                self.cluster_dialogue = None;
+                self.mode = UiMode::MainMenu;
+            }
+            dedup_flow::ClusterDialogueAction::Cancel => {
+                self.cluster_dialogue = None;
+                self.mode = UiMode::MainMenu;
+                self.status_message = Some("Deduplication cancelled".to_string());
+            }
+            dedup_flow::ClusterDialogueAction::StatusMessage(msg) => {
+                self.status_message = Some(msg);
             }
         }
     }
@@ -568,6 +602,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         UiMode::TagEditor => "Music Library Assistant - Tag Editor",
         UiMode::Dialogue => "Music Library Assistant - Decision Flow",
         UiMode::DialogueSummary => "Music Library Assistant - Session Summary",
+        UiMode::ClusterDialogue => "Music Library Assistant - Fingerprint Deduplication",
     };
 
     let header = Paragraph::new(title)
@@ -596,6 +631,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         UiMode::DialogueSummary => {
             if let Some(ref mut summary) = app.dialogue_summary {
                 summary.render(f, area);
+            }
+        }
+        UiMode::ClusterDialogue => {
+            if let Some(ref mut cluster_dlg) = app.cluster_dialogue {
+                cluster_dlg.render(f, area);
             }
         }
     }
@@ -771,6 +811,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         UiMode::MainMenu => "↑↓ Navigate | ←→ Pane | Enter Select | Q Quit",
         UiMode::TagEditor => "Tab Tracks | ↑↓ Fields | Enter Edit | Esc Exit",
         UiMode::Dialogue | UiMode::DialogueSummary => "↑↓ Navigate | Enter Select | Esc Exit",
+        UiMode::ClusterDialogue => "↑↓ Select | Enter Keep | S Skip | Esc Review",
     };
     lines.push(Line::from(hints));
 

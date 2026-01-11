@@ -45,7 +45,11 @@ content below this point has been authored by claude, and are claude's notes on 
 |--------|---------|
 | `main.rs` | Entry point, config loading, TUI launch |
 | `config.rs` | KDL config parsing, path utilities, logging |
-| `db.rs` | Central data layer - all SQLite operations, types |
+| `db/` | Central data layer module |
+| `db/types.rs` | Track, ScanStateEntry, DeploymentStats |
+| `db/changes.rs` | PendingChange, ChangeType, ChangeStatus, ChangeSession |
+| `db/decisions.rs` | Decision flow types for dialogue system |
+| `db/queries.rs` | All SQLite operations and Database methods |
 | `scanner.rs` | Directory walking, metadata extraction coordination |
 | `metadata.rs` | Audio file metadata and fingerprint extraction |
 | `deduplication.rs` | Fingerprint-based duplicate detection and resolution |
@@ -53,10 +57,13 @@ content below this point has been authored by claude, and are claude's notes on 
 | `reports.rs` | Analysis report generation |
 | `changes.rs` | Algebraic change tracking and execution |
 | `ui/mod.rs` | TUI entry point and mode dispatch |
+| `ui/render.rs` | TUI rendering functions |
 | `ui/app.rs` | Application state, eye animation, operation tracking |
 | `ui/main_menu.rs` | Multi-pane category/command navigation |
-| `ui/menu.rs` | Legacy TUI state machine (being refactored) |
+| `ui/dialogue.rs` | Conversational decision flow UI |
+| `ui/tag_editor/` | Multi-track metadata editing module |
 | `ui/picker.rs` | Reusable list picker component |
+| `ui/helpers.rs` | Shared rendering utilities and formatters |
 
 ### Key Patterns
 
@@ -100,28 +107,9 @@ Key tables:
 
 Source names are lowercase: `corpus`, `legacy`, library names.
 
-## Future Considerations (Not Yet Implemented)
+## Future Features
 
-### Database Snapshotting
-- Export metadata as JSON for backup
-- Import from snapshot to rebuild database
-- Enable rollback after failed experiments
-
-### External Metadata Integration
-- MusicBrainz, Discogs, Beatport lookups
-- Confidence levels per metadata source
-- High-confidence sources can "freeze" corpus tags
-
-### Corpus Directory Mapping
-- Map corpus directories to external source identifiers
-- e.g., `web/releases/bandcamp/artist` -> MusicBrainz artist ID
-- Enable automated metadata lookup by directory structure
-- Record label + catalog number as preferred canonical scheme
-
-### Deployment Path Structuring
-- Nuanced path structuring for vocalist/remix placement
-- Configurable via "Opinions" in config.kdl
-- Drive dialogue to establish operator's consistent preferences
+See [docs/FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md) for planned features, improvements, and TODO items.
 
 ## Common Development Tasks
 

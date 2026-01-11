@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# MLA database
+*.db
+*.txt
+
+# Config (may contain sensitive paths)
+config.kdl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+._*

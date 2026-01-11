@@ -1,0 +1,38 @@
+// Music Library Assistant (MLA) Configuration
+// Save this as $XDG_CONFIG_HOME/mla/config.kdl (or ~/.config/mla/config.kdl if XDG_CONFIG_HOME is not set)
+
+// archive-root "/path/to/archive"
+
+// Root directory of your music corpus
+corpus-root "/archive/corpus"
+lost-files "/archive/working/disorganized_files"
+// Optional: Path to your legacy library that needs organization
+// useful if you are working at dissecting an existing tag-organized library into a better organization strategy :)
+legacy-library "/archive/working/legacy"
+
+// Define your libraries to deploy organized hard links under
+library "music" {
+    path "/archive/libraries/music"
+}
+
+library "soundtracks" {
+    path "/archive/libraries/soundtracks"
+}
+
+// Deploy mappings - Define which corpus directories deploy to which libraries
+// This is required for the Deploy feature to work
+// Format: deploy "<relative-path-in-corpus>" { library "library-name" ... }
+
+// Example 1: Deploy general music to the main library
+deploy "web/releases/bandcamp" {
+    library "music"
+}
+
+deploy "web/releases/steam" {
+	library "soundtracks"
+}
+
+deploy "physical/vinyls" {
+	library "music"
+}
+

@@ -1,0 +1,43 @@
+[package]
+name = "mla"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Config parsing
+kdl = "4.7.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Audio metadata
+symphonia = { version = "0.5", features = ["all"] }
+lofty = "0.21"  # For reading/writing all tags
+
+# Acoustic fingerprinting
+rusty-chromaprint = "0.1"
+
+# File system utilities
+walkdir = "2.5"
+dirs = "5.0"
+chrono = "0.4"
+
+# Parallel processing
+rayon = "1.10"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4"] }
+
+[[bin]]
+name = "mla"
+path = "src/main.rs"

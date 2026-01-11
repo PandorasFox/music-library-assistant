@@ -139,6 +139,26 @@ enum MenuState {
         duplicate_groups: Vec<DuplicateGroupInfo>,
         current_group_idx: Option<usize>,
     },
+    // Fingerprint deduplication: Directory selection
+    FingerprintDedupDirSelect {
+        selected_dirs: Vec<PathBuf>,
+        current_input: String,
+        error_message: Option<String>,
+    },
+    // Fingerprint deduplication: Conflict resolution
+    FingerprintDedupResolve {
+        conflict_sets: Vec<crate::deduplication::ConflictSet>,
+        current_set_idx: usize,
+        session_stats: crate::deduplication::SessionStats,
+        input_buffer: String,
+        corpus_root: PathBuf,
+        lost_found_root: PathBuf,
+    },
+    // Fingerprint deduplication: End statistics
+    FingerprintDedupStats {
+        stats: crate::deduplication::SessionStats,
+        lost_found_path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -709,6 +729,9 @@ impl App {
             MenuState::TagEditor { .. } => return, // Custom navigation handled in handle_key
             MenuState::SaveConfirmationModal { .. } => return, // Phase 2: Custom navigation in modal handler
             MenuState::ChangePreviewModal { .. } => return, // Phase 4: Custom navigation in modal handler
+            MenuState::FingerprintDedupDirSelect { .. } => return, // Text input, no navigation
+            MenuState::FingerprintDedupResolve { .. } => return, // Custom navigation
+            MenuState::FingerprintDedupStats { .. } => return, // No navigation needed
         };
 
         let i = match self.menu_state.selected() {
@@ -736,6 +759,9 @@ impl App {
             MenuState::TagEditor { .. } => return, // Custom navigation handled in handle_key
             MenuState::SaveConfirmationModal { .. } => return, // Phase 2: Custom navigation in modal handler
             MenuState::ChangePreviewModal { .. } => return, // Phase 4: Custom navigation in modal handler
+            MenuState::FingerprintDedupDirSelect { .. } => return, // Text input, no navigation
+            MenuState::FingerprintDedupResolve { .. } => return, // Custom navigation
+            MenuState::FingerprintDedupStats { .. } => return, // No navigation needed
         };
 
         let i = match self.menu_state.selected() {
@@ -1270,6 +1296,21 @@ impl App {
                         // Phase 4: Esc already handled in modal's own handler above
                         // This case should never be reached due to early return
                     }
+                    MenuState::FingerprintDedupDirSelect { .. } => {
+                        // Cancel and return to corpus triage menu
+                        self.current_view = MenuState::CorpusTriageMenu;
+                        self.menu_state.select(Some(0));
+                        self.status_message = None;
+                    }
+                    MenuState::FingerprintDedupResolve { .. } => {
+                        // Cancel remaining conflicts and show stats
+                        // Handler will be in the Enter key section
+                    }
+                    MenuState::FingerprintDedupStats { .. } => {
+                        // Return to main menu
+                        self.current_view = MenuState::MainMenu;
+                        self.menu_state.select(Some(0));
+                    }
                 }
             }
             KeyCode::Down => {
@@ -1726,10 +1767,26 @@ impl App {
                             self.status_message = Some(msg);
                         }
                         1 => {
-                            // Fingerprint Deduplication
-                            self.status_message = Some(
-                                "Fingerprint deduplication not yet implemented".to_string(),
-                            );
+                            // Fingerprint Deduplication - Pre-flight check
+                            if let Some(cfg) = &self.config {
+                                if cfg.lost_files_dir.is_none() {
+                                    self.status_message = Some(
+                                        "ERROR: lost-files directory must be configured in config.kdl.\nAdd: lost-files \"/path/to/lost+found\"".to_string(),
+                                    );
+                                } else {
+                                    // Launch directory selection UI
+                                    self.current_view = MenuState::FingerprintDedupDirSelect {
+                                        selected_dirs: Vec::new(),
+                                        current_input: String::new(),
+                                        error_message: None,
+                                    };
+                                    self.status_message = Some(
+                                        "Enter corpus directory paths (Enter on empty to finish)".to_string(),
+                                    );
+                                }
+                            } else {
+                                self.status_message = Some("ERROR: Config not loaded".to_string());
+                            }
                         }
                         2 => {
                             // Back
@@ -1754,6 +1811,17 @@ impl App {
             }
             MenuState::ChangePreviewModal { .. } => {
                 // Phase 4: Enter key handled in modal's own handler
+            }
+            MenuState::FingerprintDedupDirSelect { .. } => {
+                // Enter key handled in handle_key
+            }
+            MenuState::FingerprintDedupResolve { .. } => {
+                // Enter key handled in handle_key
+            }
+            MenuState::FingerprintDedupStats { .. } => {
+                // Enter key returns to main menu
+                self.current_view = MenuState::MainMenu;
+                self.menu_state.select(Some(0));
             }
         }
     }
@@ -3202,6 +3270,112 @@ fn ui(f: &mut Frame, app: &mut App) {
                 Paragraph::new(visible_lines).wrap(ratatui::widgets::Wrap { trim: false });
 
             f.render_widget(paragraph, inner);
+        }
+        MenuState::FingerprintDedupDirSelect {
+            selected_dirs,
+            current_input,
+            error_message,
+        } => {
+            let mut text = vec![
+                Line::from("Fingerprint Deduplication - Directory Selection"),
+                Line::from(""),
+                Line::from("Selected directories:"),
+            ];
+            for (i, dir) in selected_dirs.iter().enumerate() {
+                text.push(Line::from(format!("  {}. {}", i + 1, dir.display())));
+            }
+            text.push(Line::from(""));
+            text.push(Line::from(format!(
+                "Enter next directory path: {}",
+                current_input
+            )));
+            if let Some(err) = error_message {
+                text.push(Line::from(""));
+                text.push(Line::from(format!("ERROR: {}", err)).style(Style::default().fg(Color::Red)));
+            }
+            text.push(Line::from(""));
+            text.push(Line::from("[Enter on empty path to finish] [Esc to cancel]"));
+
+            let paragraph = Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL))
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            f.render_widget(paragraph, chunks[1]);
+        }
+        MenuState::FingerprintDedupResolve {
+            conflict_sets,
+            current_set_idx,
+            session_stats,
+            input_buffer,
+            ..
+        } => {
+            if *current_set_idx >= conflict_sets.len() {
+                let text = vec![Line::from("No more conflicts to resolve")];
+                let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL));
+                f.render_widget(paragraph, chunks[1]);
+                return;
+            }
+
+            let conflict = &conflict_sets[*current_set_idx];
+            let total_files: usize = conflict.tracks_by_dir.values().map(|v| v.len()).sum();
+
+            let mut text = vec![
+                Line::from(format!(
+                    "Conflict Set {} of {} ({}-way conflict)",
+                    current_set_idx + 1,
+                    conflict_sets.len(),
+                    conflict.conflict_dirs.len()
+                )),
+                Line::from("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"),
+                Line::from(""),
+                Line::from(format!("Files affected: {} total", total_files)),
+                Line::from(format!("Match score: {}% (exact fingerprint match)", conflict.match_score)),
+                Line::from(""),
+                Line::from("Directories:"),
+            ];
+
+            for (i, dir) in conflict.conflict_dirs.iter().enumerate() {
+                let count = conflict.tracks_by_dir.get(dir).map(|v| v.len()).unwrap_or(0);
+                text.push(Line::from(format!("  [{}] {} ({} files)", i + 1, dir, count)));
+            }
+
+            text.push(Line::from(""));
+            text.push(Line::from(format!("Select winning directory (1-{}): {}", conflict.conflict_dirs.len(), input_buffer)));
+            text.push(Line::from(""));
+            text.push(Line::from(format!("Session: {} resolved, {} skipped", session_stats.resolved_count, session_stats.skipped_count)));
+            text.push(Line::from("[s] Skip  [q] Quit with stats  [Esc] Cancel"));
+
+            let paragraph = Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL).title("Conflict Resolution"))
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            f.render_widget(paragraph, chunks[1]);
+        }
+        MenuState::FingerprintDedupStats { stats, lost_found_path } => {
+            let text = vec![
+                Line::from("Fingerprint Deduplication Summary"),
+                Line::from("═════════════════════════════════"),
+                Line::from(""),
+                Line::from(format!("Total conflict sets: {}", stats.total_sets)),
+                Line::from(format!("Resolved: {}", stats.resolved_count)),
+                Line::from(format!("Skipped: {}", stats.skipped_count)),
+                Line::from(""),
+                Line::from(format!("Files kept (in corpus): {}", stats.files_kept)),
+                Line::from(format!("Files moved to lost+found: {}", stats.files_moved)),
+                Line::from(""),
+                Line::from("Lost+found location:"),
+                Line::from(format!("  {}", lost_found_path.display())),
+                Line::from(""),
+                Line::from("Next steps:"),
+                Line::from("• Rescan corpus to update database"),
+                Line::from("• Review lost+found directory"),
+                Line::from("• Delete moved files if confident"),
+                Line::from(""),
+                Line::from("[Enter] Return to menu"),
+            ];
+
+            let paragraph = Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL).title("Deduplication Complete"))
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            f.render_widget(paragraph, chunks[1]);
         }
     }
 

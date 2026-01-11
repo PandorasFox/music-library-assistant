@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct Database {
     conn: Connection,
@@ -741,6 +741,55 @@ impl Database {
         )?;
 
         Ok(())
+    }
+
+    /// Get tracks with fingerprints in specified directory paths
+    /// Used for fingerprint-based deduplication
+    pub fn get_tracks_by_paths(
+        &self,
+        path_prefixes: &[PathBuf],
+        source: &str,
+    ) -> Result<Vec<Track>> {
+        if path_prefixes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build WHERE clause with multiple LIKE conditions
+        let conditions: Vec<String> = path_prefixes
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("path LIKE ?{}", i + 2))
+            .collect();
+        let where_clause = conditions.join(" OR ");
+
+        let query = format!(
+            "SELECT id, path, source, inode, file_size, file_type,
+                    artist, album, album_artist, title, track_number,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+             FROM tracks
+             WHERE source = ?1 AND fingerprint IS NOT NULL AND ({})
+             ORDER BY path",
+            where_clause
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+
+        // Build parameter vector: source + all path prefixes with wildcard
+        let mut params: Vec<String> = vec![source.to_string()];
+        for prefix in path_prefixes {
+            let pattern = format!("{}%", prefix.to_string_lossy());
+            params.push(pattern);
+        }
+
+        // Convert to ToSql references
+        let param_refs: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+
+        let tracks = stmt
+            .query_map(&param_refs[..], Self::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(tracks)
     }
 
     fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {

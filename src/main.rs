@@ -5,6 +5,7 @@
 
 mod config;
 mod db;
+mod deduplication;
 mod deploy;
 mod metadata;
 mod progress;

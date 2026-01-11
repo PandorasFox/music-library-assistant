@@ -721,7 +721,7 @@ fn populate_metadata_duplicate_groups(
     let mut tracks_inserted = 0;
 
     // 2. For each metadata duplicate group
-    for (_metadata_key, tracks) in track_groups {
+    for tracks in track_groups.values() {
         if tracks.len() < 2 {
             continue; // Skip non-duplicates
         }

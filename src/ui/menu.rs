@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
-use crate::config::{self, ScanSource};
+use crate::config::{self, Config, ScanSource};
 use crate::db::{Database, Track};
 use crate::metadata;
 use crate::progress::{ScanMessage, ScanProgress};
@@ -509,39 +509,24 @@ enum ReportType {
 }
 
 impl App {
-    fn new() -> Self {
-        // Try to load config and capture any error for display
-        let (config, initial_status) = match config::load_config() {
-            Ok(cfg) => (Some(cfg), None),
-            Err(e) => {
-                // Log the error to /tmp/mla.log
-                let _ = config::log_message(&format!("Config load error: {}", e));
-
-                // Show the error to the user
-                let error_msg = format!(
-                    "⚠ Config Error: {}\n\nSome features will be unavailable.",
-                    e
-                );
-                (None, Some(error_msg))
-            }
-        };
-
+    fn new(config: Config) -> Self {
+        // Config already validated - no error handling needed
         let menu_items = vec![
             MenuItem {
-                label: "Scan Corpus/Library".to_string(),
+                label: "Build Indices".to_string(),
                 action: MenuAction::ScanSources,
             },
             MenuItem {
-                label: "Generate Reports".to_string(),
+                label: "Corpus Insights & Reports".to_string(),
                 action: MenuAction::Reports,
+            },
+            MenuItem {
+                label: "Corpus Operations".to_string(),
+                action: MenuAction::CorpusTriage,
             },
             MenuItem {
                 label: "Deploy to Libraries".to_string(),
                 action: MenuAction::Deploy,
-            },
-            MenuItem {
-                label: "Corpus Triage and Operations".to_string(),
-                action: MenuAction::CorpusTriage,
             },
             MenuItem {
                 label: "Quit".to_string(),
@@ -556,11 +541,11 @@ impl App {
             menu_state,
             menu_items,
             should_quit: false,
-            status_message: initial_status,
+            status_message: None, // No error message needed
             current_view: MenuState::MainMenu,
             operation_in_progress: None,
             operation_receiver: None,
-            config,
+            config: Some(config), // Always Some now
             eye_animation_state: EyeAnimationState::Idle,
             eye_state_start_time: std::time::Instant::now(),
             next_blink_delay_secs: Self::random_blink_delay(),
@@ -1035,15 +1020,16 @@ impl App {
                                                 return;
                                             }
                                             Err(e) => {
-                                                *error_message =
-                                                    Some(format!("Error finding duplicates: {}", e));
+                                                *error_message = Some(format!(
+                                                    "Error finding duplicates: {}",
+                                                    e
+                                                ));
                                                 return;
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        *error_message =
-                                            Some(format!("Database error: {}", e));
+                                        *error_message = Some(format!("Database error: {}", e));
                                         return;
                                     }
                                 },
@@ -1127,8 +1113,7 @@ impl App {
 
                         // Validate selection (1-indexed)
                         if selection < 1 || selection > current_set.conflict_dirs.len() {
-                            self.status_message =
-                                Some(format!("Invalid selection: {}", selection));
+                            self.status_message = Some(format!("Invalid selection: {}", selection));
                             input_buffer.clear();
                             return;
                         }
@@ -2027,7 +2012,8 @@ impl App {
                                         error_message: None,
                                     };
                                     self.status_message = Some(
-                                        "Enter corpus directory paths (Enter on empty to finish)".to_string(),
+                                        "Enter corpus directory paths (Enter on empty to finish)"
+                                            .to_string(),
                                     );
                                 }
                             } else {
@@ -2119,111 +2105,111 @@ impl App {
     // Handler for old duplicate resolution logic - now called from CorpusTriageMenu
     fn handle_metadata_deduplication(&mut self) -> String {
         // Phase 6: Load unresolved duplicate groups from database
-                match config::get_db_path() {
-                    Ok(db_path) => {
-                        match Database::open(&db_path) {
-                            Ok(db) => {
-                                // Get all unresolved duplicate group IDs
-                                match db.get_unresolved_duplicate_groups() {
-                                    Ok(group_ids) => {
-                                        if group_ids.is_empty() {
-                                            return "No unresolved duplicate groups found. Run duplicate detection first.".to_string();
+        match config::get_db_path() {
+            Ok(db_path) => {
+                match Database::open(&db_path) {
+                    Ok(db) => {
+                        // Get all unresolved duplicate group IDs
+                        match db.get_unresolved_duplicate_groups() {
+                            Ok(group_ids) => {
+                                if group_ids.is_empty() {
+                                    return "No unresolved duplicate groups found. Run duplicate detection first.".to_string();
+                                }
+
+                                // Load tracks for the first group
+                                match db.get_duplicate_group_tracks(group_ids[0]) {
+                                    Ok(first_group_tracks) => {
+                                        if first_group_tracks.is_empty() {
+                                            return format!(
+                                                "No tracks found for duplicate group {}",
+                                                group_ids[0]
+                                            );
                                         }
 
-                                        // Load tracks for the first group
-                                        match db.get_duplicate_group_tracks(group_ids[0]) {
-                                            Ok(first_group_tracks) => {
-                                                if first_group_tracks.is_empty() {
-                                                    return format!(
-                                                        "No tracks found for duplicate group {}",
-                                                        group_ids[0]
-                                                    );
+                                        // Build duplicate group info list
+                                        let duplicate_groups: Vec<DuplicateGroupInfo> = group_ids
+                                            .iter()
+                                            .map(|&group_id| {
+                                                DuplicateGroupInfo {
+                                                    group_id,
+                                                    tracks: Vec::new(), // Tracks loaded on-demand
+                                                    resolved: false,
                                                 }
+                                            })
+                                            .collect();
 
-                                                // Build duplicate group info list
-                                                let duplicate_groups: Vec<DuplicateGroupInfo> =
-                                                    group_ids
-                                                        .iter()
-                                                        .map(|&group_id| {
-                                                            DuplicateGroupInfo {
-                                                                group_id,
-                                                                tracks: Vec::new(), // Tracks loaded on-demand
-                                                                resolved: false,
-                                                            }
-                                                        })
-                                                        .collect();
+                                        let demo_tracks = first_group_tracks;
+                                        if demo_tracks.is_empty() {
+                                            "No tracks in first duplicate group".to_string()
+                                        } else {
+                                            // Load tag fields for each track
+                                            let tag_fields: Vec<Vec<TagField>> = demo_tracks
+                                                .iter()
+                                                .map(track_to_tag_fields)
+                                                .collect();
 
-                                                let demo_tracks = first_group_tracks;
-                                                if demo_tracks.is_empty() {
-                                                    "No tracks in first duplicate group".to_string()
-                                                } else {
-                                                    // Load tag fields for each track
-                                                    let tag_fields: Vec<Vec<TagField>> =
-                                                        demo_tracks
-                                                            .iter()
-                                                            .map(track_to_tag_fields)
-                                                            .collect();
+                                            // Phase 3: Deep clone for original state (enables change preview)
+                                            let original_tag_fields = tag_fields.clone();
 
-                                                    // Phase 3: Deep clone for original state (enables change preview)
-                                                    let original_tag_fields = tag_fields.clone();
+                                            // Auto-load first field for immediate editing
+                                            let initial_buffer = if !tag_fields.is_empty()
+                                                && !tag_fields[0].is_empty()
+                                            {
+                                                tag_fields[0][0].value.clone()
+                                            } else {
+                                                String::new()
+                                            };
+                                            let initial_name = if !tag_fields.is_empty()
+                                                && !tag_fields[0].is_empty()
+                                            {
+                                                tag_fields[0][0].name.clone()
+                                            } else {
+                                                String::new()
+                                            };
 
-                                                    // Auto-load first field for immediate editing
-                                                    let initial_buffer = if !tag_fields.is_empty()
-                                                        && !tag_fields[0].is_empty()
-                                                    {
-                                                        tag_fields[0][0].value.clone()
-                                                    } else {
-                                                        String::new()
-                                                    };
-                                                    let initial_name = if !tag_fields.is_empty()
-                                                        && !tag_fields[0].is_empty()
-                                                    {
-                                                        tag_fields[0][0].name.clone()
-                                                    } else {
-                                                        String::new()
-                                                    };
+                                            // Phase 6: Compute lengths before moving values
+                                            let num_tracks = demo_tracks.len();
+                                            let num_groups = duplicate_groups.len();
 
-                                                    // Phase 6: Compute lengths before moving values
-                                                    let num_tracks = demo_tracks.len();
-                                                    let num_groups = duplicate_groups.len();
+                                            self.current_view = MenuState::TagEditor {
+                                                tracks: demo_tracks,
+                                                tag_fields,
+                                                original_tag_fields, // Phase 3: Store original
+                                                current_track_idx: 0,
+                                                current_field_idx: 0,
 
-                                                    self.current_view = MenuState::TagEditor {
-                                                        tracks: demo_tracks,
-                                                        tag_fields,
-                                                        original_tag_fields, // Phase 3: Store original
-                                                        current_track_idx: 0,
-                                                        current_field_idx: 0,
+                                                // New edit state fields
+                                                field_edit_state: FieldEditState::NonEditable,
+                                                name_buffer: String::new(),
+                                                value_buffer: initial_buffer.clone(),
+                                                original_name: initial_name.clone(),
+                                                original_value: initial_buffer.clone(),
 
-                                                        // New edit state fields
-                                                        field_edit_state:
-                                                            FieldEditState::NonEditable,
-                                                        name_buffer: String::new(),
-                                                        value_buffer: initial_buffer.clone(),
-                                                        original_name: initial_name.clone(),
-                                                        original_value: initial_buffer.clone(),
-
-                                                        // Phase 6: Duplicate workflow fields
-                                                        duplicate_groups: duplicate_groups.clone(),
-                                                        current_group_idx: Some(0),
-                                                        // show_write_changes_button removed - Phase 0
-                                                        focus_on_value: true,
-                                                    };
-                                                    format!("Tag Editor: Duplicate group 1/{} - {} tracks", num_groups, num_tracks)
-                                                }
-                                            }
-                                            Err(e) => {
-                                                format!("Error loading tracks for group: {}", e)
-                                            }
+                                                // Phase 6: Duplicate workflow fields
+                                                duplicate_groups: duplicate_groups.clone(),
+                                                current_group_idx: Some(0),
+                                                // show_write_changes_button removed - Phase 0
+                                                focus_on_value: true,
+                                            };
+                                            format!(
+                                                "Tag Editor: Duplicate group 1/{} - {} tracks",
+                                                num_groups, num_tracks
+                                            )
                                         }
                                     }
-                                    Err(e) => format!("Error loading duplicate groups: {}", e),
+                                    Err(e) => {
+                                        format!("Error loading tracks for group: {}", e)
+                                    }
                                 }
                             }
-                            Err(e) => format!("Error opening database: {}", e),
+                            Err(e) => format!("Error loading duplicate groups: {}", e),
                         }
                     }
-                    Err(e) => format!("Error getting database path: {}", e),
+                    Err(e) => format!("Error opening database: {}", e),
                 }
+            }
+            Err(e) => format!("Error getting database path: {}", e),
+        }
     }
 
     fn start_scan(&mut self, source: ScanSource) {
@@ -2259,6 +2245,7 @@ impl App {
                 total_bytes: 0,
                 bytes_processed: 0,
                 files_processed: 0,
+                total_files: 0,
                 current_file: None,
                 errors: 0,
                 start_time: std::time::Instant::now(),
@@ -2266,7 +2253,7 @@ impl App {
             cancel_flag,
         });
         self.operation_receiver = Some(rx);
-        self.status_message = Some(format!("Scanning {}...", source.name));
+        self.status_message = Some(format!("Indexing {}...", source.name));
     }
 
     fn start_scan_all(&mut self, sources: Vec<ScanSource>, clean_rescan: bool) {
@@ -2282,6 +2269,7 @@ impl App {
                     total_bytes: 0,
                     bytes_processed: 0,
                     files_processed: 0,
+                    total_files: 0,
                     current_file: Some("Clearing database...".to_string()),
                     errors: 0,
                     start_time: std::time::Instant::now(),
@@ -2323,9 +2311,9 @@ impl App {
 
         // Set up operation state
         let status_msg = if clean_rescan {
-            "Clean rescanning all sources (clearing cache)..."
+            "Clean reindexing all sources (clearing cache)..."
         } else {
-            "Scanning all sources..."
+            "Indexing all sources..."
         };
 
         self.operation_in_progress = Some(OperationState {
@@ -2336,6 +2324,7 @@ impl App {
                 total_bytes: 0,
                 bytes_processed: 0,
                 files_processed: 0,
+                total_files: 0,
                 current_file: None,
                 errors: 0,
                 start_time: std::time::Instant::now(),
@@ -2396,6 +2385,7 @@ impl App {
                         total_bytes: 0,
                         bytes_processed: 0,
                         files_processed: 0,
+                        total_files: 0,
                         current_file: Some(format!("Generating {} ({}/4)...", report_name, i + 1)),
                         errors: 0,
                         start_time,
@@ -2443,6 +2433,7 @@ impl App {
                     total_bytes: 0,
                     bytes_processed: 0,
                     files_processed: 0,
+                    total_files: 0,
                     current_file: Some("Starting...".to_string()),
                     errors: 0,
                     start_time: std::time::Instant::now(),
@@ -2492,6 +2483,7 @@ impl App {
                 total_bytes: 0,
                 bytes_processed: 0,
                 files_processed: 0,
+                total_files: 0,
                 current_file: Some("Generating report...".to_string()),
                 errors: 0,
                 start_time,
@@ -2531,6 +2523,7 @@ impl App {
                 total_bytes: 0,
                 bytes_processed: 0,
                 files_processed: 0,
+                total_files: 0,
                 current_file: Some("Starting...".to_string()),
                 errors: 0,
                 start_time: std::time::Instant::now(),
@@ -2580,6 +2573,7 @@ impl App {
                 total_bytes: 0,
                 bytes_processed: 0,
                 files_processed: 0,
+                total_files: 0,
                 current_file: Some("Creating deployment plan...".to_string()),
                 errors: 0,
                 start_time,
@@ -2616,28 +2610,19 @@ impl App {
                     total_bytes: 0,
                     bytes_processed: 0,
                     files_processed: total_deployed,
+                    total_files: 0,
                     current_file: Some(format!("Deploying to library: {}", plan.library_name)),
                     errors: all_errors.len(),
                     start_time,
                 }));
 
-                // Find library path
-                let library = match config
-                    .libraries
-                    .iter()
-                    .find(|l| l.name == plan.library_name)
-                {
-                    Some(lib) => lib,
-                    None => {
-                        all_errors.push(format!("Library not found: {}", plan.library_name));
-                        continue;
-                    }
-                };
+                // Compute library path from libraries_root
+                let library_path = config.libraries_root.join(&plan.library_name);
 
                 // Execute deployment
                 let result = match deploy::execute_deployment(
                     &plan,
-                    &library.path,
+                    &library_path,
                     config.lost_files_dir.as_deref(),
                     dry_run,
                 ) {
@@ -2707,6 +2692,7 @@ impl App {
                 total_bytes: 0,
                 bytes_processed: 0,
                 files_processed: 0,
+                total_files: 0,
                 current_file: Some("Starting...".to_string()),
                 errors: 0,
                 start_time: std::time::Instant::now(),
@@ -2811,14 +2797,14 @@ impl App {
     }
 }
 
-pub fn run() -> Result<()> {
+pub fn run(config: Config) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
+    let mut app = App::new(config);
     let res = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -3037,7 +3023,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title("Corpus Triage and Operations"),
+                        .title("Corpus Operations"),
                 )
                 .highlight_style(
                     Style::default()
@@ -3537,10 +3523,14 @@ fn ui(f: &mut Frame, app: &mut App) {
             )));
             if let Some(err) = error_message {
                 text.push(Line::from(""));
-                text.push(Line::from(format!("ERROR: {}", err)).style(Style::default().fg(Color::Red)));
+                text.push(
+                    Line::from(format!("ERROR: {}", err)).style(Style::default().fg(Color::Red)),
+                );
             }
             text.push(Line::from(""));
-            text.push(Line::from("[Enter on empty path to finish] [Esc to cancel]"));
+            text.push(Line::from(
+                "[Enter on empty path to finish] [Esc to cancel]",
+            ));
 
             let paragraph = Paragraph::new(text)
                 .block(Block::default().borders(Borders::ALL))
@@ -3574,28 +3564,54 @@ fn ui(f: &mut Frame, app: &mut App) {
                 Line::from("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"),
                 Line::from(""),
                 Line::from(format!("Files affected: {} total", total_files)),
-                Line::from(format!("Match score: {}% (exact fingerprint match)", conflict.match_score)),
+                Line::from(format!(
+                    "Match score: {}% (exact fingerprint match)",
+                    conflict.match_score
+                )),
                 Line::from(""),
                 Line::from("Directories:"),
             ];
 
             for (i, dir) in conflict.conflict_dirs.iter().enumerate() {
-                let count = conflict.tracks_by_dir.get(dir).map(|v| v.len()).unwrap_or(0);
-                text.push(Line::from(format!("  [{}] {} ({} files)", i + 1, dir, count)));
+                let count = conflict
+                    .tracks_by_dir
+                    .get(dir)
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                text.push(Line::from(format!(
+                    "  [{}] {} ({} files)",
+                    i + 1,
+                    dir,
+                    count
+                )));
             }
 
             text.push(Line::from(""));
-            text.push(Line::from(format!("Select winning directory (1-{}): {}", conflict.conflict_dirs.len(), input_buffer)));
+            text.push(Line::from(format!(
+                "Select winning directory (1-{}): {}",
+                conflict.conflict_dirs.len(),
+                input_buffer
+            )));
             text.push(Line::from(""));
-            text.push(Line::from(format!("Session: {} resolved, {} skipped", session_stats.resolved_count, session_stats.skipped_count)));
+            text.push(Line::from(format!(
+                "Session: {} resolved, {} skipped",
+                session_stats.resolved_count, session_stats.skipped_count
+            )));
             text.push(Line::from("[s] Skip  [q] Quit with stats  [Esc] Cancel"));
 
             let paragraph = Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL).title("Conflict Resolution"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Conflict Resolution"),
+                )
                 .wrap(ratatui::widgets::Wrap { trim: false });
             f.render_widget(paragraph, chunks[1]);
         }
-        MenuState::FingerprintDedupStats { stats, lost_found_path } => {
+        MenuState::FingerprintDedupStats {
+            stats,
+            lost_found_path,
+        } => {
             let text = vec![
                 Line::from("Fingerprint Deduplication Summary"),
                 Line::from("═════════════════════════════════"),
@@ -3619,7 +3635,11 @@ fn ui(f: &mut Frame, app: &mut App) {
             ];
 
             let paragraph = Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL).title("Deduplication Complete"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Deduplication Complete"),
+                )
                 .wrap(ratatui::widgets::Wrap { trim: false });
             f.render_widget(paragraph, chunks[1]);
         }
@@ -3657,7 +3677,7 @@ fn ui(f: &mut Frame, app: &mut App) {
 
         // Progress bar with dynamic title
         let (title, show_stats) = match &op.operation_type {
-            OperationType::Scanning { .. } => ("Scanning Progress", true),
+            OperationType::Scanning { .. } => ("Indexing Progress", true),
             OperationType::GeneratingReport { .. } => ("Report Generation", false),
             OperationType::Deploying { .. } => ("Deployment Progress", false),
         };
@@ -3670,14 +3690,24 @@ fn ui(f: &mut Frame, app: &mut App) {
             .label(format!("{}%", percentage));
         f.render_widget(gauge, progress_chunks[0]);
 
-        // Stats (show for scanning only)
+        // Stats (show for indexing only)
         if show_stats {
+            let eta_str = if let Some(eta_secs) = op.progress.eta_seconds() {
+                let minutes = eta_secs / 60;
+                let seconds = eta_secs % 60;
+                format!("{}m {}s", minutes, seconds)
+            } else {
+                "calculating...".to_string()
+            };
+
             let stats_text = format!(
-                "Files: {} | Bytes: {:.2} GB / {:.2} GB | Speed: {:.1} MB/s",
+                "Files: {}/{} | Bytes: {:.2} GB / {:.2} GB | Speed: {:.1} MB/s | ETA: {}",
                 op.progress.files_processed,
+                op.progress.total_files,
                 op.progress.bytes_processed as f64 / 1_000_000_000.0,
                 op.progress.total_bytes as f64 / 1_000_000_000.0,
-                op.progress.throughput_mbps()
+                op.progress.throughput_mbps(),
+                eta_str
             );
             let stats = Paragraph::new(stats_text)
                 .block(Block::default().borders(Borders::ALL).title("Stats"))

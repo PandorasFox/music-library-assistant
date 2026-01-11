@@ -5,6 +5,7 @@ pub struct ScanProgress {
     pub total_bytes: u64,
     pub bytes_processed: u64,
     pub files_processed: usize,
+    pub total_files: usize,
     pub current_file: Option<String>,
     pub errors: usize,
     pub start_time: Instant,

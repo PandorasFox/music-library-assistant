@@ -130,16 +130,16 @@ pub fn create_deployment_plan(config: &Config, db: &Database) -> Result<Vec<Depl
 
     for mapping in &config.deploy_mappings {
         for library_name in &mapping.library_names {
-            let library = config
-                .libraries
-                .iter()
-                .find(|l| l.name == *library_name)
-                .ok_or_else(|| anyhow::anyhow!("Library not found: {}", library_name))?;
+            // Compute library path from libraries_root
+            let library_path = config.libraries_root.join(library_name);
 
-            // Get corpus tracks in this directory
-            let corpus_path = config.corpus_root.join(&mapping.corpus_relative_path);
-            let corpus_tracks =
-                db.get_tracks_by_corpus_path_prefix(&corpus_path.to_string_lossy())?;
+            // Collect corpus tracks from ALL corpus paths in this mapping
+            let mut all_corpus_tracks = Vec::new();
+            for corpus_relative_path in &mapping.corpus_relative_paths {
+                let corpus_path = config.corpus_root.join(corpus_relative_path);
+                let tracks = db.get_tracks_by_corpus_path_prefix(&corpus_path.to_string_lossy())?;
+                all_corpus_tracks.extend(tracks);
+            }
 
             // Get library tracks (to check what's already deployed)
             let library_tracks = db.get_library_tracks_by_source(library_name)?;
@@ -149,7 +149,7 @@ pub fn create_deployment_plan(config: &Config, db: &Database) -> Result<Vec<Depl
             let mut files_to_deploy = Vec::new();
             let mut files_already_deployed = Vec::new();
 
-            for track in corpus_tracks {
+            for track in all_corpus_tracks {
                 if deployed_inodes.contains(&track.inode) {
                     files_already_deployed.push(track);
                 } else {
@@ -172,9 +172,9 @@ pub fn create_deployment_plan(config: &Config, db: &Database) -> Result<Vec<Depl
                 .iter()
                 .filter(|t| !corpus_inodes.contains(&t.inode))
                 .map(|t| {
-                    // Compute lost file path
+                    // Compute lost file path relative to library
                     let relative = Path::new(&t.path)
-                        .strip_prefix(&library.path)
+                        .strip_prefix(&library_path)
                         .unwrap_or(Path::new(&t.path));
 
                     let target_path = PathBuf::from(library_name).join(relative);

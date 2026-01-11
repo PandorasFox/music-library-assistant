@@ -13,7 +13,7 @@ use crate::db::{Database, Track};
 #[derive(Debug, Clone)]
 pub struct ConflictSet {
     pub fingerprint: String,
-    pub conflict_dirs: Vec<String>,             // ["playlist-1", "playlist-2"]
+    pub conflict_dirs: Vec<String>, // ["playlist-1", "playlist-2"]
     pub tracks_by_dir: HashMap<String, Vec<Track>>,
     pub match_score: f64, // Always 100.0 for exact fingerprint match
 }
@@ -77,11 +77,8 @@ pub fn find_fingerprint_duplicates(
         // 5. Group tracks by conflict key (differing directory name)
         let mut tracks_by_dir: HashMap<String, Vec<Track>> = HashMap::new();
         for track in tracks {
-            let conflict_key = extract_conflict_key(
-                Path::new(&track.path),
-                corpus_root,
-                divergence_idx,
-            );
+            let conflict_key =
+                extract_conflict_key(Path::new(&track.path), corpus_root, divergence_idx);
             tracks_by_dir.entry(conflict_key).or_default().push(track);
         }
 
@@ -102,7 +99,8 @@ pub fn find_fingerprint_duplicates(
 
     // 7. Sort by conflict count (desc), then by total files (desc)
     conflict_sets.sort_by(|a, b| {
-        b.conflict_dirs.len()
+        b.conflict_dirs
+            .len()
             .cmp(&a.conflict_dirs.len())
             .then_with(|| {
                 let a_total: usize = a.tracks_by_dir.values().map(|v| v.len()).sum();
@@ -194,10 +192,7 @@ pub fn resolve_conflict_set(
                     ))?;
                 }
                 Err(e) => {
-                    config::log_message(&format!(
-                        "Failed to move {}: {}",
-                        track.path, e
-                    ))?;
+                    config::log_message(&format!("Failed to move {}: {}", track.path, e))?;
                     // Continue with other files even if one fails
                 }
             }

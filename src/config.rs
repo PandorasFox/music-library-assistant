@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub corpus_root: PathBuf,
-    pub libraries: Vec<Library>,
+    pub libraries_root: PathBuf,
     pub legacy_library: Option<PathBuf>,
     pub deploy_mappings: Vec<DeployMapping>,
     pub lost_files_dir: Option<PathBuf>,
@@ -19,15 +19,9 @@ pub struct Opinions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Library {
-    pub name: String,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeployMapping {
-    pub corpus_relative_path: PathBuf, // Relative to corpus-root
-    pub library_names: Vec<String>,    // Target library names
+    pub corpus_relative_paths: Vec<PathBuf>, // Multiple paths, relative to corpus-root
+    pub library_names: Vec<String>,          // Target library names
 }
 
 #[derive(Debug, Clone)]
@@ -46,12 +40,24 @@ impl Config {
             source_id: "corpus".to_string(),
         }];
 
-        for lib in &self.libraries {
-            sources.push(ScanSource {
-                name: format!("Library: {}", lib.name),
-                path: lib.path.clone(),
-                source_id: lib.name.clone(),
-            });
+        // Enumerate library subdirectories dynamically
+        if let Ok(entries) = fs::read_dir(&self.libraries_root) {
+            for entry in entries.flatten() {
+                if let Ok(metadata) = entry.metadata() {
+                    if metadata.is_dir() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            // Skip hidden directories
+                            if !name.starts_with('.') {
+                                sources.push(ScanSource {
+                                    name: format!("Library: {}", name),
+                                    path: entry.path(),
+                                    source_id: name.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if let Some(legacy) = &self.legacy_library {
@@ -65,135 +71,133 @@ impl Config {
         sources
     }
 
-    /// Validate that all configured paths support hard links
-    /// This is required for MLA's deployment system to work correctly
-    /// Uses capability-based testing instead of device ID comparison to support
-    /// multi-device filesystems like btrfs, ZFS, etc.
+    /// Validate that all configured paths exist and support required operations
+    /// Tests hard link capability for deployment and atomic moves for lost-files
     pub fn validate_same_filesystem(&self) -> Result<()> {
-        // TODO: CRITICAL STARTUP ISSUE
-        // Currently, when config validation fails (including filesystem validation),
-        // the TUI startup just prints a generic "Config load error: Filesystem validation failed"
-        // log line and continues anyway. This is wrong for several reasons:
-        //
-        // 1. Without valid config, MLA cannot know where data resides in the corpus
-        // 2. The TUI should NOT start if config is invalid - it cannot reasonably operate
-        // 3. Error messages need to be VERBOSE and show exactly what failed:
-        //    - Which specific paths failed validation
-        //    - What the underlying test was (hard link capability test)
-        //    - The actual error returned from the filesystem operation
-        // 4. The error should be printed to stdout/stderr BEFORE attempting TUI startup
-        // 5. The process should exit with non-zero status if config is invalid
-        //
-        // PROPER FIX NEEDED:
-        // - main.rs should call config::load_config() BEFORE ui::run_menu()
-        // - If config load fails, print detailed error to stderr and exit(1)
-        // - Do NOT enter TUI mode if config is invalid
-        // - Error messages should include full context chain from anyhow
-        //
-        // For now, bypassing validation to allow development to continue:
-        return Ok(());
+        use std::fs;
+        use std::io::Write;
+        use tempfile::NamedTempFile;
 
-        #[allow(unreachable_code)]
-        {
-            use std::collections::HashMap;
-            use std::fs;
-            use std::io::Write;
-            use tempfile::NamedTempFile;
-
-            // Collect all paths to test (name, path)
-            let mut test_paths: Vec<(String, PathBuf)> = Vec::new();
-
+        // Step 1: Validate corpus_root exists
         if !self.corpus_root.exists() {
-            anyhow::bail!("Corpus root does not exist: {:?}", self.corpus_root);
-        }
-        test_paths.push(("Corpus root".to_string(), self.corpus_root.clone()));
-
-        for library in &self.libraries {
-            if !library.path.exists() {
-                anyhow::bail!(
-                    "Library path does not exist: {} at {:?}",
-                    library.name,
-                    library.path
-                );
-            }
-            let lib_name = format!("Library '{}'", library.name);
-            test_paths.push((lib_name, library.path.clone()));
+            anyhow::bail!(
+                "Validation failed: corpus-root does not exist\n\
+                 Path: {:?}\n\
+                 \n\
+                 Please create this directory or update config.kdl",
+                self.corpus_root
+            );
         }
 
+        // Step 2: Validate libraries_root exists
+        if !self.libraries_root.exists() {
+            anyhow::bail!(
+                "Validation failed: libraries-root does not exist\n\
+                 Path: {:?}\n\
+                 \n\
+                 Please create this directory or update config.kdl",
+                self.libraries_root
+            );
+        }
+
+        // Step 3: Validate lost_files_dir exists (if configured)
         if let Some(lost_path) = &self.lost_files_dir {
-            if lost_path.exists() {
-                test_paths.push(("Lost-files".to_string(), lost_path.clone()));
-            }
-            // Note: Don't fail if lost-files doesn't exist - will be created on demand
-        }
-
-        // Test hard link capability between all path pairs
-        let mut hard_link_matrix: HashMap<(String, String), bool> = HashMap::new();
-
-        for i in 0..test_paths.len() {
-            for j in (i + 1)..test_paths.len() {
-                let (name1, path1) = &test_paths[i];
-                let (name2, path2) = &test_paths[j];
-
-                // Create a temp file in path1
-                let temp_dir1 = path1;
-                let mut temp_file = NamedTempFile::new_in(temp_dir1)
-                    .with_context(|| format!("Failed to create temp file in {}", name1))?;
-                temp_file.write_all(b"test")?;
-                let temp_path1 = temp_file.path().to_path_buf();
-
-                // Try to create a hard link in path2
-                let temp_dir2 = path2;
-                let link_name = format!(
-                    "mla-test-hardlink-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos()
+            if !lost_path.exists() {
+                anyhow::bail!(
+                    "Validation failed: lost-files directory does not exist\n\
+                     Path: {:?}\n\
+                     \n\
+                     Please create this directory or update config.kdl",
+                    lost_path
                 );
-                let link_path = temp_dir2.join(link_name);
-
-                let can_hardlink = match fs::hard_link(&temp_path1, &link_path) {
-                    Ok(_) => {
-                        // Success! Clean up link
-                        let _ = fs::remove_file(&link_path);
-                        true
-                    }
-                    Err(e) => {
-                        log_message(&format!(
-                            "Hard link test failed: {} -> {}: {}",
-                            name1, name2, e
-                        ))?;
-                        false
-                    }
-                };
-
-                hard_link_matrix.insert((name1.to_string(), name2.to_string()), can_hardlink);
-
-                if !can_hardlink {
-                    anyhow::bail!(
-                        "FATAL: Cannot create hard links between {} ({:?}) and {} ({:?}).\n\
-                         This is required for MLA's deployment system to work correctly.\n\
-                         \n\
-                         Possible causes:\n\
-                         - Paths are on different filesystems/volumes\n\
-                         - Filesystem doesn't support hard links\n\
-                         \n\
-                         Solution: Move all directories to the same filesystem/volume.",
-                        name1,
-                        path1,
-                        name2,
-                        path2
-                    );
-                }
             }
         }
 
-            // Log successful validation
-            log_message("Filesystem validation passed: All paths support hard links")?;
+        // Step 4: Test hard link capability (corpus → libraries)
+        let temp_file = NamedTempFile::new_in(&self.corpus_root)
+            .context("Failed to create test file in corpus-root")?;
+        temp_file.as_file().write_all(b"hardlink_test")?;
 
-            Ok(())
+        let link_name = format!(
+            "mla-hardlink-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let link_path = self.libraries_root.join(&link_name);
+
+        if let Err(e) = fs::hard_link(temp_file.path(), &link_path) {
+            anyhow::bail!(
+                "Validation failed: Cannot create hard links\n\
+                 \n\
+                 Corpus root: {:?}\n\
+                 Libraries root: {:?}\n\
+                 \n\
+                 Error: {}\n\
+                 \n\
+                 EXPLANATION:\n\
+                 MLA's deployment requires hard link support between these directories.\n\
+                 \n\
+                 COMMON CAUSES:\n\
+                 - Directories are on different filesystems/volumes\n\
+                 - Filesystem doesn't support hard links (FAT32, exFAT, network mounts)\n\
+                 \n\
+                 SOLUTION:\n\
+                 Move both directories to the same filesystem/volume.",
+                self.corpus_root,
+                self.libraries_root,
+                e
+            );
         }
+        let _ = fs::remove_file(&link_path); // Cleanup
+
+        // Step 5: Test atomic move capability (corpus → lost-files)
+        if let Some(lost_path) = &self.lost_files_dir {
+            let temp_file2 = NamedTempFile::new_in(&self.corpus_root)
+                .context("Failed to create test file in corpus-root")?;
+
+            // Persist the temp file so it doesn't get deleted when we convert it
+            let source_path = temp_file2.into_temp_path();
+
+            let move_name = format!(
+                "mla-move-test-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let move_path = lost_path.join(&move_name);
+
+            if let Err(e) = fs::rename(&source_path, &move_path) {
+                // Cleanup source file if rename failed
+                let _ = fs::remove_file(&source_path);
+
+                anyhow::bail!(
+                    "Validation failed: Cannot atomically move files\n\
+                     \n\
+                     Corpus root: {:?}\n\
+                     Lost files: {:?}\n\
+                     \n\
+                     Error: {}\n\
+                     \n\
+                     EXPLANATION:\n\
+                     MLA needs atomic moves between these directories.\n\
+                     Atomic moves only work on the same filesystem.\n\
+                     \n\
+                     SOLUTION:\n\
+                     Move lost-files to the same filesystem as corpus-root.",
+                    self.corpus_root,
+                    lost_path,
+                    e
+                );
+            }
+            let _ = fs::remove_file(&move_path); // Cleanup
+        }
+
+        // Step 6: Log success
+        log_message("Filesystem validation passed")?;
+        Ok(())
     }
 
     /// Validate deployment configuration
@@ -204,20 +208,15 @@ impl Config {
 
         // Validate deploy mappings
         for mapping in &self.deploy_mappings {
-            // Check that all library names in deploy mappings reference existing libraries
-            for lib_name in &mapping.library_names {
-                if !self.libraries.iter().any(|l| l.name == *lib_name) {
-                    anyhow::bail!("Deploy mapping references unknown library: {}", lib_name);
-                }
-            }
+            // Note: We can't validate library names here because libraries are
+            // discovered at runtime by scanning libraries_root subdirectories
 
             // Check that deploy paths are within corpus root
-            let full_path = self.corpus_root.join(&mapping.corpus_relative_path);
-            if !full_path.starts_with(&self.corpus_root) {
-                anyhow::bail!(
-                    "Deploy path escapes corpus root: {:?}",
-                    mapping.corpus_relative_path
-                );
+            for corpus_path in &mapping.corpus_relative_paths {
+                let full_path = self.corpus_root.join(corpus_path);
+                if !full_path.starts_with(&self.corpus_root) {
+                    anyhow::bail!("Deploy path escapes corpus root: {:?}", corpus_path);
+                }
             }
         }
 
@@ -303,9 +302,43 @@ pub fn load_config() -> Result<Config> {
 fn parse_kdl_config(content: &str) -> Result<Config> {
     let doc: kdl::KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
+    // Check for old format with library blocks
+    let has_old_library_format = doc.nodes().iter().any(|n| n.name().value() == "library");
+
+    if has_old_library_format {
+        anyhow::bail!(
+            "Old config format detected: 'library' blocks are no longer supported\n\
+             \n\
+             MIGRATION REQUIRED:\n\
+             \n\
+             OLD FORMAT:\n\
+             library \"music\" {{\n\
+                 path \"/archive/libraries/music\"\n\
+             }}\n\
+             \n\
+             NEW FORMAT:\n\
+             libraries-root \"/archive/libraries\"\n\
+             \n\
+             Libraries are now discovered by scanning subdirectories under libraries-root.\n\
+             Directory names become library names (e.g., /archive/libraries/music → 'music').\n\
+             \n\
+             DEPLOY FORMAT ALSO CHANGED to support multiple corpus paths:\n\
+             \n\
+             OLD:\n\
+             deploy \"web/releases/bandcamp\" {{\n\
+                 library \"music\"\n\
+             }}\n\
+             \n\
+             NEW:\n\
+             deploy \"web/releases/bandcamp\" \"web/releases/itunes\" {{\n\
+                 library \"music\"\n\
+             }}"
+        );
+    }
+
     let mut config = Config {
         corpus_root: PathBuf::new(),
-        libraries: Vec::new(),
+        libraries_root: PathBuf::new(),
         legacy_library: None,
         deploy_mappings: Vec::new(),
         lost_files_dir: None,
@@ -322,23 +355,10 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                     }
                 }
             }
-            "library" => {
-                if let Some(name_entry) = node.entries().first() {
-                    if let Some(name) = name_entry.value().as_string() {
-                        if let Some(children) = node.children() {
-                            for child in children.nodes() {
-                                if child.name().value() == "path" {
-                                    if let Some(path_entry) = child.entries().first() {
-                                        if let Some(path_str) = path_entry.value().as_string() {
-                                            config.libraries.push(Library {
-                                                name: name.to_string(),
-                                                path: PathBuf::from(path_str),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            "libraries-root" => {
+                if let Some(path) = node.entries().first() {
+                    if let Some(path_str) = path.value().as_string() {
+                        config.libraries_root = PathBuf::from(path_str);
                     }
                 }
             }
@@ -350,23 +370,34 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                 }
             }
             "deploy" => {
-                if let Some(path_entry) = node.entries().first() {
-                    if let Some(path_str) = path_entry.value().as_string() {
-                        let mut library_names = Vec::new();
-                        if let Some(children) = node.children() {
-                            for child in children.nodes() {
-                                if let Some(lib_entry) = child.entries().first() {
-                                    if let Some(lib_name) = lib_entry.value().as_string() {
-                                        library_names.push(lib_name.to_string());
-                                    }
+                let mut corpus_paths = Vec::new();
+
+                // Collect all path arguments (multiple corpus paths supported)
+                for entry in node.entries() {
+                    if let Some(path_str) = entry.value().as_string() {
+                        corpus_paths.push(PathBuf::from(path_str));
+                    }
+                }
+
+                // Parse library names from children
+                let mut library_names = Vec::new();
+                if let Some(children) = node.children() {
+                    for child in children.nodes() {
+                        if child.name().value() == "library" {
+                            if let Some(lib_entry) = child.entries().first() {
+                                if let Some(lib_name) = lib_entry.value().as_string() {
+                                    library_names.push(lib_name.to_string());
                                 }
                             }
                         }
-                        config.deploy_mappings.push(DeployMapping {
-                            corpus_relative_path: PathBuf::from(path_str),
-                            library_names,
-                        });
                     }
+                }
+
+                if !corpus_paths.is_empty() {
+                    config.deploy_mappings.push(DeployMapping {
+                        corpus_relative_paths: corpus_paths,
+                        library_names,
+                    });
                 }
             }
             "lost-files" => {
@@ -393,6 +424,10 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
         anyhow::bail!("corpus-root not specified in config.kdl");
     }
 
+    if config.libraries_root.as_os_str().is_empty() {
+        anyhow::bail!("libraries-root not specified in config.kdl");
+    }
+
     Ok(config)
 }
 
@@ -401,16 +436,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_config() {
+    fn test_parse_new_format() {
         let kdl = r#"
 corpus-root "/Volumes/cerberus/archive/music"
+libraries-root "/Volumes/cerberus/library"
+lost-files "/Volumes/cerberus/archive/lost"
 
-library "main" {
-    path "/Volumes/cerberus/library/main"
-}
-
-library "soundtracks" {
-    path "/Volumes/cerberus/library/soundtracks"
+deploy "web/releases/bandcamp" "web/releases/itunes" {
+    library "main"
 }
 
 legacy-library "/Volumes/cerberus/archive/working/legacy"
@@ -421,8 +454,43 @@ legacy-library "/Volumes/cerberus/archive/working/legacy"
             config.corpus_root,
             PathBuf::from("/Volumes/cerberus/archive/music")
         );
-        assert_eq!(config.libraries.len(), 2);
-        assert_eq!(config.libraries[0].name, "main");
+        assert_eq!(
+            config.libraries_root,
+            PathBuf::from("/Volumes/cerberus/library")
+        );
+        assert_eq!(config.deploy_mappings.len(), 1);
+        assert_eq!(config.deploy_mappings[0].corpus_relative_paths.len(), 2);
+        assert_eq!(config.deploy_mappings[0].library_names[0], "main");
         assert!(config.legacy_library.is_some());
+        assert!(config.lost_files_dir.is_some());
+    }
+
+    #[test]
+    fn test_old_format_rejected() {
+        let kdl = r#"
+corpus-root "/Volumes/cerberus/archive/music"
+
+library "main" {
+    path "/Volumes/cerberus/library/main"
+}
+"#;
+
+        let result = parse_kdl_config(kdl);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Old config format"));
+        assert!(err_msg.contains("MIGRATION REQUIRED"));
+    }
+
+    #[test]
+    fn test_missing_libraries_root() {
+        let kdl = r#"
+corpus-root "/Volumes/cerberus/archive/music"
+"#;
+
+        let result = parse_kdl_config(kdl);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("libraries-root not specified"));
     }
 }

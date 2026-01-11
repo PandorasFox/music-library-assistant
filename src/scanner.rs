@@ -150,8 +150,9 @@ pub fn scan_directory_with_progress(
             total_bytes: files_to_scan_bytes,
             bytes_processed: 0,
             files_processed: 0,
+            total_files: files_to_scan.len(),
             current_file: Some(format!(
-                "Scanning {} new/modified files (skipped {} unchanged)",
+                "Indexing {} new/modified files (skipped {} unchanged)",
                 files_to_scan.len(),
                 files_unchanged.len()
             )),
@@ -164,6 +165,7 @@ pub fn scan_directory_with_progress(
     let bytes_processed = AtomicU64::new(0);
     let files_processed = AtomicUsize::new(0);
     let errors = AtomicUsize::new(0);
+    let total_files = files_to_scan.len();
 
     let tracks: Vec<_> = files_to_scan
         .par_iter()
@@ -187,6 +189,7 @@ pub fn scan_directory_with_progress(
                         total_bytes: files_to_scan_bytes,
                         bytes_processed: bytes_processed.load(Ordering::Relaxed),
                         files_processed: files,
+                        total_files,
                         current_file: Some(
                             file_info
                                 .path
@@ -221,18 +224,6 @@ pub fn scan_directory_with_progress(
     // Check if cancelled
     if cancel_flag.load(Ordering::Relaxed) {
         return Err(anyhow::anyhow!("Scan cancelled by user"));
-    }
-
-    // Send final progress update showing 100% completion
-    if let Some(ref tx) = progress_tx {
-        let _ = tx.send(ScanMessage::Progress(ScanProgress {
-            total_bytes: files_to_scan_bytes,
-            bytes_processed: bytes_processed.load(Ordering::Relaxed),
-            files_processed: files_processed.load(Ordering::Relaxed),
-            current_file: Some("Finalizing...".to_string()),
-            errors: errors.load(Ordering::Relaxed),
-            start_time,
-        }));
     }
 
     // Step 4: Batch insert to database (INSERT OR REPLACE keeps existing data)

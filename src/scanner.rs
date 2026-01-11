@@ -198,7 +198,7 @@ pub fn scan_directory_with_progress(
             let files = files_processed.fetch_add(1, Ordering::Relaxed) + 1;
 
             // Send progress update every 10 files
-            if files % 10 == 0 {
+            if files.is_multiple_of(10) {
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(ScanMessage::Progress(ScanProgress {
                         total_bytes: files_to_scan_bytes,

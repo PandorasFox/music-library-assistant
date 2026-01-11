@@ -1,6 +1,11 @@
 //! Deduplication Module
 //!
-//! Provides fingerprint-based deduplication for surgical duplicate removal
+//! Provides fingerprint-based deduplication for surgical duplicate removal.
+//!
+//! NOTE: Core functions implemented but UI integration pending.
+//! See docs/FUTURE_FEATURES.md and FINGERPRINT_DEDUP_INTEGRATION.md.
+
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -111,11 +116,11 @@ pub fn compute_directory_clusters(
         for i in 0..dirs.len() {
             for j in i+1..dirs.len() {
                 adjacency.entry(dirs[i].clone())
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(dirs[j].clone());
 
                 adjacency.entry(dirs[j].clone())
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(dirs[i].clone());
             }
         }
@@ -350,7 +355,7 @@ pub fn auto_remove_inferior_bitrates(
     for track in tracks {
         if let Some(fp) = &track.fingerprint {
             if !fp.is_empty() {
-                by_fingerprint.entry(fp.clone()).or_insert_with(Vec::new).push(track);
+                by_fingerprint.entry(fp.clone()).or_default().push(track);
             }
         }
     }

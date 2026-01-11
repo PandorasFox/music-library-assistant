@@ -2,6 +2,8 @@
 //!
 //! All corpus-mutating operations are tracked as composable, reversible functions.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Represents a pending operation on the corpus.

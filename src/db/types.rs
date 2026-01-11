@@ -1,5 +1,7 @@
 //! Core database types for track metadata and scan state.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Universal audio file representation.

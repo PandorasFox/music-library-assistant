@@ -19,8 +19,11 @@ pub mod state;
 pub mod types;
 
 // Re-export public types
+// Some types are not yet used externally but are part of the public API
+#[allow(unused_imports)]
 pub use render::{render_change_preview_modal, render_save_confirmation_modal};
 pub use state::TagEditorState;
+#[allow(unused_imports)]
 pub use types::{
     DuplicateGroupInfo, DuplicateGroupType, FieldEditState, GroupedChange, TagChange,
     TagEditorAction, TagEditorModal, TagField,

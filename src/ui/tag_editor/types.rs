@@ -2,6 +2,8 @@
 //!
 //! Core type definitions for the tag editor workflow.
 
+#![allow(dead_code)]
+
 use crate::db::Track;
 
 /// Edit mode for tag fields

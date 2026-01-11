@@ -2,6 +2,8 @@
 //!
 //! Core state structure and conversion functions.
 
+#![allow(dead_code)]
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 

@@ -3,6 +3,8 @@
 //! Provides the core application structure with mode-based UI dispatch.
 //! This module is being phased in to replace the monolithic menu.rs.
 
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -170,7 +172,7 @@ impl EyeAnimation {
 
         // 30-60 seconds normally, occasionally up to 90 seconds
         let base = 30 + (random_val % 30);
-        if random_val % 10 == 0 {
+        if random_val.is_multiple_of(10) {
             base + 30 // 10% chance of extra long pause
         } else {
             base

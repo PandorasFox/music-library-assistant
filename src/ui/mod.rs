@@ -77,6 +77,7 @@ struct App {
     eye: EyeAnimation,
 
     // Tag editing session
+    #[allow(dead_code)]
     tag_edit_session_id: String,
 }
 

@@ -5,6 +5,11 @@
 //! - Dry-run preview of changes
 //! - Staging to a preview library
 //! - Atomic commit or revert of change sets
+//!
+//! NOTE: Much of this module is implemented but not yet wired into the UI.
+//! See docs/FUTURE_FEATURES.md for planned integration.
+
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -245,12 +250,7 @@ pub fn create_staging_preview(
 
         if let Some(target) = &change.target_path {
             // Create the same directory structure under staging root
-            let relative_target = if target.starts_with('/') {
-                // Strip leading slash for path joining
-                &target[1..]
-            } else {
-                target.as_str()
-            };
+            let relative_target = target.strip_prefix('/').unwrap_or(target.as_str());
 
             let staging_path = staging_root.join(relative_target);
 

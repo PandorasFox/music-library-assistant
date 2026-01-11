@@ -3,6 +3,8 @@
 //! These types support the MLA dialogue system where the librarian
 //! works through a stack of decisions presented by the assistant.
 
+#![allow(dead_code)]
+
 use super::changes::PendingChange;
 
 /// Priority level for decisions - determines presentation order.

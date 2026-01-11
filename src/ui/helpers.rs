@@ -1,6 +1,10 @@
 //! Shared UI rendering utilities
 //!
 //! Common helpers used across multiple UI modules to avoid code duplication.
+//!
+//! NOTE: Some helpers are not yet used but available for future features.
+
+#![allow(dead_code)]
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},

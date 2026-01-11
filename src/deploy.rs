@@ -1,6 +1,11 @@
 //! Deploy Module
 //!
 //! Part of MLA's toolkit: provides the "deploy" capability for library organization.
+//!
+//! NOTE: Core deployment logic implemented but UI integration pending.
+//! See docs/FUTURE_FEATURES.md for planned integration.
+
+#![allow(dead_code)]
 
 use anyhow::Result;
 use std::collections::HashSet;

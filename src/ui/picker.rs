@@ -1,7 +1,12 @@
 //! Reusable TUI Picker Component
 //!
 //! General-purpose list picker for selecting from 2-10 options
-//! using arrow key navigation
+//! using arrow key navigation.
+//!
+//! NOTE: Component implemented but not yet wired into deduplication UI.
+//! See FINGERPRINT_DEDUP_INTEGRATION.md for planned usage.
+
+#![allow(dead_code)]
 
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::{

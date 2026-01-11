@@ -5,6 +5,8 @@
 //! - Middle pane: Commands within selected category
 //! - Right pane: Info/description for highlighted command (TODO placeholders)
 
+#![allow(dead_code)]
+
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},

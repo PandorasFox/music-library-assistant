@@ -2,6 +2,8 @@
 //!
 //! All SQLite operations are centralized here.
 
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};

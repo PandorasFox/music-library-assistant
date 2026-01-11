@@ -2,6 +2,8 @@
 //!
 //! All UI rendering functions for the tag editor.
 
+#![allow(dead_code)]
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},

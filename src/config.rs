@@ -1,3 +1,9 @@
+//! Configuration Module
+//!
+//! KDL configuration parsing, path utilities, and logging.
+
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;

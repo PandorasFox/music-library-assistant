@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config;
-use crate::db::{Database, Track};
+use crate::db::{ChangeStatus, ChangeType, Database, PendingChange, Track};
 
 #[derive(Debug, Clone)]
 pub struct ConflictSet {
@@ -96,6 +96,272 @@ impl Default for AutoIgnoreState {
         Self::new()
     }
 }
+
+// ============================================================================
+// Directory Set Clustering (Non-Transitive)
+// ============================================================================
+
+/// A cluster of duplicates sharing EXACTLY this set of directories.
+/// Unlike DirectoryCluster (which uses transitive BFS), this groups conflicts
+/// by their exact directory set - duplicates in {A, B} are kept separate from
+/// those in {A, B, C}.
+#[derive(Debug, Clone)]
+pub struct DirectorySetCluster {
+    /// Sorted directory names (e.g., ["Tracks-DaB", "Tracks-trans"])
+    pub directory_set: Vec<String>,
+    /// Fingerprints that exist in EXACTLY these directories
+    pub fingerprints: Vec<String>,
+    /// Total file count across all directories
+    pub file_count: usize,
+    /// Number of directories (cluster magnitude)
+    pub magnitude: usize,
+}
+
+/// Decision state for a single cluster
+#[derive(Debug, Clone)]
+pub struct ClusterDecision {
+    /// The cluster this decision is for
+    pub cluster: DirectorySetCluster,
+    /// Directory chosen as keeper (None = not decided yet)
+    pub keeper_dir: Option<String>,
+    /// Generated pending changes (populated after decision)
+    pub pending_changes: Vec<PendingChange>,
+}
+
+/// Session state for the deduplication workflow
+#[derive(Debug, Clone)]
+pub struct DeduplicationSession {
+    /// Change session ID for tracking in database
+    pub session_id: String,
+    /// Clusters sorted by magnitude desc, then file_count desc
+    pub clusters: Vec<DirectorySetCluster>,
+    /// Current cluster index being reviewed
+    pub current_index: usize,
+    /// Completed decisions
+    pub decisions: Vec<ClusterDecision>,
+    /// Whether bulk phase is complete (individual conflicts remain)
+    pub bulk_phase_complete: bool,
+    /// Common divergence root path (e.g., "web/rips/spotify/")
+    pub divergence_root: String,
+    /// Original conflict sets (needed for change generation)
+    pub conflict_sets: Vec<ConflictSet>,
+    /// Auto-ignore state
+    pub auto_ignore: AutoIgnoreState,
+}
+
+impl DeduplicationSession {
+    /// Get the current cluster being reviewed, if any
+    pub fn current_cluster(&self) -> Option<&DirectorySetCluster> {
+        self.clusters.get(self.current_index)
+    }
+
+    /// Check if all clusters have been processed
+    pub fn is_complete(&self) -> bool {
+        self.current_index >= self.clusters.len()
+    }
+
+    /// Get total pending changes across all decisions
+    pub fn total_pending_changes(&self) -> usize {
+        self.decisions.iter()
+            .map(|d| d.pending_changes.len())
+            .sum()
+    }
+
+    /// Get count of files that will be kept
+    pub fn files_to_keep(&self) -> usize {
+        let mut kept = 0;
+        for decision in &self.decisions {
+            if let Some(keeper) = &decision.keeper_dir {
+                // Count files in keeper directory for this cluster's conflicts
+                for cs in &self.conflict_sets {
+                    let mut cs_dirs: Vec<_> = cs.conflict_dirs.clone();
+                    cs_dirs.sort();
+                    if cs_dirs == decision.cluster.directory_set {
+                        if let Some(tracks) = cs.tracks_by_dir.get(keeper) {
+                            kept += tracks.len();
+                        }
+                    }
+                }
+            }
+        }
+        kept
+    }
+
+    /// Get statistics by keeper directory
+    pub fn keeper_stats(&self) -> HashMap<String, usize> {
+        let mut stats: HashMap<String, usize> = HashMap::new();
+        for decision in &self.decisions {
+            if let Some(keeper) = &decision.keeper_dir {
+                // Count files kept in this directory
+                for cs in &self.conflict_sets {
+                    let mut cs_dirs: Vec<_> = cs.conflict_dirs.clone();
+                    cs_dirs.sort();
+                    if cs_dirs == decision.cluster.directory_set {
+                        if let Some(tracks) = cs.tracks_by_dir.get(keeper) {
+                            *stats.entry(keeper.clone()).or_default() += tracks.len();
+                        }
+                    }
+                }
+            }
+        }
+        stats
+    }
+}
+
+/// Compute directory set clusters (NON-TRANSITIVE).
+/// Groups conflicts by their EXACT directory set, not transitive closure.
+///
+/// For example, if you have:
+/// - Track A with copies in {dir1, dir2}
+/// - Track B with copies in {dir1, dir2, dir3}
+///
+/// These form TWO separate clusters, not one.
+pub fn compute_directory_set_clusters(
+    conflict_sets: &[ConflictSet],
+) -> Vec<DirectorySetCluster> {
+    // Group by sorted directory set
+    let mut by_dir_set: HashMap<Vec<String>, Vec<&ConflictSet>> = HashMap::new();
+    for cs in conflict_sets {
+        let mut dir_set = cs.conflict_dirs.clone();
+        dir_set.sort();
+        by_dir_set.entry(dir_set).or_default().push(cs);
+    }
+
+    // Build and sort clusters
+    let mut clusters: Vec<DirectorySetCluster> = by_dir_set
+        .into_iter()
+        .map(|(dir_set, conflicts)| {
+            DirectorySetCluster {
+                magnitude: dir_set.len(),
+                fingerprints: conflicts.iter().map(|c| c.fingerprint.clone()).collect(),
+                file_count: conflicts.iter()
+                    .flat_map(|c| c.tracks_by_dir.values())
+                    .map(|t| t.len())
+                    .sum(),
+                directory_set: dir_set,
+            }
+        })
+        .collect();
+
+    // Sort: magnitude DESC, then file_count DESC
+    clusters.sort_by(|a, b| {
+        b.magnitude.cmp(&a.magnitude)
+            .then_with(|| b.file_count.cmp(&a.file_count))
+    });
+
+    clusters
+}
+
+/// Generate Delete pending changes for a cluster decision.
+/// Creates a change for each file in non-keeper directories.
+pub fn generate_cluster_changes(
+    cluster: &DirectorySetCluster,
+    keeper_dir: &str,
+    conflict_sets: &[ConflictSet],
+    corpus_root: &Path,
+    lost_files_root: &Path,
+    session_id: &str,
+) -> Vec<PendingChange> {
+    let mut changes = Vec::new();
+
+    for cs in conflict_sets {
+        // Only process conflicts matching EXACTLY this cluster's directory set
+        let mut cs_dirs = cs.conflict_dirs.clone();
+        cs_dirs.sort();
+        if cs_dirs != cluster.directory_set {
+            continue;
+        }
+
+        // Create Delete change for each non-keeper track
+        for (dir, tracks) in &cs.tracks_by_dir {
+            if dir == keeper_dir {
+                continue; // Keep these
+            }
+
+            for track in tracks {
+                let rel_path = Path::new(&track.path)
+                    .strip_prefix(corpus_root)
+                    .unwrap_or(Path::new(&track.path));
+                let target = lost_files_root
+                    .join("fingerprint-dupes")
+                    .join(dir)
+                    .join(rel_path);
+
+                changes.push(PendingChange {
+                    id: None,
+                    session_id: session_id.to_string(),
+                    change_type: ChangeType::Delete,
+                    source_path: track.path.clone(),
+                    target_path: Some(target.to_string_lossy().to_string()),
+                    metadata_changes: None,
+                    created_at: None,
+                    status: ChangeStatus::Pending,
+                });
+            }
+        }
+    }
+
+    changes
+}
+
+/// Check if remaining clusters are all 2-dir single-file conflicts.
+/// Returns true when it's time to offer bulk review before individual resolution.
+pub fn should_offer_bulk_review(
+    clusters: &[DirectorySetCluster],
+    current_index: usize,
+) -> bool {
+    if current_index >= clusters.len() {
+        return false; // Already complete
+    }
+
+    clusters[current_index..].iter().all(|c| {
+        // 2-directory cluster with exactly 2 files (1 per directory)
+        c.magnitude == 2 && c.file_count == 2
+    })
+}
+
+/// Find the common divergence root from all conflict sets.
+/// This is the path prefix shared by all conflicting paths.
+pub fn find_divergence_root(conflict_sets: &[ConflictSet]) -> String {
+    if conflict_sets.is_empty() {
+        return String::new();
+    }
+
+    // Collect all paths
+    let all_paths: Vec<&str> = conflict_sets.iter()
+        .flat_map(|cs| cs.tracks_by_dir.values())
+        .flat_map(|tracks| tracks.iter())
+        .map(|t| t.path.as_str())
+        .collect();
+
+    if all_paths.is_empty() {
+        return String::new();
+    }
+
+    // Find longest common prefix
+    let first = all_paths[0];
+    let mut common_prefix_len = first.len();
+
+    for path in &all_paths[1..] {
+        let matching_len = first.chars()
+            .zip(path.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        common_prefix_len = common_prefix_len.min(matching_len);
+    }
+
+    // Trim to last directory separator
+    let prefix = &first[..common_prefix_len];
+    if let Some(last_sep) = prefix.rfind('/') {
+        prefix[..=last_sep].to_string()
+    } else {
+        String::new()
+    }
+}
+
+// ============================================================================
+// Original Directory Clustering (Transitive - for reference)
+// ============================================================================
 
 /// Compute non-transitive directory clusters from conflict sets
 /// Returns clusters sorted by: directory count desc, then track count desc
@@ -562,5 +828,192 @@ mod tests {
         let corpus_root = PathBuf::from("/corpus");
         let key = extract_conflict_key(&path, &corpus_root, 1);
         assert_eq!(key, "playlist-winter");
+    }
+
+    // Tests for directory set clustering
+
+    fn make_conflict_set(fingerprint: &str, dirs: &[&str]) -> ConflictSet {
+        let mut tracks_by_dir = HashMap::new();
+        for dir in dirs {
+            tracks_by_dir.insert(
+                dir.to_string(),
+                vec![Track {
+                    id: None,
+                    path: format!("/corpus/{}/artist/track.flac", dir),
+                    source: "corpus".to_string(),
+                    inode: 12345,
+                    file_size: 1000000,
+                    file_type: "flac".to_string(),
+                    artist: Some("Artist".to_string()),
+                    album: Some("Album".to_string()),
+                    album_artist: None,
+                    title: Some("Track".to_string()),
+                    track_number: Some(1),
+                    duration_ms: Some(180000),
+                    bitrate_kbps: Some(320),
+                    sample_rate: Some(44100),
+                    fingerprint: Some(fingerprint.to_string()),
+                    isrc: None,
+                }],
+            );
+        }
+        ConflictSet {
+            fingerprint: fingerprint.to_string(),
+            conflict_dirs: dirs.iter().map(|s| s.to_string()).collect(),
+            tracks_by_dir,
+            match_score: 100.0,
+        }
+    }
+
+    #[test]
+    fn test_compute_directory_set_clusters_basic() {
+        let conflicts = vec![
+            make_conflict_set("fp1", &["dir_a", "dir_b"]),
+            make_conflict_set("fp2", &["dir_a", "dir_b"]),
+        ];
+
+        let clusters = compute_directory_set_clusters(&conflicts);
+
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].magnitude, 2);
+        assert_eq!(clusters[0].fingerprints.len(), 2);
+        assert_eq!(clusters[0].file_count, 4); // 2 dirs * 2 conflicts
+    }
+
+    #[test]
+    fn test_compute_directory_set_clusters_non_transitive() {
+        // {A, B} and {B, C} should be SEPARATE clusters
+        let conflicts = vec![
+            make_conflict_set("fp1", &["dir_a", "dir_b"]),
+            make_conflict_set("fp2", &["dir_b", "dir_c"]),
+        ];
+
+        let clusters = compute_directory_set_clusters(&conflicts);
+
+        assert_eq!(clusters.len(), 2); // Two separate clusters
+        assert!(clusters.iter().all(|c| c.magnitude == 2));
+    }
+
+    #[test]
+    fn test_compute_directory_set_clusters_ordering() {
+        // 3-way cluster should come before 2-way clusters
+        let conflicts = vec![
+            make_conflict_set("fp1", &["a", "b"]),
+            make_conflict_set("fp2", &["x", "y", "z"]), // 3-way
+            make_conflict_set("fp3", &["a", "b"]),      // same as fp1
+        ];
+
+        let clusters = compute_directory_set_clusters(&conflicts);
+
+        assert_eq!(clusters.len(), 2);
+        // 3-way cluster first
+        assert_eq!(clusters[0].magnitude, 3);
+        assert_eq!(clusters[0].directory_set, vec!["x", "y", "z"]);
+        // 2-way cluster second
+        assert_eq!(clusters[1].magnitude, 2);
+    }
+
+    #[test]
+    fn test_should_offer_bulk_review_not_yet() {
+        let clusters = vec![
+            DirectorySetCluster {
+                directory_set: vec!["a".into(), "b".into(), "c".into()],
+                fingerprints: vec!["fp1".into()],
+                file_count: 3,
+                magnitude: 3,
+            },
+            DirectorySetCluster {
+                directory_set: vec!["a".into(), "b".into()],
+                fingerprints: vec!["fp2".into()],
+                file_count: 2,
+                magnitude: 2,
+            },
+        ];
+
+        // At index 0, not all remaining are 2-dir single-file
+        assert!(!should_offer_bulk_review(&clusters, 0));
+        // At index 1, the remaining is 2-dir with 2 files (1 per dir)
+        assert!(should_offer_bulk_review(&clusters, 1));
+    }
+
+    #[test]
+    fn test_should_offer_bulk_review_complete() {
+        let clusters = vec![
+            DirectorySetCluster {
+                directory_set: vec!["a".into(), "b".into()],
+                fingerprints: vec!["fp1".into()],
+                file_count: 2,
+                magnitude: 2,
+            },
+        ];
+
+        // Past the end
+        assert!(!should_offer_bulk_review(&clusters, 5));
+    }
+
+    #[test]
+    fn test_generate_cluster_changes() {
+        let conflicts = vec![make_conflict_set("fp1", &["keeper", "loser"])];
+        let cluster = DirectorySetCluster {
+            directory_set: vec!["keeper".into(), "loser".into()],
+            fingerprints: vec!["fp1".into()],
+            file_count: 2,
+            magnitude: 2,
+        };
+
+        let changes = generate_cluster_changes(
+            &cluster,
+            "keeper",
+            &conflicts,
+            Path::new("/corpus"),
+            Path::new("/lost-files"),
+            "session-123",
+        );
+
+        assert_eq!(changes.len(), 1); // Only the loser file
+        assert_eq!(changes[0].change_type, ChangeType::Delete);
+        assert!(changes[0].source_path.contains("loser"));
+        assert!(changes[0].target_path.as_ref().unwrap().contains("fingerprint-dupes"));
+    }
+
+    #[test]
+    fn test_find_divergence_root() {
+        let conflicts = vec![
+            make_conflict_set("fp1", &["web/rips/spotify/Tracks-DaB", "web/rips/spotify/Tracks-trans"]),
+        ];
+        // Adjust paths to match the expected pattern
+        let mut cs = conflicts[0].clone();
+        cs.tracks_by_dir.clear();
+        cs.tracks_by_dir.insert(
+            "Tracks-DaB".to_string(),
+            vec![Track {
+                id: None,
+                path: "/corpus/web/rips/spotify/Tracks-DaB/artist/track.flac".to_string(),
+                source: "corpus".to_string(),
+                inode: 12345,
+                file_size: 1000000,
+                file_type: "flac".to_string(),
+                artist: None, album: None, album_artist: None, title: None,
+                track_number: None, duration_ms: None, bitrate_kbps: None,
+                sample_rate: None, fingerprint: None, isrc: None,
+            }],
+        );
+        cs.tracks_by_dir.insert(
+            "Tracks-trans".to_string(),
+            vec![Track {
+                id: None,
+                path: "/corpus/web/rips/spotify/Tracks-trans/artist/track.flac".to_string(),
+                source: "corpus".to_string(),
+                inode: 12346,
+                file_size: 1000000,
+                file_type: "flac".to_string(),
+                artist: None, album: None, album_artist: None, title: None,
+                track_number: None, duration_ms: None, bitrate_kbps: None,
+                sample_rate: None, fingerprint: None, isrc: None,
+            }],
+        );
+
+        let root = find_divergence_root(&[cs]);
+        assert_eq!(root, "/corpus/web/rips/spotify/");
     }
 }

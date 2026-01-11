@@ -65,78 +65,107 @@ impl Config {
         sources
     }
 
-    /// Validate that all configured paths reside on the same filesystem
-    /// This is required for hard link operations to work
-    #[allow(unreachable_code, unused_variables, unused_mut)]
+    /// Validate that all configured paths support hard links
+    /// This is required for MLA's deployment system to work correctly
+    /// Uses capability-based testing instead of device ID comparison to support
+    /// multi-device filesystems like btrfs, ZFS, etc.
     pub fn validate_same_filesystem(&self) -> Result<()> {
-        use std::collections::HashSet;
-        use std::os::unix::fs::MetadataExt;
+        use std::collections::HashMap;
+        use std::fs;
+        use std::io::Write;
+        use tempfile::NamedTempFile;
 
-        let mut devices = HashSet::new();
-        let mut path_info = Vec::new();
+        // Collect all paths to test (name, path)
+        let mut test_paths: Vec<(String, PathBuf)> = Vec::new();
 
-        return Ok(());
-
-        // Check corpus root
-        if self.corpus_root.exists() {
-            let meta =
-                std::fs::metadata(&self.corpus_root).context("Failed to stat corpus root")?;
-            let dev = meta.dev();
-            devices.insert(dev);
-            path_info.push(format!(
-                "  Corpus root: {:?} (filesystem: {})",
-                self.corpus_root, dev
-            ));
-        } else {
+        if !self.corpus_root.exists() {
             anyhow::bail!("Corpus root does not exist: {:?}", self.corpus_root);
         }
+        test_paths.push(("Corpus root".to_string(), self.corpus_root.clone()));
 
-        // Check all library paths
         for library in &self.libraries {
-            if library.path.exists() {
-                let meta = std::fs::metadata(&library.path)
-                    .with_context(|| format!("Failed to stat library: {}", library.name))?;
-                let dev = meta.dev();
-                devices.insert(dev);
-                path_info.push(format!(
-                    "  Library '{}': {:?} (filesystem: {})",
-                    library.name, library.path, dev
-                ));
-            } else {
+            if !library.path.exists() {
                 anyhow::bail!(
                     "Library path does not exist: {} at {:?}",
                     library.name,
                     library.path
                 );
             }
+            let lib_name = format!("Library '{}'", library.name);
+            test_paths.push((lib_name, library.path.clone()));
         }
 
-        // Check lost-files directory if configured
         if let Some(lost_path) = &self.lost_files_dir {
             if lost_path.exists() {
-                let meta =
-                    std::fs::metadata(lost_path).context("Failed to stat lost-files directory")?;
-                let dev = meta.dev();
-                devices.insert(dev);
-                path_info.push(format!(
-                    "  Lost-files: {:?} (filesystem: {})",
-                    lost_path, dev
-                ));
+                test_paths.push(("Lost-files".to_string(), lost_path.clone()));
             }
-            // Note: Don't fail if lost-files doesn't exist - it's optional and may be created later
+            // Note: Don't fail if lost-files doesn't exist - will be created on demand
         }
 
-        // Verify all paths are on the same filesystem
-        if devices.len() > 1 {
-            let error_msg = format!(
-                "FATAL: Cannot create hard links across filesystems.\n\
-                 Paths span multiple filesystems:\n\
-                 {}\n\n\
-                 Solution: Move all directories to the same filesystem/volume.",
-                path_info.join("\n")
-            );
-            anyhow::bail!("{}", error_msg);
+        // Test hard link capability between all path pairs
+        let mut hard_link_matrix: HashMap<(String, String), bool> = HashMap::new();
+
+        for i in 0..test_paths.len() {
+            for j in (i + 1)..test_paths.len() {
+                let (name1, path1) = &test_paths[i];
+                let (name2, path2) = &test_paths[j];
+
+                // Create a temp file in path1
+                let temp_dir1 = path1;
+                let mut temp_file = NamedTempFile::new_in(temp_dir1)
+                    .with_context(|| format!("Failed to create temp file in {}", name1))?;
+                temp_file.write_all(b"test")?;
+                let temp_path1 = temp_file.path().to_path_buf();
+
+                // Try to create a hard link in path2
+                let temp_dir2 = path2;
+                let link_name = format!(
+                    "mla-test-hardlink-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                );
+                let link_path = temp_dir2.join(link_name);
+
+                let can_hardlink = match fs::hard_link(&temp_path1, &link_path) {
+                    Ok(_) => {
+                        // Success! Clean up link
+                        let _ = fs::remove_file(&link_path);
+                        true
+                    }
+                    Err(e) => {
+                        log_message(&format!(
+                            "Hard link test failed: {} -> {}: {}",
+                            name1, name2, e
+                        ))?;
+                        false
+                    }
+                };
+
+                hard_link_matrix.insert((name1.to_string(), name2.to_string()), can_hardlink);
+
+                if !can_hardlink {
+                    anyhow::bail!(
+                        "FATAL: Cannot create hard links between {} ({:?}) and {} ({:?}).\n\
+                         This is required for MLA's deployment system to work correctly.\n\
+                         \n\
+                         Possible causes:\n\
+                         - Paths are on different filesystems/volumes\n\
+                         - Filesystem doesn't support hard links\n\
+                         \n\
+                         Solution: Move all directories to the same filesystem/volume.",
+                        name1,
+                        path1,
+                        name2,
+                        path2
+                    );
+                }
+            }
         }
+
+        // Log successful validation
+        log_message("Filesystem validation passed: All paths support hard links")?;
 
         Ok(())
     }

@@ -439,6 +439,7 @@ pub fn generate_quality_report(output_path: &Path) -> Result<String> {
 pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
     let db_path = config::get_db_path()?;
     let db = Database::open(&db_path)?;
+    let cfg = config::load_config()?;
 
     // Only analyze corpus source for duplicates
     let all_tracks = db.get_all_tracks(Some("corpus"))?;
@@ -517,6 +518,10 @@ pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
         .collect();
 
     metadata_duplicates.sort_by_key(|(key, _)| key.as_str());
+
+    // Populate database with metadata duplicates for resolution UI
+    // This allows the "Duplicate Resolution" menu to load and process these groups
+    populate_metadata_duplicate_groups(&db, &track_groups, &cfg)?;
 
     // === FINGERPRINT-BASED DUPLICATE DETECTION ===
 
@@ -681,4 +686,75 @@ pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
         metadata_duplicates.len(),
         fingerprint_duplicates.len()
     ))
+}
+
+/// Group tracks by their deployment path
+/// This ensures we only flag as duplicates tracks that would deploy to the SAME location
+fn group_by_deployment_path<'a>(
+    tracks: Vec<&'a Track>,
+    _config: &config::Config,
+) -> HashMap<String, Vec<&'a Track>> {
+    let mut groups: HashMap<String, Vec<&'a Track>> = HashMap::new();
+
+    for track in tracks {
+        let deploy_path = crate::deploy::compute_deployment_path(track);
+        let key = deploy_path.to_string_lossy().to_string();
+        groups.entry(key).or_default().push(track);
+    }
+
+    groups
+}
+
+/// Populate database with metadata duplicate groups
+/// This function takes the metadata duplicates detected during report generation
+/// and inserts them into the duplicate_groups and duplicate_group_members tables
+/// so that the resolution UI can load and process them.
+fn populate_metadata_duplicate_groups(
+    db: &Database,
+    track_groups: &HashMap<String, Vec<&Track>>,
+    config: &config::Config,
+) -> Result<()> {
+    // 1. Clear stale pending metadata groups
+    db.clear_pending_duplicate_groups("metadata")?;
+
+    let mut groups_inserted = 0;
+    let mut tracks_inserted = 0;
+
+    // 2. For each metadata duplicate group
+    for (_metadata_key, tracks) in track_groups {
+        if tracks.len() < 2 {
+            continue; // Skip non-duplicates
+        }
+
+        // 3. Group by deployment path
+        // Only tracks that would deploy to the SAME path are true duplicates
+        let by_deploy_path = group_by_deployment_path(tracks.clone(), config);
+
+        // 4. Only insert groups where 2+ tracks deploy to SAME path
+        for (deploy_path, matching_tracks) in by_deploy_path {
+            if matching_tracks.len() < 2 {
+                continue; // Skip if only 1 track would deploy to this path
+            }
+
+            // Insert the duplicate group
+            let group_id = db.insert_duplicate_group("metadata", &deploy_path)?;
+            groups_inserted += 1;
+
+            // Insert all member tracks
+            for track in matching_tracks {
+                if let Some(track_id) = track.id {
+                    db.insert_duplicate_group_member(group_id, track_id)?;
+                    tracks_inserted += 1;
+                }
+            }
+        }
+    }
+
+    // Log summary
+    config::log_message(&format!(
+        "Populated database: {} metadata duplicate groups with {} total tracks",
+        groups_inserted, tracks_inserted
+    ))?;
+
+    Ok(())
 }

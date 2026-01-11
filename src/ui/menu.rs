@@ -83,6 +83,7 @@ enum MenuState {
     },
     ReportsMenu,
     DeployMenu,
+    CorpusTriageMenu,
     #[allow(dead_code)] // Legacy variants - replaced by TagEditor flow in Phase 6
     DuplicateGroupList {
         groups: Vec<DuplicateGroup>,
@@ -467,8 +468,15 @@ enum MenuAction {
     ScanSources,
     Reports,
     Deploy,
-    DuplicateResolution,
+    CorpusTriage,
     Quit,
+}
+
+// Corpus Triage Menu Actions
+enum CorpusTriageAction {
+    MetadataDeduplication,
+    FingerprintDeduplication,
+    Back,
 }
 
 #[derive(Clone)]
@@ -512,8 +520,8 @@ impl App {
                 action: MenuAction::Deploy,
             },
             MenuItem {
-                label: "Duplicate Resolution (Demo)".to_string(),
-                action: MenuAction::DuplicateResolution,
+                label: "Corpus Triage and Operations".to_string(),
+                action: MenuAction::CorpusTriage,
             },
             MenuItem {
                 label: "Quit".to_string(),
@@ -695,6 +703,7 @@ impl App {
             MenuState::ScanSourceMenu { sources } => sources.len() + 2, // +2 for "Scan All" and "Clean Rescan All"
             MenuState::ReportsMenu => 5, // 5 report options (including Generate All)
             MenuState::DeployMenu => 2,  // Dry Run, Full Deploy
+            MenuState::CorpusTriageMenu => 3, // Metadata dedup, Fingerprint dedup, Back
             MenuState::DuplicateGroupList { groups } => groups.len(),
             MenuState::DuplicateGroupDetail { group, .. } => group.tracks.len(),
             MenuState::TagEditor { .. } => return, // Custom navigation handled in handle_key
@@ -721,6 +730,7 @@ impl App {
             MenuState::ScanSourceMenu { sources } => sources.len() + 2, // +2 for "Scan All" and "Clean Rescan All"
             MenuState::ReportsMenu => 5, // 5 report options (including Generate All)
             MenuState::DeployMenu => 2,  // Dry Run, Full Deploy
+            MenuState::CorpusTriageMenu => 3, // Metadata dedup, Fingerprint dedup, Back
             MenuState::DuplicateGroupList { groups } => groups.len(),
             MenuState::DuplicateGroupDetail { group, .. } => group.tracks.len(),
             MenuState::TagEditor { .. } => return, // Custom navigation handled in handle_key
@@ -1202,7 +1212,8 @@ impl App {
                 match &mut self.current_view {
                     MenuState::ScanSourceMenu { .. }
                     | MenuState::ReportsMenu
-                    | MenuState::DeployMenu => {
+                    | MenuState::DeployMenu
+                    | MenuState::CorpusTriageMenu => {
                         self.current_view = MenuState::MainMenu;
                         self.menu_state.select(Some(0));
                         self.status_message = None;
@@ -1706,6 +1717,29 @@ impl App {
                     }
                 }
             }
+            MenuState::CorpusTriageMenu => {
+                if let Some(selected) = self.menu_state.selected() {
+                    match selected {
+                        0 => {
+                            // Metadata Deduplication
+                            let msg = self.handle_metadata_deduplication();
+                            self.status_message = Some(msg);
+                        }
+                        1 => {
+                            // Fingerprint Deduplication
+                            self.status_message = Some(
+                                "Fingerprint deduplication not yet implemented".to_string(),
+                            );
+                        }
+                        2 => {
+                            // Back
+                            self.current_view = MenuState::MainMenu;
+                            self.menu_state.select(Some(0));
+                        }
+                        _ => {}
+                    }
+                }
+            }
             MenuState::DuplicateGroupList { .. } => {
                 // Enter key opens group detail - handled in handle_key
             }
@@ -1759,8 +1793,18 @@ impl App {
                     }
                 }
             }
-            MenuAction::DuplicateResolution => {
-                // Phase 6: Load unresolved duplicate groups from database
+            MenuAction::CorpusTriage => {
+                self.current_view = MenuState::CorpusTriageMenu;
+                self.menu_state.select(Some(0));
+                "Select corpus triage operation (ESC to go back)".to_string()
+            }
+            MenuAction::Quit => std::process::exit(0),
+        }
+    }
+
+    // Handler for old duplicate resolution logic - now called from CorpusTriageMenu
+    fn handle_metadata_deduplication(&mut self) -> String {
+        // Phase 6: Load unresolved duplicate groups from database
                 match config::get_db_path() {
                     Ok(db_path) => {
                         match Database::open(&db_path) {
@@ -1866,12 +1910,6 @@ impl App {
                     }
                     Err(e) => format!("Error getting database path: {}", e),
                 }
-            }
-            MenuAction::Quit => {
-                self.should_quit = true;
-                "Goodbye!".to_string()
-            }
-        }
     }
 
     fn start_scan(&mut self, source: ScanSource) {
@@ -2664,6 +2702,28 @@ fn ui(f: &mut Frame, app: &mut App) {
                     Block::default()
                         .borders(Borders::ALL)
                         .title("Deploy to Libraries"),
+                )
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol(">> ");
+
+            f.render_stateful_widget(list, chunks[1], &mut app.menu_state);
+        }
+        MenuState::CorpusTriageMenu => {
+            let items: Vec<ListItem> = vec![
+                ListItem::new(Line::from("Metadata Deduplication (Tag Editor)")),
+                ListItem::new(Line::from("Fingerprint-Based Deduplication")),
+                ListItem::new(Line::from("Back to Main Menu")),
+            ];
+
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Corpus Triage and Operations"),
                 )
                 .highlight_style(
                     Style::default()

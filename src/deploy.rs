@@ -64,7 +64,7 @@ fn sanitize_path_component(s: &str) -> String {
 /// Returns: {album_artist}/{album}/{track}. {title}.{ext}
 /// Or: {album_artist}/{title}.{ext} for singles
 /// Or: [no album artist]/... if missing album_artist
-fn compute_deployment_path(track: &Track) -> PathBuf {
+pub fn compute_deployment_path(track: &Track) -> PathBuf {
     // Get extension from original path
     let ext = Path::new(&track.path)
         .extension()

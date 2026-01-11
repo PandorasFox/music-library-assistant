@@ -27,6 +27,7 @@ rusty-chromaprint = "0.1"
 walkdir = "2.5"
 dirs = "5.0"
 chrono = "0.4"
+tempfile = "3.8"
 
 # Parallel processing
 rayon = "1.10"

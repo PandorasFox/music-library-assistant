@@ -699,6 +699,50 @@ impl Database {
         Ok(())
     }
 
+    /// Clear stale pending duplicate groups before repopulating
+    pub fn clear_pending_duplicate_groups(&self, group_type: &str) -> Result<()> {
+        // Delete from duplicate_group_members first (foreign key constraint)
+        self.conn.execute(
+            "DELETE FROM duplicate_group_members
+             WHERE group_id IN (
+                 SELECT id FROM duplicate_groups
+                 WHERE group_type = ?1 AND resolution_state = 'pending'
+             )",
+            params![group_type],
+        )?;
+
+        // Then delete groups
+        self.conn.execute(
+            "DELETE FROM duplicate_groups
+             WHERE group_type = ?1 AND resolution_state = 'pending'",
+            params![group_type],
+        )?;
+
+        Ok(())
+    }
+
+    /// Insert a new duplicate group, returns group_id
+    pub fn insert_duplicate_group(&self, group_type: &str, group_key: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO duplicate_groups (group_type, group_key, resolution_state)
+             VALUES (?1, ?2, 'pending')",
+            params![group_type, group_key],
+        )?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Add a track to a duplicate group
+    pub fn insert_duplicate_group_member(&self, group_id: i64, track_id: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO duplicate_group_members (group_id, track_id, selected_for_keep)
+             VALUES (?1, ?2, 0)",
+            params![group_id, track_id],
+        )?;
+
+        Ok(())
+    }
+
     fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
         Ok(Track {
             id: Some(row.get(0)?),

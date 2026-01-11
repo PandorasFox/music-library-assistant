@@ -107,7 +107,7 @@ impl Picker {
         self.state.select(Some(i));
     }
 
-    fn render<B: Backend>(&mut self, f: &mut Frame<B>) {
+    fn render(&mut self, f: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(2)
@@ -117,7 +117,7 @@ impl Picker {
                 Constraint::Min(10),    // List
                 Constraint::Length(2),  // Instructions
             ])
-            .split(f.size());
+            .split(f.area());
 
         // Title
         let title_para = Paragraph::new(self.title.clone())

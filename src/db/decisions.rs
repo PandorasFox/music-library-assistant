@@ -102,3 +102,44 @@ pub struct DecisionStack {
     /// Auto-ignore patterns learned during session
     pub ignore_patterns: Vec<String>,
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decision_priority_as_str() {
+        assert_eq!(DecisionPriority::High.as_str(), "high");
+        assert_eq!(DecisionPriority::Medium.as_str(), "medium");
+        assert_eq!(DecisionPriority::Low.as_str(), "low");
+    }
+
+    #[test]
+    fn test_decision_priority_ordering() {
+        // High < Medium < Low (high priority comes first in sorting)
+        assert!(DecisionPriority::High < DecisionPriority::Medium);
+        assert!(DecisionPriority::Medium < DecisionPriority::Low);
+        assert!(DecisionPriority::High < DecisionPriority::Low);
+    }
+
+    #[test]
+    fn test_decision_category_as_str() {
+        assert_eq!(DecisionCategory::FingerprintDuplicate.as_str(), "fingerprint_duplicate");
+        assert_eq!(DecisionCategory::MetadataDuplicate.as_str(), "metadata_duplicate");
+        assert_eq!(DecisionCategory::QualityIssue.as_str(), "quality_issue");
+        assert_eq!(DecisionCategory::OrphanDisposition.as_str(), "orphan_disposition");
+    }
+
+    #[test]
+    fn test_decision_stack_default() {
+        let stack = DecisionStack::default();
+        assert!(stack.decisions.is_empty());
+        assert_eq!(stack.current_index, 0);
+        assert!(stack.resolved.is_empty());
+        assert!(stack.ignore_patterns.is_empty());
+    }
+}

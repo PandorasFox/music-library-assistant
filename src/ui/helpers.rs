@@ -246,3 +246,111 @@ pub fn calculate_rolling_throughput(
 
     Some(mib_per_sec)
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_path_display_short() {
+        let path = "/home/user/file.mp3";
+        assert_eq!(truncate_path_display(path, 50), path);
+    }
+
+    #[test]
+    fn test_truncate_path_display_exact() {
+        let path = "exactly20chars!!!"; // 17 chars
+        assert_eq!(truncate_path_display(path, 17), path);
+    }
+
+    #[test]
+    fn test_truncate_path_display_long() {
+        let path = "/very/long/path/to/some/deeply/nested/file.mp3";
+        let truncated = truncate_path_display(path, 20);
+        assert!(truncated.starts_with("..."));
+        assert_eq!(truncated.chars().count(), 20);
+    }
+
+    #[test]
+    fn test_truncate_path_display_unicode() {
+        // Unicode characters should be handled correctly
+        let path = "/home/用户/音乐/歌曲.mp3";
+        let truncated = truncate_path_display(path, 15);
+        assert!(truncated.starts_with("..."));
+        assert_eq!(truncated.chars().count(), 15);
+    }
+
+    #[test]
+    fn test_format_bytes_binary_bytes() {
+        assert_eq!(format_bytes_binary(0), "0 B");
+        assert_eq!(format_bytes_binary(512), "512 B");
+        assert_eq!(format_bytes_binary(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_format_bytes_binary_kib() {
+        assert_eq!(format_bytes_binary(1024), "1 KiB");
+        assert_eq!(format_bytes_binary(1536), "2 KiB"); // 1.5 rounds to 2
+        assert_eq!(format_bytes_binary(512 * 1024), "512 KiB");
+    }
+
+    #[test]
+    fn test_format_bytes_binary_mib() {
+        assert_eq!(format_bytes_binary(1024 * 1024), "1.0 MiB");
+        assert_eq!(format_bytes_binary(1024 * 1024 * 100), "100.0 MiB");
+        assert_eq!(format_bytes_binary(1024 * 1024 * 500), "500.0 MiB");
+    }
+
+    #[test]
+    fn test_format_bytes_binary_gib() {
+        assert_eq!(format_bytes_binary(1024 * 1024 * 1024), "1.00 GiB");
+        assert_eq!(format_bytes_binary(1024 * 1024 * 1024 * 50), "50.00 GiB");
+    }
+
+    #[test]
+    fn test_format_bytes_binary_tib() {
+        assert_eq!(format_bytes_binary(1024_u64 * 1024 * 1024 * 1024), "1.00 TiB");
+        assert_eq!(format_bytes_binary(1024_u64 * 1024 * 1024 * 1024 * 2), "2.00 TiB");
+    }
+
+    #[test]
+    fn test_format_eta_seconds() {
+        assert_eq!(format_eta(0), "0:00");
+        assert_eq!(format_eta(30), "0:30");
+        assert_eq!(format_eta(59), "0:59");
+    }
+
+    #[test]
+    fn test_format_eta_minutes() {
+        assert_eq!(format_eta(60), "1:00");
+        assert_eq!(format_eta(90), "1:30");
+        assert_eq!(format_eta(3599), "59:59");
+    }
+
+    #[test]
+    fn test_format_eta_hours() {
+        assert_eq!(format_eta(3600), "1:00:00");
+        assert_eq!(format_eta(3661), "1:01:01");
+        assert_eq!(format_eta(7200), "2:00:00");
+        assert_eq!(format_eta(86399), "23:59:59");
+    }
+
+    #[test]
+    fn test_calculate_rolling_throughput_insufficient_samples() {
+        use std::collections::VecDeque;
+        use std::time::Instant;
+
+        // Empty samples
+        let samples: VecDeque<(Instant, u64)> = VecDeque::new();
+        assert!(calculate_rolling_throughput(&samples, 10).is_none());
+
+        // Single sample
+        let mut samples = VecDeque::new();
+        samples.push_back((Instant::now(), 1000));
+        assert!(calculate_rolling_throughput(&samples, 10).is_none());
+    }
+}

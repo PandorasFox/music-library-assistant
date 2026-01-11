@@ -107,3 +107,89 @@ pub struct ChangeSession {
     pub committed_at: Option<String>,
     pub status: String, // "active", "committed", "reverted"
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_change_type_as_str() {
+        assert_eq!(ChangeType::Move.as_str(), "move");
+        assert_eq!(ChangeType::Delete.as_str(), "delete");
+        assert_eq!(ChangeType::TagEdit.as_str(), "tag_edit");
+        assert_eq!(ChangeType::Deploy.as_str(), "deploy");
+        assert_eq!(ChangeType::Undeploy.as_str(), "undeploy");
+    }
+
+    #[test]
+    fn test_change_type_from_str() {
+        assert_eq!(ChangeType::from_str("move"), Some(ChangeType::Move));
+        assert_eq!(ChangeType::from_str("delete"), Some(ChangeType::Delete));
+        assert_eq!(ChangeType::from_str("tag_edit"), Some(ChangeType::TagEdit));
+        assert_eq!(ChangeType::from_str("deploy"), Some(ChangeType::Deploy));
+        assert_eq!(ChangeType::from_str("undeploy"), Some(ChangeType::Undeploy));
+        assert_eq!(ChangeType::from_str("unknown"), None);
+        assert_eq!(ChangeType::from_str(""), None);
+    }
+
+    #[test]
+    fn test_change_type_roundtrip() {
+        let types = [
+            ChangeType::Move,
+            ChangeType::Delete,
+            ChangeType::TagEdit,
+            ChangeType::Deploy,
+            ChangeType::Undeploy,
+        ];
+        for t in types {
+            assert_eq!(ChangeType::from_str(t.as_str()), Some(t));
+        }
+    }
+
+    #[test]
+    fn test_change_status_as_str() {
+        assert_eq!(ChangeStatus::Pending.as_str(), "pending");
+        assert_eq!(ChangeStatus::Staged.as_str(), "staged");
+        assert_eq!(ChangeStatus::Committed.as_str(), "committed");
+        assert_eq!(ChangeStatus::Reverted.as_str(), "reverted");
+    }
+
+    #[test]
+    fn test_change_status_from_str() {
+        assert_eq!(ChangeStatus::from_str("pending"), Some(ChangeStatus::Pending));
+        assert_eq!(ChangeStatus::from_str("staged"), Some(ChangeStatus::Staged));
+        assert_eq!(ChangeStatus::from_str("committed"), Some(ChangeStatus::Committed));
+        assert_eq!(ChangeStatus::from_str("reverted"), Some(ChangeStatus::Reverted));
+        assert_eq!(ChangeStatus::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn test_change_status_roundtrip() {
+        let statuses = [
+            ChangeStatus::Pending,
+            ChangeStatus::Staged,
+            ChangeStatus::Committed,
+            ChangeStatus::Reverted,
+        ];
+        for s in statuses {
+            assert_eq!(ChangeStatus::from_str(s.as_str()), Some(s));
+        }
+    }
+
+    #[test]
+    fn test_pending_change_default() {
+        let change = PendingChange::default();
+        assert!(change.id.is_none());
+        assert!(change.session_id.is_empty());
+        assert_eq!(change.change_type, ChangeType::Move);
+        assert!(change.source_path.is_empty());
+        assert!(change.target_path.is_none());
+        assert!(change.metadata_changes.is_none());
+        assert!(change.created_at.is_none());
+        assert_eq!(change.status, ChangeStatus::Pending);
+    }
+}

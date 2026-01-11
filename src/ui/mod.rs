@@ -1,4 +1,5 @@
 mod menu;
+pub mod picker;
 
 use crate::config::Config;
 use anyhow::Result;

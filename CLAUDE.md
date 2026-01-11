@@ -11,28 +11,33 @@ This is prototyping software. Do not waste effort on backwards compatibility con
 
 ## Design Philosophy
 
-See [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md) for the full conceptual foundation. Key principles:
+See [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md) for the full conceptual foundation. The main takeaway is:
 
-1. **Librarian Cycle**: Insight → Intake → Organization → Deployment → Repair (repeat)
-2. **Algebraic Changes**: Mutations are composable, reversible functions - preview before commit
-3. **Atomic Operations**: Well-tested primitives applied in bulk without fear
-4. **Dialogue Interface**: Structured conversation, one decision at a time
+* Libraries need a cycle of health-maintaining processes as they grow.
+* Librarians need a wide variety of basic tools to work on their curated corpus & how they present it
+* All changes to the corpus must be modelled as algebraic. We want mutations to be composable and accumulatable
+* MLA interactions are menu-driven, with bulk corpus mutation choices being presented as an almost-conversational series of dialog choices.
+* MLA should defer *all decisions* to the operator. Some decisions can be explicitly configured as "Opinions" to automatically follow.
+
+Additionally, MLA itself should be neatly compartmentalized and organized. "Everything has an appropriate home" applies to both items in our corpus, and MLA's codebase; we should make efforts to modularize and keep things tidy and tested.
 
 When implementing new features, ask:
 - Which phase of the librarian cycle does this belong to?
-- What change records does this operation produce?
-- Can this be tested atomically and applied in bulk?
-- How would the operator confirm this action in dialogue?
+- How should this best be organized?
+- Is there central overlap I could leverage to keep things integrated together cleanly?
+
+---
+content below this point has been authored by claude, and are claude's notes on current implementation.
+---
 
 ## Architecture Overview
 
 ### Core Design Principles
 
 1. **Read-only by default**: Analysis operations never modify corpus
-2. **Explicit mutations**: All corpus changes require explicit confirmation
-3. **Hard link deployment**: Libraries reference corpus via hard links (no duplication)
-4. **Incremental scanning**: Track files by inode+mtime to avoid unnecessary reads
-5. **Algebraic changes**: Track mutations as composable, reversible functions
+2. **Algebraic changes**: Track mutations as composable, reversible functions
+3. **Explicit mutations**: All corpus changes require explicit confirmation to commit
+4. **Resource efficiency**: hard-link deployments only; track inode+mtimes for scan efficiency...
 
 ### Module Responsibilities
 
@@ -68,29 +73,6 @@ When implementing new features, ask:
 - **Database**: `$XDG_DATA_HOME/mla/mla.db` (or `~/.local/share/mla/`)
 - **Reports**: `$XDG_DATA_HOME/mla/reports/`
 - **Logs**: `/tmp/mla.log`
-
-## Librarian Workflow Implementation
-
-### Menu Organization
-
-The main menu reflects the librarian cycle:
-
-| Category | Cycle Phase | Commands |
-|----------|-------------|----------|
-| Build Indices | Insight (prep) | Scan Corpus, Scan Legacy |
-| Insight & Health | Insight | Reports (quality, duplicates, deployment) |
-| Corpus-mutating Ops | Organization | Deduplication, Tag Editor |
-| Deployment | Deployment | Preview, Deploy, View Changes |
-| Intake | Intake | (Coming Soon) |
-
-### Lost-Files Workspace
-
-The `lost-files` directory serves as a staging area for:
-- Duplicate files identified for removal
-- Damaged files awaiting repair
-- Files to be regenerated from external sources
-
-Files can be moved here, repaired/regenerated, then re-entered via intake.
 
 ### Algebraic Change Tracking
 

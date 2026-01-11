@@ -13,7 +13,14 @@
       "Bash(git commit:*)",
       "Bash(git restore:*)",
       "Bash(git reset:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(timeout 5 cargo check:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(du -sh:*)",
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(grep:*)"
     ]
   }
 }

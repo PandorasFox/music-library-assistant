@@ -37,7 +37,7 @@ pub struct ScanStateEntry {
     pub inode: i64,
     pub path: String,
     pub mtime_secs: i64,
-    pub mtime_nanos: u32,
+    pub mtime_nanos: i64,  // SQLite INTEGER is i64; cast to u32 at comparison time
     pub file_size: i64,
 }
 
@@ -47,6 +47,206 @@ pub struct DeploymentStats {
     pub deployed_files: usize,
     pub deployment_percentage: f64,
     pub last_updated: String,
+}
+
+/// Represents a pending operation on the corpus.
+/// All corpus-mutating operations are tracked as composable, reversible functions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingChange {
+    pub id: Option<i64>,
+    pub session_id: String,
+    pub change_type: ChangeType,
+    pub source_path: String,
+    pub target_path: Option<String>,
+    pub metadata_changes: Option<String>, // JSON-encoded tag changes
+    pub created_at: Option<String>,
+    pub status: ChangeStatus,
+}
+
+impl Default for PendingChange {
+    fn default() -> Self {
+        Self {
+            id: None,
+            session_id: String::new(),
+            change_type: ChangeType::Move,
+            source_path: String::new(),
+            target_path: None,
+            metadata_changes: None,
+            created_at: None,
+            status: ChangeStatus::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ChangeType {
+    Move,     // Move file within corpus
+    Delete,   // Move to lost-files
+    TagEdit,  // Modify metadata
+    Deploy,   // Create hard link to library
+    Undeploy, // Remove hard link from library
+}
+
+impl ChangeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChangeType::Move => "move",
+            ChangeType::Delete => "delete",
+            ChangeType::TagEdit => "tag_edit",
+            ChangeType::Deploy => "deploy",
+            ChangeType::Undeploy => "undeploy",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "move" => Some(ChangeType::Move),
+            "delete" => Some(ChangeType::Delete),
+            "tag_edit" => Some(ChangeType::TagEdit),
+            "deploy" => Some(ChangeType::Deploy),
+            "undeploy" => Some(ChangeType::Undeploy),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ChangeStatus {
+    Pending,   // Not yet executed
+    Staged,    // Preview created
+    Committed, // Executed on filesystem
+    Reverted,  // Undone
+}
+
+impl ChangeStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChangeStatus::Pending => "pending",
+            ChangeStatus::Staged => "staged",
+            ChangeStatus::Committed => "committed",
+            ChangeStatus::Reverted => "reverted",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(ChangeStatus::Pending),
+            "staged" => Some(ChangeStatus::Staged),
+            "committed" => Some(ChangeStatus::Committed),
+            "reverted" => Some(ChangeStatus::Reverted),
+            _ => None,
+        }
+    }
+}
+
+/// A session groups related changes together for atomic commit/revert.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeSession {
+    pub session_id: String,
+    pub description: String,
+    pub created_at: String,
+    pub committed_at: Option<String>,
+    pub status: String, // "active", "committed", "reverted"
+}
+
+// ============================================================================
+// Conversational Decision Flow Types
+// ============================================================================
+
+/// Priority level for decisions - determines presentation order
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DecisionPriority {
+    /// Immediate action recommended (e.g., clear duplicates with bitrate differential)
+    High,
+    /// Action beneficial but not urgent (e.g., similar metadata, needs review)
+    Medium,
+    /// Minor cleanup opportunity (e.g., orphaned files, edge cases)
+    Low,
+}
+
+impl DecisionPriority {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DecisionPriority::High => "high",
+            DecisionPriority::Medium => "medium",
+            DecisionPriority::Low => "low",
+        }
+    }
+}
+
+/// Category of decision being presented
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecisionCategory {
+    /// Fingerprint-based duplicate detection
+    FingerprintDuplicate,
+    /// Metadata-based duplicate (same artist/album/title)
+    MetadataDuplicate,
+    /// File with quality issues (low bitrate, missing tags)
+    QualityIssue,
+    /// Orphaned file in lost-files needing disposition
+    OrphanDisposition,
+}
+
+impl DecisionCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DecisionCategory::FingerprintDuplicate => "fingerprint_duplicate",
+            DecisionCategory::MetadataDuplicate => "metadata_duplicate",
+            DecisionCategory::QualityIssue => "quality_issue",
+            DecisionCategory::OrphanDisposition => "orphan_disposition",
+        }
+    }
+}
+
+/// A decision presented to the operator in the conversational flow
+#[derive(Debug, Clone)]
+pub struct Decision {
+    /// Unique identifier for this decision
+    pub id: String,
+    /// Priority determines presentation order (high first)
+    pub priority: DecisionPriority,
+    /// Category of decision
+    pub category: DecisionCategory,
+    /// Human-readable summary of the situation
+    pub summary: String,
+    /// Detailed explanation shown on request
+    pub details: String,
+    /// Affected file paths
+    pub affected_paths: Vec<String>,
+    /// Recommended action (if any)
+    pub recommendation: Option<String>,
+    /// Pending changes that would be created if approved
+    pub pending_changes: Vec<PendingChange>,
+    /// Impact metrics (e.g., "3 files, 45MB")
+    pub impact_summary: String,
+}
+
+/// Operator's response to a decision
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecisionOutcome {
+    /// Accept the recommended action
+    Accept,
+    /// Reject/skip this decision
+    Reject,
+    /// Defer to later (re-queue at lower priority)
+    Defer,
+    /// Accept and apply pattern to similar decisions
+    AcceptPattern,
+    /// Reject and ignore similar decisions
+    RejectPattern,
+}
+
+/// A stack of decisions for the operator to work through
+#[derive(Debug, Clone, Default)]
+pub struct DecisionStack {
+    /// Decisions ordered by priority (high first)
+    pub decisions: Vec<Decision>,
+    /// Index of current decision being reviewed
+    pub current_index: usize,
+    /// Decisions that have been resolved
+    pub resolved: Vec<(Decision, DecisionOutcome)>,
+    /// Auto-ignore patterns learned during session
+    pub ignore_patterns: Vec<String>,
 }
 
 impl Database {
@@ -169,6 +369,31 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_tag_history_track ON tag_edit_history(track_id);
             CREATE INDEX IF NOT EXISTS idx_tag_history_session ON tag_edit_history(session_id);
+
+            -- Algebraic change tracking tables
+            CREATE TABLE IF NOT EXISTS pending_changes (
+                id INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                change_type TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                target_path TEXT,
+                metadata_changes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'pending'
+            );
+            CREATE INDEX IF NOT EXISTS idx_pending_changes_session ON pending_changes(session_id);
+            CREATE INDEX IF NOT EXISTS idx_pending_changes_status ON pending_changes(status);
+            CREATE INDEX IF NOT EXISTS idx_pending_changes_source ON pending_changes(source_path);
+
+            CREATE TABLE IF NOT EXISTS change_sessions (
+                id INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL UNIQUE,
+                description TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                committed_at DATETIME,
+                status TEXT DEFAULT 'active'
+            );
+            CREATE INDEX IF NOT EXISTS idx_change_sessions_status ON change_sessions(status);
             "#
         ).context("Failed to initialize database schema")?;
 
@@ -790,6 +1015,202 @@ impl Database {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(tracks)
+    }
+
+    // ============================================
+    // Algebraic Change Tracking Methods
+    // ============================================
+
+    /// Create a new change session, returns the session_id (UUID)
+    pub fn create_change_session(&self, description: &str) -> Result<String> {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO change_sessions (session_id, description, status)
+             VALUES (?1, ?2, 'active')",
+            params![&session_id, description],
+        ).context("Failed to create change session")?;
+        Ok(session_id)
+    }
+
+    /// Get the active change session (if any)
+    pub fn get_active_session(&self) -> Result<Option<ChangeSession>> {
+        let result = self.conn.query_row(
+            "SELECT session_id, description, created_at, committed_at, status
+             FROM change_sessions
+             WHERE status = 'active'
+             ORDER BY created_at DESC
+             LIMIT 1",
+            params![],
+            |row| {
+                Ok(ChangeSession {
+                    session_id: row.get(0)?,
+                    description: row.get(1)?,
+                    created_at: row.get(2)?,
+                    committed_at: row.get(3)?,
+                    status: row.get(4)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(session) => Ok(Some(session)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get a change session by ID
+    pub fn get_change_session(&self, session_id: &str) -> Result<Option<ChangeSession>> {
+        let result = self.conn.query_row(
+            "SELECT session_id, description, created_at, committed_at, status
+             FROM change_sessions
+             WHERE session_id = ?1",
+            params![session_id],
+            |row| {
+                Ok(ChangeSession {
+                    session_id: row.get(0)?,
+                    description: row.get(1)?,
+                    created_at: row.get(2)?,
+                    committed_at: row.get(3)?,
+                    status: row.get(4)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(session) => Ok(Some(session)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Commit a change session (mark as committed)
+    pub fn commit_session(&self, session_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE change_sessions
+             SET status = 'committed', committed_at = CURRENT_TIMESTAMP
+             WHERE session_id = ?1",
+            params![session_id],
+        ).context("Failed to commit change session")?;
+        Ok(())
+    }
+
+    /// Revert a change session (mark as reverted)
+    pub fn revert_session(&self, session_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE change_sessions
+             SET status = 'reverted'
+             WHERE session_id = ?1",
+            params![session_id],
+        ).context("Failed to revert change session")?;
+        Ok(())
+    }
+
+    /// Add a pending change
+    pub fn add_pending_change(&self, change: &PendingChange) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO pending_changes (session_id, change_type, source_path, target_path, metadata_changes, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &change.session_id,
+                change.change_type.as_str(),
+                &change.source_path,
+                &change.target_path,
+                &change.metadata_changes,
+                change.status.as_str(),
+            ],
+        ).context("Failed to add pending change")?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Get pending changes for a session
+    pub fn get_pending_changes(&self, session_id: &str) -> Result<Vec<PendingChange>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, change_type, source_path, target_path, metadata_changes, created_at, status
+             FROM pending_changes
+             WHERE session_id = ?1
+             ORDER BY id",
+        )?;
+
+        let changes = stmt.query_map(params![session_id], Self::row_to_pending_change)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(changes)
+    }
+
+    /// Get all pending changes (across all sessions) with status = 'pending'
+    pub fn get_all_pending_changes(&self) -> Result<Vec<PendingChange>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, change_type, source_path, target_path, metadata_changes, created_at, status
+             FROM pending_changes
+             WHERE status = 'pending'
+             ORDER BY session_id, id",
+        )?;
+
+        let changes = stmt.query_map(params![], Self::row_to_pending_change)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(changes)
+    }
+
+    /// Update the status of a pending change
+    pub fn update_change_status(&self, change_id: i64, status: ChangeStatus) -> Result<()> {
+        self.conn.execute(
+            "UPDATE pending_changes SET status = ?1 WHERE id = ?2",
+            params![status.as_str(), change_id],
+        ).context("Failed to update change status")?;
+        Ok(())
+    }
+
+    /// Clear pending changes for a session (used when discarding changes)
+    pub fn clear_pending_changes(&self, session_id: &str) -> Result<usize> {
+        let deleted = self.conn.execute(
+            "DELETE FROM pending_changes WHERE session_id = ?1 AND status = 'pending'",
+            params![session_id],
+        ).context("Failed to clear pending changes")?;
+        Ok(deleted)
+    }
+
+    /// Get count of pending changes by type
+    pub fn get_pending_change_counts(&self) -> Result<std::collections::HashMap<String, usize>> {
+        use std::collections::HashMap;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT change_type, COUNT(*)
+             FROM pending_changes
+             WHERE status = 'pending'
+             GROUP BY change_type",
+        )?;
+
+        let mut counts = HashMap::new();
+        let rows = stmt.query_map(params![], |row| {
+            let change_type: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((change_type, count as usize))
+        })?;
+
+        for row in rows {
+            let (k, v) = row?;
+            counts.insert(k, v);
+        }
+
+        Ok(counts)
+    }
+
+    fn row_to_pending_change(row: &rusqlite::Row) -> rusqlite::Result<PendingChange> {
+        let change_type_str: String = row.get(2)?;
+        let status_str: String = row.get(7)?;
+
+        Ok(PendingChange {
+            id: Some(row.get(0)?),
+            session_id: row.get(1)?,
+            change_type: ChangeType::from_str(&change_type_str).unwrap_or(ChangeType::Move),
+            source_path: row.get(3)?,
+            target_path: row.get(4)?,
+            metadata_changes: row.get(5)?,
+            created_at: row.get(6)?,
+            status: ChangeStatus::from_str(&status_str).unwrap_or(ChangeStatus::Pending),
+        })
     }
 
     fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {

@@ -35,7 +35,7 @@ impl Config {
     /// Get all scan sources from the config
     pub fn get_scan_sources(&self) -> Vec<ScanSource> {
         let mut sources = vec![ScanSource {
-            name: "Corpus".to_string(),
+            name: "corpus".to_string(),
             path: self.corpus_root.clone(),
             source_id: "corpus".to_string(),
         }];
@@ -62,7 +62,7 @@ impl Config {
 
         if let Some(legacy) = &self.legacy_library {
             sources.push(ScanSource {
-                name: "Legacy Library".to_string(),
+                name: "legacy".to_string(),
                 path: legacy.clone(),
                 source_id: "legacy".to_string(),
             });
@@ -241,9 +241,33 @@ pub fn get_config_dir() -> Result<PathBuf> {
     Ok(config_home.join("mla"))
 }
 
-/// Get the database path
+/// Get the data directory path ($XDG_DATA_HOME/mla/ or ~/.local/share/mla/)
+pub fn get_data_dir() -> Result<PathBuf> {
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(s))
+            }
+        })
+        .or_else(|| dirs::home_dir().map(|home| home.join(".local").join("share")))
+        .context("Failed to determine data directory")?;
+
+    let data_dir = data_home.join("mla");
+
+    // Ensure the directory exists
+    if !data_dir.exists() {
+        fs::create_dir_all(&data_dir).context("Failed to create data directory")?;
+    }
+
+    Ok(data_dir)
+}
+
+/// Get the database path (~/.local/share/mla/mla.db)
 pub fn get_db_path() -> Result<PathBuf> {
-    Ok(get_config_dir()?.join("mla.db"))
+    Ok(get_data_dir()?.join("mla.db"))
 }
 
 /// Get the log path for stderr-type logging and warnings

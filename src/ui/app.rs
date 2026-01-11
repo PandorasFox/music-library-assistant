@@ -1,0 +1,363 @@
+//! Application State and Event Loop
+//!
+//! Provides the core application structure with mode-based UI dispatch.
+//! This module is being phased in to replace the monolithic menu.rs.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::progress::ScanProgress;
+
+// ============================================================================
+// UI Mode Enum
+// ============================================================================
+
+/// Current UI mode - determines which module handles rendering and input
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiMode {
+    /// Multi-pane main menu with categories and commands
+    MainMenu,
+    /// Tag editor for metadata editing
+    TagEditor,
+    /// Dialogue-based decision flow
+    Dialogue,
+    /// Dialogue summary after completing a flow
+    DialogueSummary,
+    /// Legacy sub-menus (being phased out)
+    LegacyMenu,
+}
+
+// ============================================================================
+// Background Operation Tracking
+// ============================================================================
+
+/// State of an in-progress background operation
+#[derive(Debug)]
+pub struct OperationState {
+    pub operation_type: OperationType,
+    pub progress: ScanProgress,
+    pub cancel_flag: Arc<AtomicBool>,
+}
+
+impl OperationState {
+    pub fn new(operation_type: OperationType) -> Self {
+        Self {
+            operation_type,
+            progress: ScanProgress {
+                total_bytes: 0,
+                bytes_processed: 0,
+                files_processed: 0,
+                total_files: 0,
+                files_skipped: 0,
+                current_file: None,
+                errors: 0,
+                start_time: Instant::now(),
+                mtime_stats: None,
+            },
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_flag.load(Ordering::SeqCst)
+    }
+}
+
+/// Type of background operation
+#[derive(Debug, Clone)]
+pub enum OperationType {
+    Scanning { source_name: String },
+    GeneratingReport { report_type: String },
+    Deploying { library_name: String, dry_run: bool },
+}
+
+impl OperationType {
+    pub fn description(&self) -> String {
+        match self {
+            OperationType::Scanning { source_name } => {
+                format!("Scanning: {}", source_name)
+            }
+            OperationType::GeneratingReport { report_type } => {
+                format!("Generating {} report", report_type)
+            }
+            OperationType::Deploying { library_name, dry_run } => {
+                if *dry_run {
+                    format!("Preview deployment to {}", library_name)
+                } else {
+                    format!("Deploying to {}", library_name)
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Eye Animation State Machine
+// ============================================================================
+
+/// State of the eye animation (Talos Principle inspired)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EyeAnimationState {
+    /// Eye open, waiting for next blink
+    Idle,
+    /// Transitioning to closed
+    Closing,
+    /// Eye closed
+    Closed,
+    /// Transitioning back to open
+    Opening,
+    /// Rapid flutter closing
+    FlutterClosing,
+    /// Rapid flutter closed
+    FlutterClosed,
+    /// Rapid flutter opening
+    FlutterOpening,
+}
+
+/// Type of blink animation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlinkType {
+    /// Medium speed blink
+    Normal,
+    /// Slower, more deliberate blink
+    Slow,
+    /// Quick blink
+    Fast,
+    /// Multiple rapid blinks
+    Flutter,
+}
+
+/// Eye animation controller
+#[derive(Debug)]
+pub struct EyeAnimation {
+    pub state: EyeAnimationState,
+    pub state_start_time: Instant,
+    pub next_blink_delay_secs: u64,
+    pub current_blink_type: BlinkType,
+    pub flutter_count: u8,
+}
+
+impl Default for EyeAnimation {
+    fn default() -> Self {
+        Self {
+            state: EyeAnimationState::Idle,
+            state_start_time: Instant::now(),
+            next_blink_delay_secs: Self::random_blink_delay(),
+            current_blink_type: BlinkType::Normal,
+            flutter_count: 0,
+        }
+    }
+}
+
+impl EyeAnimation {
+    /// Generate random delay between blinks: 30-60 seconds with occasional longer pauses
+    pub fn random_blink_delay() -> u64 {
+        use std::collections::hash_map::RandomState;
+        use std::hash::BuildHasher;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let hasher = RandomState::new();
+        let random_val = hasher.hash_one(now);
+
+        // 30-60 seconds normally, occasionally up to 90 seconds
+        let base = 30 + (random_val % 30);
+        if random_val % 10 == 0 {
+            base + 30 // 10% chance of extra long pause
+        } else {
+            base
+        }
+    }
+
+    /// Choose random blink type (weighted towards normal)
+    pub fn random_blink_type() -> BlinkType {
+        use std::collections::hash_map::RandomState;
+        use std::hash::BuildHasher;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let hasher = RandomState::new();
+        let random_val = hasher.hash_one(now) % 100;
+
+        match random_val {
+            0..=5 => BlinkType::Flutter, // 6% flutter
+            6..=20 => BlinkType::Slow,   // 15% slow
+            21..=40 => BlinkType::Fast,  // 20% fast
+            _ => BlinkType::Normal,      // 59% normal
+        }
+    }
+
+    /// Update the eye animation state machine
+    pub fn update(&mut self) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.state_start_time);
+
+        match self.state {
+            EyeAnimationState::Idle => {
+                if elapsed.as_secs() >= self.next_blink_delay_secs {
+                    self.current_blink_type = Self::random_blink_type();
+                    self.state = EyeAnimationState::Closing;
+                    self.state_start_time = now;
+
+                    if matches!(self.current_blink_type, BlinkType::Flutter) {
+                        self.flutter_count = 2 + ((now.elapsed().as_nanos() % 2) as u8);
+                    }
+                }
+            }
+            EyeAnimationState::Closing => {
+                let duration = match self.current_blink_type {
+                    BlinkType::Slow => 250,
+                    BlinkType::Normal => 120,
+                    BlinkType::Fast => 60,
+                    BlinkType::Flutter => 40,
+                };
+
+                if elapsed.as_millis() >= duration {
+                    self.state = EyeAnimationState::Closed;
+                    self.state_start_time = now;
+                }
+            }
+            EyeAnimationState::Closed => {
+                let duration = match self.current_blink_type {
+                    BlinkType::Slow => 200,
+                    BlinkType::Normal => 100,
+                    BlinkType::Fast => 50,
+                    BlinkType::Flutter => 30,
+                };
+
+                if elapsed.as_millis() >= duration {
+                    self.state = EyeAnimationState::Opening;
+                    self.state_start_time = now;
+                }
+            }
+            EyeAnimationState::Opening => {
+                let duration = match self.current_blink_type {
+                    BlinkType::Slow => 250,
+                    BlinkType::Normal => 120,
+                    BlinkType::Fast => 60,
+                    BlinkType::Flutter => 40,
+                };
+
+                if elapsed.as_millis() >= duration {
+                    if matches!(self.current_blink_type, BlinkType::Flutter) && self.flutter_count > 0
+                    {
+                        self.flutter_count -= 1;
+                        self.state = EyeAnimationState::FlutterClosing;
+                        self.state_start_time = now;
+                    } else {
+                        self.state = EyeAnimationState::Idle;
+                        self.state_start_time = now;
+                        self.next_blink_delay_secs = Self::random_blink_delay();
+                    }
+                }
+            }
+            EyeAnimationState::FlutterClosing => {
+                if elapsed.as_millis() >= 35 {
+                    self.state = EyeAnimationState::FlutterClosed;
+                    self.state_start_time = now;
+                }
+            }
+            EyeAnimationState::FlutterClosed => {
+                if elapsed.as_millis() >= 25 {
+                    self.state = EyeAnimationState::FlutterOpening;
+                    self.state_start_time = now;
+                }
+            }
+            EyeAnimationState::FlutterOpening => {
+                if elapsed.as_millis() >= 35 {
+                    if self.flutter_count > 0 {
+                        self.flutter_count -= 1;
+                        self.state = EyeAnimationState::FlutterClosing;
+                        self.state_start_time = now;
+                    } else {
+                        self.state = EyeAnimationState::Idle;
+                        self.state_start_time = now;
+                        self.next_blink_delay_secs = Self::random_blink_delay();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get the current eye frame to display
+    pub fn current_frame(&self) -> EyeFrame {
+        match self.state {
+            EyeAnimationState::Idle | EyeAnimationState::Opening | EyeAnimationState::FlutterOpening => {
+                EyeFrame::Open
+            }
+            EyeAnimationState::Closing | EyeAnimationState::FlutterClosing => EyeFrame::Closing,
+            EyeAnimationState::Closed | EyeAnimationState::FlutterClosed => EyeFrame::Closed,
+        }
+    }
+}
+
+/// Which eye frame to display
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EyeFrame {
+    Open,
+    Closing,
+    Closed,
+}
+
+// ASCII eye frames from The Talos Principle
+pub const EYE_OPEN: &str = r#"                     ...',;;:cccccccc:;,..
+                    ..,;:cccc::::ccccclloooolc;'.
+                 .',;:::;;;;:loodxk0kkxxkxxdocccc;;'..
+               .,;;;,,;:coxldKNWWWMMMMWNNWWNNKkdolcccc:,.
+            .',;;,',;lxo:...dXWMMMMMMMMNkloOXNNNX0koc:coo;.
+         ..,;:;,,,:ldl'   .kWMMMWXXNWMMMMXd..':d0XWWN0d:;lkd,
+       ..,;;,,'':loc.     lKMMMNl. .c0KNWNK:  ..';lx00X0l,cxo,.
+     ..''....'cooc.       c0NMMX;   .l0XWN0;       ,ddx00occl:.
+   ..'..  .':odc.         .x0KKKkolcld000xc.       .cxxxkkdl:,..
+ ..''..   ;dxolc;'         .lxx000kkxx00kc.      .;looolllol:'..
+..'..    .':lloolc:,..       'lxkkkkk0kd,   ..':clc:::;,,;:;,'..
+......   ....',;;;:ccc::;;,''',:loddol:,,;:clllolc:;;,'........
+    .     ....'''',,,;;:cccccclllloooollllccc:c:::;,'..
+            .......'',,,,,,,,;;::::ccccc::::;;;,,''...
+              ...............''',,,;;;,,''''''......
+                   ............................                 "#;
+
+pub const EYE_CLOSING: &str = r#"                         ...'',;;;;::;;;,'..
+                    ..,;:cloodddxxxkkkkkkkkxol;..
+                 .';codxxkkk000000000000kkkkkkxdoc,..
+               .,codxk0000000000000000000000000kkxddoc,..
+            .':ldxk00000000000000000000000000000000kkxxol:'
+         .,:ldxkk000000000K000000000000000K0000000000kkxkkx:.
+      ..,coxkk000000000000000kk000000000000000000000000kxxxxl'
+     .,;codxxkk00000000kkk0KK0XNWWWWWWWWWNX0kkkkk00000kkxdool;.
+   .';::ccldk00KKKK00oc;..,x00KNNXXXXXNNX0000000000kkkkkkxoc:,..
+ ..,;,'..,o00000kkxo,       ,lkKKKKKK0K0d,.;ldk000KK0kxxxdoc:'..
+..,,'.  .,lk0xxxdol:,..       .,ldddl:,.   .,codkk00kxdollc:,...
+..'.......',;:c::cclccc::;,,,',,;::::;,;;:clodddxdol:;::;'......
+   .....  ...''',,,;;;:ccllloooooooooooooolllcccc:;;,....
+            .......'',,,,,,;;;:::ccclllccc:::;;;,''...
+              ..............'''',,;;;;;,,,''''......
+                   .............................                "#;
+
+pub const EYE_CLOSED: &str = r#"                          ...'',;;;;;;;,,...
+                    ..,:loxkk000000KKKKKK00xdc,..
+                 .,cox000KXXXXXXXXXXXXXXXXXXXK00xo:,..
+              ..;lx000KKKKK000000000000000KKKKXXXXK00xl;..
+           ..,:oxk00000000000000000000000000000000KKKKKK0d:.
+        ..;codxkk000kkkkkkkxxxxxxxxxxxxxxxxkkkkkk000000KK0kl'
+      ..;ldxkkkkkkxxxxxddddddddddddddddddddddddxxxxxxkkk000xc.
+    ..,:oxxkkkkkxxxxdddddddddddddddddddddddddddddddddxxkkkkxl;.
+  ..,;codxxkkkxxddddddddddddddddddddddddddddddddxdxxxk000kxdo:..
+ .';::::cldk000kkkxxxxxxdddddddddddddddddddddxxxxxkk0000xkddl;..
+.';:;,..,ckXXXKKK0KK000kxk0doddxxdddddddxxxxxxkk0000kkkkkxdoc,..
+.',,''..,:oxxxxxxxkkxkkxk00xxk000000000000KKKKKKK000kxdllll:,..
+ .........',,,:ccllllooooxkxxx000kk0000000000000000kxdoc,'...
+         ......',;;::cc::clllloddoox0xdxxkxxxxddollllc:'.
+              .....'',,,,,,,;;;;;::cllc::ccc::;;,,,'...
+                  ..................'''..'''......              "#;

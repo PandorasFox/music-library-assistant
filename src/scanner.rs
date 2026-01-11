@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::config;
 use crate::db::Database;
 use crate::metadata;
-use crate::progress::{ScanMessage, ScanProgress, ScanResult};
+use crate::progress::{MtimeMismatchStats, ScanMessage, ScanProgress, ScanResult};
 
 #[derive(Debug, Clone)]
 struct FileInfo {
@@ -29,6 +29,7 @@ struct PreScanResult {
     files_to_scan: Vec<FileInfo>,
     files_unchanged: Vec<FileInfo>,
     files_to_scan_bytes: u64,
+    mtime_stats: MtimeMismatchStats,
 }
 
 /// Check if a file path has an audio file extension
@@ -86,6 +87,7 @@ fn pre_scan_directory(path: &Path, source_name: &str, db: &Database) -> Result<P
     let mut files_to_scan = Vec::new();
     let mut files_unchanged = Vec::new();
     let mut files_to_scan_bytes = 0u64;
+    let mut mtime_stats = MtimeMismatchStats::default();
 
     for file_info in all_files {
         let inode_i64 = file_info.inode as i64;
@@ -95,13 +97,21 @@ fn pre_scan_directory(path: &Path, source_name: &str, db: &Database) -> Result<P
             // Check if mtime matches
             if let Ok(duration) = file_info.mtime.duration_since(SystemTime::UNIX_EPOCH) {
                 let mtime_secs = duration.as_secs() as i64;
-                let mtime_nanos = duration.subsec_nanos();
+                let mtime_nanos = duration.subsec_nanos() as i64;
 
                 if mtime_secs == cached.mtime_secs && mtime_nanos == cached.mtime_nanos {
                     // File unchanged, skip scanning
                     needs_scan = false;
+                } else {
+                    // Mtime mismatch - track the difference
+                    mtime_stats.mismatch_count += 1;
+                    let diff_secs = mtime_secs - cached.mtime_secs;
+                    mtime_stats.diffs_secs.push(diff_secs);
                 }
             }
+        } else {
+            // Inode not found in DB
+            mtime_stats.not_in_db_count += 1;
         }
 
         if needs_scan {
@@ -117,6 +127,7 @@ fn pre_scan_directory(path: &Path, source_name: &str, db: &Database) -> Result<P
         files_to_scan,
         files_unchanged,
         files_to_scan_bytes,
+        mtime_stats,
     })
 }
 
@@ -143,21 +154,25 @@ pub fn scan_directory_with_progress(
     let files_to_scan = pre_scan.files_to_scan;
     let files_unchanged = pre_scan.files_unchanged;
     let files_to_scan_bytes = pre_scan.files_to_scan_bytes;
+    let mtime_stats = pre_scan.mtime_stats;
 
     // Send initial progress with skip statistics
+    let skipped_count = files_unchanged.len();
     if let Some(ref tx) = progress_tx {
         let _ = tx.send(ScanMessage::Progress(ScanProgress {
             total_bytes: files_to_scan_bytes,
             bytes_processed: 0,
             files_processed: 0,
             total_files: files_to_scan.len(),
+            files_skipped: skipped_count,
             current_file: Some(format!(
                 "Indexing {} new/modified files (skipped {} unchanged)",
                 files_to_scan.len(),
-                files_unchanged.len()
+                skipped_count
             )),
             errors: 0,
             start_time,
+            mtime_stats: Some(mtime_stats.clone()),
         }));
     }
 
@@ -190,6 +205,7 @@ pub fn scan_directory_with_progress(
                         bytes_processed: bytes_processed.load(Ordering::Relaxed),
                         files_processed: files,
                         total_files,
+                        files_skipped: skipped_count,
                         current_file: Some(
                             file_info
                                 .path
@@ -200,6 +216,7 @@ pub fn scan_directory_with_progress(
                         ),
                         errors: errors.load(Ordering::Relaxed),
                         start_time,
+                        mtime_stats: Some(mtime_stats.clone()),
                     }));
                 }
             }
@@ -239,7 +256,7 @@ pub fn scan_directory_with_progress(
                 inode: file_info.inode as i64,
                 path: file_info.path.to_string_lossy().to_string(),
                 mtime_secs: duration.as_secs() as i64,
-                mtime_nanos: duration.subsec_nanos(),
+                mtime_nanos: duration.subsec_nanos() as i64,
                 file_size: file_info.size as i64,
             };
             db.upsert_scan_state(&entry)?;

@@ -1,14 +1,80 @@
 use std::time::{Duration, Instant};
 
+/// Statistics about mtime mismatches during incremental scan detection
+#[derive(Debug, Clone, Default)]
+pub struct MtimeMismatchStats {
+    /// Number of files with inode found in DB but mtime didn't match
+    pub mismatch_count: usize,
+    /// Number of files with inode not found in DB at all
+    pub not_in_db_count: usize,
+    /// Differences in seconds (file_mtime - db_mtime) for mismatched files
+    pub diffs_secs: Vec<i64>,
+}
+
+impl MtimeMismatchStats {
+    pub fn mean_diff_secs(&self) -> Option<f64> {
+        if self.diffs_secs.is_empty() {
+            return None;
+        }
+        let sum: i64 = self.diffs_secs.iter().sum();
+        Some(sum as f64 / self.diffs_secs.len() as f64)
+    }
+
+    pub fn median_diff_secs(&self) -> Option<i64> {
+        if self.diffs_secs.is_empty() {
+            return None;
+        }
+        let mut sorted = self.diffs_secs.clone();
+        sorted.sort();
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            Some((sorted[mid - 1] + sorted[mid]) / 2)
+        } else {
+            Some(sorted[mid])
+        }
+    }
+
+    pub fn stddev_diff_secs(&self) -> Option<f64> {
+        let mean = self.mean_diff_secs()?;
+        if self.diffs_secs.len() < 2 {
+            return None;
+        }
+        let variance: f64 = self.diffs_secs.iter()
+            .map(|&x| {
+                let diff = x as f64 - mean;
+                diff * diff
+            })
+            .sum::<f64>() / (self.diffs_secs.len() - 1) as f64;
+        Some(variance.sqrt())
+    }
+
+    pub fn mode_diff_secs(&self) -> Option<i64> {
+        if self.diffs_secs.is_empty() {
+            return None;
+        }
+        use std::collections::HashMap;
+        let mut counts: HashMap<i64, usize> = HashMap::new();
+        for &diff in &self.diffs_secs {
+            *counts.entry(diff).or_insert(0) += 1;
+        }
+        counts.into_iter()
+            .max_by_key(|&(_, count)| count)
+            .map(|(val, _)| val)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScanProgress {
     pub total_bytes: u64,
     pub bytes_processed: u64,
     pub files_processed: usize,
     pub total_files: usize,
+    pub files_skipped: usize,  // Files skipped due to unchanged inode+mtime
     pub current_file: Option<String>,
     pub errors: usize,
     pub start_time: Instant,
+    /// Statistics about why files weren't skipped (mtime mismatches)
+    pub mtime_stats: Option<MtimeMismatchStats>,
 }
 
 impl ScanProgress {

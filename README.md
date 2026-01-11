@@ -1,5 +1,10 @@
 # Music Library Assistant (MLA)
 
+> **Work In Progress**
+> This is personal/experimental software under active development.
+> No backwards compatibility guaranteed. Database schema, config format,
+> and structures may change without notice.
+
 MLA is a high-performance music library management tool designed to help you manage large music corpus with multiple organizational strategies. Named after the Music Library Assistant from The Talos Principle, it provides comprehensive reporting and analysis capabilities to help you make informed decisions about your music collection.
 
 ## Features
@@ -14,6 +19,31 @@ MLA is a high-performance music library management tool designed to help you man
   - Duplicate detection (across different bitrates and locations)
 - Inode-based hard-link detection
 - Read-only operations preserve archive integrity
+
+## Librarian Workflow Philosophy
+
+MLA organizes music library management around classic librarian cycles:
+
+1. **Insight & Health** - Understanding corpus state, metadata quality, deployment coverage
+2. **Intake** - Bringing external material into corpus, normalizing metadata
+3. **Organization** - Corpus-mutating operations: deduplication, tag repairs, consolidation
+4. **Deployment** - Publishing corpus to browsable libraries via hard links
+5. **Operations** - Low-level maintenance, rescanning, database operations
+
+The **lost-files workspace** concept: damaged or duplicate files are moved to a staging
+area for review, repair, or regeneration before re-introduction to the corpus. This
+allows repair tools to work in isolation, or files to be regenerated from external
+sources and cleanly re-entered via the intake cycle.
+
+### Algebraic Change Tracking
+
+All corpus-mutating operations are tracked as composable, reversible functions:
+- Changes accumulate as "pending" before execution
+- Preview (dry-run) changes before committing
+- Stage changes to a preview library for inspection
+- Commit or revert change sets atomically
+
+This enables confident experimentation with large-scale tagging and organizational changes.
 
 ## Installation
 
@@ -70,10 +100,13 @@ mla
 
 ### Main Menu Options
 
-- **Scan Corpus/Library**: Scan audio files and build the database index
-- **Generate Reports**: Create analysis reports (legacy matches, deployment status, quality issues, duplicates)
-- **Deploy to Libraries**: Deploy corpus files to libraries via hard links
-- **Duplicate Resolution**: Tag editor for resolving duplicate tracks (demo)
+The TUI is organized around librarian workflow cycles:
+
+- **Insight & Health**: Corpus health dashboard, generate analysis reports
+- **Intake**: Scan external sources, import from legacy library
+- **Organization**: Metadata deduplication, fingerprint deduplication, move files to lost-files
+- **Deployment**: Preview changes (dry-run), deploy to libraries, view pending changes
+- **Operations**: Incremental scan, full rescan, database statistics
 - **Quit**: Exit MLA
 
 ### Reports
@@ -163,13 +196,21 @@ Libraries deployed via hard links from the corpus share the same inode. MLA uses
 - ✅ Deployment status reports
 - ✅ Quality/canonicalization reports
 - ✅ Basic duplicate detection
+- ✅ Acoustic fingerprinting (Chromaprint) for robust duplicate detection
+- ✅ Fingerprint-based deduplication workflow with auto-removal
+- ✅ Incremental scanning (inode + mtime based)
+- ✅ Config-driven scanning (scan all sources at once)
 
-### Future Enhancements
-- Acoustic fingerprinting (Chromaprint) for more robust duplicate detection
-- Config-driven scanning (scan all configured sources with one command)
-- More sophisticated remix/edition detection
-- Report filtering and customization options
-- Integration with external tools (beets, etc.)
+### In Progress
+- Algebraic change tracking (pending change accumulation)
+- TUI reorganization around librarian workflows
+- Staging preview for changes
+
+### Future Considerations
+- Database snapshotting and metadata backup/restore
+- External metadata source integration (MusicBrainz, Discogs)
+- Confidence levels for metadata sources
+- Corpus directory → external source key mapping
 
 ## Technical Details
 

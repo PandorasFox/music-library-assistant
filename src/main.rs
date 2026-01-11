@@ -2,7 +2,15 @@
 //!
 //! A toolkit of precise, limited tools leveraging a common central database.
 //! Main operational areas: scan, report, repair, deploy.
+//!
+//! Organized around librarian workflow cycles:
+//! - Insight & Health: Understanding corpus state
+//! - Intake: Bringing external material into corpus
+//! - Organization: Corpus-mutating operations
+//! - Deployment: Publishing to browsable libraries
+//! - Operations: Low-level maintenance
 
+mod changes;
 mod config;
 mod db;
 mod deduplication;

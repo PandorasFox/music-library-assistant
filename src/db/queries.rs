@@ -1,252 +1,17 @@
-//! Central Database Module
+//! Database operations and queries.
 //!
-//! Core of MLA's toolkit architecture. Common data layer for all operations.
+//! All SQLite operations are centralized here.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use super::changes::{ChangeSession, ChangeStatus, ChangeType, PendingChange};
+use super::types::{DeploymentStats, ScanStateEntry, Track};
+
+/// Central database connection wrapper.
 pub struct Database {
     conn: Connection,
-}
-
-#[derive(Debug, Clone)]
-pub struct Track {
-    pub id: Option<i64>,
-    pub path: String,
-    pub source: String, // corpus/library name/legacy
-    pub inode: i64,
-    pub file_size: i64,
-    pub file_type: String, // flac, mp3, ogg, etc.
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    pub title: Option<String>,
-    pub track_number: Option<i32>,
-    pub duration_ms: Option<i64>,
-    pub bitrate_kbps: Option<i32>,
-    pub sample_rate: Option<i32>,
-    pub fingerprint: Option<String>, // chromaprint acoustic fingerprint
-    pub isrc: Option<String>,        // International Standard Recording Code
-}
-
-#[derive(Debug, Clone)]
-pub struct ScanStateEntry {
-    pub source: String,
-    pub inode: i64,
-    pub path: String,
-    pub mtime_secs: i64,
-    pub mtime_nanos: i64,  // SQLite INTEGER is i64; cast to u32 at comparison time
-    pub file_size: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeploymentStats {
-    pub total_corpus_files: usize,
-    pub deployed_files: usize,
-    pub deployment_percentage: f64,
-    pub last_updated: String,
-}
-
-/// Represents a pending operation on the corpus.
-/// All corpus-mutating operations are tracked as composable, reversible functions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingChange {
-    pub id: Option<i64>,
-    pub session_id: String,
-    pub change_type: ChangeType,
-    pub source_path: String,
-    pub target_path: Option<String>,
-    pub metadata_changes: Option<String>, // JSON-encoded tag changes
-    pub created_at: Option<String>,
-    pub status: ChangeStatus,
-}
-
-impl Default for PendingChange {
-    fn default() -> Self {
-        Self {
-            id: None,
-            session_id: String::new(),
-            change_type: ChangeType::Move,
-            source_path: String::new(),
-            target_path: None,
-            metadata_changes: None,
-            created_at: None,
-            status: ChangeStatus::Pending,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum ChangeType {
-    Move,     // Move file within corpus
-    Delete,   // Move to lost-files
-    TagEdit,  // Modify metadata
-    Deploy,   // Create hard link to library
-    Undeploy, // Remove hard link from library
-}
-
-impl ChangeType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ChangeType::Move => "move",
-            ChangeType::Delete => "delete",
-            ChangeType::TagEdit => "tag_edit",
-            ChangeType::Deploy => "deploy",
-            ChangeType::Undeploy => "undeploy",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "move" => Some(ChangeType::Move),
-            "delete" => Some(ChangeType::Delete),
-            "tag_edit" => Some(ChangeType::TagEdit),
-            "deploy" => Some(ChangeType::Deploy),
-            "undeploy" => Some(ChangeType::Undeploy),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ChangeStatus {
-    Pending,   // Not yet executed
-    Staged,    // Preview created
-    Committed, // Executed on filesystem
-    Reverted,  // Undone
-}
-
-impl ChangeStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ChangeStatus::Pending => "pending",
-            ChangeStatus::Staged => "staged",
-            ChangeStatus::Committed => "committed",
-            ChangeStatus::Reverted => "reverted",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "pending" => Some(ChangeStatus::Pending),
-            "staged" => Some(ChangeStatus::Staged),
-            "committed" => Some(ChangeStatus::Committed),
-            "reverted" => Some(ChangeStatus::Reverted),
-            _ => None,
-        }
-    }
-}
-
-/// A session groups related changes together for atomic commit/revert.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangeSession {
-    pub session_id: String,
-    pub description: String,
-    pub created_at: String,
-    pub committed_at: Option<String>,
-    pub status: String, // "active", "committed", "reverted"
-}
-
-// ============================================================================
-// Conversational Decision Flow Types
-// ============================================================================
-
-/// Priority level for decisions - determines presentation order
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DecisionPriority {
-    /// Immediate action recommended (e.g., clear duplicates with bitrate differential)
-    High,
-    /// Action beneficial but not urgent (e.g., similar metadata, needs review)
-    Medium,
-    /// Minor cleanup opportunity (e.g., orphaned files, edge cases)
-    Low,
-}
-
-impl DecisionPriority {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DecisionPriority::High => "high",
-            DecisionPriority::Medium => "medium",
-            DecisionPriority::Low => "low",
-        }
-    }
-}
-
-/// Category of decision being presented
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecisionCategory {
-    /// Fingerprint-based duplicate detection
-    FingerprintDuplicate,
-    /// Metadata-based duplicate (same artist/album/title)
-    MetadataDuplicate,
-    /// File with quality issues (low bitrate, missing tags)
-    QualityIssue,
-    /// Orphaned file in lost-files needing disposition
-    OrphanDisposition,
-}
-
-impl DecisionCategory {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DecisionCategory::FingerprintDuplicate => "fingerprint_duplicate",
-            DecisionCategory::MetadataDuplicate => "metadata_duplicate",
-            DecisionCategory::QualityIssue => "quality_issue",
-            DecisionCategory::OrphanDisposition => "orphan_disposition",
-        }
-    }
-}
-
-/// A decision presented to the operator in the conversational flow
-#[derive(Debug, Clone)]
-pub struct Decision {
-    /// Unique identifier for this decision
-    pub id: String,
-    /// Priority determines presentation order (high first)
-    pub priority: DecisionPriority,
-    /// Category of decision
-    pub category: DecisionCategory,
-    /// Human-readable summary of the situation
-    pub summary: String,
-    /// Detailed explanation shown on request
-    pub details: String,
-    /// Affected file paths
-    pub affected_paths: Vec<String>,
-    /// Recommended action (if any)
-    pub recommendation: Option<String>,
-    /// Pending changes that would be created if approved
-    pub pending_changes: Vec<PendingChange>,
-    /// Impact metrics (e.g., "3 files, 45MB")
-    pub impact_summary: String,
-}
-
-/// Operator's response to a decision
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecisionOutcome {
-    /// Accept the recommended action
-    Accept,
-    /// Reject/skip this decision
-    Reject,
-    /// Defer to later (re-queue at lower priority)
-    Defer,
-    /// Accept and apply pattern to similar decisions
-    AcceptPattern,
-    /// Reject and ignore similar decisions
-    RejectPattern,
-}
-
-/// A stack of decisions for the operator to work through
-#[derive(Debug, Clone, Default)]
-pub struct DecisionStack {
-    /// Decisions ordered by priority (high first)
-    pub decisions: Vec<Decision>,
-    /// Index of current decision being reviewed
-    pub current_index: usize,
-    /// Decisions that have been resolved
-    pub resolved: Vec<(Decision, DecisionOutcome)>,
-    /// Auto-ignore patterns learned during session
-    pub ignore_patterns: Vec<String>,
 }
 
 impl Database {
@@ -255,8 +20,8 @@ impl Database {
 
         let db = Database { conn };
         db.initialize_schema()?;
-        db.migrate_add_fingerprint()?; // Run migration for existing databases
-        db.migrate_add_isrc()?; // Run migration for ISRC column
+        db.migrate_add_fingerprint()?;
+        db.migrate_add_isrc()?;
         Ok(db)
     }
 
@@ -402,7 +167,6 @@ impl Database {
 
     /// Migrate existing databases to add fingerprint column
     fn migrate_add_fingerprint(&self) -> Result<()> {
-        // Check if column exists by querying pragma_table_info
         let has_column: bool = self
             .conn
             .query_row(
@@ -416,12 +180,10 @@ impl Database {
             .unwrap_or(false);
 
         if !has_column {
-            // Add fingerprint column if it doesn't exist
             self.conn
                 .execute("ALTER TABLE tracks ADD COLUMN fingerprint TEXT", params![])
                 .context("Failed to add fingerprint column")?;
 
-            // Create index for fingerprint lookups
             self.conn
                 .execute(
                     "CREATE INDEX IF NOT EXISTS idx_fingerprint ON tracks(fingerprint)",
@@ -435,7 +197,6 @@ impl Database {
 
     /// Migrate existing databases to add ISRC column
     fn migrate_add_isrc(&self) -> Result<()> {
-        // Check if column exists by querying pragma_table_info
         let has_column: bool = self
             .conn
             .query_row(
@@ -449,12 +210,10 @@ impl Database {
             .unwrap_or(false);
 
         if !has_column {
-            // Add ISRC column if it doesn't exist
             self.conn
                 .execute("ALTER TABLE tracks ADD COLUMN isrc TEXT", params![])
                 .context("Failed to add ISRC column")?;
 
-            // Create index for ISRC lookups
             self.conn
                 .execute(
                     "CREATE INDEX IF NOT EXISTS idx_isrc ON tracks(isrc)",
@@ -465,6 +224,10 @@ impl Database {
 
         Ok(())
     }
+
+    // ========================================================================
+    // Track Operations
+    // ========================================================================
 
     pub fn insert_track(&self, track: &Track) -> Result<i64> {
         self.conn
@@ -571,7 +334,10 @@ impl Database {
         tracks.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    // Scan state methods for incremental scanning
+    // ========================================================================
+    // Scan State Operations
+    // ========================================================================
+
     pub fn get_scan_state_batch(
         &self,
         source: &str,
@@ -583,7 +349,6 @@ impl Database {
             return Ok(HashMap::new());
         }
 
-        // Build placeholders for SQL IN clause
         let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
 
         let query = format!(
@@ -595,7 +360,6 @@ impl Database {
 
         let mut stmt = self.conn.prepare(&query)?;
 
-        // Build params: first is source, rest are inodes
         let mut params: Vec<&dyn rusqlite::ToSql> = vec![&source];
         for inode in inodes {
             params.push(inode);
@@ -655,14 +419,12 @@ impl Database {
         use std::collections::HashSet;
 
         if current_inodes.is_empty() {
-            // If no current inodes, delete all for this source
             let deleted = self
                 .conn
                 .execute("DELETE FROM scan_state WHERE source = ?1", params![source])?;
             return Ok(deleted);
         }
 
-        // Get all inodes for this source from scan_state
         let mut stmt = self
             .conn
             .prepare("SELECT inode FROM scan_state WHERE source = ?1")?;
@@ -670,7 +432,6 @@ impl Database {
             .query_map(params![source], |row| row.get(0))?
             .collect::<Result<HashSet<_>, _>>()?;
 
-        // Find inodes to delete (in database but not in current set)
         let to_delete: Vec<i64> = existing_inodes
             .difference(current_inodes)
             .copied()
@@ -680,7 +441,6 @@ impl Database {
             return Ok(0);
         }
 
-        // Delete stale entries
         let placeholders = (0..to_delete.len())
             .map(|_| "?")
             .collect::<Vec<_>>()
@@ -700,7 +460,10 @@ impl Database {
         Ok(deleted)
     }
 
-    // Deployment methods
+    // ========================================================================
+    // Deployment Operations
+    // ========================================================================
+
     pub fn get_tracks_by_corpus_path_prefix(&self, path_prefix: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type, artist, album, album_artist,
@@ -735,9 +498,11 @@ impl Database {
         Ok(())
     }
 
-    // Corpus health methods
+    // ========================================================================
+    // Corpus Health Operations
+    // ========================================================================
+
     pub fn compute_deployment_stats(&self) -> Result<DeploymentStats> {
-        // Count total corpus files
         let total: usize = self
             .conn
             .query_row(
@@ -747,7 +512,6 @@ impl Database {
             )
             .unwrap_or(0);
 
-        // Get all library sources (sources that aren't 'corpus' or 'legacy')
         let sources = self.get_sources()?;
         let library_sources: Vec<String> = sources
             .iter()
@@ -755,7 +519,6 @@ impl Database {
             .cloned()
             .collect();
 
-        // Collect all library inodes
         let mut library_inodes = std::collections::HashSet::new();
         for source in library_sources {
             let tracks = self.get_all_tracks(Some(&source))?;
@@ -764,7 +527,6 @@ impl Database {
             }
         }
 
-        // Count how many corpus files are deployed (have matching inodes in libraries)
         let deployed = if total > 0 {
             let corpus_tracks = self.get_all_tracks(Some("corpus"))?;
             corpus_tracks
@@ -826,7 +588,10 @@ impl Database {
         }
     }
 
-    /// Log a tag edit to the history table
+    // ========================================================================
+    // Tag Edit Operations
+    // ========================================================================
+
     pub fn log_tag_edit(
         &self,
         track_id: i64,
@@ -843,16 +608,13 @@ impl Database {
         Ok(())
     }
 
-    /// Update a single tag field in the tracks table
     pub fn update_track_tag(&self, track_id: i64, field_name: &str, value: &str) -> Result<()> {
-        // Only update standard fields that exist in the tracks table
         let query = match field_name {
             "artist" => "UPDATE tracks SET artist = ?1 WHERE id = ?2",
             "album" => "UPDATE tracks SET album = ?1 WHERE id = ?2",
             "album_artist" => "UPDATE tracks SET album_artist = ?1 WHERE id = ?2",
             "title" => "UPDATE tracks SET title = ?1 WHERE id = ?2",
             "track_number" => {
-                // Try to parse as integer
                 if let Ok(num) = value.parse::<i32>() {
                     self.conn
                         .execute(
@@ -862,11 +624,10 @@ impl Database {
                         .context("Failed to update track_number")?;
                     return Ok(());
                 } else {
-                    return Ok(()); // Skip invalid track numbers
+                    return Ok(());
                 }
             }
             "isrc" => "UPDATE tracks SET isrc = ?1 WHERE id = ?2",
-            // For other fields, we don't update the database (they're not in the schema)
             _ => return Ok(()),
         };
 
@@ -877,7 +638,10 @@ impl Database {
         Ok(())
     }
 
-    /// Phase 6: Get unresolved duplicate groups
+    // ========================================================================
+    // Duplicate Group Operations
+    // ========================================================================
+
     pub fn get_unresolved_duplicate_groups(&self) -> Result<Vec<i64>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM duplicate_groups
@@ -892,7 +656,6 @@ impl Database {
         Ok(group_ids)
     }
 
-    /// Phase 6: Get tracks for a specific duplicate group
     pub fn get_duplicate_group_tracks(&self, group_id: i64) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
@@ -911,7 +674,6 @@ impl Database {
         Ok(tracks)
     }
 
-    /// Phase 6: Mark a duplicate group as resolved
     pub fn mark_duplicate_group_resolved(&self, group_id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE duplicate_groups
@@ -924,9 +686,7 @@ impl Database {
         Ok(())
     }
 
-    /// Clear stale pending duplicate groups before repopulating
     pub fn clear_pending_duplicate_groups(&self, group_type: &str) -> Result<()> {
-        // Delete from duplicate_group_members first (foreign key constraint)
         self.conn.execute(
             "DELETE FROM duplicate_group_members
              WHERE group_id IN (
@@ -936,7 +696,6 @@ impl Database {
             params![group_type],
         )?;
 
-        // Then delete groups
         self.conn.execute(
             "DELETE FROM duplicate_groups
              WHERE group_type = ?1 AND resolution_state = 'pending'",
@@ -946,7 +705,6 @@ impl Database {
         Ok(())
     }
 
-    /// Insert a new duplicate group, returns group_id
     pub fn insert_duplicate_group(&self, group_type: &str, group_key: &str) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO duplicate_groups (group_type, group_key, resolution_state)
@@ -957,7 +715,6 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Add a track to a duplicate group
     pub fn insert_duplicate_group_member(&self, group_id: i64, track_id: i64) -> Result<()> {
         self.conn.execute(
             "INSERT INTO duplicate_group_members (group_id, track_id, selected_for_keep)
@@ -968,8 +725,6 @@ impl Database {
         Ok(())
     }
 
-    /// Get tracks with fingerprints in specified directory paths
-    /// Used for fingerprint-based deduplication
     pub fn get_tracks_by_paths(
         &self,
         path_prefixes: &[PathBuf],
@@ -979,7 +734,6 @@ impl Database {
             return Ok(Vec::new());
         }
 
-        // Build WHERE clause with multiple LIKE conditions
         let conditions: Vec<String> = path_prefixes
             .iter()
             .enumerate()
@@ -999,14 +753,12 @@ impl Database {
 
         let mut stmt = self.conn.prepare(&query)?;
 
-        // Build parameter vector: source + all path prefixes with wildcard
         let mut params: Vec<String> = vec![source.to_string()];
         for prefix in path_prefixes {
             let pattern = format!("{}%", prefix.to_string_lossy());
             params.push(pattern);
         }
 
-        // Convert to ToSql references
         let param_refs: Vec<&dyn rusqlite::ToSql> =
             params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
 
@@ -1017,11 +769,10 @@ impl Database {
         Ok(tracks)
     }
 
-    // ============================================
-    // Algebraic Change Tracking Methods
-    // ============================================
+    // ========================================================================
+    // Change Session Operations
+    // ========================================================================
 
-    /// Create a new change session, returns the session_id (UUID)
     pub fn create_change_session(&self, description: &str) -> Result<String> {
         let session_id = uuid::Uuid::new_v4().to_string();
         self.conn.execute(
@@ -1032,7 +783,6 @@ impl Database {
         Ok(session_id)
     }
 
-    /// Get the active change session (if any)
     pub fn get_active_session(&self) -> Result<Option<ChangeSession>> {
         let result = self.conn.query_row(
             "SELECT session_id, description, created_at, committed_at, status
@@ -1059,7 +809,6 @@ impl Database {
         }
     }
 
-    /// Get a change session by ID
     pub fn get_change_session(&self, session_id: &str) -> Result<Option<ChangeSession>> {
         let result = self.conn.query_row(
             "SELECT session_id, description, created_at, committed_at, status
@@ -1084,7 +833,6 @@ impl Database {
         }
     }
 
-    /// Commit a change session (mark as committed)
     pub fn commit_session(&self, session_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE change_sessions
@@ -1095,7 +843,6 @@ impl Database {
         Ok(())
     }
 
-    /// Revert a change session (mark as reverted)
     pub fn revert_session(&self, session_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE change_sessions
@@ -1106,7 +853,10 @@ impl Database {
         Ok(())
     }
 
-    /// Add a pending change
+    // ========================================================================
+    // Pending Change Operations
+    // ========================================================================
+
     pub fn add_pending_change(&self, change: &PendingChange) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO pending_changes (session_id, change_type, source_path, target_path, metadata_changes, status)
@@ -1123,7 +873,6 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Get pending changes for a session
     pub fn get_pending_changes(&self, session_id: &str) -> Result<Vec<PendingChange>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, change_type, source_path, target_path, metadata_changes, created_at, status
@@ -1138,7 +887,6 @@ impl Database {
         Ok(changes)
     }
 
-    /// Get all pending changes (across all sessions) with status = 'pending'
     pub fn get_all_pending_changes(&self) -> Result<Vec<PendingChange>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, change_type, source_path, target_path, metadata_changes, created_at, status
@@ -1153,7 +901,6 @@ impl Database {
         Ok(changes)
     }
 
-    /// Update the status of a pending change
     pub fn update_change_status(&self, change_id: i64, status: ChangeStatus) -> Result<()> {
         self.conn.execute(
             "UPDATE pending_changes SET status = ?1 WHERE id = ?2",
@@ -1162,7 +909,6 @@ impl Database {
         Ok(())
     }
 
-    /// Clear pending changes for a session (used when discarding changes)
     pub fn clear_pending_changes(&self, session_id: &str) -> Result<usize> {
         let deleted = self.conn.execute(
             "DELETE FROM pending_changes WHERE session_id = ?1 AND status = 'pending'",
@@ -1171,7 +917,6 @@ impl Database {
         Ok(deleted)
     }
 
-    /// Get count of pending changes by type
     pub fn get_pending_change_counts(&self) -> Result<std::collections::HashMap<String, usize>> {
         use std::collections::HashMap;
 
@@ -1196,6 +941,10 @@ impl Database {
 
         Ok(counts)
     }
+
+    // ========================================================================
+    // Row Conversion Helpers
+    // ========================================================================
 
     fn row_to_pending_change(row: &rusqlite::Row) -> rusqlite::Result<PendingChange> {
         let change_type_str: String = row.get(2)?;

@@ -98,6 +98,259 @@ impl Default for AutoIgnoreState {
 }
 
 // ============================================================================
+// Fingerprint Match Filtering
+// ============================================================================
+
+/// Check if a group of tracks represents different tracks from the same album.
+/// This detects false positives where similar-sounding tracks (e.g., ambient music)
+/// have matching fingerprints but are actually different songs.
+///
+/// Returns true if ALL of:
+/// - All tracks are in the same directory (same album folder)
+/// - Tracks have different track numbers (different songs)
+pub fn is_same_album_different_tracks(tracks: &[Track]) -> bool {
+    use std::collections::HashSet;
+
+    if tracks.len() < 2 {
+        return false;
+    }
+
+    // Collect parent directories
+    let dirs: HashSet<_> = tracks
+        .iter()
+        .filter_map(|t| Path::new(&t.path).parent())
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+
+    // If tracks are in different directories, this isn't the same-album case
+    if dirs.len() != 1 {
+        return false;
+    }
+
+    // Check if track numbers are different
+    let track_nums: HashSet<_> = tracks
+        .iter()
+        .filter_map(|t| t.track_number)
+        .collect();
+
+    // If we have different track numbers, these are different songs from the same album
+    // (at least 2 distinct track numbers means they're different songs)
+    track_nums.len() > 1
+}
+
+/// Check if all tracks in a group have durations within a tolerance of each other.
+/// Returns false if any track's duration differs by more than the tolerance from others.
+///
+/// This filters out false positives like:
+/// - Radio edits vs album versions
+/// - Remixes tagged as originals
+/// - Different versions with similar fingerprints
+pub fn durations_within_tolerance(tracks: &[Track], tolerance_percent: f64) -> bool {
+    if tracks.len() < 2 {
+        return true;
+    }
+
+    // Get all durations
+    let durations: Vec<_> = tracks
+        .iter()
+        .filter_map(|t| t.duration_ms)
+        .collect();
+
+    // If no durations available, assume they're within tolerance (can't verify)
+    if durations.is_empty() {
+        return true;
+    }
+
+    let min_dur = *durations.iter().min().unwrap() as f64;
+    let max_dur = *durations.iter().max().unwrap() as f64;
+
+    // Avoid division by zero
+    if min_dur == 0.0 {
+        return true;
+    }
+
+    // Calculate variance as percentage
+    let variance = (max_dur - min_dur) / min_dur;
+
+    // Return true if variance is within tolerance
+    variance <= tolerance_percent
+}
+
+// ============================================================================
+// Quality-Based Resolution
+// ============================================================================
+
+/// File format quality tiers (higher = better)
+/// Tier 3: Lossless formats (FLAC, WAV, APE, WV)
+/// Tier 2: High-quality lossy (OGG, OPUS, M4A/AAC at high bitrate)
+/// Tier 1: Legacy lossy (MP3, WMA, low-bitrate AAC)
+fn format_quality_tier(file_type: &str) -> u8 {
+    match file_type.to_lowercase().as_str() {
+        // Tier 3: Lossless
+        "flac" | "wav" | "ape" | "wv" | "alac" => 3,
+        // Tier 2: High-quality lossy
+        "ogg" | "opus" | "m4a" | "aac" => 2,
+        // Tier 1: Legacy lossy
+        "mp3" | "wma" => 1,
+        // Unknown formats default to middle tier
+        _ => 2,
+    }
+}
+
+/// Result of quality-based comparison between tracks
+#[derive(Debug, Clone, PartialEq)]
+pub enum QualityVerdict {
+    /// One track is clearly superior (index of winner in the slice)
+    ClearWinner(usize),
+    /// Tracks are equivalent quality (same tier, similar bitrate)
+    Equivalent,
+    /// Cannot determine (missing data)
+    Indeterminate,
+}
+
+/// Compare tracks by quality and return verdict.
+/// Uses format tier first, then bitrate within same tier.
+///
+/// A track is a "clear winner" if:
+/// - It's in a higher format tier (e.g., FLAC vs MP3), OR
+/// - Same tier but significantly higher bitrate (>50% difference)
+pub fn compare_track_quality(tracks: &[Track]) -> QualityVerdict {
+    if tracks.len() < 2 {
+        return QualityVerdict::Indeterminate;
+    }
+
+    // Get quality metrics for each track
+    let metrics: Vec<(usize, u8, Option<i32>)> = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (i, format_quality_tier(&t.file_type), t.bitrate_kbps))
+        .collect();
+
+    // Find the highest tier
+    let max_tier = metrics.iter().map(|(_, tier, _)| *tier).max().unwrap_or(0);
+    let min_tier = metrics.iter().map(|(_, tier, _)| *tier).min().unwrap_or(0);
+
+    // If there's a tier difference, the highest tier wins
+    if max_tier > min_tier {
+        // Find the track with the highest tier (if tied, pick highest bitrate among them)
+        let winners: Vec<_> = metrics
+            .iter()
+            .filter(|(_, tier, _)| *tier == max_tier)
+            .collect();
+
+        if winners.len() == 1 {
+            return QualityVerdict::ClearWinner(winners[0].0);
+        }
+
+        // Multiple tracks at highest tier - compare bitrates
+        let winner = winners
+            .iter()
+            .max_by_key(|(_, _, br)| br.unwrap_or(0))
+            .map(|(i, _, _)| *i);
+
+        if let Some(idx) = winner {
+            return QualityVerdict::ClearWinner(idx);
+        }
+    }
+
+    // Same tier - check bitrate difference
+    let bitrates: Vec<_> = metrics
+        .iter()
+        .filter_map(|(i, _, br)| br.map(|b| (*i, b)))
+        .collect();
+
+    if bitrates.len() < 2 {
+        return QualityVerdict::Indeterminate;
+    }
+
+    let max_br = bitrates.iter().map(|(_, br)| *br).max().unwrap();
+    let min_br = bitrates.iter().map(|(_, br)| *br).min().unwrap();
+
+    // >50% bitrate difference is significant
+    if min_br > 0 && (max_br - min_br) as f64 / min_br as f64 > 0.5 {
+        let winner_idx = bitrates
+            .iter()
+            .find(|(_, br)| *br == max_br)
+            .map(|(i, _)| *i);
+
+        if let Some(idx) = winner_idx {
+            return QualityVerdict::ClearWinner(idx);
+        }
+    }
+
+    QualityVerdict::Equivalent
+}
+
+/// Filter a group of duplicate tracks to find auto-resolvable ones.
+/// Returns Some((winner_track, loser_tracks)) if there's a clear quality winner.
+/// Returns None if manual resolution is needed.
+pub fn auto_resolve_by_quality(tracks: &[Track]) -> Option<(&Track, Vec<&Track>)> {
+    if tracks.len() < 2 {
+        return None;
+    }
+
+    match compare_track_quality(tracks) {
+        QualityVerdict::ClearWinner(idx) => {
+            let winner = &tracks[idx];
+            let losers: Vec<_> = tracks
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != idx)
+                .map(|(_, t)| t)
+                .collect();
+            Some((winner, losers))
+        }
+        _ => None,
+    }
+}
+
+/// Statistics from auto-resolution process
+#[derive(Debug, Clone, Default)]
+pub struct AutoResolutionStats {
+    pub groups_analyzed: usize,
+    pub groups_auto_resolved: usize,
+    pub groups_need_manual: usize,
+    pub files_marked_inferior: usize,
+    pub files_kept: usize,
+    /// Breakdown by winning format
+    pub wins_by_format: HashMap<String, usize>,
+}
+
+/// Analyze fingerprint duplicate groups and categorize by resolution type.
+/// Returns (auto_resolvable, manual_needed) groups.
+#[allow(clippy::type_complexity)]
+pub fn categorize_duplicates_by_quality<'a>(
+    groups: &'a [(&'a String, &'a Vec<&'a Track>)],
+) -> (Vec<(&'a String, &'a Track, Vec<&'a Track>)>, Vec<&'a (&'a String, &'a Vec<&'a Track>)>) {
+    let mut auto_resolvable = Vec::new();
+    let mut manual_needed = Vec::new();
+
+    for group in groups {
+        let (fp, tracks) = group;
+        // Convert &&Track to &Track for the function
+        let track_slice: Vec<Track> = tracks.iter().map(|t| (*t).clone()).collect();
+
+        match compare_track_quality(&track_slice) {
+            QualityVerdict::ClearWinner(idx) => {
+                let winner = tracks[idx];
+                let losers: Vec<_> = tracks
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != idx)
+                    .map(|(_, t)| *t)
+                    .collect();
+                auto_resolvable.push((*fp, winner, losers));
+            }
+            _ => {
+                manual_needed.push(group);
+            }
+        }
+    }
+
+    (auto_resolvable, manual_needed)
+}
+
+// ============================================================================
 // Directory Set Clustering (Non-Transitive)
 // ============================================================================
 
@@ -607,6 +860,7 @@ pub fn compute_directory_clusters(
 /// - Files in any 2 directories
 ///
 /// Returns clusters sorted by magnitude (4-dir before 3-dir before 2-dir).
+#[allow(clippy::type_complexity)]
 pub fn find_duplicates_between_directories(
     db: &Database,
     selected_dirs: &[PathBuf],
@@ -658,14 +912,55 @@ pub fn find_duplicates_between_directories(
     ));
 
     // 2. Filter to only fingerprints that appear in 2+ selected directories
+    //    Also apply false-positive filters (OR logic - skip if EITHER is true):
+    //    - Skip if same directory + different track numbers (sequential album tracks)
+    //    - Skip if duration variance exceeds 10%
+    let mut filtered_count = 0usize;
+    let mut same_album_filtered = 0usize;
+    let mut duration_filtered = 0usize;
+
     let duplicates: HashMap<_, _> = fp_to_dirs
         .into_iter()
-        .filter(|(_, dirs)| dirs.len() >= 2)
+        .filter(|(fp, dirs)| {
+            if dirs.len() < 2 {
+                return false;
+            }
+
+            // Collect all tracks across all directories for this fingerprint
+            let all_tracks: Vec<Track> = dirs.values().flat_map(|t| t.clone()).collect();
+
+            // Filter 1: Skip if these are different tracks from the same album
+            if is_same_album_different_tracks(&all_tracks) {
+                let _ = config::log_message(&format!(
+                    "[find_duplicates] Filtered same-album-different-tracks: fp={}...",
+                    &fp[..20.min(fp.len())]
+                ));
+                same_album_filtered += 1;
+                filtered_count += 1;
+                return false;
+            }
+
+            // Filter 2: Skip if duration variance exceeds 10%
+            if !durations_within_tolerance(&all_tracks, 0.10) {
+                let _ = config::log_message(&format!(
+                    "[find_duplicates] Filtered duration-variance: fp={}...",
+                    &fp[..20.min(fp.len())]
+                ));
+                duration_filtered += 1;
+                filtered_count += 1;
+                return false;
+            }
+
+            true
+        })
         .collect();
 
     let _ = config::log_message(&format!(
-        "[find_duplicates] Fingerprints appearing in 2+ directories: {}",
-        duplicates.len()
+        "[find_duplicates] Fingerprints appearing in 2+ directories: {} (filtered out: {} total, {} same-album, {} duration-variance)",
+        duplicates.len(),
+        filtered_count,
+        same_album_filtered,
+        duration_filtered
     ));
 
     if duplicates.is_empty() {
@@ -1332,5 +1627,209 @@ mod tests {
 
         let root = find_divergence_root(&[cs]);
         assert_eq!(root, "/corpus/web/rips/spotify/");
+    }
+
+    // Tests for fingerprint match filtering
+
+    fn make_track_with_details(path: &str, track_num: Option<i32>, duration_ms: Option<i64>) -> Track {
+        Track {
+            id: None,
+            path: path.to_string(),
+            source: "corpus".to_string(),
+            inode: 12345,
+            file_size: 1000000,
+            file_type: "flac".to_string(),
+            artist: Some("Artist".to_string()),
+            album: Some("Album".to_string()),
+            album_artist: None,
+            title: Some("Track".to_string()),
+            track_number: track_num,
+            duration_ms,
+            bitrate_kbps: Some(320),
+            sample_rate: Some(44100),
+            fingerprint: Some("fp123".to_string()),
+            isrc: None,
+        }
+    }
+
+    #[test]
+    fn test_is_same_album_different_tracks_true() {
+        // Same directory, different track numbers = should be filtered
+        let tracks = vec![
+            make_track_with_details("/album/track17.flac", Some(17), Some(180000)),
+            make_track_with_details("/album/track18.flac", Some(18), Some(180000)),
+            make_track_with_details("/album/track19.flac", Some(19), Some(180000)),
+        ];
+        assert!(is_same_album_different_tracks(&tracks));
+    }
+
+    #[test]
+    fn test_is_same_album_different_tracks_false_different_dirs() {
+        // Different directories = should NOT be filtered (actual duplicates)
+        let tracks = vec![
+            make_track_with_details("/album-a/track.flac", Some(1), Some(180000)),
+            make_track_with_details("/album-b/track.flac", Some(1), Some(180000)),
+        ];
+        assert!(!is_same_album_different_tracks(&tracks));
+    }
+
+    #[test]
+    fn test_is_same_album_different_tracks_false_same_track_num() {
+        // Same directory, same track number = actual duplicates
+        let tracks = vec![
+            make_track_with_details("/album/track.flac", Some(1), Some(180000)),
+            make_track_with_details("/album/track_copy.flac", Some(1), Some(180000)),
+        ];
+        assert!(!is_same_album_different_tracks(&tracks));
+    }
+
+    #[test]
+    fn test_durations_within_tolerance_true() {
+        // 180000ms and 185000ms = 2.8% difference, within 10%
+        let tracks = vec![
+            make_track_with_details("/a/track.flac", Some(1), Some(180000)),
+            make_track_with_details("/b/track.flac", Some(1), Some(185000)),
+        ];
+        assert!(durations_within_tolerance(&tracks, 0.10));
+    }
+
+    #[test]
+    fn test_durations_within_tolerance_false() {
+        // 180000ms and 220000ms = 22% difference, exceeds 10%
+        let tracks = vec![
+            make_track_with_details("/a/track.flac", Some(1), Some(180000)),
+            make_track_with_details("/b/track.flac", Some(1), Some(220000)),
+        ];
+        assert!(!durations_within_tolerance(&tracks, 0.10));
+    }
+
+    #[test]
+    fn test_durations_within_tolerance_no_durations() {
+        // No duration data = assume within tolerance (can't verify)
+        let tracks = vec![
+            make_track_with_details("/a/track.flac", Some(1), None),
+            make_track_with_details("/b/track.flac", Some(1), None),
+        ];
+        assert!(durations_within_tolerance(&tracks, 0.10));
+    }
+
+    #[test]
+    fn test_durations_within_tolerance_edge_case_exact() {
+        // Exactly 10% difference = should be within tolerance (<=)
+        let tracks = vec![
+            make_track_with_details("/a/track.flac", Some(1), Some(100000)),
+            make_track_with_details("/b/track.flac", Some(1), Some(110000)),
+        ];
+        assert!(durations_within_tolerance(&tracks, 0.10));
+    }
+
+    // Tests for quality-based resolution
+
+    fn make_track_with_quality(path: &str, file_type: &str, bitrate: Option<i32>) -> Track {
+        Track {
+            id: None,
+            path: path.to_string(),
+            source: "corpus".to_string(),
+            inode: 12345,
+            file_size: 1000000,
+            file_type: file_type.to_string(),
+            artist: Some("Artist".to_string()),
+            album: Some("Album".to_string()),
+            album_artist: None,
+            title: Some("Track".to_string()),
+            track_number: Some(1),
+            duration_ms: Some(180000),
+            bitrate_kbps: bitrate,
+            sample_rate: Some(44100),
+            fingerprint: Some("fp123".to_string()),
+            isrc: None,
+        }
+    }
+
+    #[test]
+    fn test_compare_quality_flac_vs_mp3() {
+        // FLAC (tier 3) should beat MP3 (tier 1)
+        let tracks = vec![
+            make_track_with_quality("/a/track.mp3", "mp3", Some(320)),
+            make_track_with_quality("/b/track.flac", "flac", Some(900)),
+        ];
+        assert_eq!(compare_track_quality(&tracks), QualityVerdict::ClearWinner(1));
+    }
+
+    #[test]
+    fn test_compare_quality_ogg_vs_mp3() {
+        // OGG (tier 2) should beat MP3 (tier 1)
+        let tracks = vec![
+            make_track_with_quality("/a/track.ogg", "ogg", Some(256)),
+            make_track_with_quality("/b/track.mp3", "mp3", Some(320)),
+        ];
+        assert_eq!(compare_track_quality(&tracks), QualityVerdict::ClearWinner(0));
+    }
+
+    #[test]
+    fn test_compare_quality_same_tier_big_bitrate_diff() {
+        // Same tier (both MP3) but >50% bitrate difference = clear winner
+        let tracks = vec![
+            make_track_with_quality("/a/track.mp3", "mp3", Some(128)),
+            make_track_with_quality("/b/track.mp3", "mp3", Some(320)),
+        ];
+        // 320 vs 128 = 150% difference, clear winner
+        assert_eq!(compare_track_quality(&tracks), QualityVerdict::ClearWinner(1));
+    }
+
+    #[test]
+    fn test_compare_quality_same_tier_similar_bitrate() {
+        // Same tier, similar bitrate = equivalent (needs manual review)
+        let tracks = vec![
+            make_track_with_quality("/a/track.mp3", "mp3", Some(256)),
+            make_track_with_quality("/b/track.mp3", "mp3", Some(320)),
+        ];
+        // 320 vs 256 = 25% difference, not enough for clear winner
+        assert_eq!(compare_track_quality(&tracks), QualityVerdict::Equivalent);
+    }
+
+    #[test]
+    fn test_compare_quality_missing_bitrate() {
+        // Missing bitrate data = indeterminate
+        let tracks = vec![
+            make_track_with_quality("/a/track.mp3", "mp3", None),
+            make_track_with_quality("/b/track.mp3", "mp3", Some(320)),
+        ];
+        assert_eq!(compare_track_quality(&tracks), QualityVerdict::Indeterminate);
+    }
+
+    #[test]
+    fn test_compare_quality_three_way_mixed() {
+        // Three tracks: FLAC, OGG, MP3 - FLAC should win
+        let tracks = vec![
+            make_track_with_quality("/a/track.mp3", "mp3", Some(320)),
+            make_track_with_quality("/b/track.ogg", "ogg", Some(256)),
+            make_track_with_quality("/c/track.flac", "flac", Some(900)),
+        ];
+        assert_eq!(compare_track_quality(&tracks), QualityVerdict::ClearWinner(2));
+    }
+
+    #[test]
+    fn test_auto_resolve_by_quality_winner() {
+        let tracks = vec![
+            make_track_with_quality("/a/track.mp3", "mp3", Some(128)),
+            make_track_with_quality("/b/track.flac", "flac", Some(900)),
+        ];
+        let result = auto_resolve_by_quality(&tracks);
+        assert!(result.is_some());
+        let (winner, losers) = result.unwrap();
+        assert_eq!(winner.file_type, "flac");
+        assert_eq!(losers.len(), 1);
+        assert_eq!(losers[0].file_type, "mp3");
+    }
+
+    #[test]
+    fn test_auto_resolve_by_quality_no_winner() {
+        let tracks = vec![
+            make_track_with_quality("/a/track.mp3", "mp3", Some(256)),
+            make_track_with_quality("/b/track.mp3", "mp3", Some(320)),
+        ];
+        // Similar quality, no clear winner
+        assert!(auto_resolve_by_quality(&tracks).is_none());
     }
 }

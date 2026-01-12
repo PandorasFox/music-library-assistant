@@ -1,0 +1,34 @@
+//! Corpus Health System
+//!
+//! Health is a continuously maintained invariant - not computed on-demand.
+//! This module provides detection, filtering, and tracking of corpus health issues.
+//!
+//! Flow:
+//! ```text
+//! SCAN/INDEX → detect issues → store in DB
+//!      ↓
+//! MUTATION (tag edit, move, delete) → update affected issues
+//!      ↓
+//! REPORTS → read from DB (fast, cached)
+//!      ↓
+//! TRIAGE UI → resolve issues → update DB
+//! ```
+//!
+//! ## Health Issue Categories
+//!
+//! - **Fingerprint Duplicates**: Exact fingerprint match across files
+//! - **Legitimate Re-releases**: Same fingerprint, different album metadata
+//! - **Metadata Collisions**: Same artist/album/title, different fingerprint
+//! - **Canonicalization Issues**: Artist name variants needing unification
+//! - **Quality Variants**: Same content, different quality (FLAC vs MP3)
+
+mod detection;
+mod filter;
+mod heartbeat;
+
+pub use detection::{detect_fingerprint_issues, detect_metadata_issues};
+#[allow(unused_imports)]
+pub use filter::{
+    durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks,
+};
+pub use heartbeat::{spawn_heartbeat, HeartbeatResult};

@@ -171,8 +171,7 @@ impl SessionReviewState {
 
     fn render_options(&mut self, f: &mut Frame, area: Rect) {
         let pending = self.session.total_pending_changes();
-        let options = vec![
-            (
+        let options = [(
                 "Commit all changes",
                 format!("Stash {} files", pending),
             ),
@@ -187,8 +186,7 @@ impl SessionReviewState {
             (
                 "Cancel",
                 "Discard all pending changes".to_string(),
-            ),
-        ];
+            )];
 
         let items: Vec<ListItem> = options
             .iter()
@@ -237,6 +235,7 @@ impl SessionReviewState {
     }
 
     /// Get the session (for use after review)
+    #[allow(dead_code)]
     pub fn into_session(self) -> DeduplicationSession {
         self.session
     }

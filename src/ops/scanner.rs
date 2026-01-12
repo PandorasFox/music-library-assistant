@@ -13,6 +13,7 @@ use walkdir::WalkDir;
 
 use crate::config;
 use crate::db::Database;
+use crate::health;
 use crate::metadata;
 use crate::progress::{MtimeMismatchStats, ScanMessage, ScanProgress, ScanResult};
 
@@ -244,8 +245,22 @@ pub fn scan_directory_with_progress(
     }
 
     // Step 4: Batch insert to database (INSERT OR REPLACE keeps existing data)
-    for track in tracks {
-        db.insert_track(&track)?;
+    // and detect health issues for tracks with fingerprints
+    for track in &tracks {
+        let track_id = db.insert_track(track)?;
+
+        // Run health detection for tracks with fingerprints
+        if track.fingerprint.is_some() {
+            // Create a track with the ID for health detection
+            let track_with_id = crate::db::Track {
+                id: Some(track_id),
+                ..track.clone()
+            };
+            // Detect fingerprint issues (will create health_issues entries)
+            let _ = health::detect_fingerprint_issues(&db, &track_with_id);
+            // Detect metadata issues
+            let _ = health::detect_metadata_issues(&db, &track_with_id);
+        }
     }
 
     // Step 5: Update scan_state for all processed files

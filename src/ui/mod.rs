@@ -34,12 +34,13 @@ use std::time::Instant;
 
 use crate::config::{self, Config};
 use crate::db::Database;
+use crate::health::{spawn_heartbeat, HeartbeatResult};
 use crate::ops::{reports, scanner};
 use crate::progress::ScanMessage;
 
 use app::{EyeAnimation, EyeFrame, OperationState, OperationType, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
-use main_menu::{BackgroundTask, CommandAction, DirBrowserContext, MainMenuState, MenuAction, ReportType, TransitionTarget};
+use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 // ============================================================================
 // Application State
@@ -47,6 +48,7 @@ use main_menu::{BackgroundTask, CommandAction, DirBrowserContext, MainMenuState,
 
 /// Current UI mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum UiMode {
     MainMenu,
     TagEditor,
@@ -98,6 +100,10 @@ struct App {
     operation: Option<OperationState>,
     operation_receiver: Option<mpsc::Receiver<ScanMessage>>,
 
+    // Startup heartbeat
+    heartbeat_result: Option<HeartbeatResult>,
+    heartbeat_receiver: Option<mpsc::Receiver<HeartbeatResult>>,
+
     // Throughput tracking for rolling average (timestamp, bytes_processed)
     throughput_samples: VecDeque<(Instant, u64)>,
 
@@ -128,6 +134,8 @@ impl App {
             drop_missing_state: None,
             operation: None,
             operation_receiver: None,
+            heartbeat_result: None,
+            heartbeat_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
             tag_edit_session_id: uuid::Uuid::new_v4().to_string(),
@@ -227,6 +235,9 @@ impl App {
             }
             BackgroundTask::DetectMissing => {
                 self.detect_missing_files();
+            }
+            BackgroundTask::RebuildHealthIndex => {
+                self.rebuild_health_index();
             }
             BackgroundTask::GenerateReport { report_type } => {
                 self.generate_report(report_type);
@@ -332,6 +343,12 @@ impl App {
                         .map_err(|e| e.to_string()),
                 ]
             }
+            ReportType::Health => {
+                vec![
+                    reports::generate_health_report(&reports_dir.join("health.txt"))
+                        .map_err(|e| e.to_string()),
+                ]
+            }
         };
 
         let successes: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
@@ -387,6 +404,56 @@ impl App {
                 self.status_message = Some(format!("Detection error: {}", e));
             }
         }
+    }
+
+    fn rebuild_health_index(&mut self) {
+        use crate::health::{detect_fingerprint_issues, detect_metadata_issues};
+
+        // Open database
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        // Get all tracks with fingerprints
+        let tracks = match db.get_all_tracks(Some("corpus")) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status_message = Some(format!("Error getting tracks: {}", e));
+                return;
+            }
+        };
+
+        let total = tracks.len();
+        let with_fingerprints: Vec<_> = tracks.into_iter().filter(|t| t.fingerprint.is_some()).collect();
+        let fp_count = with_fingerprints.len();
+
+        // Run health detection on each track
+        let mut issues_found = 0;
+        for track in &with_fingerprints {
+            if let Ok(issues) = detect_fingerprint_issues(&db, track) {
+                issues_found += issues.len();
+            }
+            let _ = detect_metadata_issues(&db, track);
+        }
+
+        self.status_message = Some(format!(
+            "Rebuilt health index: {} tracks ({} with fingerprints), {} issues detected",
+            total, fp_count, issues_found
+        ));
+
+        // Refresh corpus summary
+        self.refresh_corpus_summary();
     }
 
     fn start_drop_missing_confirmation(&mut self) {
@@ -716,7 +783,7 @@ impl App {
         // Find all fingerprint duplicates
         let conflict_sets = match find_fingerprint_duplicates(
             &db,
-            &[corpus_root.clone()],
+            std::slice::from_ref(&corpus_root),
             &corpus_root,
         ) {
             Ok(sets) => sets,
@@ -1183,6 +1250,36 @@ impl App {
             self.operation = None;
             self.operation_receiver = None;
             self.throughput_samples.clear();
+            // Refresh corpus summary after operation completes
+            self.refresh_corpus_summary();
+        }
+    }
+
+    /// Refresh the cached corpus summary for the info panel
+    fn refresh_corpus_summary(&mut self) {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        if let Ok(summary) = db.get_corpus_summary() {
+            self.main_menu.set_corpus_summary(summary);
+        }
+    }
+
+    /// Check for heartbeat completion
+    fn update_heartbeat(&mut self) {
+        if let Some(ref rx) = self.heartbeat_receiver {
+            if let Ok(result) = rx.try_recv() {
+                // Heartbeat completed - pass result to main menu for display
+                self.main_menu.set_heartbeat_result(result.clone());
+                self.heartbeat_result = Some(result);
+                self.heartbeat_receiver = None;
+                self.eye.set_heartbeat_pending(false);
+            }
         }
     }
 }
@@ -1378,33 +1475,69 @@ fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     render_eye(f, footer_layout[1], app);
 }
 
-fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, _app: &App) {
+fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let mut lines = Vec::new();
 
-    // Try to get corpus stats from database
-    if let Ok(db_path) = config::get_db_path() {
-        if let Ok(db) = Database::open(&db_path) {
-            let track_count = db.get_track_count(None).unwrap_or(0);
-            let dup_groups = db.get_unresolved_duplicate_groups().map(|g| g.len()).unwrap_or(0);
-
-            if track_count == 0 {
-                lines.push(Line::from("No scan data - run a scan first")
-                    .style(Style::default().fg(Color::Yellow)));
-            } else {
-                lines.push(Line::from(format!("Indexed: {} tracks", track_count)));
-                if dup_groups > 0 {
-                    lines.push(Line::from(format!("Duplicates: {} groups need review", dup_groups))
-                        .style(Style::default().fg(Color::Yellow)));
-                } else {
-                    lines.push(Line::from("Duplicates: None pending")
-                        .style(Style::default().fg(Color::Green)));
-                }
-            }
+    // Show heartbeat status first
+    if let Some(ref hb) = app.heartbeat_result {
+        if hb.is_healthy() {
+            lines.push(
+                Line::from(format!("Validated ({:.0}ms)", hb.duration.as_millis()))
+                    .style(Style::default().fg(Color::Green)),
+            );
         } else {
-            lines.push(Line::from("Database unavailable").style(Style::default().fg(Color::Red)));
+            if hb.missing_from_disk > 0 {
+                lines.push(
+                    Line::from(format!("{} missing", hb.missing_from_disk))
+                        .style(Style::default().fg(Color::Yellow)),
+                );
+            }
+            if hb.new_on_disk > 0 {
+                lines.push(
+                    Line::from(format!("{} new files", hb.new_on_disk))
+                        .style(Style::default().fg(Color::Cyan)),
+                );
+            }
         }
-    } else {
-        lines.push(Line::from("Config error").style(Style::default().fg(Color::Red)));
+    } else if app.heartbeat_receiver.is_some() {
+        lines.push(Line::from("Validating...").style(Style::default().fg(Color::DarkGray)));
+    }
+
+    // Show corpus summary from cached data
+    if let Some(ref summary) = app.main_menu.corpus_summary {
+        if summary.track_count == 0 {
+            lines.push(
+                Line::from("No scan data")
+                    .style(Style::default().fg(Color::Yellow)),
+            );
+        } else {
+            lines.push(Line::from(format!("Indexed: {} tracks", summary.track_count)));
+
+            // Deployment status
+            if let Some(ref ds) = summary.deployment_stats {
+                lines.push(Line::from(format!(
+                    "Deployed: {:.0}%",
+                    ds.deployment_percentage
+                )));
+            }
+
+            // Duplicate status
+            if summary.duplicate_groups > 0 {
+                lines.push(
+                    Line::from(format!("Duplicates: {} groups", summary.duplicate_groups))
+                        .style(Style::default().fg(Color::Yellow)),
+                );
+            }
+
+            // Pending changes
+            let pending_total: usize = summary.pending_changes.values().sum();
+            if pending_total > 0 {
+                lines.push(
+                    Line::from(format!("Pending: {} changes", pending_total))
+                        .style(Style::default().fg(Color::Cyan)),
+                );
+            }
+        }
     }
 
     let para = Paragraph::new(lines)
@@ -1564,6 +1697,15 @@ pub fn run_menu(config: Config) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(config);
+
+    // Spawn heartbeat check if enabled
+    if app.config.opinions.startup.heartbeat_on_startup {
+        let rx = spawn_heartbeat(&app.config);
+        app.heartbeat_receiver = Some(rx);
+        app.eye.set_heartbeat_pending(true);
+    }
+
+    app.refresh_corpus_summary();
     let res = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -1588,6 +1730,7 @@ fn run_app<B: ratatui::backend::Backend>(
     loop {
         app.eye.update();
         app.update_operation_progress();
+        app.update_heartbeat();
 
         terminal.draw(|f| render(f, app))?;
 

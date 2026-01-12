@@ -346,6 +346,7 @@ impl ClusterDialogueState {
         f.render_widget(header, area);
     }
 
+    #[allow(clippy::type_complexity)]
     fn render_directory_list(&mut self, f: &mut Frame, area: Rect) {
         let cluster = match self.session.current_cluster() {
             Some(c) => c,

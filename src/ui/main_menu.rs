@@ -17,6 +17,8 @@ use ratatui::{
 };
 
 use crate::config::Config;
+use crate::db::CorpusSummary;
+use crate::health::HeartbeatResult;
 
 // ============================================================================
 // Types
@@ -44,6 +46,10 @@ pub struct MainMenuState {
     pub command_list_state: ListState,
     /// Built menu structure
     pub categories: Vec<Category>,
+    /// Cached corpus summary for info panel display
+    pub corpus_summary: Option<CorpusSummary>,
+    /// Startup heartbeat result
+    pub heartbeat_result: Option<HeartbeatResult>,
 }
 
 /// Category definition with commands
@@ -83,6 +89,8 @@ pub enum BackgroundTask {
     ScanLegacy,
     /// Detect files in index that no longer exist on disk
     DetectMissing,
+    /// Rebuild health index from existing tracks
+    RebuildHealthIndex,
     GenerateReport { report_type: ReportType },
     Deploy { dry_run: bool },
 }
@@ -112,6 +120,7 @@ pub enum ReportType {
     Deployment,
     Quality,
     Duplicates,
+    Health,
 }
 
 /// Result of handling a key press
@@ -147,7 +156,19 @@ impl MainMenuState {
             category_list_state,
             command_list_state,
             categories,
+            corpus_summary: None,
+            heartbeat_result: None,
         }
+    }
+
+    /// Update the cached corpus summary
+    pub fn set_corpus_summary(&mut self, summary: CorpusSummary) {
+        self.corpus_summary = Some(summary);
+    }
+
+    /// Update the heartbeat result
+    pub fn set_heartbeat_result(&mut self, result: HeartbeatResult) {
+        self.heartbeat_result = Some(result);
     }
 
     /// Handle a key event and return the resulting action
@@ -370,11 +391,18 @@ impl MainMenuState {
             lines.push(command.description.clone());
             lines.push(String::new());
 
-            // Add context-specific info
+            // Add context-specific info based on command action
             match &command.action {
                 CommandAction::Background(BackgroundTask::ScanCorpus) => {
                     lines.push("Uses cached timestamps for incremental scan.".to_string());
                     lines.push("Only processes new/modified files.".to_string());
+                    // Show last scan time if available
+                    if let Some(ref summary) = self.corpus_summary {
+                        if let Some(ref last_scan) = summary.last_scan {
+                            lines.push(String::new());
+                            lines.push(format!("Last scan: {}", last_scan));
+                        }
+                    }
                 }
                 CommandAction::Background(BackgroundTask::DetectMissing) => {
                     lines.push("Checks each indexed file for existence on disk.".to_string());
@@ -383,8 +411,17 @@ impl MainMenuState {
                 CommandAction::Background(BackgroundTask::ScanLegacy) => {
                     lines.push("Scans legacy library for migration analysis.".to_string());
                 }
-                CommandAction::Background(BackgroundTask::GenerateReport { .. }) => {
-                    lines.push("(Latest report results will appear here)".to_string());
+                CommandAction::Background(BackgroundTask::RebuildHealthIndex) => {
+                    lines.push("[DEBUG] Re-runs health detection on all tracks.".to_string());
+                    lines.push("Populates health_issues from existing data.".to_string());
+                    lines.push(String::new());
+                    lines.push("This is a temporary debug operation.".to_string());
+                    lines.push("Will be removed once on-upgrade health".to_string());
+                    lines.push("rebuilding is a first-class feature.".to_string());
+                }
+                CommandAction::Background(BackgroundTask::GenerateReport { report_type }) => {
+                    // Show report-specific summaries
+                    self.add_report_summary(&mut lines, report_type);
                 }
                 CommandAction::Transition(target) => {
                     let desc = match target {
@@ -403,6 +440,62 @@ impl MainMenuState {
         }
 
         lines
+    }
+
+    /// Add report-specific summary based on report type
+    fn add_report_summary(&self, lines: &mut Vec<String>, report_type: &ReportType) {
+        let Some(ref summary) = self.corpus_summary else {
+            lines.push("Run a scan to populate statistics.".to_string());
+            return;
+        };
+
+        let hs = &summary.health_summary;
+
+        match report_type {
+            ReportType::Health => {
+                lines.push("─── Current Health ───".to_string());
+                lines.push(format!("Duplicate groups: {}", summary.duplicate_groups));
+                lines.push(format!("  Fingerprint: {}", hs.fingerprint_duplicates));
+                lines.push(format!("  Metadata: {}", hs.metadata_duplicates));
+                lines.push(format!("Auto-resolvable: {}", hs.auto_resolvable));
+                lines.push(format!("Manual review: {}", hs.manual_review));
+                lines.push(format!("Known variants: {}", hs.known_variants));
+            }
+            ReportType::Duplicates => {
+                lines.push("─── Duplicate Status ───".to_string());
+                lines.push(format!("Groups pending: {}", summary.duplicate_groups));
+                lines.push(format!("Fingerprint matches: {}", hs.fingerprint_duplicates));
+                lines.push(format!("Metadata collisions: {}", hs.metadata_duplicates));
+            }
+            ReportType::Deployment => {
+                lines.push("─── Deployment Status ───".to_string());
+                if let Some(ref ds) = summary.deployment_stats {
+                    lines.push(format!("Corpus files: {}", ds.total_corpus_files));
+                    lines.push(format!("Deployed: {}", ds.deployed_files));
+                    lines.push(format!("Coverage: {:.1}%", ds.deployment_percentage));
+                } else {
+                    lines.push("No deployment stats available.".to_string());
+                }
+            }
+            ReportType::Quality => {
+                lines.push("─── Quality Status ───".to_string());
+                lines.push(format!("Canonicalization issues: {}", hs.canonicalization_issues));
+                lines.push(format!("Missing tags: {}", hs.missing_tag_issues));
+                lines.push(format!("Quality variants: {}", hs.quality_variants));
+            }
+            ReportType::Legacy => {
+                lines.push("─── Legacy Analysis ───".to_string());
+                lines.push("Compares legacy library against corpus.".to_string());
+                lines.push("Identifies migration candidates.".to_string());
+            }
+            ReportType::GenerateAll => {
+                lines.push("Generates all configured reports:".to_string());
+                lines.push("  - Health status".to_string());
+                lines.push("  - Duplicate detection".to_string());
+                lines.push("  - Deployment coverage".to_string());
+                lines.push("  - Quality analysis".to_string());
+            }
+        }
     }
 }
 
@@ -451,6 +544,13 @@ fn build_build_indices_category(config: &Config) -> Category {
         description: "Drop entries for files no longer on disk (with confirmation)".to_string(),
     });
 
+    // Rebuild health index from existing tracks (DEBUG - will be removed)
+    commands.push(Command {
+        label: "Rebuild Health Index".to_string(),
+        action: CommandAction::Background(BackgroundTask::RebuildHealthIndex),
+        description: "[DEBUG] Re-detect duplicates and health issues for all tracks".to_string(),
+    });
+
     Category {
         name: "Build Indices".to_string(),
         commands,
@@ -458,9 +558,22 @@ fn build_build_indices_category(config: &Config) -> Category {
 }
 
 fn build_insight_category() -> Category {
+    // Get health summary for description
+    let health_description = match crate::ops::reports::get_health_summary() {
+        Ok(summary) => crate::ops::reports::format_health_summary_brief(&summary),
+        Err(_) => "Health status unavailable - scan corpus first".to_string(),
+    };
+
     Category {
         name: "Insight & Health".to_string(),
         commands: vec![
+            Command {
+                label: "Health Status".to_string(),
+                action: CommandAction::Background(BackgroundTask::GenerateReport {
+                    report_type: ReportType::Health,
+                }),
+                description: health_description,
+            },
             Command {
                 label: "Generate All Reports".to_string(),
                 action: CommandAction::Background(BackgroundTask::GenerateReport {

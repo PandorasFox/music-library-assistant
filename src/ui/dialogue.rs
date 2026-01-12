@@ -94,6 +94,7 @@ pub enum DialogueResult {
 
 impl DialogueState {
     /// Create a new dialogue state with the given decision stack
+    #[allow(dead_code)]
     pub fn new(stack: DecisionStack) -> Self {
         let mut action_list_state = ListState::default();
         action_list_state.select(Some(0));

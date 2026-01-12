@@ -3,7 +3,7 @@
 //! Core of MLA's toolkit architecture. Common data layer for all operations.
 //!
 //! This module is organized into:
-//! - `types`: Core data structures (Track, ScanStateEntry, DeploymentStats)
+//! - `types`: Core data structures (Track, ScanStateEntry, DeploymentStats, Health types)
 //! - `changes`: Algebraic change tracking types
 //! - `decisions`: Conversational decision flow types
 //! - `queries`: All database operations
@@ -17,7 +17,12 @@ pub mod types;
 // Some types are not yet used but are part of the public API
 #[allow(unused_imports)]
 pub use changes::{ChangeSession, ChangeStatus, ChangeType, PendingChange};
-pub use decisions::{Decision, DecisionCategory, DecisionOutcome, DecisionPriority, DecisionStack};
+pub use decisions::{Decision, DecisionOutcome, DecisionStack};
 pub use queries::Database;
 #[allow(unused_imports)]
-pub use types::{DeploymentStats, ScanStateEntry, Track};
+pub use types::{CorpusSummary, DeploymentStats, ScanStateEntry, Track};
+#[allow(unused_imports)]
+pub use types::{
+    ArtistCanonicalization, HealthIssue, HealthIssueSeverity, HealthIssueTrack, HealthIssueType,
+    HealthSummary, KnownVariant, ResolutionType, TrackRole, VariantType,
+};

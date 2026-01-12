@@ -270,7 +270,7 @@ impl DirBrowserState {
                 .collect();
 
             // Sort alphabetically
-            dirs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+            dirs.sort_by_key(|a| a.file_name());
 
             for dir_entry in dirs {
                 let path = dir_entry.path();

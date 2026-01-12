@@ -19,9 +19,120 @@ pub struct Config {
     pub opinions: Opinions,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Opinions {
     pub auto_next_save_all: bool,
+    pub fingerprint_matching: FingerprintMatchingOpinions,
+    pub quality_resolution: QualityResolutionOpinions,
+    pub canonicalization: CanonicalizationOpinions,
+    pub re_releases: ReReleaseOpinions,
+    pub startup: StartupOpinions,
+}
+
+
+/// Opinions for fingerprint matching thresholds
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FingerprintMatchingOpinions {
+    /// Duration difference above this % = different track (default: 10.0)
+    pub duration_tolerance_percent: f64,
+    /// Same dir + different track# = not duplicate (default: true)
+    pub require_matching_track_number: bool,
+    /// Different albums can still be duplicates (default: false)
+    pub require_matching_album: bool,
+}
+
+impl Default for FingerprintMatchingOpinions {
+    fn default() -> Self {
+        Self {
+            duration_tolerance_percent: 10.0,
+            require_matching_track_number: true,
+            require_matching_album: false,
+        }
+    }
+}
+
+/// Opinions for quality-based auto-resolution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityResolutionOpinions {
+    /// FLAC beats MP3 automatically (default: true)
+    pub auto_resolve_format_tier: bool,
+    /// Bitrate diff above this % = clear winner (default: 50.0)
+    pub bitrate_threshold_percent: f64,
+}
+
+impl Default for QualityResolutionOpinions {
+    fn default() -> Self {
+        Self {
+            auto_resolve_format_tier: true,
+            bitrate_threshold_percent: 50.0,
+        }
+    }
+}
+
+/// Opinions for artist canonicalization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalizationOpinions {
+    /// Case-insensitive matching (default: true)
+    pub case_insensitive: bool,
+    /// Strip parentheticals like "(Live)" (default: false)
+    pub strip_parentheticals: bool,
+    /// Levenshtein similarity threshold (default: 0.85)
+    pub fuzzy_threshold: f64,
+}
+
+impl Default for CanonicalizationOpinions {
+    fn default() -> Self {
+        Self {
+            case_insensitive: true,
+            strip_parentheticals: false,
+            fuzzy_threshold: 0.85,
+        }
+    }
+}
+
+/// How to handle re-releases (same audio on different albums)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
+pub enum ReReleaseHandling {
+    /// Mark as known variant, don't flag as duplicate
+    #[default]
+    MarkVariant,
+    /// Ignore completely
+    Ignore,
+    /// Flag for manual review
+    Flag,
+}
+
+
+/// Opinions for re-release handling
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReReleaseOpinions {
+    /// How to handle same fingerprint on different albums
+    pub same_fingerprint_different_album: ReReleaseHandling,
+}
+
+impl Default for ReReleaseOpinions {
+    fn default() -> Self {
+        Self {
+            same_fingerprint_different_album: ReReleaseHandling::MarkVariant,
+        }
+    }
+}
+
+/// Opinions for startup behavior
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartupOpinions {
+    /// Run heartbeat check at startup (default: true)
+    pub heartbeat_on_startup: bool,
+}
+
+impl Default for StartupOpinions {
+    fn default() -> Self {
+        Self {
+            heartbeat_on_startup: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,6 +440,130 @@ pub fn load_config() -> Result<Config> {
     Ok(config)
 }
 
+/// Parse fingerprint-matching opinions from KDL node
+fn parse_fingerprint_matching_opinions(node: &kdl::KdlNode, opinions: &mut FingerprintMatchingOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "duration-tolerance-percent" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.duration_tolerance_percent = val;
+                        }
+                    }
+                }
+                "require-matching-track-number" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.require_matching_track_number = val;
+                        }
+                    }
+                }
+                "require-matching-album" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.require_matching_album = val;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Parse quality-resolution opinions from KDL node
+fn parse_quality_resolution_opinions(node: &kdl::KdlNode, opinions: &mut QualityResolutionOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "auto-resolve-format-tier" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.auto_resolve_format_tier = val;
+                        }
+                    }
+                }
+                "bitrate-threshold-percent" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.bitrate_threshold_percent = val;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Parse canonicalization opinions from KDL node
+fn parse_canonicalization_opinions(node: &kdl::KdlNode, opinions: &mut CanonicalizationOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "case-insensitive" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.case_insensitive = val;
+                        }
+                    }
+                }
+                "strip-parentheticals" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.strip_parentheticals = val;
+                        }
+                    }
+                }
+                "fuzzy-threshold" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.fuzzy_threshold = val;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Parse re-release opinions from KDL node
+fn parse_rerelease_opinions(node: &kdl::KdlNode, opinions: &mut ReReleaseOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == "same-fingerprint-different-album" {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_string() {
+                        opinions.same_fingerprint_different_album = match val {
+                            "mark-variant" => ReReleaseHandling::MarkVariant,
+                            "ignore" => ReReleaseHandling::Ignore,
+                            "flag" => ReReleaseHandling::Flag,
+                            _ => ReReleaseHandling::MarkVariant,
+                        };
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Parse startup opinions from KDL node
+fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == "heartbeat-on-startup" {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_bool() {
+                        opinions.heartbeat_on_startup = val;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn parse_kdl_config(content: &str) -> Result<Config> {
     let doc: kdl::KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
@@ -440,8 +675,26 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
             "opinions" => {
                 if let Some(children) = node.children() {
                     for child in children.nodes() {
-                        if child.name().value() == "auto_next_save_all" {
-                            config.opinions.auto_next_save_all = true;
+                        match child.name().value() {
+                            "auto_next_save_all" => {
+                                config.opinions.auto_next_save_all = true;
+                            }
+                            "fingerprint-matching" => {
+                                parse_fingerprint_matching_opinions(child, &mut config.opinions.fingerprint_matching);
+                            }
+                            "quality-resolution" => {
+                                parse_quality_resolution_opinions(child, &mut config.opinions.quality_resolution);
+                            }
+                            "canonicalization" => {
+                                parse_canonicalization_opinions(child, &mut config.opinions.canonicalization);
+                            }
+                            "re-releases" => {
+                                parse_rerelease_opinions(child, &mut config.opinions.re_releases);
+                            }
+                            "startup" => {
+                                parse_startup_opinions(child, &mut config.opinions.startup);
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -522,5 +775,82 @@ corpus-root "/Volumes/cerberus/archive/music"
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("libraries-root not specified"));
+    }
+
+    #[test]
+    fn test_opinions_parsing() {
+        let kdl = r#"
+corpus-root "/Volumes/cerberus/archive/music"
+libraries-root "/Volumes/cerberus/library"
+
+opinions {
+    auto_next_save_all
+
+    fingerprint-matching {
+        duration-tolerance-percent 15.0
+        require-matching-track-number false
+        require-matching-album true
+    }
+
+    quality-resolution {
+        auto-resolve-format-tier false
+        bitrate-threshold-percent 75.0
+    }
+
+    canonicalization {
+        case-insensitive false
+        strip-parentheticals true
+        fuzzy-threshold 0.90
+    }
+
+    re-releases {
+        same-fingerprint-different-album "flag"
+    }
+}
+"#;
+
+        let config = parse_kdl_config(kdl).unwrap();
+
+        // Check auto_next_save_all flag
+        assert!(config.opinions.auto_next_save_all);
+
+        // Check fingerprint matching
+        assert_eq!(config.opinions.fingerprint_matching.duration_tolerance_percent, 15.0);
+        assert!(!config.opinions.fingerprint_matching.require_matching_track_number);
+        assert!(config.opinions.fingerprint_matching.require_matching_album);
+
+        // Check quality resolution
+        assert!(!config.opinions.quality_resolution.auto_resolve_format_tier);
+        assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 75.0);
+
+        // Check canonicalization
+        assert!(!config.opinions.canonicalization.case_insensitive);
+        assert!(config.opinions.canonicalization.strip_parentheticals);
+        assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.90);
+
+        // Check re-releases
+        assert_eq!(config.opinions.re_releases.same_fingerprint_different_album, ReReleaseHandling::Flag);
+    }
+
+    #[test]
+    fn test_opinions_defaults() {
+        let kdl = r#"
+corpus-root "/Volumes/cerberus/archive/music"
+libraries-root "/Volumes/cerberus/library"
+"#;
+
+        let config = parse_kdl_config(kdl).unwrap();
+
+        // Should have default values
+        assert!(!config.opinions.auto_next_save_all);
+        assert_eq!(config.opinions.fingerprint_matching.duration_tolerance_percent, 10.0);
+        assert!(config.opinions.fingerprint_matching.require_matching_track_number);
+        assert!(!config.opinions.fingerprint_matching.require_matching_album);
+        assert!(config.opinions.quality_resolution.auto_resolve_format_tier);
+        assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 50.0);
+        assert!(config.opinions.canonicalization.case_insensitive);
+        assert!(!config.opinions.canonicalization.strip_parentheticals);
+        assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.85);
+        assert_eq!(config.opinions.re_releases.same_fingerprint_different_album, ReReleaseHandling::MarkVariant);
     }
 }

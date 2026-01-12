@@ -142,6 +142,8 @@ pub struct EyeAnimation {
     pub next_blink_delay_secs: u64,
     pub current_blink_type: BlinkType,
     pub flutter_count: u8,
+    /// When true, eye stays closed (waiting for startup heartbeat)
+    pub heartbeat_pending: bool,
 }
 
 impl Default for EyeAnimation {
@@ -152,6 +154,7 @@ impl Default for EyeAnimation {
             next_blink_delay_secs: Self::random_blink_delay(),
             current_blink_type: BlinkType::Normal,
             flutter_count: 0,
+            heartbeat_pending: false,
         }
     }
 }
@@ -294,12 +297,27 @@ impl EyeAnimation {
 
     /// Get the current eye frame to display
     pub fn current_frame(&self) -> EyeFrame {
+        // Keep eye closed during heartbeat check
+        if self.heartbeat_pending {
+            return EyeFrame::Closed;
+        }
+
         match self.state {
             EyeAnimationState::Idle | EyeAnimationState::Opening | EyeAnimationState::FlutterOpening => {
                 EyeFrame::Open
             }
             EyeAnimationState::Closing | EyeAnimationState::FlutterClosing => EyeFrame::Closing,
             EyeAnimationState::Closed | EyeAnimationState::FlutterClosed => EyeFrame::Closed,
+        }
+    }
+
+    /// Set heartbeat pending state (eye stays closed until cleared)
+    pub fn set_heartbeat_pending(&mut self, pending: bool) {
+        self.heartbeat_pending = pending;
+        if pending {
+            // Start in closed state when heartbeat begins
+            self.state = EyeAnimationState::Closed;
+            self.state_start_time = Instant::now();
         }
     }
 }

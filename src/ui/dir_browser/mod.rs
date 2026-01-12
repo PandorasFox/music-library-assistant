@@ -9,4 +9,4 @@ mod state;
 mod types;
 
 pub use state::DirBrowserState;
-pub use types::{DirBrowserAction, DirBrowserConfig, DirEntry};
+pub use types::{DirBrowserAction, DirBrowserConfig};

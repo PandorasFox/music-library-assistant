@@ -128,11 +128,9 @@ impl BulkPromptState {
     }
 
     fn render_options(&mut self, f: &mut Frame, area: Rect) {
-        let options = vec![
-            ("Review & commit bulk changes now", "Proceed to session review"),
+        let options = [("Review & commit bulk changes now", "Proceed to session review"),
             ("Continue to individual resolution", "Handle remaining 2-file conflicts one by one"),
-            ("Cancel session", "Discard all pending changes"),
-        ];
+            ("Cancel session", "Discard all pending changes")];
 
         let items: Vec<ListItem> = options
             .iter()

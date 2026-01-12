@@ -10,6 +10,10 @@ use std::path::Path;
 
 use crate::config;
 use crate::db::{Database, Track};
+use crate::deduplication::{
+    compare_track_quality, durations_within_tolerance, is_same_album_different_tracks,
+    QualityVerdict,
+};
 
 const DURATION_TOLERANCE_MS: i64 = 2000; // 2 seconds tolerance for duration matching
 
@@ -541,13 +545,60 @@ pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
         }
     }
 
-    // Filter to only duplicates
+    // Filter to only duplicates, applying false-positive filters
+    let mut filtered_same_album = 0usize;
+    let mut filtered_duration = 0usize;
+
     let mut fingerprint_duplicates: Vec<_> = fingerprint_groups
         .iter()
-        .filter(|(_, tracks)| tracks.len() > 1)
+        .filter(|(_, tracks)| {
+            if tracks.len() < 2 {
+                return false;
+            }
+
+            // Convert to owned tracks for filter functions
+            let owned_tracks: Vec<Track> = tracks.iter().map(|t| (*t).clone()).collect();
+
+            // Filter 1: Skip if these are different tracks from the same album
+            if is_same_album_different_tracks(&owned_tracks) {
+                filtered_same_album += 1;
+                return false;
+            }
+
+            // Filter 2: Skip if duration variance exceeds 10%
+            if !durations_within_tolerance(&owned_tracks, 0.10) {
+                filtered_duration += 1;
+                return false;
+            }
+
+            true
+        })
         .collect();
 
     fingerprint_duplicates.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    // Categorize by quality (auto-resolvable vs manual review needed)
+    let mut auto_resolvable: Vec<(&String, usize, &Track, Vec<&Track>)> = Vec::new();
+    let mut manual_review: Vec<(&String, &Vec<&Track>)> = Vec::new();
+
+    for (fp, tracks) in &fingerprint_duplicates {
+        let owned_tracks: Vec<Track> = tracks.iter().map(|t| (*t).clone()).collect();
+        match compare_track_quality(&owned_tracks) {
+            QualityVerdict::ClearWinner(idx) => {
+                let winner = tracks[idx];
+                let losers: Vec<_> = tracks
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != idx)
+                    .map(|(_, t)| *t)
+                    .collect();
+                auto_resolvable.push((*fp, idx, winner, losers));
+            }
+            _ => {
+                manual_review.push((*fp, *tracks));
+            }
+        }
+    }
 
     // Write report
     let mut file = File::create(output_path)?;
@@ -578,10 +629,33 @@ pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
         "Metadata-based duplicate groups: {}",
         metadata_duplicates.len()
     )?;
+
+    // Fingerprint duplicate stats with filtering breakdown
+    writeln!(file, "\nFingerprint-based duplicates:")?;
     writeln!(
         file,
-        "Fingerprint-based duplicate groups: {}\n",
+        "  Total groups after filtering: {}",
         fingerprint_duplicates.len()
+    )?;
+    writeln!(
+        file,
+        "  Filtered out (same album, different tracks): {}",
+        filtered_same_album
+    )?;
+    writeln!(
+        file,
+        "  Filtered out (duration variance >10%): {}",
+        filtered_duration
+    )?;
+    writeln!(
+        file,
+        "  Auto-resolvable (clear quality winner): {}",
+        auto_resolvable.len()
+    )?;
+    writeln!(
+        file,
+        "  Manual review needed: {}\n",
+        manual_review.len()
     )?;
 
     // === METADATA DUPLICATES SECTION ===
@@ -640,51 +714,119 @@ pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
     if fingerprint_duplicates.is_empty() {
         writeln!(file, "No fingerprint-based duplicates found.\n")?;
     } else {
-        for (fp_hash, tracks) in &fingerprint_duplicates {
-            // Show first track's metadata if available for context
-            let first_track = tracks[0];
-            let track_info =
-                if let (Some(artist), Some(title)) = (&first_track.artist, &first_track.title) {
-                    format!("{} - {}", artist, title)
-                } else {
-                    "Unknown track".to_string()
-                };
-
-            writeln!(file, "Track: {}", track_info)?;
+        // === AUTO-RESOLVABLE DUPLICATES (clear quality winner) ===
+        if !auto_resolvable.is_empty() {
+            writeln!(file, "\n{}", "-".repeat(60))?;
+            writeln!(file, "AUTO-RESOLVABLE (clear quality winner)")?;
+            writeln!(file, "{}", "-".repeat(60))?;
             writeln!(
                 file,
-                "Fingerprint: {}...",
-                &fp_hash.chars().take(40).collect::<String>()
+                "These can be safely resolved by keeping the higher-quality version.\n"
             )?;
-            writeln!(file, "Instances: {}", tracks.len())?;
 
-            for track in *tracks {
-                let bitrate_str = track
+            for (fp_hash, _winner_idx, winner, losers) in &auto_resolvable {
+                let track_info =
+                    if let (Some(artist), Some(title)) = (&winner.artist, &winner.title) {
+                        format!("{} - {}", artist, title)
+                    } else {
+                        "Unknown track".to_string()
+                    };
+
+                writeln!(file, "Track: {}", track_info)?;
+                writeln!(
+                    file,
+                    "Fingerprint: {}...",
+                    &fp_hash.chars().take(40).collect::<String>()
+                )?;
+
+                // Show winner
+                let winner_bitrate = winner
                     .bitrate_kbps
                     .map(|br| format!("{}kbps", br))
                     .unwrap_or_else(|| "unknown".to_string());
-                let artist_str = track.artist.as_deref().unwrap_or("Unknown");
-                let title_str = track.title.as_deref().unwrap_or("Unknown");
                 writeln!(
                     file,
-                    "  [{}] [{}] {} - {} - {}",
-                    track.source,
-                    track.file_type.to_uppercase(),
-                    bitrate_str,
-                    artist_str,
-                    title_str
+                    "  KEEP: [{}] {} - {}",
+                    winner.file_type.to_uppercase(),
+                    winner_bitrate,
+                    winner.path
                 )?;
-                writeln!(file, "      {}", track.path)?;
+
+                // Show losers
+                for loser in losers {
+                    let loser_bitrate = loser
+                        .bitrate_kbps
+                        .map(|br| format!("{}kbps", br))
+                        .unwrap_or_else(|| "unknown".to_string());
+                    writeln!(
+                        file,
+                        "  DROP: [{}] {} - {}",
+                        loser.file_type.to_uppercase(),
+                        loser_bitrate,
+                        loser.path
+                    )?;
+                }
+                writeln!(file)?;
             }
-            writeln!(file)?;
+        }
+
+        // === MANUAL REVIEW DUPLICATES ===
+        if !manual_review.is_empty() {
+            writeln!(file, "\n{}", "-".repeat(60))?;
+            writeln!(file, "MANUAL REVIEW NEEDED")?;
+            writeln!(file, "{}", "-".repeat(60))?;
+            writeln!(
+                file,
+                "These require manual inspection (similar quality or missing data).\n"
+            )?;
+
+            for (fp_hash, tracks) in &manual_review {
+                let first_track = tracks[0];
+                let track_info =
+                    if let (Some(artist), Some(title)) = (&first_track.artist, &first_track.title) {
+                        format!("{} - {}", artist, title)
+                    } else {
+                        "Unknown track".to_string()
+                    };
+
+                writeln!(file, "Track: {}", track_info)?;
+                writeln!(
+                    file,
+                    "Fingerprint: {}...",
+                    &fp_hash.chars().take(40).collect::<String>()
+                )?;
+                writeln!(file, "Instances: {}", tracks.len())?;
+
+                for track in *tracks {
+                    let bitrate_str = track
+                        .bitrate_kbps
+                        .map(|br| format!("{}kbps", br))
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let artist_str = track.artist.as_deref().unwrap_or("Unknown");
+                    let title_str = track.title.as_deref().unwrap_or("Unknown");
+                    writeln!(
+                        file,
+                        "  [{}] [{}] {} - {} - {}",
+                        track.source,
+                        track.file_type.to_uppercase(),
+                        bitrate_str,
+                        artist_str,
+                        title_str
+                    )?;
+                    writeln!(file, "      {}", track.path)?;
+                }
+                writeln!(file)?;
+            }
         }
     }
 
     Ok(format!(
-        "Duplicate report generated: {}\n  Metadata duplicates: {}\n  Fingerprint duplicates: {}",
+        "Duplicate report generated: {}\n  Metadata duplicates: {}\n  Fingerprint duplicates: {} ({} auto-resolvable, {} manual review)",
         output_path.display(),
         metadata_duplicates.len(),
-        fingerprint_duplicates.len()
+        fingerprint_duplicates.len(),
+        auto_resolvable.len(),
+        manual_review.len()
     ))
 }
 
@@ -703,6 +845,171 @@ fn group_by_deployment_path<'a>(
     }
 
     groups
+}
+
+// ============================================================================
+// Health Summary Functions (reading from health_issues table)
+// ============================================================================
+
+use crate::db::{HealthIssue, HealthIssueType, HealthIssueSeverity, HealthSummary};
+
+/// Get the current health summary from the database.
+/// This reads from the health_issues table for fast cached results.
+pub fn get_health_summary() -> Result<HealthSummary> {
+    let db_path = config::get_db_path()?;
+    let db = Database::open(&db_path)?;
+    db.get_health_summary()
+}
+
+/// Format a health summary as a brief string for display in the UI.
+pub fn format_health_summary_brief(summary: &HealthSummary) -> String {
+    let total_issues = summary.fingerprint_duplicates
+        + summary.metadata_duplicates
+        + summary.canonicalization_issues
+        + summary.missing_tag_issues
+        + summary.quality_variants;
+
+    if total_issues == 0 {
+        return "Corpus is healthy - no issues detected".to_string();
+    }
+
+    let mut parts = Vec::new();
+
+    if summary.fingerprint_duplicates > 0 {
+        parts.push(format!("{} fingerprint dups", summary.fingerprint_duplicates));
+    }
+    if summary.metadata_duplicates > 0 {
+        parts.push(format!("{} metadata dups", summary.metadata_duplicates));
+    }
+    if summary.canonicalization_issues > 0 {
+        parts.push(format!("{} canon issues", summary.canonicalization_issues));
+    }
+    if summary.missing_tag_issues > 0 {
+        parts.push(format!("{} missing tags", summary.missing_tag_issues));
+    }
+    if summary.quality_variants > 0 {
+        parts.push(format!("{} quality variants", summary.quality_variants));
+    }
+    if summary.known_variants > 0 {
+        parts.push(format!("{} known variants", summary.known_variants));
+    }
+
+    let resolvable_note = if summary.auto_resolvable > 0 {
+        format!(" ({} auto-resolvable)", summary.auto_resolvable)
+    } else {
+        String::new()
+    };
+
+    format!("{}{}", parts.join(", "), resolvable_note)
+}
+
+/// Generate a detailed health report file from the health_issues table.
+pub fn generate_health_report(output_path: &Path) -> Result<String> {
+    let db_path = config::get_db_path()?;
+    let db = Database::open(&db_path)?;
+
+    // Get health summary
+    let summary = db.get_health_summary()?;
+
+    // Get unresolved issues by type
+    let fingerprint_issues = db.get_unresolved_health_issues(Some(HealthIssueType::FingerprintDuplicate))?;
+    let metadata_issues = db.get_unresolved_health_issues(Some(HealthIssueType::MetadataDuplicate))?;
+
+    // Write report
+    let mut file = File::create(output_path)?;
+
+    writeln!(file, "Music Library Assistant - Corpus Health Report")?;
+    writeln!(file, "==============================================")?;
+    writeln!(file, "Generated: {}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+
+    // Summary section
+    writeln!(file, "SUMMARY")?;
+    writeln!(file, "-------")?;
+    writeln!(file, "Fingerprint duplicates: {}", summary.fingerprint_duplicates)?;
+    writeln!(file, "Metadata duplicates: {}", summary.metadata_duplicates)?;
+    writeln!(file, "Canonicalization issues: {}", summary.canonicalization_issues)?;
+    writeln!(file, "Missing tag issues: {}", summary.missing_tag_issues)?;
+    writeln!(file, "Quality variants: {}", summary.quality_variants)?;
+    writeln!(file, "Known variants (re-releases): {}", summary.known_variants)?;
+    writeln!(file)?;
+    writeln!(file, "Auto-resolvable: {}", summary.auto_resolvable)?;
+    writeln!(file, "Manual review needed: {}\n", summary.manual_review)?;
+
+    // Fingerprint duplicates section
+    if !fingerprint_issues.is_empty() {
+        writeln!(file, "\n{}", "=".repeat(80))?;
+        writeln!(file, "FINGERPRINT DUPLICATES")?;
+        writeln!(file, "{}\n", "=".repeat(80))?;
+
+        for issue in &fingerprint_issues {
+            write_health_issue(&mut file, &db, issue)?;
+        }
+    }
+
+    // Metadata duplicates section
+    if !metadata_issues.is_empty() {
+        writeln!(file, "\n{}", "=".repeat(80))?;
+        writeln!(file, "METADATA DUPLICATES")?;
+        writeln!(file, "{}\n", "=".repeat(80))?;
+
+        for issue in &metadata_issues {
+            write_health_issue(&mut file, &db, issue)?;
+        }
+    }
+
+    Ok(format!(
+        "Health report generated: {}\n  {} fingerprint issues, {} metadata issues",
+        output_path.display(),
+        fingerprint_issues.len(),
+        metadata_issues.len()
+    ))
+}
+
+/// Write a single health issue to the report file.
+fn write_health_issue(file: &mut File, db: &Database, issue: &HealthIssue) -> Result<()> {
+    let severity_str = match issue.severity {
+        HealthIssueSeverity::AutoResolvable => "[AUTO]",
+        HealthIssueSeverity::ManualReview => "[MANUAL]",
+        HealthIssueSeverity::Informational => "[INFO]",
+    };
+
+    writeln!(file, "Issue: {} {}", severity_str, truncate_key(&issue.issue_key, 60))?;
+
+    // Get tracks for this issue
+    if let Some(issue_id) = issue.id {
+        let tracks = db.get_health_issue_tracks(issue_id)?;
+        writeln!(file, "Tracks: {}", tracks.len())?;
+
+        for (track, role) in &tracks {
+            let bitrate_str = track
+                .bitrate_kbps
+                .map(|br| format!("{}kbps", br))
+                .unwrap_or_else(|| "?".to_string());
+            let role_str = role.as_str();
+            writeln!(
+                file,
+                "  [{}] [{}] [{}] {} - {}",
+                role_str,
+                track.file_type.to_uppercase(),
+                bitrate_str,
+                track.artist.as_deref().unwrap_or("Unknown"),
+                track.title.as_deref().unwrap_or("Unknown")
+            )?;
+            writeln!(file, "      {}", track.path)?;
+        }
+    }
+
+    writeln!(file)?;
+    Ok(())
+}
+
+/// Truncate a string key for display.
+fn truncate_key(key: &str, max_len: usize) -> String {
+    if key.len() <= max_len {
+        key.to_string()
+    } else {
+        format!("{}...", &key[..max_len - 3])
+    }
 }
 
 /// Populate database with metadata duplicate groups

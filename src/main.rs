@@ -13,6 +13,7 @@
 mod config;
 mod db;
 mod deduplication;
+mod health;
 mod metadata;
 mod ops;
 mod progress;

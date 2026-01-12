@@ -11,6 +11,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
+use crate::config::is_audio_extension;
 use crate::db::Track;
 
 pub struct AudioMetadata {
@@ -84,10 +85,7 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
 }
 
 fn is_audio_file(extension: &str) -> bool {
-    matches!(
-        extension,
-        "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" | "wma" | "ape" | "wv"
-    )
+    is_audio_extension(extension)
 }
 
 fn extract_audio_metadata(path: &Path) -> Result<AudioMetadata> {

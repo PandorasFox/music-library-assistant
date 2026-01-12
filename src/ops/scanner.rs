@@ -35,16 +35,10 @@ struct PreScanResult {
 
 /// Check if a file path has an audio file extension
 fn is_audio_file_by_extension(path: &Path) -> bool {
-    if let Some(ext) = path.extension() {
-        if let Some(ext_str) = ext.to_str() {
-            let ext_lower = ext_str.to_lowercase();
-            return matches!(
-                ext_lower.as_str(),
-                "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" | "wma" | "ape" | "wv"
-            );
-        }
-    }
-    false
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| config::is_audio_extension(ext))
+        .unwrap_or(false)
 }
 
 /// Pre-scan directory to count total bytes and collect file list

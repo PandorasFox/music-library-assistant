@@ -5,5 +5,6 @@
 
 pub mod changes;
 pub mod deploy;
+pub mod operation;
 pub mod reports;
 pub mod scanner;

@@ -305,6 +305,86 @@ fn relocate_to_stash(current_path: &Path, target_path: &Path) -> Result<()> {
     })
 }
 
+/// Convert a deployment plan into pending change mutations
+///
+/// This allows deployment operations to be tracked, previewed, and committed
+/// like any other corpus mutation. Each Deploy/Undeploy operation becomes
+/// a PendingChange that can be executed through the standard change system.
+///
+/// A single corpus file can be deployed to multiple libraries by creating
+/// multiple Deploy mutations with different target paths.
+pub fn plan_deployment_as_mutations(
+    plan: &DeploymentPlan,
+    library_root: &Path,
+    stash_root: Option<&Path>,
+    session_id: &str,
+) -> Vec<crate::db::PendingChange> {
+    use crate::db::{ChangeStatus, ChangeType, PendingChange};
+
+    let mut changes = Vec::new();
+
+    // Files to deploy -> Deploy mutations
+    for action in &plan.files_to_deploy {
+        let target_path = library_root.join(&action.target_path);
+        changes.push(PendingChange {
+            id: None,
+            session_id: session_id.to_string(),
+            change_type: ChangeType::Deploy,
+            source_path: action.corpus_track.path.clone(),
+            target_path: Some(target_path.to_string_lossy().to_string()),
+            metadata_changes: Some(serde_json::json!({
+                "library": plan.library_name,
+                "relative_path": action.target_path.to_string_lossy(),
+            }).to_string()),
+            created_at: None,
+            status: ChangeStatus::Pending,
+        });
+    }
+
+    // Lost files -> Undeploy mutations (move to stash)
+    if let Some(stash_path) = stash_root {
+        for lost in &plan.lost_files {
+            let target_path = stash_path.join(&lost.target_path);
+            changes.push(PendingChange {
+                id: None,
+                session_id: session_id.to_string(),
+                change_type: ChangeType::Undeploy,
+                source_path: lost.current_path.to_string_lossy().to_string(),
+                target_path: Some(target_path.to_string_lossy().to_string()),
+                metadata_changes: Some(serde_json::json!({
+                    "library": plan.library_name,
+                    "reason": "orphan_cleanup",
+                    "original_inode": lost.inode,
+                }).to_string()),
+                created_at: None,
+                status: ChangeStatus::Pending,
+            });
+        }
+    }
+
+    changes
+}
+
+/// Convert all deployment plans to mutations
+pub fn plan_all_deployments_as_mutations(
+    config: &Config,
+    db: &Database,
+    session_id: &str,
+) -> Result<Vec<crate::db::PendingChange>> {
+    let plans = create_deployment_plan(config, db)?;
+    let mut all_changes = Vec::new();
+
+    for plan in plans {
+        let library_root = config.libraries_root.join(&plan.library_name);
+        let stash_root = config.stash_dir.as_ref().map(|p| p.as_path());
+
+        let changes = plan_deployment_as_mutations(&plan, &library_root, stash_root, session_id);
+        all_changes.extend(changes);
+    }
+
+    Ok(all_changes)
+}
+
 /// Generate dry-run reports for all deployment plans
 pub fn generate_dry_run_report(config: &Config, db: &Database) -> Result<Vec<DryRunReport>> {
     let plans = create_deployment_plan(config, db)?;

@@ -68,7 +68,8 @@ pub fn preview_change(change: &PendingChange) -> ChangePreview {
         ChangeType::TagEdit => true,                   // Old values stored in metadata_changes
         ChangeType::Deploy => true,                    // Can remove hard link
         ChangeType::Undeploy => true,                  // Can re-create hard link
-        ChangeType::DropIndex => false,               // Can't restore - file is gone
+        ChangeType::DropIndex => false,                // Can't restore - file is gone
+        ChangeType::OutOfBandTagChange => false,       // Informational - not directly reversible
     };
 
     ChangePreview {
@@ -314,6 +315,26 @@ fn execute_single_change(change: &PendingChange, db: &Database, dry_run: bool) -
             }
             Ok(true)
         }
+
+        ChangeType::OutOfBandTagChange => {
+            // OutOfBandTagChange is a marker for review, not directly executable.
+            // When resolved, it should be converted to either:
+            // - Accept corpus tags (update index) - no filesystem changes
+            // - Accept index tags (write to corpus file) - requires metadata write
+            //
+            // TODO: Operations flow for resolving OutOfBandTagChange mutations
+            // - Present list of files with tag differences
+            // - Options: Accept corpus (update index), Accept index (revert corpus tags),
+            //   or Manual (edit tags)
+            // - Opinion system: auto-accept corpus changes for specific directories
+            // - Consider batch resolution by artist/album
+            let _ = config::log_message(&format!(
+                "[OUT_OF_BAND_TAG_CHANGE] Skipping - requires resolution: {}",
+                change.source_path
+            ));
+            // Skip - can't execute directly
+            Ok(false)
+        }
     }
 }
 
@@ -534,6 +555,12 @@ pub fn revert_changes(db: &Database, changes: &[PendingChange]) -> Result<Revert
                 report.not_reversible += 1;
                 continue;
             }
+
+            ChangeType::OutOfBandTagChange => {
+                // OutOfBandTagChange is informational - nothing to revert
+                report.not_reversible += 1;
+                continue;
+            }
         };
 
         if reverted {
@@ -548,6 +575,125 @@ pub fn revert_changes(db: &Database, changes: &[PendingChange]) -> Result<Revert
     }
 
     Ok(report)
+}
+
+/// Execute pending changes with progress reporting (for background execution)
+///
+/// This version reports progress through a `ProgressReporter`, suitable for
+/// running in a background thread with UI progress updates.
+pub fn execute_changes_with_progress(
+    db: &Database,
+    changes: &[PendingChange],
+    dry_run: bool,
+    reporter: &mut super::operation::ProgressReporter,
+) -> Result<super::operation::OperationResult> {
+    use super::operation::{OperationProgress, OperationResult, ProgressContext};
+    use crate::config;
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let _ = config::log_message(&format!(
+        "=== execute_changes_with_progress: {} changes, dry_run={} ===",
+        changes.len(),
+        dry_run
+    ));
+
+    // Count change types for context
+    let mut moves = 0;
+    let mut deletes = 0;
+    let mut deploys = 0;
+    let mut tag_edits = 0;
+    for change in changes {
+        match change.change_type {
+            ChangeType::Move => moves += 1,
+            ChangeType::Delete | ChangeType::DropIndex => deletes += 1,
+            ChangeType::Deploy | ChangeType::Undeploy => deploys += 1,
+            ChangeType::TagEdit | ChangeType::OutOfBandTagChange => tag_edits += 1,
+        }
+    }
+
+    let mut progress = OperationProgress::new(changes.len());
+    progress.context = Some(ProgressContext::Changes {
+        moves,
+        deletes,
+        deploys,
+        tag_edits,
+    });
+
+    let mut errors = Vec::new();
+
+    for (i, change) in changes.iter().enumerate() {
+        // Check cancellation
+        if reporter.is_cancelled() {
+            let _ = config::log_message("[execute_changes_with_progress] Cancelled by user");
+            reporter.cancelled();
+            anyhow::bail!("Cancelled by user");
+        }
+
+        // Update current item
+        progress.current_item = Some(truncate_path(&change.source_path, 60));
+
+        let _ = config::log_message(&format!(
+            "[execute_changes_with_progress] Processing {}/{}: status={:?}",
+            i + 1,
+            changes.len(),
+            change.status
+        ));
+
+        // Skip already committed/reverted changes
+        if change.status != ChangeStatus::Pending {
+            progress.skipped_items += 1;
+            reporter.update(progress.clone());
+            continue;
+        }
+
+        match execute_single_change(change, db, dry_run) {
+            Ok(true) => {
+                progress.completed_items += 1;
+                if !dry_run {
+                    if let Some(id) = change.id {
+                        let _ = db.update_change_status(id, ChangeStatus::Committed);
+                    }
+                }
+            }
+            Ok(false) => {
+                progress.skipped_items += 1;
+            }
+            Err(e) => {
+                progress.error_count += 1;
+                errors.push(format!("{}: {}", change.source_path, e));
+            }
+        }
+
+        reporter.update(progress.clone());
+    }
+
+    let result = OperationResult {
+        succeeded: progress.completed_items,
+        skipped: progress.skipped_items,
+        failed: progress.error_count,
+        duration: start.elapsed(),
+        bytes_processed: None,
+        errors,
+        data: None,
+    };
+
+    let _ = config::log_message(&format!(
+        "=== execute_changes_with_progress complete: succeeded={} failed={} skipped={} ===",
+        result.succeeded, result.failed, result.skipped
+    ));
+
+    reporter.complete(result.clone());
+    Ok(result)
+}
+
+/// Truncate a path string for display, preserving the end (filename)
+fn truncate_path(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        return path.to_string();
+    }
+    let suffix = &path[path.len().saturating_sub(max_len - 3)..];
+    format!("...{}", suffix)
 }
 
 /// Format a change for display
@@ -578,6 +724,9 @@ pub fn format_change(change: &PendingChange) -> String {
         }
         ChangeType::DropIndex => {
             format!("x {} [drop from index]", change.source_path)
+        }
+        ChangeType::OutOfBandTagChange => {
+            format!("? {} [out-of-band tag change]", change.source_path)
         }
     }
 }

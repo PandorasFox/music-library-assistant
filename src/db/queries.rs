@@ -231,6 +231,13 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_artist_canon_canonical ON artist_canonicalization(canonical_name);
             CREATE INDEX IF NOT EXISTS idx_artist_canon_variant ON artist_canonicalization(variant_name);
+
+            -- Application metadata (version tracking, etc.)
+            CREATE TABLE IF NOT EXISTS app_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
             "#
         ).context("Failed to initialize database schema")?;
 
@@ -402,11 +409,25 @@ impl Database {
             )
             .with_context(|| format!("Failed to delete tag edit history for track: {}", path))?;
 
+        // Delete from health_issue_tracks before deleting the track
+        self.conn
+            .execute(
+                "DELETE FROM health_issue_tracks WHERE track_id = ?1",
+                params![track_id],
+            )
+            .with_context(|| format!("Failed to delete health issue tracks for: {}", path))?;
+
         // Now delete the track itself
         let deleted = self
             .conn
             .execute("DELETE FROM tracks WHERE id = ?1", params![track_id])
             .with_context(|| format!("Failed to delete track by path: {}", path))?;
+
+        // Also clean up scan_state entry for this path
+        // This ensures heartbeat won't report this as "missing" anymore
+        self.conn
+            .execute("DELETE FROM scan_state WHERE path = ?1", params![path])
+            .with_context(|| format!("Failed to delete scan_state for: {}", path))?;
 
         Ok(deleted > 0)
     }
@@ -420,6 +441,43 @@ impl Database {
             }
         }
         Ok(count)
+    }
+
+    /// Clean up scan_state entries where the file no longer exists on disk.
+    /// This handles orphaned entries (in scan_state but not in tracks).
+    /// Returns the number of entries deleted.
+    pub fn cleanup_missing_scan_state_entries(&self, source: &str) -> Result<usize> {
+        use std::path::Path;
+
+        // Get all scan_state entries for this source
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM scan_state WHERE source = ?1")?;
+
+        let paths: Vec<String> = stmt
+            .query_map(params![source], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Find which paths no longer exist
+        let missing_paths: Vec<String> = paths
+            .into_iter()
+            .filter(|p| !Path::new(p).exists())
+            .collect();
+
+        if missing_paths.is_empty() {
+            return Ok(0);
+        }
+
+        // Delete orphaned entries
+        let mut deleted = 0;
+        for path in &missing_paths {
+            deleted += self
+                .conn
+                .execute("DELETE FROM scan_state WHERE path = ?1", params![path])?;
+        }
+
+        Ok(deleted)
     }
 
     /// Get all tracks for a specific source.
@@ -634,6 +692,40 @@ impl Database {
             .collect::<Result<HashSet<_>, _>>()?;
 
         Ok(inodes)
+    }
+
+    /// Get paths for specific inodes from scan_state (used for logging missing files)
+    pub fn get_scan_state_paths_for_inodes(
+        &self,
+        source: &str,
+        inodes: &std::collections::HashSet<i64>,
+    ) -> Result<Vec<String>> {
+        if inodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build IN clause for query
+        let placeholders: Vec<String> = inodes.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT path FROM scan_state WHERE source = ?1 AND inode IN ({})",
+            placeholders.join(",")
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+
+        // Build params: source first, then all inodes
+        let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        param_values.push(Box::new(source.to_string()));
+        for inode in inodes {
+            param_values.push(Box::new(*inode));
+        }
+        let params: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+
+        let paths: Vec<String> = stmt
+            .query_map(&params[..], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(paths)
     }
 
     // ========================================================================
@@ -1444,6 +1536,15 @@ impl Database {
             |row| row.get(0),
         )?;
 
+        // Count unconfirmed artist canonicalizations as canonicalization issues
+        // These are stored separately in artist_canonicalization, not health_issues
+        let unconfirmed_canons: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM artist_canonicalization WHERE confirmed_at IS NULL",
+            params![],
+            |row| row.get(0),
+        )?;
+        summary.canonicalization_issues += unconfirmed_canons;
+
         Ok(summary)
     }
 
@@ -1495,6 +1596,24 @@ impl Database {
         )?;
 
         let rows = stmt.query_map(params![fingerprint], Self::row_to_known_variant)?;
+
+        let mut variants = Vec::new();
+        for row in rows {
+            variants.push(row?);
+        }
+        Ok(variants)
+    }
+
+    /// Get all known variants.
+    pub fn get_all_known_variants(&self) -> Result<Vec<KnownVariant>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, variant_type, canonical_fingerprint, variant_fingerprint,
+                      canonical_track_id, variant_track_id, marked_at, notes
+               FROM known_variants
+               ORDER BY variant_type, canonical_fingerprint"#,
+        )?;
+
+        let rows = stmt.query_map(params![], Self::row_to_known_variant)?;
 
         let mut variants = Vec::new();
         for row in rows {
@@ -1586,6 +1705,51 @@ impl Database {
             variants.push(row?);
         }
         Ok(variants)
+    }
+
+    // ========================================================================
+    // App Metadata
+    // ========================================================================
+
+    /// Get a metadata value by key.
+    pub fn get_metadata(&self, key: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT value FROM app_metadata WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Set a metadata value (upsert).
+    pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_metadata (key, value, updated_at)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP)
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Get health data version from metadata.
+    pub fn get_health_version(&self) -> Result<Option<u32>> {
+        match self.get_metadata("health_version")? {
+            Some(v) => Ok(v.parse().ok()),
+            None => Ok(None),
+        }
+    }
+
+    /// Set health data version.
+    pub fn set_health_version(&self, version: u32) -> Result<()> {
+        self.set_metadata("health_version", &version.to_string())
     }
 
     // ========================================================================

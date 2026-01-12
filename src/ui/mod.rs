@@ -35,12 +35,25 @@ use std::time::Instant;
 use crate::config::{self, Config};
 use crate::db::Database;
 use crate::health::{spawn_heartbeat, HeartbeatResult};
+use crate::ops::operation::{
+    log_operation_summary, OperationManager, OperationMessage, OperationProgress,
+    OperationResult, OperationType, ProgressReporter,
+};
 use crate::ops::{reports, scanner};
 use crate::progress::ScanMessage;
 
-use app::{EyeAnimation, EyeFrame, OperationState, OperationType, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
+use app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
 use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
+
+// ============================================================================
+// Health Data Version
+// ============================================================================
+
+/// Current health data schema version.
+/// Increment this when health detection algorithms change significantly.
+/// On startup, if DB version differs from this, health index is rebuilt.
+pub const HEALTH_DATA_VERSION: u32 = 1;
 
 // ============================================================================
 // Application State
@@ -96,9 +109,11 @@ struct App {
     session_review: Option<dedup_flow::SessionReviewState>,
     drop_missing_state: Option<DropMissingState>,
 
-    // Background operations
-    operation: Option<OperationState>,
-    operation_receiver: Option<mpsc::Receiver<ScanMessage>>,
+    // Background operations (supports multiple concurrent)
+    operations: OperationManager,
+    // Legacy single-operation receiver for scan (uses ScanMessage)
+    legacy_scan_receiver: Option<mpsc::Receiver<ScanMessage>>,
+    legacy_scan_type: Option<OperationType>,
 
     // Startup heartbeat
     heartbeat_result: Option<HeartbeatResult>,
@@ -132,8 +147,9 @@ impl App {
             bulk_prompt: None,
             session_review: None,
             drop_missing_state: None,
-            operation: None,
-            operation_receiver: None,
+            operations: OperationManager::new(),
+            legacy_scan_receiver: None,
+            legacy_scan_type: None,
             heartbeat_result: None,
             heartbeat_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
@@ -233,12 +249,6 @@ impl App {
             BackgroundTask::ScanLegacy => {
                 self.start_scan_legacy();
             }
-            BackgroundTask::DetectMissing => {
-                self.detect_missing_files();
-            }
-            BackgroundTask::RebuildHealthIndex => {
-                self.rebuild_health_index();
-            }
             BackgroundTask::GenerateReport { report_type } => {
                 self.generate_report(report_type);
             }
@@ -271,10 +281,14 @@ impl App {
         let source_name = name.to_string();
         let cancel_flag = Arc::new(AtomicBool::new(false));
 
-        self.operation = Some(OperationState::new(OperationType::Scanning {
+        // Store scan type for progress display
+        let op_type = OperationType::Scanning {
             source_name: source_name.clone(),
-        }));
-        self.operation_receiver = Some(rx);
+        };
+        self.legacy_scan_type = Some(op_type.clone());
+        self.legacy_scan_receiver = Some(rx);
+        // Register with operation manager for unified display
+        self.operations.set_legacy_operation(op_type);
 
         let cancel = cancel_flag.clone();
         std::thread::spawn(move || {
@@ -293,167 +307,220 @@ impl App {
     }
 
     fn generate_report(&mut self, report_type: ReportType) {
-        // Get reports directory
-        let reports_dir = match config::get_data_dir() {
-            Ok(dir) => dir.join("reports"),
-            Err(e) => {
-                self.status_message = Some(format!("Failed to get data dir: {}", e));
-                return;
-            }
+        // Get report type name for display
+        let report_name = match report_type {
+            ReportType::GenerateAll => "all",
+            ReportType::Legacy => "legacy",
+            ReportType::Deployment => "deployment",
+            ReportType::Quality => "quality",
+            ReportType::Duplicates => "duplicates",
+            ReportType::Health => "health",
+            ReportType::KnownVariants => "known_variants",
         };
 
-        // Ensure reports directory exists
-        if let Err(e) = std::fs::create_dir_all(&reports_dir) {
-            self.status_message = Some(format!("Failed to create reports dir: {}", e));
-            return;
-        }
+        // Add operation to manager
+        let (id, tx, cancel_flag) = self.operations.add(OperationType::GeneratingReport {
+            report_type: report_name.to_string(),
+        });
 
-        let results: Vec<Result<String, String>> = match report_type {
-            ReportType::GenerateAll => {
-                vec![
-                    reports::generate_duplicate_report(&reports_dir.join("duplicates.txt"))
-                        .map_err(|e| e.to_string()),
-                    reports::generate_quality_report(&reports_dir.join("quality.txt"))
-                        .map_err(|e| e.to_string()),
-                    reports::generate_deployment_report(&reports_dir.join("deployment.txt"))
-                        .map_err(|e| e.to_string()),
-                ]
-            }
-            ReportType::Legacy => {
-                vec![
-                    reports::generate_legacy_report(&reports_dir.join("legacy.txt"))
-                        .map_err(|e| e.to_string()),
-                ]
-            }
-            ReportType::Deployment => {
-                vec![
-                    reports::generate_deployment_report(&reports_dir.join("deployment.txt"))
-                        .map_err(|e| e.to_string()),
-                ]
-            }
-            ReportType::Quality => {
-                vec![
-                    reports::generate_quality_report(&reports_dir.join("quality.txt"))
-                        .map_err(|e| e.to_string()),
-                ]
-            }
-            ReportType::Duplicates => {
-                vec![
-                    reports::generate_duplicate_report(&reports_dir.join("duplicates.txt"))
-                        .map_err(|e| e.to_string()),
-                ]
-            }
-            ReportType::Health => {
-                vec![
-                    reports::generate_health_report(&reports_dir.join("health.txt"))
-                        .map_err(|e| e.to_string()),
-                ]
-            }
-        };
+        self.status_message = Some(format!("Generating {} report... [{}]", report_name, id));
 
-        let successes: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
-        let failures: Vec<_> = results.iter().filter_map(|r| r.as_ref().err()).collect();
+        // Spawn background thread
+        std::thread::spawn(move || {
+            use std::time::Instant;
 
-        if failures.is_empty() {
-            self.status_message = Some(format!(
-                "Generated {} report(s) in {}",
-                successes.len(),
-                reports_dir.display()
-            ));
-        } else if successes.is_empty() {
-            self.status_message = Some(format!("Report generation failed: {}", failures[0]));
-        } else {
-            self.status_message = Some(format!(
-                "{} report(s) generated, {} failed",
-                successes.len(),
-                failures.len()
-            ));
-        }
-    }
+            let start = Instant::now();
+            let mut reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
 
-    fn detect_missing_files(&mut self) {
-        // Open database
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
-
-        // Find missing files
-        match scanner::find_missing_tracks(&db, "corpus") {
-            Ok(missing) => {
-                if missing.is_empty() {
-                    self.status_message = Some("No missing files found in index".to_string());
-                } else {
-                    self.status_message = Some(format!(
-                        "Found {} missing files. Use 'Drop Missing From Index' to remove entries.",
-                        missing.len()
-                    ));
+            // Get reports directory
+            let reports_dir = match config::get_data_dir() {
+                Ok(dir) => dir.join("reports"),
+                Err(e) => {
+                    reporter.error(format!("Failed to get data dir: {}", e));
+                    return;
                 }
+            };
+
+            // Ensure reports directory exists
+            if let Err(e) = std::fs::create_dir_all(&reports_dir) {
+                reporter.error(format!("Failed to create reports dir: {}", e));
+                return;
             }
-            Err(e) => {
-                self.status_message = Some(format!("Detection error: {}", e));
+
+            // Determine which reports to generate
+            let report_tasks: Vec<(&str, std::path::PathBuf)> = match report_type {
+                ReportType::GenerateAll => vec![
+                    ("duplicates", reports_dir.join("duplicates.txt")),
+                    ("quality", reports_dir.join("quality.txt")),
+                    ("deployment", reports_dir.join("deployment.txt")),
+                    ("known_variants", reports_dir.join("known_variants.txt")),
+                ],
+                ReportType::Legacy => vec![
+                    ("legacy", reports_dir.join("legacy.txt")),
+                ],
+                ReportType::Deployment => vec![
+                    ("deployment", reports_dir.join("deployment.txt")),
+                ],
+                ReportType::Quality => vec![
+                    ("quality", reports_dir.join("quality.txt")),
+                ],
+                ReportType::Duplicates => vec![
+                    ("duplicates", reports_dir.join("duplicates.txt")),
+                ],
+                ReportType::Health => vec![
+                    ("health", reports_dir.join("health.txt")),
+                ],
+                ReportType::KnownVariants => vec![
+                    ("known_variants", reports_dir.join("known_variants.txt")),
+                ],
+            };
+
+            let total = report_tasks.len();
+            let mut progress = OperationProgress::new(total);
+            reporter.force_update(progress.clone());
+
+            let mut succeeded = 0;
+            let mut errors = Vec::new();
+
+            for (name, path) in report_tasks {
+                if reporter.is_cancelled() {
+                    reporter.cancelled();
+                    return;
+                }
+
+                progress.current_item = Some(format!("Generating {} report", name));
+                reporter.update(progress.clone());
+
+                let result = match name {
+                    "duplicates" => reports::generate_duplicate_report(&path),
+                    "quality" => reports::generate_quality_report(&path),
+                    "deployment" => reports::generate_deployment_report(&path),
+                    "legacy" => reports::generate_legacy_report(&path),
+                    "health" => reports::generate_health_report(&path),
+                    "known_variants" => reports::generate_known_variants_report(&path),
+                    _ => Err(anyhow::anyhow!("Unknown report type")),
+                };
+
+                match result {
+                    Ok(_) => succeeded += 1,
+                    Err(e) => errors.push(format!("{}: {}", name, e)),
+                }
+
+                progress.completed_items += 1;
+                reporter.update(progress.clone());
             }
-        }
+
+            let result = OperationResult {
+                succeeded,
+                skipped: 0,
+                failed: errors.len(),
+                duration: start.elapsed(),
+                bytes_processed: None,
+                errors,
+                data: None,
+            };
+            reporter.complete(result);
+        });
     }
 
     fn rebuild_health_index(&mut self) {
-        use crate::health::{detect_fingerprint_issues, detect_metadata_issues};
+        // Add operation to manager
+        let (id, tx, cancel_flag) = self.operations.add(OperationType::RebuildingHealth);
 
-        // Open database
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
+        self.status_message = Some(format!("Rebuilding health index... [{}]", id));
+
+        // Spawn background thread
+        std::thread::spawn(move || {
+            use crate::health::{detect_fingerprint_issues, detect_metadata_issues};
+            use std::time::Instant;
+
+            let start = Instant::now();
+            let mut reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
+
+            // Open database
+            let db_path = match config::get_db_path() {
+                Ok(p) => p,
+                Err(e) => {
+                    reporter.error(format!("Config error: {}", e));
+                    return;
+                }
+            };
+            let db = match Database::open(&db_path) {
+                Ok(db) => db,
+                Err(e) => {
+                    reporter.error(format!("Database error: {}", e));
+                    return;
+                }
+            };
+
+            // Get all tracks with fingerprints
+            let tracks = match db.get_all_tracks(Some("corpus")) {
+                Ok(t) => t,
+                Err(e) => {
+                    reporter.error(format!("Error getting tracks: {}", e));
+                    return;
+                }
+            };
+
+            let with_fingerprints: Vec<_> = tracks
+                .into_iter()
+                .filter(|t| t.fingerprint.is_some())
+                .collect();
+
+            let mut progress = OperationProgress::new(with_fingerprints.len());
+            reporter.force_update(progress.clone());
+
+            // Run health detection on each track
+            let mut issues_found = 0;
+            for track in &with_fingerprints {
+                if reporter.is_cancelled() {
+                    reporter.cancelled();
+                    return;
+                }
+
+                progress.current_item = track.title.clone().or_else(|| {
+                    std::path::Path::new(&track.path)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                });
+
+                if let Ok(issues) = detect_fingerprint_issues(&db, track) {
+                    issues_found += issues.len();
+                }
+                let _ = detect_metadata_issues(&db, track);
+
+                progress.completed_items += 1;
+                reporter.update(progress.clone());
             }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
+
+            // Detect and store artist canonicalization issues
+            if let Ok(canon_count) = crate::health::detect_and_store_canonicalizations(&db) {
+                if canon_count > 0 {
+                    let _ = config::log_message(&format!(
+                        "Health rebuild: detected {} new canonicalization issues",
+                        canon_count
+                    ));
+                }
             }
-        };
 
-        // Get all tracks with fingerprints
-        let tracks = match db.get_all_tracks(Some("corpus")) {
-            Ok(t) => t,
-            Err(e) => {
-                self.status_message = Some(format!("Error getting tracks: {}", e));
-                return;
+            // Update health data version on successful completion
+            if let Err(e) = db.set_health_version(crate::ui::HEALTH_DATA_VERSION) {
+                let _ = config::log_message(&format!(
+                    "WARN: Failed to set health version: {}", e
+                ));
             }
-        };
 
-        let total = tracks.len();
-        let with_fingerprints: Vec<_> = tracks.into_iter().filter(|t| t.fingerprint.is_some()).collect();
-        let fp_count = with_fingerprints.len();
-
-        // Run health detection on each track
-        let mut issues_found = 0;
-        for track in &with_fingerprints {
-            if let Ok(issues) = detect_fingerprint_issues(&db, track) {
-                issues_found += issues.len();
-            }
-            let _ = detect_metadata_issues(&db, track);
-        }
-
-        self.status_message = Some(format!(
-            "Rebuilt health index: {} tracks ({} with fingerprints), {} issues detected",
-            total, fp_count, issues_found
-        ));
-
-        // Refresh corpus summary
-        self.refresh_corpus_summary();
+            let result = OperationResult {
+                succeeded: progress.completed_items,
+                skipped: 0,
+                failed: 0,
+                duration: start.elapsed(),
+                bytes_processed: None,
+                errors: vec![],
+                data: None,
+            };
+            reporter.complete(result);
+        });
     }
 
     fn start_drop_missing_confirmation(&mut self) {
@@ -646,6 +713,9 @@ impl App {
         // Execute the changes
         match changes::execute_changes(&db, &pending_changes, false) {
             Ok(report) => {
+                // Also clean up any orphaned scan_state entries (in scan_state but not in tracks)
+                let orphan_cleanup = db.cleanup_missing_scan_state_entries("corpus").unwrap_or(0);
+
                 let msg = if log_created {
                     format!(
                         "Dropped {} entries from index. Log: {}",
@@ -654,6 +724,13 @@ impl App {
                     )
                 } else {
                     format!("Dropped {} entries from index", report.succeeded)
+                };
+
+                // Add orphan cleanup info if any were found
+                let msg = if orphan_cleanup > 0 {
+                    format!("{} (also cleaned {} orphaned scan entries)", msg, orphan_cleanup)
+                } else {
+                    msg
                 };
 
                 if report.failed > 0 {
@@ -1197,58 +1274,141 @@ impl App {
     }
 
     fn update_operation_progress(&mut self) {
-        let mut should_clear = false;
+        // Poll all tracked operations from OperationManager
+        let completed = self.operations.poll_all();
+        for (id, result, op_type) in completed {
+            // Log operation summary
+            log_operation_summary(&result, &op_type);
 
-        if let Some(ref rx) = self.operation_receiver {
+            // Format completion message
+            self.status_message = Some(if result.succeeded == 0 && result.skipped > 0 {
+                format!(
+                    "[{}] Complete! {} skipped (unchanged) in {:.1}s",
+                    id,
+                    result.skipped,
+                    result.duration.as_secs_f64()
+                )
+            } else {
+                let bytes_str = result
+                    .bytes_processed
+                    .map(|b| format!(" ({:.2} GB)", b as f64 / 1_000_000_000.0))
+                    .unwrap_or_default();
+                format!(
+                    "[{}] Complete! {} succeeded{} in {:.1}s",
+                    id,
+                    result.succeeded,
+                    bytes_str,
+                    result.duration.as_secs_f64()
+                )
+            });
+        }
+
+        // Handle legacy scan receiver (for backwards compatibility with existing scan code)
+        let mut legacy_complete = false;
+        let mut legacy_result: Option<(OperationResult, OperationType)> = None;
+
+        if let Some(ref rx) = self.legacy_scan_receiver {
             while let Ok(message) = rx.try_recv() {
-                match message {
-                    ScanMessage::Progress(progress) => {
-                        // Record throughput sample
-                        let now = Instant::now();
-                        self.throughput_samples.push_back((now, progress.bytes_processed));
+                // Convert ScanMessage to OperationMessage using the From impl
+                let op_message: OperationMessage = message.into();
 
-                        // Keep only samples from last 15 seconds (allows 8s rolling window + buffer)
-                        let cutoff = now - std::time::Duration::from_secs(15);
-                        while let Some((t, _)) = self.throughput_samples.front() {
-                            if *t < cutoff {
-                                self.throughput_samples.pop_front();
-                            } else {
-                                break;
+                match op_message {
+                    OperationMessage::Progress(progress) => {
+                        // Record throughput sample if bytes are tracked
+                        if let Some(bytes) = progress.bytes_processed {
+                            let now = Instant::now();
+                            self.throughput_samples.push_back((now, bytes));
+
+                            // Keep only samples from last 15 seconds (allows 8s rolling window + buffer)
+                            let cutoff = now - std::time::Duration::from_secs(15);
+                            while let Some((t, _)) = self.throughput_samples.front() {
+                                if *t < cutoff {
+                                    self.throughput_samples.pop_front();
+                                } else {
+                                    break;
+                                }
                             }
                         }
 
-                        if let Some(ref mut op) = self.operation {
-                            op.progress = progress;
-                        }
+                        // Store progress in a "virtual" tracked operation for rendering
+                        self.operations.update_legacy_progress(progress);
                     }
-                    ScanMessage::Complete(result) => {
-                        self.status_message = Some(if result.files_scanned == 0 && result.files_skipped > 0 {
+                    OperationMessage::Complete(result) => {
+                        // Format completion message
+                        self.status_message = Some(if result.succeeded == 0 && result.skipped > 0 {
                             format!(
-                                "Scan complete! {} files skipped (unchanged) in {:.1}s",
-                                result.files_skipped,
+                                "Complete! {} skipped (unchanged) in {:.1}s",
+                                result.skipped,
                                 result.duration.as_secs_f64()
                             )
                         } else {
+                            let bytes_str = result
+                                .bytes_processed
+                                .map(|b| format!(" ({:.2} GB)", b as f64 / 1_000_000_000.0))
+                                .unwrap_or_default();
                             format!(
-                                "Scan complete! {} files ({:.2} GB) in {:.1}s",
-                                result.files_scanned,
-                                result.bytes_scanned as f64 / 1_000_000_000.0,
+                                "Complete! {} succeeded{} in {:.1}s",
+                                result.succeeded,
+                                bytes_str,
                                 result.duration.as_secs_f64()
                             )
                         });
-                        should_clear = true;
+
+                        // Store result for logging
+                        if let Some(ref op_type) = self.legacy_scan_type {
+                            legacy_result = Some((result, op_type.clone()));
+                        }
+                        legacy_complete = true;
                     }
-                    ScanMessage::Error(err) => {
-                        self.status_message = Some(format!("Scan error: {}", err));
-                        should_clear = true;
+                    OperationMessage::Error(err) => {
+                        self.status_message = Some(format!("Operation error: {}", err));
+                        legacy_complete = true;
+                    }
+                    OperationMessage::Cancelled => {
+                        self.status_message = Some("Operation cancelled".to_string());
+                        legacy_complete = true;
                     }
                 }
             }
         }
 
-        if should_clear {
-            self.operation = None;
-            self.operation_receiver = None;
+        // Log legacy operation summary after clearing receiver
+        if let Some((ref result, ref op_type)) = legacy_result {
+            log_operation_summary(result, op_type);
+
+            // Run canonicalization detection after corpus scan completes
+            if let OperationType::Scanning { source_name } = op_type {
+                if source_name == "corpus" && result.failed == 0 {
+                    // Run in background to not block UI
+                    std::thread::spawn(|| {
+                        if let Ok(db_path) = config::get_db_path() {
+                            if let Ok(db) = Database::open(&db_path) {
+                                match crate::health::detect_and_store_canonicalizations(&db) {
+                                    Ok(count) if count > 0 => {
+                                        let _ = config::log_message(&format!(
+                                            "Post-scan: detected {} new canonicalization issues",
+                                            count
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        let _ = config::log_message(&format!(
+                                            "Post-scan canonicalization error: {}",
+                                            e
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        if legacy_complete {
+            self.legacy_scan_receiver = None;
+            self.legacy_scan_type = None;
+            self.operations.clear_legacy_progress();
             self.throughput_samples.clear();
             // Refresh corpus summary after operation completes
             self.refresh_corpus_summary();
@@ -1546,96 +1706,130 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 }
 
 fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    use crate::ops::operation::ProgressContext;
+
     let mut lines = Vec::new();
 
-    if let Some(ref op) = app.operation {
-        let progress = &op.progress;
+    // Get all active operations from the manager
+    let active_ops = app.operations.all_for_display();
 
-        // Operation description with ETA
-        let desc = op.operation_type.description();
-        let eta_span = if progress.bytes_processed > 0 && progress.total_bytes > 0 {
-            // Calculate ETA from rolling throughput
-            let throughput = calculate_rolling_throughput(&app.throughput_samples, 8);
-            if let Some(mib_per_sec) = throughput {
-                if mib_per_sec > 0.01 {
-                    let remaining_bytes = progress.total_bytes.saturating_sub(progress.bytes_processed);
-                    let remaining_mib = remaining_bytes as f64 / (1024.0 * 1024.0);
-                    let eta_secs = (remaining_mib / mib_per_sec) as u64;
-                    Span::styled(
-                        format!(" (ETA: {})", format_eta(eta_secs)),
-                        Style::default().fg(Color::DarkGray),
-                    )
+    if active_ops.is_empty() {
+        lines.push(
+            Line::from("No operation in progress").style(Style::default().fg(Color::DarkGray)),
+        );
+    } else {
+        // Show each active operation
+        for (i, (op_type, progress)) in active_ops.iter().enumerate() {
+            // Operation description with ETA
+            let desc = op_type.description();
+            let eta_span = {
+                let bytes_processed = progress.bytes_processed.unwrap_or(0);
+                let total_bytes = progress.total_bytes.unwrap_or(0);
+                if bytes_processed > 0 && total_bytes > 0 {
+                    // Calculate ETA from rolling throughput (only for first op)
+                    if i == 0 {
+                        let throughput = calculate_rolling_throughput(&app.throughput_samples, 8);
+                        if let Some(mib_per_sec) = throughput {
+                            if mib_per_sec > 0.01 {
+                                let remaining_bytes = total_bytes.saturating_sub(bytes_processed);
+                                let remaining_mib = remaining_bytes as f64 / (1024.0 * 1024.0);
+                                let eta_secs = (remaining_mib / mib_per_sec) as u64;
+                                Span::styled(
+                                    format!(" (ETA: {})", format_eta(eta_secs)),
+                                    Style::default().fg(Color::DarkGray),
+                                )
+                            } else {
+                                Span::raw("")
+                            }
+                        } else {
+                            Span::raw("")
+                        }
+                    } else {
+                        Span::raw("")
+                    }
                 } else {
                     Span::raw("")
                 }
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(desc, Style::default().fg(Color::Cyan)),
+                eta_span,
+            ]));
+
+            // Items progress (compact for multiple operations)
+            if active_ops.len() > 1 {
+                lines.push(Line::from(format!(
+                    "  {}/{} ({} skipped)",
+                    progress.completed_items,
+                    progress.total_items,
+                    progress.skipped_items
+                )));
             } else {
-                Span::raw("")
-            }
-        } else {
-            Span::raw("")
-        };
+                // Full detail for single operation
+                lines.push(Line::from(format!(
+                    "Items: {}/{} | Skipped: {} unchanged",
+                    progress.completed_items,
+                    progress.total_items,
+                    progress.skipped_items
+                )));
 
-        lines.push(Line::from(vec![
-            Span::styled(desc, Style::default().fg(Color::Cyan)),
-            eta_span,
-        ]));
-
-        // Files progress
-        lines.push(Line::from(format!(
-            "Files: {}/{} | Skipped: {} unchanged",
-            progress.files_processed,
-            progress.total_files,
-            progress.files_skipped
-        )));
-
-        // Mtime mismatch statistics (for debugging incremental scan)
-        if let Some(ref stats) = progress.mtime_stats {
-            if stats.mismatch_count > 0 || stats.not_in_db_count > 0 {
-                let mut parts = Vec::new();
-                if stats.not_in_db_count > 0 {
-                    parts.push(format!("new:{}", stats.not_in_db_count));
-                }
-                if stats.mismatch_count > 0 {
-                    parts.push(format!("mtime_delta:{}", stats.mismatch_count));
-                    if let Some(mean) = stats.mean_diff_secs() {
-                        let median = stats.median_diff_secs().unwrap_or(0);
-                        let mode = stats.mode_diff_secs().unwrap_or(0);
-                        let stddev = stats.stddev_diff_secs().unwrap_or(0.0);
-                        parts.push(format!(
-                            "μ={:.1}s med={}s mode={}s σ={:.1}",
-                            mean, median, mode, stddev
-                        ));
+                // Mtime mismatch statistics (for debugging incremental scan)
+                if let Some(ProgressContext::Scan { ref mtime_stats }) = progress.context {
+                    if mtime_stats.mismatch_count > 0 || mtime_stats.not_in_db_count > 0 {
+                        let mut parts = Vec::new();
+                        if mtime_stats.not_in_db_count > 0 {
+                            parts.push(format!("new:{}", mtime_stats.not_in_db_count));
+                        }
+                        if mtime_stats.mismatch_count > 0 {
+                            parts.push(format!("mtime_delta:{}", mtime_stats.mismatch_count));
+                            if let Some(mean) = mtime_stats.mean_diff_secs() {
+                                let median = mtime_stats.median_diff_secs().unwrap_or(0);
+                                let mode = mtime_stats.mode_diff_secs().unwrap_or(0);
+                                let stddev = mtime_stats.stddev_diff_secs().unwrap_or(0.0);
+                                parts.push(format!(
+                                    "μ={:.1}s med={}s mode={}s σ={:.1}",
+                                    mean, median, mode, stddev
+                                ));
+                            }
+                        }
+                        lines.push(
+                            Line::from(parts.join(" | ")).style(Style::default().fg(Color::DarkGray)),
+                        );
                     }
                 }
-                lines.push(Line::from(parts.join(" | "))
-                    .style(Style::default().fg(Color::DarkGray)));
+
+                // Bytes: XX GiB / YY TiB (ZZZ MiB/s) - only if tracking bytes
+                if let (Some(processed), Some(total)) = (progress.bytes_processed, progress.total_bytes) {
+                    let processed_str = format_bytes_binary(processed);
+                    let total_str = format_bytes_binary(total);
+                    let throughput_str = match calculate_rolling_throughput(&app.throughput_samples, 8) {
+                        Some(mib_per_sec) => format!(" ({:.1} MiB/s)", mib_per_sec),
+                        None => String::new(),
+                    };
+                    lines.push(Line::from(format!(
+                        "Bytes: {} / {}{}",
+                        processed_str, total_str, throughput_str
+                    )));
+                }
+
+                // Current item (UTF-8 safe truncation)
+                if let Some(ref item) = progress.current_item {
+                    let display = truncate_path_display(item, 50);
+                    lines.push(Line::from(display).style(Style::default().fg(Color::DarkGray)));
+                }
             }
         }
-
-        // Bytes: XX GiB / YY TiB (ZZZ MiB/s)
-        let processed_str = format_bytes_binary(progress.bytes_processed);
-        let total_str = format_bytes_binary(progress.total_bytes);
-        let throughput_str = match calculate_rolling_throughput(&app.throughput_samples, 8) {
-            Some(mib_per_sec) => format!(" ({:.1} MiB/s)", mib_per_sec),
-            None => String::new(),
-        };
-        lines.push(Line::from(format!(
-            "Bytes: {} / {}{}",
-            processed_str, total_str, throughput_str
-        )));
-
-        // Current file (UTF-8 safe truncation)
-        if let Some(file) = &progress.current_file {
-            let display = truncate_path_display(file, 50);
-            lines.push(Line::from(display).style(Style::default().fg(Color::DarkGray)));
-        }
-    } else {
-        lines.push(Line::from("No operation in progress")
-            .style(Style::default().fg(Color::DarkGray)));
     }
 
+    let title = if active_ops.len() > 1 {
+        format!("Operations ({})", active_ops.len())
+    } else {
+        "Operation".to_string()
+    };
+
     let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Operation"));
+        .block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(para, area);
 }
 
@@ -1686,6 +1880,50 @@ fn render_eye(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 }
 
 // ============================================================================
+// Startup Health Version Check
+// ============================================================================
+
+/// Check health data version and trigger rebuild if needed.
+/// This runs at startup before the main event loop.
+fn check_and_maybe_rebuild_health(app: &mut App) {
+    // Open database to check version
+    let db_path = match config::get_db_path() {
+        Ok(p) => p,
+        Err(_) => return, // No DB yet, nothing to rebuild
+    };
+
+    let db = match Database::open(&db_path) {
+        Ok(db) => db,
+        Err(_) => return, // Can't open DB, skip check
+    };
+
+    // Get stored version
+    let stored_version = db.get_health_version().ok().flatten();
+
+    match stored_version {
+        None => {
+            // No version stored - potential corruption or first run after adding versioning.
+            // Rebuild to ensure consistency.
+            app.status_message = Some(
+                "Health index version missing (potential corruption detected), rebuilding...".to_string()
+            );
+            app.rebuild_health_index();
+        }
+        Some(v) if v != HEALTH_DATA_VERSION => {
+            // Version mismatch - need to rebuild for upgrade
+            app.status_message = Some(format!(
+                "Health data version changed ({} → {}), rebuilding...",
+                v, HEALTH_DATA_VERSION
+            ));
+            app.rebuild_health_index();
+        }
+        Some(_) => {
+            // Version matches, no rebuild needed
+        }
+    }
+}
+
+// ============================================================================
 // Entry Point
 // ============================================================================
 
@@ -1697,6 +1935,9 @@ pub fn run_menu(config: Config) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(config);
+
+    // Check health data version and trigger rebuild if needed
+    check_and_maybe_rebuild_health(&mut app);
 
     // Spawn heartbeat check if enabled
     if app.config.opinions.startup.heartbeat_on_startup {
@@ -1731,6 +1972,13 @@ fn run_app<B: ratatui::backend::Backend>(
         app.eye.update();
         app.update_operation_progress();
         app.update_heartbeat();
+
+        // Check if eye blink triggered a heartbeat (d20 rolled 13)
+        if app.eye.take_heartbeat_trigger() && app.heartbeat_receiver.is_none() {
+            let rx = spawn_heartbeat(&app.config);
+            app.heartbeat_receiver = Some(rx);
+            app.eye.set_heartbeat_pending(true);
+        }
 
         terminal.draw(|f| render(f, app))?;
 

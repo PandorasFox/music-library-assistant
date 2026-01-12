@@ -21,14 +21,28 @@
 //! - **Metadata Collisions**: Same artist/album/title, different fingerprint
 //! - **Canonicalization Issues**: Artist name variants needing unification
 //! - **Quality Variants**: Same content, different quality (FLAC vs MP3)
+//!
+//! ## Library Health
+//!
+//! - **Healthy**: Deployed files at correct paths
+//! - **Not Deployed**: Corpus files missing from library
+//! - **Stale Deployments**: Tag changes caused incorrect library paths
+//! - **Orphans**: Library files without corpus backing
 
+mod canonicalization;
 mod detection;
 mod filter;
 mod heartbeat;
+pub mod library;
 
+pub use canonicalization::detect_and_store_canonicalizations;
 pub use detection::{detect_fingerprint_issues, detect_metadata_issues};
 #[allow(unused_imports)]
 pub use filter::{
     durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks,
 };
 pub use heartbeat::{spawn_heartbeat, HeartbeatResult};
+pub use library::{
+    check_all_libraries_health, check_library_health, generate_orphan_cleanup_mutations,
+    LibraryHealthResult, OrphanFile, StaleDeployment,
+};

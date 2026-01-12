@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::progress::ScanProgress;
+use crate::ops::operation::OperationProgress;
+// Re-export OperationType from ops::operation for use by other UI modules
+pub use crate::ops::operation::OperationType;
 
 // ============================================================================
 // UI Mode Enum
@@ -38,7 +40,7 @@ pub enum UiMode {
 #[derive(Debug)]
 pub struct OperationState {
     pub operation_type: OperationType,
-    pub progress: ScanProgress,
+    pub progress: OperationProgress,
     pub cancel_flag: Arc<AtomicBool>,
 }
 
@@ -46,17 +48,7 @@ impl OperationState {
     pub fn new(operation_type: OperationType) -> Self {
         Self {
             operation_type,
-            progress: ScanProgress {
-                total_bytes: 0,
-                bytes_processed: 0,
-                files_processed: 0,
-                total_files: 0,
-                files_skipped: 0,
-                current_file: None,
-                errors: 0,
-                start_time: Instant::now(),
-                mtime_stats: None,
-            },
+            progress: OperationProgress::new(0),
             cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -67,34 +59,6 @@ impl OperationState {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancel_flag.load(Ordering::SeqCst)
-    }
-}
-
-/// Type of background operation
-#[derive(Debug, Clone)]
-pub enum OperationType {
-    Scanning { source_name: String },
-    GeneratingReport { report_type: String },
-    Deploying { library_name: String, dry_run: bool },
-}
-
-impl OperationType {
-    pub fn description(&self) -> String {
-        match self {
-            OperationType::Scanning { source_name } => {
-                format!("Scanning: {}", source_name)
-            }
-            OperationType::GeneratingReport { report_type } => {
-                format!("Generating {} report", report_type)
-            }
-            OperationType::Deploying { library_name, dry_run } => {
-                if *dry_run {
-                    format!("Preview deployment to {}", library_name)
-                } else {
-                    format!("Deploying to {}", library_name)
-                }
-            }
-        }
     }
 }
 
@@ -144,6 +108,8 @@ pub struct EyeAnimation {
     pub flutter_count: u8,
     /// When true, eye stays closed (waiting for startup heartbeat)
     pub heartbeat_pending: bool,
+    /// Flag set when a blink completes and d20 rolled 13 (trigger heartbeat)
+    pub trigger_heartbeat: bool,
 }
 
 impl Default for EyeAnimation {
@@ -155,6 +121,7 @@ impl Default for EyeAnimation {
             current_blink_type: BlinkType::Normal,
             flutter_count: 0,
             heartbeat_pending: false,
+            trigger_heartbeat: false,
         }
     }
 }
@@ -180,6 +147,30 @@ impl EyeAnimation {
         } else {
             base
         }
+    }
+
+    /// Roll a d20 - returns 1-20
+    fn roll_d20() -> u8 {
+        use std::collections::hash_map::RandomState;
+        use std::hash::BuildHasher;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let hasher = RandomState::new();
+        let random_val = hasher.hash_one(now);
+
+        // 1-20 inclusive
+        (1 + (random_val % 20)) as u8
+    }
+
+    /// Check and clear the trigger_heartbeat flag
+    pub fn take_heartbeat_trigger(&mut self) -> bool {
+        let triggered = self.trigger_heartbeat;
+        self.trigger_heartbeat = false;
+        triggered
     }
 
     /// Choose random blink type (weighted towards normal)
@@ -264,6 +255,11 @@ impl EyeAnimation {
                         self.state = EyeAnimationState::Idle;
                         self.state_start_time = now;
                         self.next_blink_delay_secs = Self::random_blink_delay();
+
+                        // Blink completed - roll d20, trigger heartbeat on 13
+                        if Self::roll_d20() == 13 {
+                            self.trigger_heartbeat = true;
+                        }
                     }
                 }
             }
@@ -289,6 +285,11 @@ impl EyeAnimation {
                         self.state = EyeAnimationState::Idle;
                         self.state_start_time = now;
                         self.next_blink_delay_secs = Self::random_blink_delay();
+
+                        // Flutter blink completed - roll d20, trigger heartbeat on 13
+                        if Self::roll_d20() == 13 {
+                            self.trigger_heartbeat = true;
+                        }
                     }
                 }
             }

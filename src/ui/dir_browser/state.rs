@@ -6,8 +6,7 @@ use std::path::PathBuf;
 
 use super::types::{DirBrowserAction, DirBrowserConfig, DirEntry};
 
-/// Audio file extensions we count
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "m4a", "ogg", "opus", "wav", "aiff", "aac"];
+use crate::config::AUDIO_EXTENSIONS;
 
 /// Directory browser state.
 #[derive(Debug)]

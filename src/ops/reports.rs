@@ -1003,6 +1003,89 @@ fn write_health_issue(file: &mut File, db: &Database, issue: &HealthIssue) -> Re
     Ok(())
 }
 
+/// Generate a report of known variants (legitimate re-releases, remixes, etc.)
+/// This is separate from the duplicate report to keep actionable items distinct.
+pub fn generate_known_variants_report(output_path: &Path) -> Result<String> {
+    let db_path = config::get_db_path()?;
+    let db = Database::open(&db_path)?;
+
+    // Get all known variants
+    let variants = db.get_all_known_variants()?;
+
+    if variants.is_empty() {
+        let mut file = File::create(output_path)?;
+        writeln!(file, "Music Library Assistant - Known Variants Report")?;
+        writeln!(file, "===============================================\n")?;
+        writeln!(file, "No known variants have been marked.")?;
+        writeln!(file, "\nKnown variants are tracks that share the same fingerprint but are")?;
+        writeln!(file, "legitimate different versions (re-releases, remasters, remixes, live).")?;
+        return Ok(format!("Known variants report generated: {} (0 variants)", output_path.display()));
+    }
+
+    let mut file = File::create(output_path)?;
+    writeln!(file, "Music Library Assistant - Known Variants Report")?;
+    writeln!(file, "===============================================\n")?;
+    writeln!(file, "Total known variants: {}\n", variants.len())?;
+    writeln!(file, "These are tracks that share fingerprints but are legitimate different versions.")?;
+    writeln!(file, "They have been marked as known variants and are excluded from duplicate detection.\n")?;
+
+    // Group by variant type
+    use std::collections::HashMap;
+    let mut by_type: HashMap<String, Vec<_>> = HashMap::new();
+    for variant in &variants {
+        let type_str = variant.variant_type.as_str().to_string();
+        by_type.entry(type_str).or_default().push(variant);
+    }
+
+    for (variant_type, type_variants) in &by_type {
+        writeln!(file, "\n{}", "=".repeat(60))?;
+        writeln!(file, "{} ({})", variant_type.to_uppercase(), type_variants.len())?;
+        writeln!(file, "{}\n", "=".repeat(60))?;
+
+        for variant in type_variants {
+            // Get track info for canonical
+            let canonical_info = variant.canonical_track_id
+                .and_then(|id| db.get_track_by_id(id).ok().flatten())
+                .map(|t| format!(
+                    "{} - {} ({})",
+                    t.artist.as_deref().unwrap_or("Unknown"),
+                    t.title.as_deref().unwrap_or("Unknown"),
+                    t.path
+                ))
+                .unwrap_or_else(|| format!("Fingerprint: {}...", &variant.canonical_fingerprint.chars().take(40).collect::<String>()));
+
+            // Get track info for variant (if different fingerprint)
+            let variant_info = variant.variant_track_id
+                .and_then(|id| db.get_track_by_id(id).ok().flatten())
+                .map(|t| format!(
+                    "{} - {} ({})",
+                    t.artist.as_deref().unwrap_or("Unknown"),
+                    t.title.as_deref().unwrap_or("Unknown"),
+                    t.path
+                ));
+
+            writeln!(file, "Canonical: {}", canonical_info)?;
+            if let Some(vi) = variant_info {
+                writeln!(file, "  Variant: {}", vi)?;
+            }
+            if let Some(ref notes) = variant.notes {
+                writeln!(file, "  Notes: {}", notes)?;
+            }
+            if let Some(ref marked_at) = variant.marked_at {
+                writeln!(file, "  Marked: {}", marked_at)?;
+            }
+            writeln!(file)?;
+        }
+    }
+
+    Ok(format!(
+        "Known variants report generated: {}\n  {} variants across {} types",
+        output_path.display(),
+        variants.len(),
+        by_type.len()
+    ))
+}
+
 /// Truncate a string key for display.
 fn truncate_key(key: &str, max_len: usize) -> String {
     if key.len() <= max_len {

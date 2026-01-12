@@ -87,10 +87,6 @@ pub enum BackgroundTask {
     ScanCorpus,
     /// Scan the legacy library (if configured)
     ScanLegacy,
-    /// Detect files in index that no longer exist on disk
-    DetectMissing,
-    /// Rebuild health index from existing tracks
-    RebuildHealthIndex,
     GenerateReport { report_type: ReportType },
     Deploy { dry_run: bool },
 }
@@ -121,6 +117,7 @@ pub enum ReportType {
     Quality,
     Duplicates,
     Health,
+    KnownVariants,
 }
 
 /// Result of handling a key press
@@ -404,20 +401,8 @@ impl MainMenuState {
                         }
                     }
                 }
-                CommandAction::Background(BackgroundTask::DetectMissing) => {
-                    lines.push("Checks each indexed file for existence on disk.".to_string());
-                    lines.push("Reports count of missing files.".to_string());
-                }
                 CommandAction::Background(BackgroundTask::ScanLegacy) => {
                     lines.push("Scans legacy library for migration analysis.".to_string());
-                }
-                CommandAction::Background(BackgroundTask::RebuildHealthIndex) => {
-                    lines.push("[DEBUG] Re-runs health detection on all tracks.".to_string());
-                    lines.push("Populates health_issues from existing data.".to_string());
-                    lines.push(String::new());
-                    lines.push("This is a temporary debug operation.".to_string());
-                    lines.push("Will be removed once on-upgrade health".to_string());
-                    lines.push("rebuilding is a first-class feature.".to_string());
                 }
                 CommandAction::Background(BackgroundTask::GenerateReport { report_type }) => {
                     // Show report-specific summaries
@@ -495,6 +480,11 @@ impl MainMenuState {
                 lines.push("  - Deployment coverage".to_string());
                 lines.push("  - Quality analysis".to_string());
             }
+            ReportType::KnownVariants => {
+                lines.push("─── Known Variants ───".to_string());
+                lines.push(format!("Stored variants: {}", hs.known_variants));
+                lines.push("Lists all explicitly confirmed artist/album variations.".to_string());
+            }
         }
     }
 }
@@ -521,11 +511,6 @@ fn build_build_indices_category(config: &Config) -> Category {
             action: CommandAction::Background(BackgroundTask::ScanCorpus),
             description: "Incrementally scan corpus, skipping unchanged files".to_string(),
         },
-        Command {
-            label: "Detect Missing Files".to_string(),
-            action: CommandAction::Background(BackgroundTask::DetectMissing),
-            description: "Check index for files that no longer exist on disk".to_string(),
-        },
     ];
 
     // Add legacy corpus scan if configured
@@ -538,17 +523,12 @@ fn build_build_indices_category(config: &Config) -> Category {
     }
 
     // Drop missing files from index (with confirmation)
+    // Note: Missing files are detected automatically by heartbeat at startup
+    // and periodically when the eye blinks and rolls a 13.
     commands.push(Command {
         label: "Drop Missing From Index".to_string(),
         action: CommandAction::Transition(TransitionTarget::DropMissingConfirm),
         description: "Drop entries for files no longer on disk (with confirmation)".to_string(),
-    });
-
-    // Rebuild health index from existing tracks (DEBUG - will be removed)
-    commands.push(Command {
-        label: "Rebuild Health Index".to_string(),
-        action: CommandAction::Background(BackgroundTask::RebuildHealthIndex),
-        description: "[DEBUG] Re-detect duplicates and health issues for all tracks".to_string(),
     });
 
     Category {

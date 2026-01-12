@@ -1,7 +1,19 @@
 //! Startup Heartbeat Check
 //!
-//! Quick validation of corpus against index at app launch.
-//! Detects files missing from disk or new files not yet indexed.
+//! Quick validation of corpus and libraries against index at app launch.
+//! Detects files missing from disk, new files not yet indexed, and library health.
+//!
+//! ## Health Detection Coverage
+//!
+//! - **missing_from_disk**: Indexed files that no longer exist on disk
+//! - **new_on_disk**: Audio files in corpus not yet indexed
+//! - **library_health**: Per-library deployment status (healthy, pending, stale, orphans)
+//!
+//! ## TODO: Health Warnings
+//!
+//! The heartbeat should generate health warnings for:
+//! - Files in corpus that are not indexed (resolvable by running a scan)
+//! - Consider adding health_issues entries for these to surface in reports
 
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
@@ -11,6 +23,8 @@ use std::time::{Duration, Instant};
 
 use crate::config::{self, Config};
 use crate::db::Database;
+
+use super::library::{check_all_libraries_health, LibraryHealthResult};
 
 /// Result of the startup heartbeat check
 #[derive(Debug, Clone)]
@@ -25,27 +39,46 @@ pub struct HeartbeatResult {
     pub missing_from_disk: usize,
     /// Number of files on disk not in index
     pub new_on_disk: usize,
+    /// Health results for each configured library
+    pub library_health: Vec<LibraryHealthResult>,
     /// How long the check took
     pub duration: Duration,
 }
 
 impl HeartbeatResult {
     /// Returns true if the corpus is in sync with the index
-    pub fn is_healthy(&self) -> bool {
+    pub fn is_corpus_healthy(&self) -> bool {
         self.missing_from_disk == 0 && self.new_on_disk == 0
+    }
+
+    /// Returns true if all libraries are healthy
+    pub fn are_libraries_healthy(&self) -> bool {
+        self.library_health.iter().all(|l| l.is_healthy())
+    }
+
+    /// Returns true if everything is healthy
+    pub fn is_healthy(&self) -> bool {
+        self.is_corpus_healthy() && self.are_libraries_healthy()
+    }
+
+    /// Total count of library issues across all libraries
+    pub fn total_library_issues(&self) -> usize {
+        self.library_health
+            .iter()
+            .map(|l| l.not_deployed + l.stale + l.orphans)
+            .sum()
     }
 }
 
-/// Audio file extensions to check
-const AUDIO_EXTENSIONS: &[&str] = &["flac", "mp3", "ogg", "m4a", "opus", "wav", "aiff", "aif"];
+use crate::config::AUDIO_EXTENSIONS;
 
 /// Spawn heartbeat check in a background thread
 pub fn spawn_heartbeat(config: &Config) -> mpsc::Receiver<HeartbeatResult> {
     let (tx, rx) = mpsc::channel();
-    let corpus_root = config.corpus_root.clone();
+    let config_clone = config.clone();
 
     std::thread::spawn(move || {
-        let result = run_heartbeat(&corpus_root);
+        let result = run_heartbeat(&config_clone);
         let _ = tx.send(result);
     });
 
@@ -53,8 +86,9 @@ pub fn spawn_heartbeat(config: &Config) -> mpsc::Receiver<HeartbeatResult> {
 }
 
 /// Run the heartbeat check synchronously
-fn run_heartbeat(corpus_root: &Path) -> HeartbeatResult {
+fn run_heartbeat(config: &Config) -> HeartbeatResult {
     let start = Instant::now();
+    let corpus_root = &config.corpus_root;
 
     // Get database path and open connection
     let db_path = match config::get_db_path() {
@@ -65,6 +99,7 @@ fn run_heartbeat(corpus_root: &Path) -> HeartbeatResult {
                 disk_count: 0,
                 missing_from_disk: 0,
                 new_on_disk: 0,
+                library_health: Vec::new(),
                 duration: start.elapsed(),
             };
         }
@@ -78,6 +113,7 @@ fn run_heartbeat(corpus_root: &Path) -> HeartbeatResult {
                 disk_count: 0,
                 missing_from_disk: 0,
                 new_on_disk: 0,
+                library_health: Vec::new(),
                 duration: start.elapsed(),
             };
         }
@@ -90,14 +126,32 @@ fn run_heartbeat(corpus_root: &Path) -> HeartbeatResult {
     let disk_inodes = walk_corpus_inodes(corpus_root);
 
     // Calculate differences
-    let missing_from_disk = indexed_inodes.difference(&disk_inodes).count();
+    let missing_inodes: HashSet<i64> = indexed_inodes.difference(&disk_inodes).cloned().collect();
+    let missing_from_disk = missing_inodes.len();
     let new_on_disk = disk_inodes.difference(&indexed_inodes).count();
+
+    // Log missing files for debugging
+    if missing_from_disk > 0 {
+        if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes("corpus", &missing_inodes) {
+            let _ = config::log_message(&format!(
+                "Heartbeat: {} files missing from disk:",
+                missing_from_disk
+            ));
+            for path in &missing_paths {
+                let _ = config::log_message(&format!("  - {}", path));
+            }
+        }
+    }
+
+    // Check library health
+    let library_health = check_all_libraries_health(config, &db);
 
     HeartbeatResult {
         indexed_count: indexed_inodes.len(),
         disk_count: disk_inodes.len(),
         missing_from_disk,
         new_on_disk,
+        library_health,
         duration: start.elapsed(),
     }
 }

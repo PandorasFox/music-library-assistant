@@ -9,6 +9,17 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Canonical list of audio file extensions supported by MLA.
+/// All modules should reference this constant to ensure consistency.
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "flac", "mp3", "ogg", "m4a", "opus", "wav", "aiff", "aif", "aac", "wma", "ape", "wv",
+];
+
+/// Check if a file extension is a supported audio format.
+pub fn is_audio_extension(ext: &str) -> bool {
+    AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub corpus_root: PathBuf,
@@ -388,15 +399,27 @@ pub fn get_db_path() -> Result<PathBuf> {
 }
 
 /// Get the log path for stderr-type logging and warnings
-pub fn get_log_path() -> PathBuf {
-    PathBuf::from("/tmp/mla.log")
+/// Now located in XDG data directory: ~/.local/share/mla/mla.log
+pub fn get_log_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("mla.log"))
+}
+
+/// Get the path for operation summary logs
+/// Located at ~/.local/share/mla/operations-overview.log
+pub fn get_operations_log_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("operations-overview.log"))
 }
 
 /// Log a message (error, warning, etc.) to the main log file
 pub fn log_message(message: &str) -> Result<()> {
     use std::io::Write;
 
-    let log_path = get_log_path();
+    let log_path = get_log_path()?;
+
+    // Ensure parent directory exists
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
     // Append to log file with timestamp
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");

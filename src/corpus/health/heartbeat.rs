@@ -39,6 +39,8 @@ pub struct HeartbeatResult {
     pub missing_from_disk: usize,
     /// Number of files on disk not in index
     pub new_on_disk: usize,
+    /// Number of tracks with pending tag flushes (DB differs from disk)
+    pub pending_tag_flushes: usize,
     /// Health results for each configured library
     pub library_health: Vec<LibraryHealthResult>,
     /// How long the check took
@@ -56,9 +58,14 @@ impl HeartbeatResult {
         self.library_health.iter().all(|l| l.is_healthy())
     }
 
+    /// Returns true if there are no pending tag flushes
+    pub fn are_tags_synced(&self) -> bool {
+        self.pending_tag_flushes == 0
+    }
+
     /// Returns true if everything is healthy
     pub fn is_healthy(&self) -> bool {
-        self.is_corpus_healthy() && self.are_libraries_healthy()
+        self.is_corpus_healthy() && self.are_libraries_healthy() && self.are_tags_synced()
     }
 
     /// Total count of library issues across all libraries
@@ -99,6 +106,7 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
                 disk_count: 0,
                 missing_from_disk: 0,
                 new_on_disk: 0,
+                pending_tag_flushes: 0,
                 library_health: Vec::new(),
                 duration: start.elapsed(),
             };
@@ -113,6 +121,7 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
                 disk_count: 0,
                 missing_from_disk: 0,
                 new_on_disk: 0,
+                pending_tag_flushes: 0,
                 library_health: Vec::new(),
                 duration: start.elapsed(),
             };
@@ -146,11 +155,15 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
     // Check library health
     let library_health = check_all_libraries_health(config, &db);
 
+    // Check for pending tag flushes (DB differs from disk)
+    let pending_tag_flushes = db.get_tag_mismatch_count().unwrap_or(0);
+
     HeartbeatResult {
         indexed_count: indexed_inodes.len(),
         disk_count: disk_inodes.len(),
         missing_from_disk,
         new_on_disk,
+        pending_tag_flushes,
         library_health,
         duration: start.elapsed(),
     }

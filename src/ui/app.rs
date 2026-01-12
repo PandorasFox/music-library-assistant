@@ -165,6 +165,27 @@ impl EyeAnimation {
         // 1-20 inclusive
         (1 + (random_val % 20)) as u8
     }
+}
+
+/// Flip a coin - returns true for heads, false for tails.
+/// Uses hash-based PRNG similar to eye animation d20 roll.
+// TODO: Resolve coin-flip actions to Opinion in the future
+pub fn flip_coin() -> bool {
+    use std::collections::hash_map::RandomState;
+    use std::hash::BuildHasher;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+
+    let hasher = RandomState::new();
+    let random_val = hasher.hash_one(now);
+
+    random_val % 2 == 0
+}
+
+impl EyeAnimation {
 
     /// Check and clear the trigger_heartbeat flag
     pub fn take_heartbeat_trigger(&mut self) -> bool {

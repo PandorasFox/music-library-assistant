@@ -263,6 +263,10 @@ pub enum ResultData {
         library_name: String,
         lost_files_moved: usize,
     },
+    /// Tag flush operation
+    TagFlush {
+        flushed_paths: Vec<String>,
+    },
 }
 
 // ============================================================================

@@ -44,7 +44,12 @@ pub enum ChangeType {
     TagEdit,            // Modify metadata (user-initiated)
     Deploy,             // Create hard link to library
     Undeploy,           // Remove hard link from library
+    Redeploy,           // Relocate existing library link to new path (stale fix)
     OutOfBandTagChange, // Corpus file tags differ from index (detected during scan)
+    // TODO: OutOfBandTagChange health check resolution UI
+    // - Resolution options: flush index to disk OR accept out-of-band changes
+    // - Granularity TBD (potentially per-directory config)
+    // - Similar pattern to canon_flow (bucket selection -> confirmation -> commit)
 }
 
 impl ChangeType {
@@ -56,6 +61,7 @@ impl ChangeType {
             ChangeType::TagEdit => "tag_edit",
             ChangeType::Deploy => "deploy",
             ChangeType::Undeploy => "undeploy",
+            ChangeType::Redeploy => "redeploy",
             ChangeType::OutOfBandTagChange => "out_of_band_tag_change",
         }
     }
@@ -68,6 +74,7 @@ impl ChangeType {
             "tag_edit" => Some(ChangeType::TagEdit),
             "deploy" => Some(ChangeType::Deploy),
             "undeploy" => Some(ChangeType::Undeploy),
+            "redeploy" => Some(ChangeType::Redeploy),
             "out_of_band_tag_change" => Some(ChangeType::OutOfBandTagChange),
             _ => None,
         }
@@ -129,6 +136,7 @@ mod tests {
         assert_eq!(ChangeType::TagEdit.as_str(), "tag_edit");
         assert_eq!(ChangeType::Deploy.as_str(), "deploy");
         assert_eq!(ChangeType::Undeploy.as_str(), "undeploy");
+        assert_eq!(ChangeType::Redeploy.as_str(), "redeploy");
         assert_eq!(ChangeType::OutOfBandTagChange.as_str(), "out_of_band_tag_change");
     }
 
@@ -139,6 +147,7 @@ mod tests {
         assert_eq!(ChangeType::from_str("tag_edit"), Some(ChangeType::TagEdit));
         assert_eq!(ChangeType::from_str("deploy"), Some(ChangeType::Deploy));
         assert_eq!(ChangeType::from_str("undeploy"), Some(ChangeType::Undeploy));
+        assert_eq!(ChangeType::from_str("redeploy"), Some(ChangeType::Redeploy));
         assert_eq!(ChangeType::from_str("out_of_band_tag_change"), Some(ChangeType::OutOfBandTagChange));
         assert_eq!(ChangeType::from_str("unknown"), None);
         assert_eq!(ChangeType::from_str(""), None);
@@ -152,6 +161,7 @@ mod tests {
             ChangeType::TagEdit,
             ChangeType::Deploy,
             ChangeType::Undeploy,
+            ChangeType::Redeploy,
             ChangeType::OutOfBandTagChange,
         ];
         for t in types {

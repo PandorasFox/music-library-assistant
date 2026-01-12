@@ -3,12 +3,17 @@
 //! Modular UI components for the Music Library Assistant.
 
 pub mod app;
+pub mod canon_flow;
 pub mod dedup_flow;
+pub mod deploy_flow;
 pub mod dialogue;
 pub mod dir_browser;
+pub mod drop_flow;
+pub mod flows;
 pub mod helpers;
 pub mod main_menu;
 pub mod picker;
+pub mod render;
 pub mod tag_editor;
 
 use anyhow::Result;
@@ -19,10 +24,6 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
 use std::collections::VecDeque;
@@ -33,8 +34,8 @@ use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crate::config::{self, Config};
+use crate::corpus::{spawn_heartbeat, HeartbeatResult};
 use crate::db::Database;
-use crate::health::{spawn_heartbeat, HeartbeatResult};
 use crate::ops::operation::{
     log_operation_summary, OperationManager, OperationMessage, OperationProgress,
     OperationResult, OperationType, ProgressReporter,
@@ -42,8 +43,7 @@ use crate::ops::operation::{
 use crate::ops::{reports, scanner};
 use crate::progress::ScanMessage;
 
-use app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
-use helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
+use app::EyeAnimation;
 use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 // ============================================================================
@@ -62,7 +62,7 @@ pub const HEALTH_DATA_VERSION: u32 = 1;
 /// Current UI mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-enum UiMode {
+pub(crate) enum UiMode {
     MainMenu,
     TagEditor,
     DirBrowser,
@@ -72,14 +72,54 @@ enum UiMode {
     BulkReviewPrompt,
     SessionReview,
     DropMissingConfirmation,
+    DeploymentPreview,
+    /// Artist canonicalization - Single-screen three-pane cluster view
+    CanonClusterView,
+    /// Artist canonicalization - Session review before commit
+    CanonSessionReview,
+    /// Artist canonicalization - Commit completion modal
+    CanonCommitModal,
+    /// Exit confirmation modal (when operations are in progress)
+    ExitConfirmModal,
 }
 
-/// State for drop missing confirmation dialog
+/// Re-export from drop_flow module
+pub(crate) use drop_flow::DropMissingState;
+
+/// State for the exit confirmation modal.
+/// Default selection is "No" (stay in application).
+/// Pressing Esc/Enter/Space when selected_no=true returns to main menu.
 #[derive(Debug, Clone)]
-struct DropMissingState {
-    missing_tracks: Vec<crate::db::Track>,
-    list_offset: usize,
-    selected_option: usize, // 0 = Cancel, 1 = Drop
+pub(crate) struct ExitConfirmModalState {
+    /// True = "No" selected (default), False = "Yes" selected
+    pub selected_no: bool,
+}
+
+impl Default for ExitConfirmModalState {
+    fn default() -> Self {
+        Self { selected_no: true }
+    }
+}
+
+/// State for the canon commit modal with two options
+#[derive(Debug, Clone)]
+pub(crate) struct CanonCommitModalState {
+    /// Currently selected option (0 = main menu, 1 = deployment review)
+    selected_option: usize,
+    /// Number of tracks updated in the database
+    tracks_updated: usize,
+    /// Number of deployments that are now stale
+    stale_deployments: usize,
+}
+
+impl Default for CanonCommitModalState {
+    fn default() -> Self {
+        Self {
+            selected_option: 1, // Default to deployment review
+            tracks_updated: 0,
+            stale_deployments: 0,
+        }
+    }
 }
 
 /// Context for what operation launched the directory browser.
@@ -108,6 +148,13 @@ struct App {
     bulk_prompt: Option<dedup_flow::BulkPromptState>,
     session_review: Option<dedup_flow::SessionReviewState>,
     drop_missing_state: Option<DropMissingState>,
+    deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
+    // Artist canonicalization flow
+    canon_cluster_view: Option<canon_flow::ClusterViewState>,
+    canon_session_review: Option<canon_flow::ReviewState>,
+    canon_commit_modal_state: Option<CanonCommitModalState>,
+    // Exit confirmation modal
+    exit_confirm_modal_state: Option<ExitConfirmModalState>,
 
     // Background operations (supports multiple concurrent)
     operations: OperationManager,
@@ -147,6 +194,11 @@ impl App {
             bulk_prompt: None,
             session_review: None,
             drop_missing_state: None,
+            deployment_preview: None,
+            canon_cluster_view: None,
+            canon_session_review: None,
+            canon_commit_modal_state: None,
+            exit_confirm_modal_state: None,
             operations: OperationManager::new(),
             legacy_scan_receiver: None,
             legacy_scan_type: None,
@@ -209,6 +261,92 @@ impl App {
             UiMode::DropMissingConfirmation => {
                 self.handle_drop_missing_key(key);
             }
+            UiMode::DeploymentPreview => {
+                if let Some(ref mut preview) = self.deployment_preview {
+                    let action = preview.handle_key(key);
+                    self.handle_deployment_preview_action(action);
+                }
+            }
+            UiMode::CanonClusterView => {
+                if let Some(ref mut cluster_view) = self.canon_cluster_view {
+                    let action = cluster_view.handle_key(key);
+                    self.handle_canon_cluster_action(action);
+                }
+            }
+            UiMode::CanonSessionReview => {
+                if let Some(ref mut review) = self.canon_session_review {
+                    let action = review.handle_key(key);
+                    self.handle_canon_review_action(action);
+                }
+            }
+            UiMode::CanonCommitModal => {
+                if let Some(ref mut state) = self.canon_commit_modal_state {
+                    match key.code {
+                        KeyCode::Up => {
+                            state.selected_option = state.selected_option.saturating_sub(1);
+                        }
+                        KeyCode::Down => {
+                            state.selected_option = (state.selected_option + 1).min(1);
+                        }
+                        KeyCode::Enter => {
+                            match state.selected_option {
+                                0 => {
+                                    // Return to main menu
+                                    self.canon_commit_modal_state = None;
+                                    self.mode = UiMode::MainMenu;
+                                }
+                                1 => {
+                                    // Proceed to deployment review
+                                    self.canon_commit_modal_state = None;
+                                    self.start_deployment_preview();
+                                }
+                                _ => {}
+                            }
+                        }
+                        KeyCode::Esc => {
+                            // Esc also returns to main menu
+                            self.canon_commit_modal_state = None;
+                            self.mode = UiMode::MainMenu;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            UiMode::ExitConfirmModal => {
+                if let Some(ref mut state) = self.exit_confirm_modal_state {
+                    match key.code {
+                        KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                            // Toggle between Yes and No
+                            state.selected_no = !state.selected_no;
+                        }
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            if state.selected_no {
+                                // "No" selected - return to main menu with Exit highlighted
+                                self.exit_confirm_modal_state = None;
+                                self.mode = UiMode::MainMenu;
+                            } else {
+                                // "Yes" selected - actually quit
+                                self.should_quit = true;
+                            }
+                        }
+                        KeyCode::Esc => {
+                            // Esc returns to main menu with Exit highlighted
+                            self.exit_confirm_modal_state = None;
+                            self.mode = UiMode::MainMenu;
+                        }
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            // 'y' confirms exit
+                            self.should_quit = true;
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') => {
+                            // 'n' cancels
+                            self.exit_confirm_modal_state = None;
+                            self.mode = UiMode::MainMenu;
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -236,7 +374,13 @@ impl App {
                 self.status_message = Some(msg);
             }
             CommandAction::Quit => {
-                self.should_quit = true;
+                // If operations are running, show confirmation modal
+                if !self.operations.is_empty() {
+                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
+                    self.mode = UiMode::ExitConfirmModal;
+                } else {
+                    self.should_quit = true;
+                }
             }
         }
     }
@@ -252,11 +396,11 @@ impl App {
             BackgroundTask::GenerateReport { report_type } => {
                 self.generate_report(report_type);
             }
-            BackgroundTask::Deploy { dry_run } => {
-                self.status_message = Some(format!(
-                    "Deploy {} (TODO)",
-                    if dry_run { "preview" } else { "execute" }
-                ));
+            BackgroundTask::Deploy => {
+                self.start_deployment_preview();
+            }
+            BackgroundTask::Stub => {
+                self.status_message = Some("Feature not yet implemented".to_string());
             }
         }
     }
@@ -272,6 +416,50 @@ impl App {
             self.start_scan_source("legacy", &path);
         } else {
             self.status_message = Some("No legacy library configured".to_string());
+        }
+    }
+
+    fn start_deployment_preview(&mut self) {
+        // Compute deployment status synchronously (could be made async for large libraries)
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        let _ = config::log_message("Computing deployment status...");
+        match crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
+            Ok(statuses) => {
+                let session_id = uuid::Uuid::new_v4().to_string();
+                let total_mutations: usize = statuses
+                    .iter()
+                    .map(|s| s.to_deploy.len() + s.stale.len() + s.orphans.len())
+                    .sum();
+
+                let _ = config::log_message(&format!(
+                    "Computed deployment status: {} libraries, {} total mutations",
+                    statuses.len(),
+                    total_mutations
+                ));
+
+                self.deployment_preview =
+                    Some(deploy_flow::DeploymentPreviewState::new(statuses, session_id));
+                self.mode = UiMode::DeploymentPreview;
+            }
+            Err(e) => {
+                let _ = config::log_message(&format!("ERROR: Failed to compute deployment status: {}", e));
+                self.status_message = Some(format!("Deployment status error: {}", e));
+            }
         }
     }
 
@@ -431,7 +619,7 @@ impl App {
 
         // Spawn background thread
         std::thread::spawn(move || {
-            use crate::health::{detect_fingerprint_issues, detect_metadata_issues};
+            use crate::corpus::{detect_fingerprint_issues, detect_metadata_issues};
             use std::time::Instant;
 
             let start = Instant::now();
@@ -494,7 +682,7 @@ impl App {
             }
 
             // Detect and store artist canonicalization issues
-            if let Ok(canon_count) = crate::health::detect_and_store_canonicalizations(&db) {
+            if let Ok(canon_count) = crate::corpus::detect_and_store_canonicalizations(&db) {
                 if canon_count > 0 {
                     let _ = config::log_message(&format!(
                         "Health rebuild: detected {} new canonicalization issues",
@@ -524,93 +712,39 @@ impl App {
     }
 
     fn start_drop_missing_confirmation(&mut self) {
-        // Open database
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
-
-        // Find missing files
-        match scanner::find_missing_tracks(&db, "corpus") {
+        match drop_flow::find_missing_tracks() {
             Ok(missing) => {
                 if missing.is_empty() {
                     self.status_message = Some("No missing files found in index".to_string());
-                    // Stay in main menu
                 } else {
-                    // Enter confirmation mode
-                    self.drop_missing_state = Some(DropMissingState {
-                        missing_tracks: missing,
-                        list_offset: 0,
-                        selected_option: 0, // Default to Cancel
-                    });
+                    self.drop_missing_state = Some(DropMissingState::new(missing));
                     self.mode = UiMode::DropMissingConfirmation;
                 }
             }
             Err(e) => {
-                self.status_message = Some(format!("Detection error: {}", e));
+                self.status_message = Some(e);
             }
         }
     }
 
     fn handle_drop_missing_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-
         if let Some(ref mut state) = self.drop_missing_state {
-            let list_len = state.missing_tracks.len();
-            let max_visible = 20; // Number of items visible in the list
-
-            match key.code {
-                KeyCode::Up => {
-                    if state.list_offset > 0 {
-                        state.list_offset -= 1;
-                    }
+            let action = state.handle_key(key);
+            match action {
+                drop_flow::DropMissingAction::None => {}
+                drop_flow::DropMissingAction::Execute => {
+                    self.execute_drop_missing();
                 }
-                KeyCode::Down => {
-                    if state.list_offset + max_visible < list_len {
-                        state.list_offset += 1;
-                    }
-                }
-                KeyCode::Left | KeyCode::Right => {
-                    // Toggle between Cancel (0) and Drop (1)
-                    state.selected_option = 1 - state.selected_option;
-                }
-                KeyCode::Enter => {
-                    if state.selected_option == 1 {
-                        // Execute drop
-                        self.execute_drop_missing();
-                    } else {
-                        // Cancel - return to main menu
-                        self.drop_missing_state = None;
-                        self.mode = UiMode::MainMenu;
-                        self.status_message = Some("Drop cancelled".to_string());
-                    }
-                }
-                KeyCode::Esc => {
-                    // Cancel
+                drop_flow::DropMissingAction::Cancel => {
                     self.drop_missing_state = None;
                     self.mode = UiMode::MainMenu;
+                    self.status_message = Some("Drop cancelled".to_string());
                 }
-                _ => {}
             }
         }
     }
 
     fn execute_drop_missing(&mut self) {
-        use crate::db::{ChangeStatus, ChangeType, PendingChange};
-        use crate::ops::changes;
-        use std::fs::File;
-        use std::io::Write;
-
         // Get the missing tracks from state
         let missing_tracks = match &self.drop_missing_state {
             Some(state) => state.missing_tracks.clone(),
@@ -621,129 +755,26 @@ impl App {
             }
         };
 
-        if missing_tracks.is_empty() {
-            self.drop_missing_state = None;
-            self.mode = UiMode::MainMenu;
-            self.status_message = Some("No missing files to drop".to_string());
-            return;
-        }
-
-        // Get reports directory for log file
-        let reports_dir = match config::get_data_dir() {
-            Ok(dir) => dir.join("reports"),
-            Err(e) => {
-                self.status_message = Some(format!("Failed to get data dir: {}", e));
-                self.drop_missing_state = None;
-                self.mode = UiMode::MainMenu;
-                return;
-            }
-        };
-
-        // Create reports directory if needed
-        if let Err(e) = std::fs::create_dir_all(&reports_dir) {
-            self.status_message = Some(format!("Failed to create reports dir: {}", e));
-            self.drop_missing_state = None;
-            self.mode = UiMode::MainMenu;
-            return;
-        }
-
-        // Write log file with dropped track metadata
-        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let log_path = reports_dir.join(format!("dropped_tracks_{}.log", timestamp));
-        let log_result = (|| -> Result<(), std::io::Error> {
-            let mut log_file = File::create(&log_path)?;
-            writeln!(log_file, "# Tracks dropped from corpus index")?;
-            writeln!(log_file, "# Timestamp: {}", chrono::Local::now())?;
-            writeln!(log_file, "# Count: {}", missing_tracks.len())?;
-            writeln!(log_file, "#")?;
-            for track in &missing_tracks {
-                writeln!(log_file, "Path: {}", track.path)?;
-                if let Some(ref artist) = track.artist {
-                    writeln!(log_file, "  Artist: {}", artist)?;
-                }
-                if let Some(ref title) = track.title {
-                    writeln!(log_file, "  Title: {}", title)?;
-                }
-                if let Some(ref album) = track.album {
-                    writeln!(log_file, "  Album: {}", album)?;
-                }
-                writeln!(log_file)?;
-            }
-            Ok(())
-        })();
-
-        let log_created = log_result.is_ok();
-
-        // Open database
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                self.drop_missing_state = None;
-                self.mode = UiMode::MainMenu;
-                return;
-            }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                self.drop_missing_state = None;
-                self.mode = UiMode::MainMenu;
-                return;
-            }
-        };
-
-        // Generate DropIndex changes for each missing track
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let pending_changes: Vec<PendingChange> = missing_tracks
-            .iter()
-            .map(|track| PendingChange {
-                id: None,
-                session_id: session_id.clone(),
-                change_type: ChangeType::DropIndex,
-                source_path: track.path.clone(),
-                target_path: None,
-                metadata_changes: None,
-                created_at: None,
-                status: ChangeStatus::Pending,
-            })
-            .collect();
-
-        // Execute the changes
-        match changes::execute_changes(&db, &pending_changes, false) {
-            Ok(report) => {
-                // Also clean up any orphaned scan_state entries (in scan_state but not in tracks)
-                let orphan_cleanup = db.cleanup_missing_scan_state_entries("corpus").unwrap_or(0);
-
-                let msg = if log_created {
-                    format!(
-                        "Dropped {} entries from index. Log: {}",
-                        report.succeeded,
-                        log_path.display()
-                    )
+        match drop_flow::execute_drop_missing(&missing_tracks) {
+            Ok(result) => {
+                let mut msg = if let Some(log_path) = result.log_path {
+                    format!("Dropped {} entries from index. Log: {}", result.dropped_count, log_path)
                 } else {
-                    format!("Dropped {} entries from index", report.succeeded)
+                    format!("Dropped {} entries from index", result.dropped_count)
                 };
 
-                // Add orphan cleanup info if any were found
-                let msg = if orphan_cleanup > 0 {
-                    format!("{} (also cleaned {} orphaned scan entries)", msg, orphan_cleanup)
-                } else {
-                    msg
-                };
-
-                if report.failed > 0 {
-                    self.status_message = Some(format!(
-                        "{}. {} failed: {:?}",
-                        msg, report.failed, report.errors
-                    ));
-                } else {
-                    self.status_message = Some(msg);
+                if result.orphans_cleaned > 0 {
+                    msg = format!("{} (also cleaned {} orphaned scan entries)", msg, result.orphans_cleaned);
                 }
+
+                if result.failed_count > 0 {
+                    msg = format!("{}. {} failed: {:?}", msg, result.failed_count, result.errors);
+                }
+
+                self.status_message = Some(msg);
             }
             Err(e) => {
-                self.status_message = Some(format!("Drop error: {}", e));
+                self.status_message = Some(e);
             }
         }
 
@@ -767,6 +798,9 @@ impl App {
             }
             TransitionTarget::DropMissingConfirm => {
                 self.start_drop_missing_confirmation();
+            }
+            TransitionTarget::CanonFlow => {
+                self.start_canon_flow();
             }
         }
     }
@@ -1273,12 +1307,453 @@ impl App {
         }
     }
 
+    fn handle_deployment_preview_action(&mut self, action: deploy_flow::DeploymentPreviewAction) {
+        match action {
+            deploy_flow::DeploymentPreviewAction::None => {}
+            deploy_flow::DeploymentPreviewAction::Confirm => {
+                // Generate mutations from deployment status and spawn background execution
+                if let Some(ref preview) = self.deployment_preview {
+                    let _ = config::log_message("=== DEPLOYMENT PREVIEW: CONFIRM REQUESTED ===");
+
+                    // Generate mutations for all libraries
+                    let all_changes = crate::ops::deploy::all_deployment_statuses_to_mutations(
+                        &preview.statuses,
+                        &self.config,
+                        &preview.session_id,
+                    );
+
+                    let _ = config::log_message(&format!(
+                        "Generated {} deployment mutations",
+                        all_changes.len()
+                    ));
+
+                    if all_changes.is_empty() {
+                        self.status_message = Some("No deployment changes needed".to_string());
+                        self.deployment_preview = None;
+                        self.mode = UiMode::MainMenu;
+                        return;
+                    }
+
+                    // Get library names for status message
+                    let library_names: Vec<String> = preview.statuses
+                        .iter()
+                        .map(|s| s.library_name.clone())
+                        .collect();
+                    let library_display = if library_names.len() == 1 {
+                        library_names[0].clone()
+                    } else {
+                        format!("{} libraries", library_names.len())
+                    };
+
+                    let change_count = all_changes.len();
+
+                    // Add operation to manager for background execution
+                    let (id, tx, cancel_flag) = self.operations.add(
+                        OperationType::ExecutingChanges {
+                            session_id: preview.session_id.clone(),
+                            change_count,
+                        }
+                    );
+
+                    self.status_message = Some(format!(
+                        "Deploying {} changes to {}... [{}]",
+                        change_count, library_display, id
+                    ));
+
+                    // Clone config for the spawned thread
+                    let config_clone = self.config.clone();
+
+                    // Spawn background deployment thread
+                    std::thread::spawn(move || {
+                        use std::time::Instant;
+
+                        let start = Instant::now();
+                        let reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
+
+                        // Open database
+                        let db_path = match config::get_db_path() {
+                            Ok(p) => p,
+                            Err(e) => {
+                                reporter.error(format!("Config error: {}", e));
+                                return;
+                            }
+                        };
+                        let db = match Database::open(&db_path) {
+                            Ok(db) => db,
+                            Err(e) => {
+                                reporter.error(format!("Database error: {}", e));
+                                return;
+                            }
+                        };
+
+                        // Execute deployment changes
+                        let _ = config::log_message("Executing deployment changes...");
+                        match crate::ops::changes::execute_changes(&db, &all_changes, false) {
+                            Ok(report) => {
+                                let _ = config::log_message(&format!(
+                                    "Deployment complete: {} succeeded, {} failed, {} skipped",
+                                    report.succeeded, report.failed, report.skipped
+                                ));
+                                for err in &report.errors {
+                                    let _ = config::log_message(&format!("  ERROR: {}", err));
+                                }
+
+                                let result = OperationResult {
+                                    succeeded: report.succeeded,
+                                    skipped: report.skipped,
+                                    failed: report.failed,
+                                    duration: start.elapsed(),
+                                    bytes_processed: None,
+                                    errors: report.errors,
+                                    data: None,
+                                };
+                                reporter.complete(result);
+
+                                // Trigger heartbeat refresh in background
+                                // Note: This spawns another thread - the heartbeat receiver
+                                // will be checked by the main UI loop
+                                let _ = spawn_heartbeat(&config_clone);
+                            }
+                            Err(e) => {
+                                let _ = config::log_message(&format!("ERROR: Deployment failed: {}", e));
+                                reporter.error(format!("Deployment error: {}", e));
+                            }
+                        }
+                    });
+                }
+                // Return to main menu immediately - deployment runs in background
+                self.deployment_preview = None;
+                self.mode = UiMode::MainMenu;
+            }
+            deploy_flow::DeploymentPreviewAction::Cancel => {
+                let _ = config::log_message("Deployment preview cancelled");
+                self.deployment_preview = None;
+                self.mode = UiMode::MainMenu;
+                self.status_message = Some("Deployment cancelled".to_string());
+            }
+        }
+    }
+
+    // ========================================================================
+    // Artist Canonicalization Flow Handlers
+    // ========================================================================
+
+    fn start_canon_flow(&mut self) {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        // Get artist buckets with variants
+        match db.get_artist_canonicalization_buckets() {
+            Ok(bucket_data) if !bucket_data.is_empty() => {
+                // Convert to ArtistBucket structs
+                let buckets: Vec<canon_flow::ArtistBucket> = bucket_data
+                    .into_iter()
+                    .map(|(normalized_key, variants)| canon_flow::ArtistBucket {
+                        normalized_key,
+                        variants: variants
+                            .into_iter()
+                            .map(|(name, track_count)| canon_flow::ArtistVariant {
+                                name,
+                                track_count,
+                                selected_for_squash: false,
+                            })
+                            .collect(),
+                    })
+                    .collect();
+
+                let session = canon_flow::CanonSession::new(
+                    uuid::Uuid::new_v4().to_string(),
+                    buckets,
+                );
+
+                self.canon_cluster_view = Some(canon_flow::ClusterViewState::new(session));
+                self.mode = UiMode::CanonClusterView;
+            }
+            Ok(_) => {
+                self.status_message = Some("No artist name variants found - corpus is clean!".to_string());
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Error loading artist buckets: {}", e));
+            }
+        }
+    }
+
+    fn handle_canon_cluster_action(&mut self, action: canon_flow::ClusterViewAction) {
+        match action {
+            canon_flow::ClusterViewAction::None => {}
+            canon_flow::ClusterViewAction::Continue => {}
+            canon_flow::ClusterViewAction::SessionComplete => {
+                // All buckets processed, go to review
+                self.transition_to_canon_review();
+            }
+            canon_flow::ClusterViewAction::ShowSessionReview => {
+                self.transition_to_canon_review();
+            }
+            canon_flow::ClusterViewAction::StatusMessage(msg) => {
+                self.status_message = Some(msg);
+            }
+        }
+    }
+
+    fn transition_to_canon_review(&mut self) {
+        if let Some(cluster_view) = self.canon_cluster_view.take() {
+            let session = cluster_view.into_session();
+
+            if session.decisions.is_empty() {
+                self.status_message = Some("No decisions made".to_string());
+                self.mode = UiMode::MainMenu;
+            } else {
+                self.canon_session_review = Some(canon_flow::ReviewState::new(session));
+                self.mode = UiMode::CanonSessionReview;
+            }
+        }
+    }
+
+    fn handle_canon_review_action(&mut self, action: canon_flow::ReviewAction) {
+        match action {
+            canon_flow::ReviewAction::None => {}
+            canon_flow::ReviewAction::Continue => {}
+            canon_flow::ReviewAction::Commit => {
+                self.commit_canon_changes();
+            }
+            canon_flow::ReviewAction::Cancel => {
+                self.canon_session_review = None;
+                self.mode = UiMode::MainMenu;
+                self.status_message = Some("Artist canonicalization cancelled".to_string());
+            }
+            canon_flow::ReviewAction::BackToClusterView => {
+                // Return to cluster view to add more decisions
+                if let Some(review) = self.canon_session_review.take() {
+                    let session = review.into_session();
+                    self.canon_cluster_view = Some(canon_flow::ClusterViewState::new(session));
+                    self.mode = UiMode::CanonClusterView;
+                }
+            }
+        }
+    }
+
+    fn commit_canon_changes(&mut self) {
+        let _ = config::log_message("=== CANON REVIEW: COMMIT REQUESTED ===");
+
+        // Get all pending changes from decisions
+        let all_changes: Vec<_> = if let Some(ref review) = self.canon_session_review {
+            review.session().decisions
+                .iter()
+                .flat_map(|d| d.pending_changes.clone())
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let _ = config::log_message(&format!(
+            "Total pending tag changes to execute: {}",
+            all_changes.len()
+        ));
+
+        if all_changes.is_empty() {
+            self.canon_session_review = None;
+            self.mode = UiMode::MainMenu;
+            self.status_message = Some("No changes to commit".to_string());
+            return;
+        }
+
+        // Open database
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                self.canon_session_review = None;
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                self.canon_session_review = None;
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        // Update database artist fields directly
+        let mut succeeded = 0;
+        let mut failed = 0;
+
+        for change in &all_changes {
+            if let Some(ref metadata_json) = change.metadata_changes {
+                if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) {
+                    let new_artist = metadata.get("new_artist")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let old_artist = metadata.get("old_artist")
+                        .and_then(|v| v.as_str());
+
+                    // Get track ID by path
+                    if let Ok(Some(track)) = db.get_track_by_path(&change.source_path) {
+                        if let Some(track_id) = track.id {
+                            match db.update_artist_for_tracks(&[track_id], new_artist) {
+                                Ok(_) => {
+                                    succeeded += 1;
+                                    // Record tag mismatch: disk still has old value, DB now has new value
+                                    if let Err(e) = db.record_tag_mismatch(
+                                        track_id,
+                                        "artist",
+                                        Some(new_artist),  // db_value
+                                        old_artist,        // disk_value
+                                    ) {
+                                        let _ = config::log_message(&format!(
+                                            "Failed to record tag mismatch for {}: {}",
+                                            change.source_path, e
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = config::log_message(&format!(
+                                        "Failed to update artist for {}: {}",
+                                        change.source_path, e
+                                    ));
+                                    failed += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = config::log_message(&format!(
+            "Canon commit complete: {} succeeded, {} failed",
+            succeeded, failed
+        ));
+
+        // Compute stale deployment count
+        let stale_count = match crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
+            Ok(statuses) => statuses.iter().map(|s| s.stale.len()).sum(),
+            Err(_) => 0,
+        };
+
+        let _ = config::log_message(&format!(
+            "Stale deployments after commit: {}",
+            stale_count
+        ));
+
+        // Show commit modal with options
+        self.canon_session_review = None;
+        self.canon_commit_modal_state = Some(CanonCommitModalState {
+            selected_option: 1, // Default to deployment review
+            tracks_updated: succeeded,
+            stale_deployments: stale_count,
+        });
+        self.mode = UiMode::CanonCommitModal;
+
+        // Start background tag-flush operation
+        self.start_canon_tag_flush(all_changes);
+    }
+
+    fn start_canon_tag_flush(&mut self, changes: Vec<crate::db::PendingChange>) {
+        let change_count = changes.len();
+
+        // Add operation to manager
+        let (id, tx, cancel_flag) = self.operations.add(OperationType::ExecutingChanges {
+            session_id: "canon_tag_flush".to_string(),
+            change_count,
+        });
+
+        let _ = config::log_message(&format!(
+            "Starting background tag flush for {} tracks [{}]",
+            change_count, id
+        ));
+
+        // Spawn background thread to write tags to disk
+        std::thread::spawn(move || {
+            use std::time::Instant;
+
+            let start = Instant::now();
+            let mut reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
+
+            let mut progress = OperationProgress::new(changes.len());
+            reporter.force_update(progress.clone());
+
+            let mut succeeded = 0;
+            let mut failed = 0;
+            let mut errors = Vec::new();
+            let mut flushed_paths = Vec::new();
+
+            for change in &changes {
+                if reporter.is_cancelled() {
+                    reporter.cancelled();
+                    return;
+                }
+
+                progress.current_item = Some(change.source_path.clone());
+                reporter.update(progress.clone());
+
+                // Parse metadata to get new artist
+                if let Some(ref metadata_json) = change.metadata_changes {
+                    if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) {
+                        let new_artist = metadata.get("new_artist")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        // Write tag to file using lofty
+                        match crate::metadata::write_artist_tag(&change.source_path, new_artist) {
+                            Ok(_) => {
+                                succeeded += 1;
+                                flushed_paths.push(change.source_path.clone());
+                            }
+                            Err(e) => {
+                                errors.push(format!("{}: {}", change.source_path, e));
+                                failed += 1;
+                            }
+                        }
+                    }
+                }
+
+                progress.completed_items += 1;
+                reporter.update(progress.clone());
+            }
+
+            // Store flushed paths in result data for mismatch cleanup
+            let result = OperationResult {
+                succeeded,
+                skipped: 0,
+                failed,
+                duration: start.elapsed(),
+                bytes_processed: None,
+                errors,
+                data: Some(crate::ops::operation::ResultData::TagFlush { flushed_paths }),
+            };
+            reporter.complete(result);
+        });
+    }
+
     fn update_operation_progress(&mut self) {
         // Poll all tracked operations from OperationManager
         let completed = self.operations.poll_all();
         for (id, result, op_type) in completed {
             // Log operation summary
             log_operation_summary(&result, &op_type);
+
+            // Handle tag flush completion - clear tag mismatches
+            if let OperationType::ExecutingChanges { ref session_id, .. } = op_type {
+                if session_id == "canon_tag_flush" {
+                    self.clear_tag_mismatches_for_flushed(&result);
+                }
+            }
 
             // Format completion message
             self.status_message = Some(if result.succeeded == 0 && result.skipped > 0 {
@@ -1383,7 +1858,7 @@ impl App {
                     std::thread::spawn(|| {
                         if let Ok(db_path) = config::get_db_path() {
                             if let Ok(db) = Database::open(&db_path) {
-                                match crate::health::detect_and_store_canonicalizations(&db) {
+                                match crate::corpus::detect_and_store_canonicalizations(&db) {
                                     Ok(count) if count > 0 => {
                                         let _ = config::log_message(&format!(
                                             "Post-scan: detected {} new canonicalization issues",
@@ -1413,6 +1888,44 @@ impl App {
             // Refresh corpus summary after operation completes
             self.refresh_corpus_summary();
         }
+    }
+
+    /// Clear tag mismatches for successfully flushed paths
+    fn clear_tag_mismatches_for_flushed(&self, result: &OperationResult) {
+        use crate::ops::operation::ResultData;
+
+        // Extract flushed paths from result data
+        let flushed_paths = match &result.data {
+            Some(ResultData::TagFlush { flushed_paths }) => flushed_paths.clone(),
+            _ => Vec::new(),
+        };
+
+        if flushed_paths.is_empty() {
+            return;
+        }
+
+        // Open database and clear mismatches
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let mut cleared = 0;
+        for path in &flushed_paths {
+            if db.clear_tag_mismatches_by_path(path).is_ok() {
+                cleared += 1;
+            }
+        }
+
+        let _ = config::log_message(&format!(
+            "Cleared tag mismatches for {}/{} flushed paths",
+            cleared,
+            flushed_paths.len()
+        ));
     }
 
     /// Refresh the cached corpus summary for the info panel
@@ -1449,435 +1962,34 @@ impl App {
 // ============================================================================
 
 fn render(f: &mut Frame, app: &mut App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(10),    // Content
-            Constraint::Length(18), // Footer with eye
-        ])
-        .split(f.area());
-
-    render_header(f, chunks[0], app);
-    render_content(f, chunks[1], app);
-    render_footer(f, chunks[2], app);
-}
-
-fn render_header(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let title = match app.mode {
-        UiMode::MainMenu => "Music Library Assistant",
-        UiMode::TagEditor => "Music Library Assistant - Tag Editor",
-        UiMode::DirBrowser => "Music Library Assistant - Directory Browser",
-        UiMode::Dialogue => "Music Library Assistant - Decision Flow",
-        UiMode::DialogueSummary => "Music Library Assistant - Session Summary",
-        UiMode::ClusterDialogue => "Music Library Assistant - Fingerprint Deduplication",
-        UiMode::BulkReviewPrompt => "Music Library Assistant - Bulk Decision Point",
-        UiMode::SessionReview => "Music Library Assistant - Session Review",
-        UiMode::DropMissingConfirmation => "Music Library Assistant - Drop Missing From Index",
+    let mut ctx = render::RenderContext {
+        mode: app.mode,
+        config: &app.config,
+        status_message: app.status_message.as_deref(),
+        main_menu: &mut app.main_menu,
+        tag_editor: app.tag_editor.as_mut(),
+        dir_browser: app.dir_browser.as_mut(),
+        dialogue: app.dialogue.as_mut(),
+        dialogue_summary: app.dialogue_summary.as_mut(),
+        cluster_dialogue: app.cluster_dialogue.as_mut(),
+        bulk_prompt: app.bulk_prompt.as_mut(),
+        session_review: app.session_review.as_mut(),
+        drop_missing_state: app.drop_missing_state.as_ref(),
+        deployment_preview: app.deployment_preview.as_mut(),
+        canon_cluster_view: app.canon_cluster_view.as_mut(),
+        canon_session_review: app.canon_session_review.as_mut(),
+        canon_commit_modal_state: app.canon_commit_modal_state.as_ref(),
+        exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
+        heartbeat_result: app.heartbeat_result.as_ref(),
+        heartbeat_pending: app.heartbeat_receiver.is_some(),
+        eye: &app.eye,
+        throughput_samples: &app.throughput_samples,
+        active_operations: app.operations.all_for_display().into_iter().map(|(t, p)| (t.clone(), p.clone())).collect(),
     };
-
-    let header = Paragraph::new(title)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL));
-
-    f.render_widget(header, area);
+    render::render(f, &mut ctx);
 }
 
-fn render_content(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
-    match app.mode {
-        UiMode::MainMenu => {
-            app.main_menu.render(f, area, &Some(app.config.clone()));
-        }
-        UiMode::TagEditor => {
-            if let Some(ref mut editor) = app.tag_editor {
-                editor.render(f, area, app.status_message.as_deref());
-            }
-        }
-        UiMode::DirBrowser => {
-            if let Some(ref mut browser) = app.dir_browser {
-                browser.render(f, area);
-            }
-        }
-        UiMode::Dialogue => {
-            if let Some(ref mut dialogue) = app.dialogue {
-                dialogue.render(f, area);
-            }
-        }
-        UiMode::DialogueSummary => {
-            if let Some(ref mut summary) = app.dialogue_summary {
-                summary.render(f, area);
-            }
-        }
-        UiMode::ClusterDialogue => {
-            if let Some(ref mut cluster_dlg) = app.cluster_dialogue {
-                cluster_dlg.render(f, area);
-            }
-        }
-        UiMode::BulkReviewPrompt => {
-            if let Some(ref mut bulk_prompt) = app.bulk_prompt {
-                bulk_prompt.render(f, area);
-            }
-        }
-        UiMode::SessionReview => {
-            if let Some(ref mut session_review) = app.session_review {
-                session_review.render(f, area);
-            }
-        }
-        UiMode::DropMissingConfirmation => {
-            render_drop_missing_confirmation(f, area, app);
-        }
-    }
-}
 
-fn render_drop_missing_confirmation(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    use ratatui::widgets::{List, ListItem};
-
-    if let Some(ref state) = app.drop_missing_state {
-        let count = state.missing_tracks.len();
-
-        // Layout: header info, file list, action buttons
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),  // Header with count
-                Constraint::Min(5),     // File list
-                Constraint::Length(3),  // Action buttons
-            ])
-            .split(area);
-
-        // Header
-        let header_text = format!(
-            "Found {} missing file{} in corpus index\nThese files no longer exist on disk but are still in the database.",
-            count,
-            if count == 1 { "" } else { "s" }
-        );
-        let header = Paragraph::new(header_text)
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL));
-        f.render_widget(header, chunks[0]);
-
-        // File list
-        let max_visible = chunks[1].height.saturating_sub(2) as usize;
-        let items: Vec<ListItem> = state
-            .missing_tracks
-            .iter()
-            .skip(state.list_offset)
-            .take(max_visible)
-            .map(|track| {
-                ListItem::new(track.path.clone())
-                    .style(Style::default().fg(Color::White))
-            })
-            .collect();
-
-        let list_title = format!(
-            "Missing Files ({}-{} of {})",
-            state.list_offset + 1,
-            (state.list_offset + items.len()).min(count),
-            count
-        );
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(list_title));
-        f.render_widget(list, chunks[1]);
-
-        // Action buttons
-        let cancel_style = if state.selected_option == 0 {
-            Style::default().fg(Color::Black).bg(Color::White)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let drop_style = if state.selected_option == 1 {
-            Style::default().fg(Color::Black).bg(Color::Red)
-        } else {
-            Style::default().fg(Color::Red)
-        };
-
-        let buttons = Line::from(vec![
-            Span::raw("  "),
-            Span::styled(" Cancel ", cancel_style),
-            Span::raw("    "),
-            Span::styled(format!(" Drop {} entries ", count), drop_style),
-            Span::raw("  "),
-        ]);
-        let buttons_para = Paragraph::new(buttons)
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title("Action"));
-        f.render_widget(buttons_para, chunks[2]);
-    }
-}
-
-fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    // Three status boxes + eye animation
-    // Eye is 64 chars wide + 2 for borders = 66, but we want 70 total width
-    let footer_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(30),      // Left status area (flexible)
-            Constraint::Length(70),   // Eye animation (fixed 70 cols)
-        ])
-        .split(area);
-
-    // Left side: three stacked status boxes
-    let status_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),  // Corpus status
-            Constraint::Length(6),  // Operation status
-            Constraint::Min(4),     // Controls
-        ])
-        .split(footer_layout[0]);
-
-    render_corpus_status(f, status_layout[0], app);
-    render_operation_status(f, status_layout[1], app);
-    render_controls(f, status_layout[2], app);
-
-    // Eye animation (70 cols wide, 64-col eye centered)
-    render_eye(f, footer_layout[1], app);
-}
-
-fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let mut lines = Vec::new();
-
-    // Show heartbeat status first
-    if let Some(ref hb) = app.heartbeat_result {
-        if hb.is_healthy() {
-            lines.push(
-                Line::from(format!("Validated ({:.0}ms)", hb.duration.as_millis()))
-                    .style(Style::default().fg(Color::Green)),
-            );
-        } else {
-            if hb.missing_from_disk > 0 {
-                lines.push(
-                    Line::from(format!("{} missing", hb.missing_from_disk))
-                        .style(Style::default().fg(Color::Yellow)),
-                );
-            }
-            if hb.new_on_disk > 0 {
-                lines.push(
-                    Line::from(format!("{} new files", hb.new_on_disk))
-                        .style(Style::default().fg(Color::Cyan)),
-                );
-            }
-        }
-    } else if app.heartbeat_receiver.is_some() {
-        lines.push(Line::from("Validating...").style(Style::default().fg(Color::DarkGray)));
-    }
-
-    // Show corpus summary from cached data
-    if let Some(ref summary) = app.main_menu.corpus_summary {
-        if summary.track_count == 0 {
-            lines.push(
-                Line::from("No scan data")
-                    .style(Style::default().fg(Color::Yellow)),
-            );
-        } else {
-            lines.push(Line::from(format!("Indexed: {} tracks", summary.track_count)));
-
-            // Deployment status
-            if let Some(ref ds) = summary.deployment_stats {
-                lines.push(Line::from(format!(
-                    "Deployed: {:.0}%",
-                    ds.deployment_percentage
-                )));
-            }
-
-            // Duplicate status
-            if summary.duplicate_groups > 0 {
-                lines.push(
-                    Line::from(format!("Duplicates: {} groups", summary.duplicate_groups))
-                        .style(Style::default().fg(Color::Yellow)),
-                );
-            }
-
-            // Pending changes
-            let pending_total: usize = summary.pending_changes.values().sum();
-            if pending_total > 0 {
-                lines.push(
-                    Line::from(format!("Pending: {} changes", pending_total))
-                        .style(Style::default().fg(Color::Cyan)),
-                );
-            }
-        }
-    }
-
-    let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Corpus"));
-    f.render_widget(para, area);
-}
-
-fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    use crate::ops::operation::ProgressContext;
-
-    let mut lines = Vec::new();
-
-    // Get all active operations from the manager
-    let active_ops = app.operations.all_for_display();
-
-    if active_ops.is_empty() {
-        lines.push(
-            Line::from("No operation in progress").style(Style::default().fg(Color::DarkGray)),
-        );
-    } else {
-        // Show each active operation
-        for (i, (op_type, progress)) in active_ops.iter().enumerate() {
-            // Operation description with ETA
-            let desc = op_type.description();
-            let eta_span = {
-                let bytes_processed = progress.bytes_processed.unwrap_or(0);
-                let total_bytes = progress.total_bytes.unwrap_or(0);
-                if bytes_processed > 0 && total_bytes > 0 {
-                    // Calculate ETA from rolling throughput (only for first op)
-                    if i == 0 {
-                        let throughput = calculate_rolling_throughput(&app.throughput_samples, 8);
-                        if let Some(mib_per_sec) = throughput {
-                            if mib_per_sec > 0.01 {
-                                let remaining_bytes = total_bytes.saturating_sub(bytes_processed);
-                                let remaining_mib = remaining_bytes as f64 / (1024.0 * 1024.0);
-                                let eta_secs = (remaining_mib / mib_per_sec) as u64;
-                                Span::styled(
-                                    format!(" (ETA: {})", format_eta(eta_secs)),
-                                    Style::default().fg(Color::DarkGray),
-                                )
-                            } else {
-                                Span::raw("")
-                            }
-                        } else {
-                            Span::raw("")
-                        }
-                    } else {
-                        Span::raw("")
-                    }
-                } else {
-                    Span::raw("")
-                }
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(desc, Style::default().fg(Color::Cyan)),
-                eta_span,
-            ]));
-
-            // Items progress (compact for multiple operations)
-            if active_ops.len() > 1 {
-                lines.push(Line::from(format!(
-                    "  {}/{} ({} skipped)",
-                    progress.completed_items,
-                    progress.total_items,
-                    progress.skipped_items
-                )));
-            } else {
-                // Full detail for single operation
-                lines.push(Line::from(format!(
-                    "Items: {}/{} | Skipped: {} unchanged",
-                    progress.completed_items,
-                    progress.total_items,
-                    progress.skipped_items
-                )));
-
-                // Mtime mismatch statistics (for debugging incremental scan)
-                if let Some(ProgressContext::Scan { ref mtime_stats }) = progress.context {
-                    if mtime_stats.mismatch_count > 0 || mtime_stats.not_in_db_count > 0 {
-                        let mut parts = Vec::new();
-                        if mtime_stats.not_in_db_count > 0 {
-                            parts.push(format!("new:{}", mtime_stats.not_in_db_count));
-                        }
-                        if mtime_stats.mismatch_count > 0 {
-                            parts.push(format!("mtime_delta:{}", mtime_stats.mismatch_count));
-                            if let Some(mean) = mtime_stats.mean_diff_secs() {
-                                let median = mtime_stats.median_diff_secs().unwrap_or(0);
-                                let mode = mtime_stats.mode_diff_secs().unwrap_or(0);
-                                let stddev = mtime_stats.stddev_diff_secs().unwrap_or(0.0);
-                                parts.push(format!(
-                                    "μ={:.1}s med={}s mode={}s σ={:.1}",
-                                    mean, median, mode, stddev
-                                ));
-                            }
-                        }
-                        lines.push(
-                            Line::from(parts.join(" | ")).style(Style::default().fg(Color::DarkGray)),
-                        );
-                    }
-                }
-
-                // Bytes: XX GiB / YY TiB (ZZZ MiB/s) - only if tracking bytes
-                if let (Some(processed), Some(total)) = (progress.bytes_processed, progress.total_bytes) {
-                    let processed_str = format_bytes_binary(processed);
-                    let total_str = format_bytes_binary(total);
-                    let throughput_str = match calculate_rolling_throughput(&app.throughput_samples, 8) {
-                        Some(mib_per_sec) => format!(" ({:.1} MiB/s)", mib_per_sec),
-                        None => String::new(),
-                    };
-                    lines.push(Line::from(format!(
-                        "Bytes: {} / {}{}",
-                        processed_str, total_str, throughput_str
-                    )));
-                }
-
-                // Current item (UTF-8 safe truncation)
-                if let Some(ref item) = progress.current_item {
-                    let display = truncate_path_display(item, 50);
-                    lines.push(Line::from(display).style(Style::default().fg(Color::DarkGray)));
-                }
-            }
-        }
-    }
-
-    let title = if active_ops.len() > 1 {
-        format!("Operations ({})", active_ops.len())
-    } else {
-        "Operation".to_string()
-    };
-
-    let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(title));
-    f.render_widget(para, area);
-}
-
-fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let mut lines = Vec::new();
-
-    // Show any status message first
-    if let Some(ref msg) = app.status_message {
-        lines.push(Line::from(msg.clone()).style(Style::default().fg(Color::Yellow)));
-    }
-
-    // Navigation hints based on mode
-    let hints = match app.mode {
-        UiMode::MainMenu => "↑↓ Navigate | ←→ Pane | Enter Select | Q Quit",
-        UiMode::TagEditor => "Tab Tracks | ↑↓ Fields | Enter Edit | Esc Exit",
-        UiMode::DirBrowser => "↑↓ Navigate | ←→ Expand | Space Toggle | Enter Proceed | Esc Cancel",
-        UiMode::Dialogue | UiMode::DialogueSummary => "↑↓ Navigate | Enter Select | Esc Exit",
-        UiMode::ClusterDialogue => "↑↓ Select | Enter Keep | Tab Skip | Esc Review",
-        UiMode::BulkReviewPrompt => "↑↓ Select | Enter Choose | Esc Cancel",
-        UiMode::SessionReview => "↑↓ Select | Enter Execute | Esc Cancel",
-        UiMode::DropMissingConfirmation => "↑↓ Scroll | ←→ Select Option | Enter Confirm | Esc Cancel",
-    };
-    lines.push(Line::from(hints));
-
-    let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Controls"));
-    f.render_widget(para, area);
-}
-
-fn render_eye(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let eye_text = match app.eye.current_frame() {
-        EyeFrame::Open => EYE_OPEN,
-        EyeFrame::Closing => EYE_CLOSING,
-        EyeFrame::Closed => EYE_CLOSED,
-    };
-
-    // Center the 64-col eye in the 70-col frame (3 spaces padding each side)
-    let centered_eye: String = eye_text
-        .lines()
-        .map(|line| format!("   {}   ", line))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let eye_para = Paragraph::new(centered_eye)
-        .style(Style::default().fg(Color::Cyan))
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(eye_para, area);
-}
 
 // ============================================================================
 // Startup Health Version Check

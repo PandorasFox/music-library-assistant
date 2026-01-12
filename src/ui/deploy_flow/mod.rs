@@ -1,0 +1,9 @@
+//! Deployment Flow UI Module
+//!
+//! Provides the interactive workflow for deploying corpus files to libraries.
+//! Shows deployment preview with statistics, then transitions to session review
+//! for commit/cancel.
+
+pub mod preview;
+
+pub use preview::{DeploymentPreviewAction, DeploymentPreviewState};

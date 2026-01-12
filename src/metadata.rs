@@ -580,3 +580,41 @@ pub fn write_tags(
 
     Ok(())
 }
+
+/// Write only the artist tag to an audio file
+/// Simplified wrapper for canon flow tag flushing
+pub fn write_artist_tag(path: &str, new_artist: &str) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::file::{AudioFile, TaggedFileExt};
+    use lofty::probe::Probe;
+    use lofty::tag::{Accessor, Tag};
+
+    let path = Path::new(path);
+
+    let mut tagged_file = Probe::open(path)
+        .with_context(|| format!("Failed to open file for tag writing: {}", path.display()))?
+        .read()
+        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+
+    let tag_type = tagged_file.primary_tag_type();
+
+    // Get or create primary tag
+    let tag = match tagged_file.primary_tag_mut() {
+        Some(t) => t,
+        None => {
+            let new_tag = Tag::new(tag_type);
+            tagged_file.insert_tag(new_tag);
+            tagged_file.primary_tag_mut().unwrap()
+        }
+    };
+
+    // Update only the artist field, preserving other tags
+    tag.set_artist(new_artist.to_string());
+
+    // Save to file
+    tagged_file
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("Failed to save artist tag to file: {}", path.display()))?;
+
+    Ok(())
+}

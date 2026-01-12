@@ -68,6 +68,7 @@ pub fn preview_change(change: &PendingChange) -> ChangePreview {
         ChangeType::TagEdit => true,                   // Old values stored in metadata_changes
         ChangeType::Deploy => true,                    // Can remove hard link
         ChangeType::Undeploy => true,                  // Can re-create hard link
+        ChangeType::Redeploy => true,                  // Can move back to old path
         ChangeType::DropIndex => false,                // Can't restore - file is gone
         ChangeType::OutOfBandTagChange => false,       // Informational - not directly reversible
     };
@@ -279,6 +280,59 @@ fn execute_single_change(change: &PendingChange, db: &Database, dry_run: bool) -
 
             fs::remove_file(&change.source_path)
                 .with_context(|| format!("Failed to undeploy {}", change.source_path))?;
+            Ok(true)
+        }
+
+        ChangeType::Redeploy => {
+            // Relocate existing library link to new path (stale path fix)
+            // source_path = current library path, target_path = expected library path
+            // Both are hard links to the same corpus file, so we can just rename
+            let target = change
+                .target_path
+                .as_ref()
+                .context("Redeploy requires target_path")?;
+
+            let _ = config::log_message(&format!(
+                "[REDEPLOY] source={} target={}",
+                change.source_path, target
+            ));
+
+            // Check if source exists
+            let source_path = Path::new(&change.source_path);
+            if !source_path.exists() {
+                let _ = config::log_message(&format!(
+                    "[REDEPLOY] ERROR: Source does not exist: {}",
+                    change.source_path
+                ));
+                anyhow::bail!("Source file does not exist: {}", change.source_path);
+            }
+
+            if dry_run {
+                let _ = config::log_message("[REDEPLOY] DRY RUN - skipping actual move");
+                return Ok(true);
+            }
+
+            // Ensure target parent directory exists
+            if let Some(parent) = Path::new(target).parent() {
+                let _ = config::log_message(&format!(
+                    "[REDEPLOY] Creating target parent dir: {}",
+                    parent.display()
+                ));
+                fs::create_dir_all(parent)?;
+            }
+
+            // Rename moves the hard link to the new path, preserving inode relationship
+            let _ = config::log_message(&format!(
+                "[REDEPLOY] Executing fs::rename {} -> {}",
+                change.source_path, target
+            ));
+            fs::rename(&change.source_path, target).with_context(|| {
+                format!(
+                    "Failed to redeploy {} to {}",
+                    change.source_path, target
+                )
+            })?;
+            let _ = config::log_message("[REDEPLOY] SUCCESS");
             Ok(true)
         }
 
@@ -543,6 +597,27 @@ pub fn revert_changes(db: &Database, changes: &[PendingChange]) -> Result<Revert
                 }
             }
 
+            ChangeType::Redeploy => {
+                // Swap source and target to reverse the rename
+                if let Some(target) = &change.target_path {
+                    match fs::rename(target, &change.source_path) {
+                        Ok(_) => true,
+                        Err(e) => {
+                            report.errors.push(format!(
+                                "Failed to revert redeploy {}: {}",
+                                target, e
+                            ));
+                            false
+                        }
+                    }
+                } else {
+                    report
+                        .errors
+                        .push(format!("Cannot revert redeploy {}: no target path", change.source_path));
+                    false
+                }
+            }
+
             ChangeType::TagEdit => {
                 // Tag edits would need to restore from metadata_changes
                 // For now, mark as not automatically reversible
@@ -607,7 +682,7 @@ pub fn execute_changes_with_progress(
         match change.change_type {
             ChangeType::Move => moves += 1,
             ChangeType::Delete | ChangeType::DropIndex => deletes += 1,
-            ChangeType::Deploy | ChangeType::Undeploy => deploys += 1,
+            ChangeType::Deploy | ChangeType::Undeploy | ChangeType::Redeploy => deploys += 1,
             ChangeType::TagEdit | ChangeType::OutOfBandTagChange => tag_edits += 1,
         }
     }
@@ -721,6 +796,13 @@ pub fn format_change(change: &PendingChange) -> String {
         }
         ChangeType::Undeploy => {
             format!("- {} [undeploy]", change.source_path)
+        }
+        ChangeType::Redeploy => {
+            format!(
+                "~ {} -> {} [redeploy]",
+                change.source_path,
+                change.target_path.as_deref().unwrap_or("?")
+            )
         }
         ChangeType::DropIndex => {
             format!("x {} [drop from index]", change.source_path)

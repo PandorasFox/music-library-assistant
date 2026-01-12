@@ -17,8 +17,8 @@ use ratatui::{
 };
 
 use crate::config::Config;
+use crate::corpus::HeartbeatResult;
 use crate::db::CorpusSummary;
-use crate::health::HeartbeatResult;
 
 // ============================================================================
 // Types
@@ -88,7 +88,10 @@ pub enum BackgroundTask {
     /// Scan the legacy library (if configured)
     ScanLegacy,
     GenerateReport { report_type: ReportType },
-    Deploy { dry_run: bool },
+    /// Deploy to libraries (opens preview, then executes)
+    Deploy,
+    /// Stub for unimplemented features (shows "not yet implemented" message)
+    Stub,
 }
 
 /// Context for what operation uses the directory browser.
@@ -106,6 +109,8 @@ pub enum TransitionTarget {
     DirBrowser { context: DirBrowserContext },
     PendingChangesView,
     DropMissingConfirm,
+    /// Artist name canonicalization flow
+    CanonFlow,
 }
 
 /// Report types (mirrored from legacy code)
@@ -385,6 +390,11 @@ impl MainMenuState {
         let mut lines = Vec::new();
 
         if let Some(command) = self.current_command() {
+            // Exit gets an empty info panel
+            if matches!(command.action, CommandAction::Quit) {
+                return lines;
+            }
+
             lines.push(command.description.clone());
             lines.push(String::new());
 
@@ -415,6 +425,7 @@ impl MainMenuState {
                         TransitionTarget::DirBrowser { .. } => "Opens directory browser for path selection",
                         TransitionTarget::DropMissingConfirm => "Shows list of missing files for review",
                         TransitionTarget::PendingChangesView => "Shows queued changes",
+                        TransitionTarget::CanonFlow => "Opens artist canonicalization workflow",
                     };
                     lines.push(desc.to_string());
                 }
@@ -593,6 +604,51 @@ fn build_insight_category() -> Category {
     }
 }
 
+// =============================================================================
+// TODO: Album Artist Health Restoration - Design Intentions
+// =============================================================================
+//
+// The three album artist flows below should eventually be unified into a single
+// "Album Artist Health Restoration" meta-flow that guides the operator through
+// all three sub-flows in sequence.
+//
+// ## Design Goals
+//
+// 1. **Transformed State Reasoning**: As the operator proceeds through each flow
+//    and accumulates mutations, we should reason about the "transformed" corpus
+//    state in-memory. This means applying pending mutations virtually when
+//    computing health metrics for subsequent flows.
+//
+// 2. **Progressive Resolution**: Each flow should see the corpus as it WILL BE
+//    after earlier flows' mutations are applied, not as it currently exists.
+//    This prevents redundant work and shows accurate resolution state.
+//
+// 3. **3-Pane/3-Stage Review**: Consider a review process that shows:
+//    - Pane 1: Capitalization canonicalizations (album_artist case variants)
+//    - Pane 2: Album artist inference (from album+track# patterns)
+//    - Pane 3: Album artist population (from artist field where missing)
+//    Each pane could be independently reviewed before final commit.
+//
+// 4. **Final Resolution Display**: After all three flows, display a summary
+//    showing the overall transformed state - how many tracks were affected,
+//    what the album_artist distribution looks like post-mutation, etc.
+//
+// ## Health Metrics Needed
+//
+// - Album artist capitalization variants (similar to artist canon buckets)
+// - Tracks with album + track_number but no album_artist (grouped by album similarity)
+// - Tracks with album + artist but no album_artist (candidates for population)
+// - Album coherence score (do all tracks in an "album" agree on album_artist?)
+//
+// ## Implementation Notes
+//
+// - May want to share mutation accumulation infrastructure with canon_flow
+// - Virtual corpus state could use a HashMap<track_id, PendingChange> overlay
+// - Review panes could use similar patterns to CanonSessionReview
+// - Consider "back" navigation between flows (not just within)
+//
+// =============================================================================
+
 fn build_corpus_ops_category() -> Category {
     Category {
         name: "Corpus-mutating Operations".to_string(),
@@ -609,6 +665,46 @@ fn build_corpus_ops_category() -> Category {
                 }),
                 description: "Select directories and resolve fingerprint duplicates".to_string(),
             },
+            Command {
+                label: "Artist Name Canonicalization".to_string(),
+                action: CommandAction::Transition(TransitionTarget::CanonFlow),
+                description: "Resolve artist name spelling variants".to_string(),
+            },
+            // -----------------------------------------------------------------
+            // Album Artist Health Flows (Stubs)
+            // -----------------------------------------------------------------
+            // TODO: These three flows should eventually be unified into a single
+            // "Album Artist Health Restoration" flow. See design notes above.
+            // -----------------------------------------------------------------
+            Command {
+                label: "Album Artist Canonicalization".to_string(),
+                action: CommandAction::Background(BackgroundTask::Stub),
+                description: "STUB: Resolve album_artist capitalization/spelling variants".to_string(),
+            },
+            Command {
+                label: "Album Artist Inference (Album Patterns)".to_string(),
+                action: CommandAction::Background(BackgroundTask::Stub),
+                description: "STUB: Infer album_artist from tracks sharing album + track numbers".to_string(),
+            },
+            Command {
+                label: "Album Artist Population".to_string(),
+                action: CommandAction::Background(BackgroundTask::Stub),
+                description: "STUB: Populate missing album_artist from artist field".to_string(),
+            },
+            // -----------------------------------------------------------------
+            // Album Tag Resolution Flow (Stub)
+            // -----------------------------------------------------------------
+            // Handles cases where album tags differ only by suffix patterns like:
+            // - "Album Name EP" vs "Album Name"
+            // - "Album Name (Deluxe)" vs "Album Name"
+            // - "Album Name [Remaster]" vs "Album Name"
+            // Needs backing health metric to detect these near-matches.
+            // -----------------------------------------------------------------
+            Command {
+                label: "Album Tag Resolution".to_string(),
+                action: CommandAction::Background(BackgroundTask::Stub),
+                description: "Resolve album tag variants (EP/Deluxe/Remaster suffixes)".to_string(),
+            },
         ],
     }
 }
@@ -618,14 +714,9 @@ fn build_deployment_category() -> Category {
         name: "Deployment".to_string(),
         commands: vec![
             Command {
-                label: "Preview Changes (Dry Run)".to_string(),
-                action: CommandAction::Background(BackgroundTask::Deploy { dry_run: true }),
-                description: "TODO: Preview deployment without making changes".to_string(),
-            },
-            Command {
                 label: "Deploy to Libraries".to_string(),
-                action: CommandAction::Background(BackgroundTask::Deploy { dry_run: false }),
-                description: "TODO: Create hard links in library directories".to_string(),
+                action: CommandAction::Background(BackgroundTask::Deploy),
+                description: "Preview deployment status and create hard links".to_string(),
             },
             Command {
                 label: "View Pending Changes".to_string(),

@@ -12,8 +12,8 @@ use std::time::{Instant, SystemTime};
 use walkdir::WalkDir;
 
 use crate::config;
+use crate::corpus;
 use crate::db::Database;
-use crate::health;
 use crate::metadata;
 use crate::progress::{MtimeMismatchStats, ScanMessage, ScanProgress, ScanResult};
 
@@ -251,9 +251,9 @@ pub fn scan_directory_with_progress(
                 ..track.clone()
             };
             // Detect fingerprint issues (will create health_issues entries)
-            let _ = health::detect_fingerprint_issues(&db, &track_with_id);
+            let _ = corpus::detect_fingerprint_issues(&db, &track_with_id);
             // Detect metadata issues
-            let _ = health::detect_metadata_issues(&db, &track_with_id);
+            let _ = corpus::detect_metadata_issues(&db, &track_with_id);
         }
     }
 

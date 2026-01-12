@@ -141,3 +141,17 @@ See [docs/FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md) for planned features, imp
 2. Add transition from `CommandAction::Transition`
 3. Implement `handle_key()` returning `DialogueAction`
 4. Follow dialogue design principles from PHILOSOPHY.md
+
+### Managing TODOs
+
+All TODO/FIXME/HACK comments in code should be reflected in [docs/FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md) under the "Technical Debt" section. This centralizes intent tracking for future cleanup sessions.
+
+When adding a TODO in code:
+1. Add the comment with file location context (e.g., `// TODO: description`)
+2. Add corresponding entry to `docs/FUTURE_FEATURES.md` Technical Debt section with `file:line`
+
+When resolving a TODO:
+1. Remove the code comment
+2. Remove the corresponding entry from `docs/FUTURE_FEATURES.md`
+
+Periodically grep for `TODO|FIXME|HACK|XXX` and reconcile with the docs page.

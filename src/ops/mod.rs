@@ -4,6 +4,7 @@
 //! These modules handle the core actions: scanning, reporting, deploying, and change execution.
 
 pub mod changes;
+pub mod dedup;
 pub mod deploy;
 pub mod operation;
 pub mod reports;

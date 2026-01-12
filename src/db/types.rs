@@ -65,6 +65,8 @@ pub enum HealthIssueType {
     MissingTag,
     /// Quality variants (same content, different quality)
     QualityVariant,
+    /// Multiple corpus files would deploy to the same library path
+    DeployConflict,
 }
 
 impl HealthIssueType {
@@ -75,6 +77,7 @@ impl HealthIssueType {
             Self::ArtistCanonical => "canon",
             Self::MissingTag => "missing_tag",
             Self::QualityVariant => "quality",
+            Self::DeployConflict => "deploy_conflict",
         }
     }
 
@@ -85,6 +88,7 @@ impl HealthIssueType {
             "canon" => Some(Self::ArtistCanonical),
             "missing_tag" => Some(Self::MissingTag),
             "quality" => Some(Self::QualityVariant),
+            "deploy_conflict" => Some(Self::DeployConflict),
             _ => None,
         }
     }

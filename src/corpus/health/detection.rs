@@ -1,6 +1,12 @@
 //! Health issue detection during scanning and mutations.
 //!
 //! This module detects and creates health issues when tracks are inserted or modified.
+//!
+//! TODO: Out-of-band tag change detection and resolution
+//! - When tags on disk differ from indexed tags, create ChangeType::OutOfBandTagChange
+//! - Resolution options: flush index to disk OR accept out-of-band changes
+//! - Granularity TBD (potentially per-directory config)
+//! - UI pattern similar to canon_flow (bucket selection -> confirmation -> commit)
 
 use crate::db::{
     Database, HealthIssue, HealthIssueType, HealthIssueSeverity, Track, TrackRole,

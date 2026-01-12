@@ -11,9 +11,9 @@
 //! - Operations: Low-level maintenance
 
 mod config;
+mod corpus;
 mod db;
 mod deduplication;
-mod health;
 mod metadata;
 mod ops;
 mod progress;

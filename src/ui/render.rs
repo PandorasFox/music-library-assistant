@@ -66,21 +66,27 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
 }
 
 fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    let title = match ctx.mode {
-        super::UiMode::MainMenu => "Music Library Assistant",
-        super::UiMode::TagEditor => "Music Library Assistant - Tag Editor",
-        super::UiMode::DirBrowser => "Music Library Assistant - Directory Browser",
-        super::UiMode::Dialogue => "Music Library Assistant - Decision Flow",
-        super::UiMode::DialogueSummary => "Music Library Assistant - Session Summary",
-        super::UiMode::ClusterDialogue => "Music Library Assistant - Fingerprint Deduplication",
-        super::UiMode::BulkReviewPrompt => "Music Library Assistant - Bulk Decision Point",
-        super::UiMode::SessionReview => "Music Library Assistant - Session Review",
-        super::UiMode::DropMissingConfirmation => "Music Library Assistant - Drop Missing From Index",
-        super::UiMode::DeploymentPreview => "Music Library Assistant - Deployment Preview",
-        super::UiMode::CanonClusterView => "Music Library Assistant - Artist Canonicalization",
-        super::UiMode::CanonSessionReview => "Music Library Assistant - Artist Canonicalization Review",
-        super::UiMode::CanonCommitModal => "Music Library Assistant - Artist Canonicalization",
-        super::UiMode::ExitConfirmModal => "Music Library Assistant - Exit Confirmation",
+    // Get mode-specific suffix (if any)
+    let suffix = match ctx.mode {
+        super::UiMode::MainMenu => None,
+        super::UiMode::TagEditor => Some("Tag Editor"),
+        super::UiMode::DirBrowser => Some("Directory Browser"),
+        super::UiMode::Dialogue => Some("Decision Flow"),
+        super::UiMode::DialogueSummary => Some("Session Summary"),
+        super::UiMode::ClusterDialogue => Some("Fingerprint Deduplication"),
+        super::UiMode::BulkReviewPrompt => Some("Bulk Decision Point"),
+        super::UiMode::SessionReview => Some("Session Review"),
+        super::UiMode::DropMissingConfirmation => Some("Drop Missing From Index"),
+        super::UiMode::DeploymentPreview => Some("Deployment Preview"),
+        super::UiMode::CanonClusterView => Some("Artist Canonicalization"),
+        super::UiMode::CanonSessionReview => Some("Artist Canonicalization Review"),
+        super::UiMode::CanonCommitModal => Some("Artist Canonicalization"),
+        super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
+    };
+
+    let title = match suffix {
+        Some(s) => format!("{} - {}", crate::MLA_TITLE, s),
+        None => crate::MLA_TITLE.to_string(),
     };
 
     let header = Paragraph::new(title)

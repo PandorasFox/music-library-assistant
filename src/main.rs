@@ -10,6 +10,16 @@
 //! - Deployment: Publishing to browsable libraries
 //! - Operations: Low-level maintenance
 
+// ============================================================================
+// Version Information
+// ============================================================================
+
+/// MLA release version string (shown in title bar and reports)
+pub const MLA_VERSION: &str = "alpha 1";
+
+/// Full application title with version
+pub const MLA_TITLE: &str = "Music Library Assistant (mla alpha 1)";
+
 mod config;
 mod corpus;
 mod db;

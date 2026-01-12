@@ -56,7 +56,13 @@ pub struct MainMenuState {
 #[derive(Debug, Clone)]
 pub struct Category {
     pub name: String,
+    /// Commands within this category (for normal categories)
     pub commands: Vec<Command>,
+    /// Direct action for "action categories" - when set, selecting this category
+    /// executes the action immediately without showing a submenu.
+    /// The right pane shows as a single empty area.
+    /// Example: "Quit" is an action category.
+    pub action: Option<CommandAction>,
 }
 
 /// Individual command within a category
@@ -266,16 +272,31 @@ impl MainMenuState {
 
     fn move_right(&mut self) {
         if self.focus == PaneFocus::Category {
-            self.focus = PaneFocus::Command;
-            // Ensure command is selected
-            self.command_list_state.select(Some(self.command_index));
+            // Don't move to command pane for action categories (they have no commands)
+            let is_action_category = self
+                .current_category()
+                .map(|c| c.action.is_some())
+                .unwrap_or(false);
+
+            if !is_action_category {
+                self.focus = PaneFocus::Command;
+                // Ensure command is selected
+                self.command_list_state.select(Some(self.command_index));
+            }
         }
     }
 
     fn execute_selection(&mut self) -> MenuAction {
         match self.focus {
             PaneFocus::Category => {
-                // Enter from category = move to commands
+                // Check if this is an action category (has direct action, no submenu)
+                if let Some(category) = self.current_category() {
+                    if let Some(ref action) = category.action {
+                        // Action category: execute immediately
+                        return MenuAction::Execute(action.clone());
+                    }
+                }
+                // Normal category: move to commands pane
                 self.focus = PaneFocus::Command;
                 self.command_list_state.select(Some(self.command_index));
                 MenuAction::None
@@ -303,19 +324,45 @@ impl MainMenuState {
 
     /// Render the multi-pane main menu
     pub fn render(&mut self, f: &mut Frame, area: Rect, _config: &Option<Config>) {
-        // Three-pane horizontal layout
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(25), // Categories
-                Constraint::Percentage(35), // Commands
-                Constraint::Percentage(40), // Info
-            ])
-            .split(area);
+        // Check if current category is an action category (no submenu)
+        let is_action_category = self
+            .current_category()
+            .map(|c| c.action.is_some())
+            .unwrap_or(false);
 
-        self.render_categories(f, chunks[0]);
-        self.render_commands(f, chunks[1]);
-        self.render_info(f, chunks[2]);
+        if is_action_category {
+            // Two-pane layout: categories on left, single empty pane on right
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(25), // Categories
+                    Constraint::Percentage(75), // Empty pane
+                ])
+                .split(area);
+
+            self.render_categories(f, chunks[0]);
+            self.render_action_category_pane(f, chunks[1]);
+        } else {
+            // Normal three-pane layout
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(25), // Categories
+                    Constraint::Percentage(35), // Commands
+                    Constraint::Percentage(40), // Info
+                ])
+                .split(area);
+
+            self.render_categories(f, chunks[0]);
+            self.render_commands(f, chunks[1]);
+            self.render_info(f, chunks[2]);
+        }
+    }
+
+    /// Render an empty pane for action categories (like Quit)
+    fn render_action_category_pane(&self, f: &mut Frame, area: Rect) {
+        let block = Block::default().borders(Borders::ALL);
+        f.render_widget(block, area);
     }
 
     fn render_categories(&mut self, f: &mut Frame, area: Rect) {
@@ -545,6 +592,7 @@ fn build_build_indices_category(config: &Config) -> Category {
     Category {
         name: "Build Indices".to_string(),
         commands,
+        action: None,
     }
 }
 
@@ -601,6 +649,7 @@ fn build_insight_category() -> Category {
                 description: "TODO: Report on detected duplicates".to_string(),
             },
         ],
+        action: None,
     }
 }
 
@@ -706,6 +755,7 @@ fn build_corpus_ops_category() -> Category {
                 description: "Resolve album tag variants (EP/Deluxe/Remaster suffixes)".to_string(),
             },
         ],
+        action: None,
     }
 }
 
@@ -724,6 +774,7 @@ fn build_deployment_category() -> Category {
                 description: "TODO: Review queued changes before commit".to_string(),
             },
         ],
+        action: None,
     }
 }
 
@@ -735,16 +786,16 @@ fn build_intake_category() -> Category {
             action: CommandAction::Message("Intake workflow not yet implemented".to_string()),
             description: "TODO: Import external material into corpus".to_string(),
         }],
+        action: None,
     }
 }
 
+/// Build an "action category" - a top-level menu entry that executes immediately
+/// when selected (no submenu). Shows a single empty pane to the right.
 fn build_quit_category() -> Category {
     Category {
         name: "Quit".to_string(),
-        commands: vec![Command {
-            label: "Exit MLA".to_string(),
-            action: CommandAction::Quit,
-            description: "Exit the application".to_string(),
-        }],
+        commands: vec![], // Action categories have no submenu
+        action: Some(CommandAction::Quit),
     }
 }

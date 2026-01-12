@@ -174,7 +174,7 @@ impl SessionReviewState {
         let options = vec![
             (
                 "Commit all changes",
-                format!("Execute {} file moves to lost-files/", pending),
+                format!("Stash {} files", pending),
             ),
             (
                 "Preview (dry run)",

@@ -78,11 +78,20 @@ pub enum CommandAction {
 #[derive(Debug, Clone)]
 pub enum BackgroundTask {
     /// Scan the main corpus
-    ScanCorpus { re_fingerprint: bool },
+    ScanCorpus,
     /// Scan the legacy library (if configured)
     ScanLegacy,
+    /// Detect files in index that no longer exist on disk
+    DetectMissing,
     GenerateReport { report_type: ReportType },
     Deploy { dry_run: bool },
+}
+
+/// Context for what operation uses the directory browser.
+#[derive(Debug, Clone, Copy)]
+pub enum DirBrowserContext {
+    /// Fingerprint-based deduplication
+    Sleuthing,
 }
 
 /// Target UI modes for transitions
@@ -90,7 +99,9 @@ pub enum BackgroundTask {
 pub enum TransitionTarget {
     TagEditor,
     DecisionFlow,
+    DirBrowser { context: DirBrowserContext },
     PendingChangesView,
+    DropMissingConfirm,
 }
 
 /// Report types (mirrored from legacy code)
@@ -361,14 +372,13 @@ impl MainMenuState {
 
             // Add context-specific info
             match &command.action {
-                CommandAction::Background(BackgroundTask::ScanCorpus { re_fingerprint }) => {
-                    if *re_fingerprint {
-                        lines.push("Ignores scan cache - rescans all files.".to_string());
-                        lines.push("Use when fingerprints need recomputation.".to_string());
-                    } else {
-                        lines.push("Uses cached timestamps for incremental scan.".to_string());
-                        lines.push("Only processes new/modified files.".to_string());
-                    }
+                CommandAction::Background(BackgroundTask::ScanCorpus) => {
+                    lines.push("Uses cached timestamps for incremental scan.".to_string());
+                    lines.push("Only processes new/modified files.".to_string());
+                }
+                CommandAction::Background(BackgroundTask::DetectMissing) => {
+                    lines.push("Checks each indexed file for existence on disk.".to_string());
+                    lines.push("Reports count of missing files.".to_string());
                 }
                 CommandAction::Background(BackgroundTask::ScanLegacy) => {
                     lines.push("Scans legacy library for migration analysis.".to_string());
@@ -380,6 +390,8 @@ impl MainMenuState {
                     let desc = match target {
                         TransitionTarget::TagEditor => "Opens interactive tag editor",
                         TransitionTarget::DecisionFlow => "Opens decision-making workflow",
+                        TransitionTarget::DirBrowser { .. } => "Opens directory browser for path selection",
+                        TransitionTarget::DropMissingConfirm => "Shows list of missing files for review",
                         TransitionTarget::PendingChangesView => "Shows queued changes",
                     };
                     lines.push(desc.to_string());
@@ -413,13 +425,13 @@ fn build_build_indices_category(config: &Config) -> Category {
     let mut commands = vec![
         Command {
             label: "Scan Corpus".to_string(),
-            action: CommandAction::Background(BackgroundTask::ScanCorpus { re_fingerprint: false }),
+            action: CommandAction::Background(BackgroundTask::ScanCorpus),
             description: "Incrementally scan corpus, skipping unchanged files".to_string(),
         },
         Command {
-            label: "Scan Corpus (re-fingerprint)".to_string(),
-            action: CommandAction::Background(BackgroundTask::ScanCorpus { re_fingerprint: true }),
-            description: "Full rescan of corpus, recomputing all fingerprints".to_string(),
+            label: "Detect Missing Files".to_string(),
+            action: CommandAction::Background(BackgroundTask::DetectMissing),
+            description: "Check index for files that no longer exist on disk".to_string(),
         },
     ];
 
@@ -431,6 +443,13 @@ fn build_build_indices_category(config: &Config) -> Category {
             description: "Scan the legacy library for matching/migration".to_string(),
         });
     }
+
+    // Drop missing files from index (with confirmation)
+    commands.push(Command {
+        label: "Drop Missing From Index".to_string(),
+        action: CommandAction::Transition(TransitionTarget::DropMissingConfirm),
+        description: "Drop entries for files no longer on disk (with confirmation)".to_string(),
+    });
 
     Category {
         name: "Build Indices".to_string(),
@@ -491,9 +510,11 @@ fn build_corpus_ops_category() -> Category {
                 description: "TODO: Resolve metadata conflicts across duplicate tracks".to_string(),
             },
             Command {
-                label: "Fingerprint Deduplication (Decision Flow)".to_string(),
-                action: CommandAction::Transition(TransitionTarget::DecisionFlow),
-                description: "TODO: Resolve audio fingerprint duplicates".to_string(),
+                label: "Sleuthing (Fingerprint Deduplication)".to_string(),
+                action: CommandAction::Transition(TransitionTarget::DirBrowser {
+                    context: DirBrowserContext::Sleuthing,
+                }),
+                description: "Select directories and resolve fingerprint duplicates".to_string(),
             },
         ],
     }

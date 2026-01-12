@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 
 use super::changes::{ChangeSession, ChangeStatus, ChangeType, PendingChange};
@@ -19,6 +19,10 @@ pub struct Database {
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
+
+        // Enable foreign key constraint enforcement
+        conn.execute("PRAGMA foreign_keys = ON", [])
+            .context("Failed to enable foreign key constraints")?;
 
         let db = Database { conn };
         db.initialize_schema()?;
@@ -263,10 +267,31 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Clear all tracks for a source, cascading to dependent tables.
     pub fn clear_source(&self, source: &str) -> Result<()> {
+        // Get all track IDs for this source first
+        let mut stmt = self.conn.prepare("SELECT id FROM tracks WHERE source = ?1")?;
+        let track_ids: Vec<i64> = stmt
+            .query_map(params![source], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Delete from dependent tables for each track
+        for track_id in &track_ids {
+            self.conn.execute(
+                "DELETE FROM duplicate_group_members WHERE track_id = ?1",
+                params![track_id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM tag_edit_history WHERE track_id = ?1",
+                params![track_id],
+            )?;
+        }
+
+        // Now delete the tracks
         self.conn
             .execute("DELETE FROM tracks WHERE source = ?1", params![source])
             .context("Failed to clear source")?;
+
         Ok(())
     }
 
@@ -275,6 +300,75 @@ impl Database {
             .execute("DELETE FROM scan_state WHERE source = ?1", params![source])
             .context("Failed to clear scan state")?;
         Ok(())
+    }
+
+    /// Delete a track from the index by its path.
+    /// Also removes related entries from duplicate_group_members and tag_edit_history.
+    /// Returns true if a track was deleted.
+    pub fn delete_track_by_path(&self, path: &str) -> Result<bool> {
+        // First, find the track ID
+        let track_id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM tracks WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()
+            .with_context(|| format!("Failed to find track by path: {}", path))?;
+
+        let Some(track_id) = track_id else {
+            return Ok(false); // Track not found
+        };
+
+        // Delete from dependent tables first (foreign key constraints)
+        self.conn
+            .execute(
+                "DELETE FROM duplicate_group_members WHERE track_id = ?1",
+                params![track_id],
+            )
+            .with_context(|| format!("Failed to delete duplicate group members for track: {}", path))?;
+
+        self.conn
+            .execute(
+                "DELETE FROM tag_edit_history WHERE track_id = ?1",
+                params![track_id],
+            )
+            .with_context(|| format!("Failed to delete tag edit history for track: {}", path))?;
+
+        // Now delete the track itself
+        let deleted = self
+            .conn
+            .execute("DELETE FROM tracks WHERE id = ?1", params![track_id])
+            .with_context(|| format!("Failed to delete track by path: {}", path))?;
+
+        Ok(deleted > 0)
+    }
+
+    /// Delete multiple tracks by path, returning count deleted.
+    pub fn delete_tracks_by_paths(&self, paths: &[&str]) -> Result<usize> {
+        let mut count = 0;
+        for path in paths {
+            if self.delete_track_by_path(path)? {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    /// Get all tracks for a specific source.
+    pub fn get_all_tracks_for_source(&self, source: &str) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, source, inode, file_size, file_type, artist, album, album_artist,
+                    title, track_number, duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+             FROM tracks WHERE source = ?1 ORDER BY path",
+        )?;
+
+        let tracks = stmt
+            .query_map(params![source], Self::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(tracks)
     }
 
     pub fn get_track_count(&self, source: Option<&str>) -> Result<usize> {
@@ -766,6 +860,27 @@ impl Database {
 
         let tracks = stmt
             .query_map(&param_refs[..], Self::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(tracks)
+    }
+
+    /// Get all tracks with fingerprints in a specific directory (recursive).
+    /// Used by sleuthing to find duplicates between selected directories.
+    pub fn get_tracks_in_directory(&self, dir_path: &PathBuf) -> Result<Vec<Track>> {
+        let path_prefix = format!("{}%", dir_path.to_string_lossy());
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, source, inode, file_size, file_type,
+                    artist, album, album_artist, title, track_number,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+             FROM tracks
+             WHERE source = 'corpus' AND fingerprint IS NOT NULL AND path LIKE ?1
+             ORDER BY path",
+        )?;
+
+        let tracks = stmt
+            .query_map(params![path_prefix], Self::row_to_track)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(tracks)

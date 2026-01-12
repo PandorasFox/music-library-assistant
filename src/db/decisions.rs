@@ -37,7 +37,7 @@ pub enum DecisionCategory {
     MetadataDuplicate,
     /// File with quality issues (low bitrate, missing tags)
     QualityIssue,
-    /// Orphaned file in lost-files needing disposition
+    /// Orphaned file in stash needing disposition
     OrphanDisposition,
 }
 

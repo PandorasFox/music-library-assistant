@@ -94,7 +94,7 @@ impl TagEditorState {
         f.render_widget(info_para, area);
     }
 
-    fn render_three_column(&self, f: &mut Frame, area: Rect) {
+    fn render_three_column(&mut self, f: &mut Frame, area: Rect) {
         let three_column = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -137,8 +137,14 @@ impl TagEditorState {
         f.render_widget(track_list, area);
     }
 
-    fn render_tag_fields(&self, f: &mut Frame, area: Rect) {
+    fn render_tag_fields(&mut self, f: &mut Frame, area: Rect) {
         let fields = &self.tag_fields[self.current_track_idx];
+
+        // Calculate visible height (area height minus 2 for borders)
+        let visible_height = area.height.saturating_sub(2) as usize;
+        self.tag_visible_height = visible_height;
+
+        // Build all field lines
         let field_lines: Vec<Line> = fields
             .iter()
             .enumerate()
@@ -181,8 +187,24 @@ impl TagEditorState {
             })
             .collect();
 
-        let tag_para = Paragraph::new(field_lines)
-            .block(Block::default().borders(Borders::ALL).title("Tag Editor"));
+        // Apply scroll offset - show only visible portion
+        let total_fields = field_lines.len();
+        let scroll_indicator = if total_fields > visible_height {
+            let pos = self.tag_scroll_offset + 1;
+            let max = total_fields.saturating_sub(visible_height) + 1;
+            format!(" [{}/{}]", pos, max)
+        } else {
+            String::new()
+        };
+
+        let visible_lines: Vec<Line> = field_lines
+            .into_iter()
+            .skip(self.tag_scroll_offset)
+            .take(visible_height)
+            .collect();
+
+        let tag_para = Paragraph::new(visible_lines)
+            .block(Block::default().borders(Borders::ALL).title(format!("Tag Editor{}", scroll_indicator)));
         f.render_widget(tag_para, area);
     }
 

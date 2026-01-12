@@ -15,7 +15,7 @@ pub struct Config {
     pub libraries_root: PathBuf,
     pub legacy_library: Option<PathBuf>,
     pub deploy_mappings: Vec<DeployMapping>,
-    pub lost_files_dir: Option<PathBuf>,
+    pub stash_dir: Option<PathBuf>,
     pub opinions: Opinions,
 }
 
@@ -78,7 +78,7 @@ impl Config {
     }
 
     /// Validate that all configured paths exist and support required operations
-    /// Tests hard link capability for deployment and atomic moves for lost-files
+    /// Tests hard link capability for deployment and atomic moves to stash
     pub fn validate_same_filesystem(&self) -> Result<()> {
         use std::fs;
         use std::io::Write;
@@ -106,15 +106,15 @@ impl Config {
             );
         }
 
-        // Step 3: Validate lost_files_dir exists (if configured)
-        if let Some(lost_path) = &self.lost_files_dir {
-            if !lost_path.exists() {
+        // Step 3: Validate stash_dir exists (if configured)
+        if let Some(stash_path) = &self.stash_dir {
+            if !stash_path.exists() {
                 anyhow::bail!(
-                    "Validation failed: lost-files directory does not exist\n\
+                    "Validation failed: stash-dir does not exist\n\
                      Path: {:?}\n\
                      \n\
                      Please create this directory or update config.kdl",
-                    lost_path
+                    stash_path
                 );
             }
         }
@@ -158,8 +158,8 @@ impl Config {
         }
         let _ = fs::remove_file(&link_path); // Cleanup
 
-        // Step 5: Test atomic move capability (corpus → lost-files)
-        if let Some(lost_path) = &self.lost_files_dir {
+        // Step 5: Test atomic move capability (corpus → stash)
+        if let Some(stash_path) = &self.stash_dir {
             let temp_file2 = NamedTempFile::new_in(&self.corpus_root)
                 .context("Failed to create test file in corpus-root")?;
 
@@ -173,7 +173,7 @@ impl Config {
                     .unwrap()
                     .as_nanos()
             );
-            let move_path = lost_path.join(&move_name);
+            let move_path = stash_path.join(&move_name);
 
             if let Err(e) = fs::rename(&source_path, &move_path) {
                 // Cleanup source file if rename failed
@@ -183,7 +183,7 @@ impl Config {
                     "Validation failed: Cannot atomically move files\n\
                      \n\
                      Corpus root: {:?}\n\
-                     Lost files: {:?}\n\
+                     Stash dir: {:?}\n\
                      \n\
                      Error: {}\n\
                      \n\
@@ -192,9 +192,9 @@ impl Config {
                      Atomic moves only work on the same filesystem.\n\
                      \n\
                      SOLUTION:\n\
-                     Move lost-files to the same filesystem as corpus-root.",
+                     Move stash-dir to the same filesystem as corpus-root.",
                     self.corpus_root,
-                    lost_path,
+                    stash_path,
                     e
                 );
             }
@@ -371,7 +371,7 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
         libraries_root: PathBuf::new(),
         legacy_library: None,
         deploy_mappings: Vec::new(),
-        lost_files_dir: None,
+        stash_dir: None,
         opinions: Opinions::default(),
     };
 
@@ -430,10 +430,10 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                     });
                 }
             }
-            "lost-files" => {
+            "stash-dir" => {
                 if let Some(path) = node.entries().first() {
                     if let Some(path_str) = path.value().as_string() {
-                        config.lost_files_dir = Some(PathBuf::from(path_str));
+                        config.stash_dir = Some(PathBuf::from(path_str));
                     }
                 }
             }
@@ -470,7 +470,7 @@ mod tests {
         let kdl = r#"
 corpus-root "/Volumes/cerberus/archive/music"
 libraries-root "/Volumes/cerberus/library"
-lost-files "/Volumes/cerberus/archive/lost"
+stash-dir "/Volumes/cerberus/archive/stash"
 
 deploy "web/releases/bandcamp" "web/releases/itunes" {
     library "main"
@@ -492,7 +492,7 @@ legacy-library "/Volumes/cerberus/archive/working/legacy"
         assert_eq!(config.deploy_mappings[0].corpus_relative_paths.len(), 2);
         assert_eq!(config.deploy_mappings[0].library_names[0], "main");
         assert!(config.legacy_library.is_some());
-        assert!(config.lost_files_dir.is_some());
+        assert!(config.stash_dir.is_some());
     }
 
     #[test]

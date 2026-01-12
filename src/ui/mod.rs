@@ -5,6 +5,7 @@
 pub mod app;
 pub mod dedup_flow;
 pub mod dialogue;
+pub mod dir_browser;
 pub mod helpers;
 pub mod main_menu;
 pub mod picker;
@@ -38,7 +39,7 @@ use crate::progress::ScanMessage;
 
 use app::{EyeAnimation, EyeFrame, OperationState, OperationType, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
-use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
+use main_menu::{BackgroundTask, CommandAction, DirBrowserContext, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 // ============================================================================
 // Application State
@@ -49,11 +50,29 @@ use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, Report
 enum UiMode {
     MainMenu,
     TagEditor,
+    DirBrowser,
     Dialogue,
     DialogueSummary,
     ClusterDialogue,
     BulkReviewPrompt,
     SessionReview,
+    DropMissingConfirmation,
+}
+
+/// State for drop missing confirmation dialog
+#[derive(Debug, Clone)]
+struct DropMissingState {
+    missing_tracks: Vec<crate::db::Track>,
+    list_offset: usize,
+    selected_option: usize, // 0 = Cancel, 1 = Drop
+}
+
+/// Context for what operation launched the directory browser.
+/// The browser returns paths; this tells us what to do with them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserContext {
+    /// Fingerprint-based deduplication
+    Sleuthing,
 }
 
 /// Main application state
@@ -66,11 +85,14 @@ struct App {
     mode: UiMode,
     main_menu: MainMenuState,
     tag_editor: Option<tag_editor::TagEditorState>,
+    dir_browser: Option<dir_browser::DirBrowserState>,
+    browser_context: Option<BrowserContext>,
     dialogue: Option<dialogue::DialogueState>,
     dialogue_summary: Option<dialogue::DialogueSummaryState>,
     cluster_dialogue: Option<dedup_flow::ClusterDialogueState>,
     bulk_prompt: Option<dedup_flow::BulkPromptState>,
     session_review: Option<dedup_flow::SessionReviewState>,
+    drop_missing_state: Option<DropMissingState>,
 
     // Background operations
     operation: Option<OperationState>,
@@ -96,11 +118,14 @@ impl App {
             status_message: None,
             mode: UiMode::MainMenu,
             tag_editor: None,
+            dir_browser: None,
+            browser_context: None,
             dialogue: None,
             dialogue_summary: None,
             cluster_dialogue: None,
             bulk_prompt: None,
             session_review: None,
+            drop_missing_state: None,
             operation: None,
             operation_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
@@ -119,6 +144,12 @@ impl App {
                 if let Some(ref mut editor) = self.tag_editor {
                     let action = editor.handle_key(key);
                     self.handle_tag_editor_action(action);
+                }
+            }
+            UiMode::DirBrowser => {
+                if let Some(ref mut browser) = self.dir_browser {
+                    let action = browser.handle_key(key);
+                    self.handle_dir_browser_action(action);
                 }
             }
             UiMode::Dialogue => {
@@ -150,6 +181,9 @@ impl App {
                     let action = session_review.handle_key(key);
                     self.handle_session_review_action(action);
                 }
+            }
+            UiMode::DropMissingConfirmation => {
+                self.handle_drop_missing_key(key);
             }
         }
     }
@@ -185,11 +219,14 @@ impl App {
 
     fn start_background_task(&mut self, task: BackgroundTask) {
         match task {
-            BackgroundTask::ScanCorpus { re_fingerprint } => {
-                self.start_scan_corpus(re_fingerprint);
+            BackgroundTask::ScanCorpus => {
+                self.start_scan_corpus();
             }
             BackgroundTask::ScanLegacy => {
                 self.start_scan_legacy();
+            }
+            BackgroundTask::DetectMissing => {
+                self.detect_missing_files();
             }
             BackgroundTask::GenerateReport { report_type } => {
                 self.generate_report(report_type);
@@ -203,9 +240,8 @@ impl App {
         }
     }
 
-    fn start_scan_corpus(&mut self, _re_fingerprint: bool) {
+    fn start_scan_corpus(&mut self) {
         let path = self.config.corpus_root.to_string_lossy().to_string();
-        // TODO: Pass _re_fingerprint flag to scanner to clear scan_state cache
         self.start_scan_source("corpus", &path);
     }
 
@@ -318,6 +354,259 @@ impl App {
         }
     }
 
+    fn detect_missing_files(&mut self) {
+        // Open database
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        // Find missing files
+        match scanner::find_missing_tracks(&db, "corpus") {
+            Ok(missing) => {
+                if missing.is_empty() {
+                    self.status_message = Some("No missing files found in index".to_string());
+                } else {
+                    self.status_message = Some(format!(
+                        "Found {} missing files. Use 'Drop Missing From Index' to remove entries.",
+                        missing.len()
+                    ));
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Detection error: {}", e));
+            }
+        }
+    }
+
+    fn start_drop_missing_confirmation(&mut self) {
+        // Open database
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        // Find missing files
+        match scanner::find_missing_tracks(&db, "corpus") {
+            Ok(missing) => {
+                if missing.is_empty() {
+                    self.status_message = Some("No missing files found in index".to_string());
+                    // Stay in main menu
+                } else {
+                    // Enter confirmation mode
+                    self.drop_missing_state = Some(DropMissingState {
+                        missing_tracks: missing,
+                        list_offset: 0,
+                        selected_option: 0, // Default to Cancel
+                    });
+                    self.mode = UiMode::DropMissingConfirmation;
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Detection error: {}", e));
+            }
+        }
+    }
+
+    fn handle_drop_missing_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        if let Some(ref mut state) = self.drop_missing_state {
+            let list_len = state.missing_tracks.len();
+            let max_visible = 20; // Number of items visible in the list
+
+            match key.code {
+                KeyCode::Up => {
+                    if state.list_offset > 0 {
+                        state.list_offset -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if state.list_offset + max_visible < list_len {
+                        state.list_offset += 1;
+                    }
+                }
+                KeyCode::Left | KeyCode::Right => {
+                    // Toggle between Cancel (0) and Drop (1)
+                    state.selected_option = 1 - state.selected_option;
+                }
+                KeyCode::Enter => {
+                    if state.selected_option == 1 {
+                        // Execute drop
+                        self.execute_drop_missing();
+                    } else {
+                        // Cancel - return to main menu
+                        self.drop_missing_state = None;
+                        self.mode = UiMode::MainMenu;
+                        self.status_message = Some("Drop cancelled".to_string());
+                    }
+                }
+                KeyCode::Esc => {
+                    // Cancel
+                    self.drop_missing_state = None;
+                    self.mode = UiMode::MainMenu;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn execute_drop_missing(&mut self) {
+        use crate::db::{ChangeStatus, ChangeType, PendingChange};
+        use crate::ops::changes;
+        use std::fs::File;
+        use std::io::Write;
+
+        // Get the missing tracks from state
+        let missing_tracks = match &self.drop_missing_state {
+            Some(state) => state.missing_tracks.clone(),
+            None => {
+                self.status_message = Some("No missing tracks to drop".to_string());
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        if missing_tracks.is_empty() {
+            self.drop_missing_state = None;
+            self.mode = UiMode::MainMenu;
+            self.status_message = Some("No missing files to drop".to_string());
+            return;
+        }
+
+        // Get reports directory for log file
+        let reports_dir = match config::get_data_dir() {
+            Ok(dir) => dir.join("reports"),
+            Err(e) => {
+                self.status_message = Some(format!("Failed to get data dir: {}", e));
+                self.drop_missing_state = None;
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        // Create reports directory if needed
+        if let Err(e) = std::fs::create_dir_all(&reports_dir) {
+            self.status_message = Some(format!("Failed to create reports dir: {}", e));
+            self.drop_missing_state = None;
+            self.mode = UiMode::MainMenu;
+            return;
+        }
+
+        // Write log file with dropped track metadata
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let log_path = reports_dir.join(format!("dropped_tracks_{}.log", timestamp));
+        let log_result = (|| -> Result<(), std::io::Error> {
+            let mut log_file = File::create(&log_path)?;
+            writeln!(log_file, "# Tracks dropped from corpus index")?;
+            writeln!(log_file, "# Timestamp: {}", chrono::Local::now())?;
+            writeln!(log_file, "# Count: {}", missing_tracks.len())?;
+            writeln!(log_file, "#")?;
+            for track in &missing_tracks {
+                writeln!(log_file, "Path: {}", track.path)?;
+                if let Some(ref artist) = track.artist {
+                    writeln!(log_file, "  Artist: {}", artist)?;
+                }
+                if let Some(ref title) = track.title {
+                    writeln!(log_file, "  Title: {}", title)?;
+                }
+                if let Some(ref album) = track.album {
+                    writeln!(log_file, "  Album: {}", album)?;
+                }
+                writeln!(log_file)?;
+            }
+            Ok(())
+        })();
+
+        let log_created = log_result.is_ok();
+
+        // Open database
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                self.drop_missing_state = None;
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                self.drop_missing_state = None;
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        // Generate DropIndex changes for each missing track
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let pending_changes: Vec<PendingChange> = missing_tracks
+            .iter()
+            .map(|track| PendingChange {
+                id: None,
+                session_id: session_id.clone(),
+                change_type: ChangeType::DropIndex,
+                source_path: track.path.clone(),
+                target_path: None,
+                metadata_changes: None,
+                created_at: None,
+                status: ChangeStatus::Pending,
+            })
+            .collect();
+
+        // Execute the changes
+        match changes::execute_changes(&db, &pending_changes, false) {
+            Ok(report) => {
+                let msg = if log_created {
+                    format!(
+                        "Dropped {} entries from index. Log: {}",
+                        report.succeeded,
+                        log_path.display()
+                    )
+                } else {
+                    format!("Dropped {} entries from index", report.succeeded)
+                };
+
+                if report.failed > 0 {
+                    self.status_message = Some(format!(
+                        "{}. {} failed: {:?}",
+                        msg, report.failed, report.errors
+                    ));
+                } else {
+                    self.status_message = Some(msg);
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Drop error: {}", e));
+            }
+        }
+
+        self.drop_missing_state = None;
+        self.mode = UiMode::MainMenu;
+    }
+
     fn transition_to(&mut self, target: TransitionTarget) {
         match target {
             TransitionTarget::TagEditor => {
@@ -326,8 +615,14 @@ impl App {
             TransitionTarget::DecisionFlow => {
                 self.start_decision_flow();
             }
+            TransitionTarget::DirBrowser { context } => {
+                self.start_dir_browser(context);
+            }
             TransitionTarget::PendingChangesView => {
                 self.status_message = Some("Pending changes view (TODO)".to_string());
+            }
+            TransitionTarget::DropMissingConfirm => {
+                self.start_drop_missing_confirmation();
             }
         }
     }
@@ -410,10 +705,10 @@ impl App {
         };
 
         let corpus_root = self.config.corpus_root.clone();
-        let lost_files_root = match &self.config.lost_files_dir {
+        let stash_root = match &self.config.stash_dir {
             Some(path) => path.clone(),
             None => {
-                self.status_message = Some("lost-files-dir not configured".to_string());
+                self.status_message = Some("stash-dir not configured".to_string());
                 return;
             }
         };
@@ -444,9 +739,139 @@ impl App {
             conflict_sets,
             session_id,
             corpus_root.to_string_lossy().to_string(),
-            lost_files_root.to_string_lossy().to_string(),
+            stash_root.to_string_lossy().to_string(),
         ));
         self.mode = UiMode::ClusterDialogue;
+    }
+
+    fn start_dir_browser(&mut self, context: main_menu::DirBrowserContext) {
+        let config = match context {
+            main_menu::DirBrowserContext::Sleuthing => dir_browser::DirBrowserConfig::for_sleuthing(),
+        };
+
+        self.dir_browser = Some(dir_browser::DirBrowserState::new(
+            self.config.corpus_root.clone(),
+            config,
+        ));
+        self.browser_context = Some(match context {
+            main_menu::DirBrowserContext::Sleuthing => BrowserContext::Sleuthing,
+        });
+        self.mode = UiMode::DirBrowser;
+    }
+
+    fn handle_dir_browser_action(&mut self, action: dir_browser::DirBrowserAction) {
+        match action {
+            dir_browser::DirBrowserAction::None => {}
+            dir_browser::DirBrowserAction::Cancel => {
+                self.dir_browser = None;
+                self.browser_context = None;
+                self.mode = UiMode::MainMenu;
+            }
+            dir_browser::DirBrowserAction::Proceed(paths) => {
+                let context = self.browser_context.take();
+                self.dir_browser = None;
+
+                match context {
+                    Some(BrowserContext::Sleuthing) => {
+                        self.start_sleuthing_with_paths(paths);
+                    }
+                    None => {
+                        self.status_message = Some("No browser context set".to_string());
+                        self.mode = UiMode::MainMenu;
+                    }
+                }
+            }
+        }
+    }
+
+    fn start_sleuthing_with_paths(&mut self, paths: Vec<std::path::PathBuf>) {
+        use crate::deduplication::find_duplicates_between_directories;
+
+        let _ = config::log_message("=== start_sleuthing_with_paths called ===");
+        for (i, path) in paths.iter().enumerate() {
+            let _ = config::log_message(&format!("  path[{}]: {}", i, path.display()));
+        }
+
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = config::log_message(&format!("ERROR: Failed to get db path: {}", e));
+                self.status_message = Some(format!("Config error: {}", e));
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+        let _ = config::log_message(&format!("Database path: {}", db_path.display()));
+
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                let _ = config::log_message(&format!("ERROR: Failed to open database: {}", e));
+                self.status_message = Some(format!("Database error: {}", e));
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        let corpus_root = self.config.corpus_root.clone();
+        let _ = config::log_message(&format!("Corpus root: {}", corpus_root.display()));
+
+        let stash_root = match &self.config.stash_dir {
+            Some(path) => {
+                let _ = config::log_message(&format!("Stash root: {}", path.display()));
+                path.clone()
+            }
+            None => {
+                let _ = config::log_message("ERROR: stash-dir not configured");
+                self.status_message = Some("stash-dir not configured".to_string());
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        // Find duplicates BETWEEN selected directories (directory-set based)
+        let _ = config::log_message("Calling find_duplicates_between_directories...");
+        let clusters = match find_duplicates_between_directories(&db, &paths) {
+            Ok(c) => {
+                let _ = config::log_message(&format!("Found {} clusters", c.len()));
+                c
+            }
+            Err(e) => {
+                let _ = config::log_message(&format!("ERROR: find_duplicates failed: {}", e));
+                self.status_message = Some(format!("Error finding duplicates: {}", e));
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        if clusters.is_empty() {
+            let _ = config::log_message("No duplicates found - returning to main menu");
+            self.status_message = Some("No duplicates found between selected directories".to_string());
+            self.mode = UiMode::MainMenu;
+            return;
+        }
+
+        // Create session ID
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let _ = config::log_message(&format!("Created session ID: {}", session_id));
+
+        // Create cluster dialogue state with clusters directly
+        let _ = config::log_message(&format!(
+            "Creating ClusterDialogueState with {} clusters, corpus_root={}, stash_root={}",
+            clusters.len(),
+            corpus_root.display(),
+            stash_root.display()
+        ));
+
+        self.cluster_dialogue = Some(dedup_flow::ClusterDialogueState::new_from_clusters(
+            clusters,
+            session_id,
+            corpus_root.to_string_lossy().to_string(),
+            stash_root.to_string_lossy().to_string(),
+        ));
+        self.mode = UiMode::ClusterDialogue;
+
+        let _ = config::log_message("=== start_sleuthing_with_paths complete ===");
     }
 
     fn handle_tag_editor_action(&mut self, action: tag_editor::TagEditorAction) {
@@ -555,7 +980,7 @@ impl App {
                     // Recreate cluster dialogue with current session state
                     // For now, mark bulk phase complete and continue
                     let corpus_root = self.config.corpus_root.to_string_lossy().to_string();
-                    let lost_files_root = self.config.lost_files_dir
+                    let stash_root = self.config.stash_dir
                         .as_ref()
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
@@ -564,7 +989,7 @@ impl App {
                         session.conflict_sets.clone(),
                         session.session_id.clone(),
                         corpus_root,
-                        lost_files_root,
+                        stash_root,
                     );
                     // Restore session state
                     new_state.session = session;
@@ -588,12 +1013,74 @@ impl App {
             dedup_flow::SessionReviewAction::Commit => {
                 // Execute all pending changes
                 if let Some(ref session_review) = self.session_review {
-                    let total = session_review.session.total_pending_changes();
-                    // TODO: Actually execute changes via ops/changes.rs
-                    self.status_message = Some(format!(
-                        "Committed {} file moves (execution TODO)",
-                        total
+                    let _ = config::log_message("=== SESSION REVIEW: COMMIT REQUESTED ===");
+
+                    // Collect all pending changes from decisions
+                    let all_changes: Vec<_> = session_review.session.decisions
+                        .iter()
+                        .flat_map(|d| d.pending_changes.clone())
+                        .collect();
+
+                    let _ = config::log_message(&format!(
+                        "Total pending changes to execute: {}",
+                        all_changes.len()
                     ));
+
+                    // Log each change before execution
+                    for (i, change) in all_changes.iter().enumerate() {
+                        let _ = config::log_message(&format!(
+                            "  Change {}: {:?} {} -> {}",
+                            i + 1,
+                            change.change_type,
+                            change.source_path,
+                            change.target_path.as_deref().unwrap_or("(none)")
+                        ));
+                    }
+
+                    // Open database for change execution
+                    let db_path = match config::get_db_path() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let _ = config::log_message(&format!("ERROR: Failed to get db path: {}", e));
+                            self.status_message = Some(format!("Config error: {}", e));
+                            self.session_review = None;
+                            self.mode = UiMode::MainMenu;
+                            return;
+                        }
+                    };
+
+                    let db = match Database::open(&db_path) {
+                        Ok(db) => db,
+                        Err(e) => {
+                            let _ = config::log_message(&format!("ERROR: Failed to open database: {}", e));
+                            self.status_message = Some(format!("Database error: {}", e));
+                            self.session_review = None;
+                            self.mode = UiMode::MainMenu;
+                            return;
+                        }
+                    };
+
+                    // Execute changes
+                    let _ = config::log_message("Executing changes...");
+                    match crate::ops::changes::execute_changes(&db, &all_changes, false) {
+                        Ok(report) => {
+                            let _ = config::log_message(&format!(
+                                "Execution complete: {} succeeded, {} failed, {} skipped",
+                                report.succeeded, report.failed, report.skipped
+                            ));
+                            for err in &report.errors {
+                                let _ = config::log_message(&format!("  ERROR: {}", err));
+                            }
+                            self.status_message = Some(format!(
+                                "Committed: {} succeeded, {} failed, {} skipped",
+                                report.succeeded, report.failed, report.skipped
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = config::log_message(&format!("ERROR: Change execution failed: {}", e));
+                            self.status_message = Some(format!("Execution error: {}", e));
+                        }
+                    }
                 }
                 self.session_review = None;
                 self.mode = UiMode::MainMenu;
@@ -601,10 +1088,31 @@ impl App {
             dedup_flow::SessionReviewAction::Preview => {
                 // Dry run - show what would happen
                 if let Some(ref session_review) = self.session_review {
-                    let total = session_review.session.total_pending_changes();
+                    let _ = config::log_message("=== SESSION REVIEW: PREVIEW (DRY RUN) ===");
+
+                    let all_changes: Vec<_> = session_review.session.decisions
+                        .iter()
+                        .flat_map(|d| d.pending_changes.clone())
+                        .collect();
+
+                    let _ = config::log_message(&format!(
+                        "Would execute {} changes:",
+                        all_changes.len()
+                    ));
+
+                    for (i, change) in all_changes.iter().enumerate() {
+                        let _ = config::log_message(&format!(
+                            "  [DRY RUN] {}: {:?} {} -> {}",
+                            i + 1,
+                            change.change_type,
+                            change.source_path,
+                            change.target_path.as_deref().unwrap_or("(none)")
+                        ));
+                    }
+
                     self.status_message = Some(format!(
-                        "Preview: {} files would be moved to lost-files/",
-                        total
+                        "Preview: {} files would be stashed (see log)",
+                        all_changes.len()
                     ));
                 }
             }
@@ -613,6 +1121,7 @@ impl App {
                 self.status_message = Some("Export change list (TODO)".to_string());
             }
             dedup_flow::SessionReviewAction::Cancel => {
+                let _ = config::log_message("=== SESSION REVIEW: CANCELLED ===");
                 self.session_review = None;
                 self.mode = UiMode::MainMenu;
                 self.status_message = Some("Session cancelled, no changes made".to_string());
@@ -701,11 +1210,13 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let title = match app.mode {
         UiMode::MainMenu => "Music Library Assistant",
         UiMode::TagEditor => "Music Library Assistant - Tag Editor",
+        UiMode::DirBrowser => "Music Library Assistant - Directory Browser",
         UiMode::Dialogue => "Music Library Assistant - Decision Flow",
         UiMode::DialogueSummary => "Music Library Assistant - Session Summary",
         UiMode::ClusterDialogue => "Music Library Assistant - Fingerprint Deduplication",
         UiMode::BulkReviewPrompt => "Music Library Assistant - Bulk Decision Point",
         UiMode::SessionReview => "Music Library Assistant - Session Review",
+        UiMode::DropMissingConfirmation => "Music Library Assistant - Drop Missing From Index",
     };
 
     let header = Paragraph::new(title)
@@ -724,6 +1235,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         UiMode::TagEditor => {
             if let Some(ref mut editor) = app.tag_editor {
                 editor.render(f, area, app.status_message.as_deref());
+            }
+        }
+        UiMode::DirBrowser => {
+            if let Some(ref mut browser) = app.dir_browser {
+                browser.render(f, area);
             }
         }
         UiMode::Dialogue => {
@@ -751,6 +1267,85 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
                 session_review.render(f, area);
             }
         }
+        UiMode::DropMissingConfirmation => {
+            render_drop_missing_confirmation(f, area, app);
+        }
+    }
+}
+
+fn render_drop_missing_confirmation(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    use ratatui::widgets::{List, ListItem};
+
+    if let Some(ref state) = app.drop_missing_state {
+        let count = state.missing_tracks.len();
+
+        // Layout: header info, file list, action buttons
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),  // Header with count
+                Constraint::Min(5),     // File list
+                Constraint::Length(3),  // Action buttons
+            ])
+            .split(area);
+
+        // Header
+        let header_text = format!(
+            "Found {} missing file{} in corpus index\nThese files no longer exist on disk but are still in the database.",
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+        let header = Paragraph::new(header_text)
+            .style(Style::default().fg(Color::Yellow))
+            .block(Block::default().borders(Borders::ALL));
+        f.render_widget(header, chunks[0]);
+
+        // File list
+        let max_visible = chunks[1].height.saturating_sub(2) as usize;
+        let items: Vec<ListItem> = state
+            .missing_tracks
+            .iter()
+            .skip(state.list_offset)
+            .take(max_visible)
+            .map(|track| {
+                ListItem::new(track.path.clone())
+                    .style(Style::default().fg(Color::White))
+            })
+            .collect();
+
+        let list_title = format!(
+            "Missing Files ({}-{} of {})",
+            state.list_offset + 1,
+            (state.list_offset + items.len()).min(count),
+            count
+        );
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title(list_title));
+        f.render_widget(list, chunks[1]);
+
+        // Action buttons
+        let cancel_style = if state.selected_option == 0 {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let drop_style = if state.selected_option == 1 {
+            Style::default().fg(Color::Black).bg(Color::Red)
+        } else {
+            Style::default().fg(Color::Red)
+        };
+
+        let buttons = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(" Cancel ", cancel_style),
+            Span::raw("    "),
+            Span::styled(format!(" Drop {} entries ", count), drop_style),
+            Span::raw("  "),
+        ]);
+        let buttons_para = Paragraph::new(buttons)
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title("Action"));
+        f.render_widget(buttons_para, chunks[2]);
     }
 }
 
@@ -923,10 +1518,12 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let hints = match app.mode {
         UiMode::MainMenu => "↑↓ Navigate | ←→ Pane | Enter Select | Q Quit",
         UiMode::TagEditor => "Tab Tracks | ↑↓ Fields | Enter Edit | Esc Exit",
+        UiMode::DirBrowser => "↑↓ Navigate | ←→ Expand | Space Toggle | Enter Proceed | Esc Cancel",
         UiMode::Dialogue | UiMode::DialogueSummary => "↑↓ Navigate | Enter Select | Esc Exit",
         UiMode::ClusterDialogue => "↑↓ Select | Enter Keep | Tab Skip | Esc Review",
         UiMode::BulkReviewPrompt => "↑↓ Select | Enter Choose | Esc Cancel",
         UiMode::SessionReview => "↑↓ Select | Enter Execute | Esc Cancel",
+        UiMode::DropMissingConfirmation => "↑↓ Scroll | ←→ Select Option | Enter Confirm | Esc Cancel",
     };
     lines.push(Line::from(hints));
 

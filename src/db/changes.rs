@@ -38,11 +38,12 @@ impl Default for PendingChange {
 /// Type of corpus mutation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ChangeType {
-    Move,     // Move file within corpus
-    Delete,   // Move to lost-files
-    TagEdit,  // Modify metadata
-    Deploy,   // Create hard link to library
-    Undeploy, // Remove hard link from library
+    Move,      // Move file within corpus
+    Delete,    // Move to stash (remove from corpus)
+    DropIndex, // Remove from index (file already missing)
+    TagEdit,   // Modify metadata
+    Deploy,    // Create hard link to library
+    Undeploy,  // Remove hard link from library
 }
 
 impl ChangeType {
@@ -50,6 +51,7 @@ impl ChangeType {
         match self {
             ChangeType::Move => "move",
             ChangeType::Delete => "delete",
+            ChangeType::DropIndex => "drop_index",
             ChangeType::TagEdit => "tag_edit",
             ChangeType::Deploy => "deploy",
             ChangeType::Undeploy => "undeploy",
@@ -60,6 +62,7 @@ impl ChangeType {
         match s {
             "move" => Some(ChangeType::Move),
             "delete" => Some(ChangeType::Delete),
+            "drop_index" => Some(ChangeType::DropIndex),
             "tag_edit" => Some(ChangeType::TagEdit),
             "deploy" => Some(ChangeType::Deploy),
             "undeploy" => Some(ChangeType::Undeploy),

@@ -115,6 +115,9 @@ pub struct DirectorySetCluster {
     pub file_count: usize,
     /// Number of directories (cluster magnitude)
     pub magnitude: usize,
+    /// Tracks grouped by directory name (aggregated across all fingerprints)
+    /// Used by the cluster dialogue for rendering and decision-making
+    pub tracks_by_dir: HashMap<String, Vec<Track>>,
 }
 
 /// Decision state for a single cluster
@@ -172,13 +175,20 @@ impl DeduplicationSession {
         let mut kept = 0;
         for decision in &self.decisions {
             if let Some(keeper) = &decision.keeper_dir {
-                // Count files in keeper directory for this cluster's conflicts
-                for cs in &self.conflict_sets {
-                    let mut cs_dirs: Vec<_> = cs.conflict_dirs.clone();
-                    cs_dirs.sort();
-                    if cs_dirs == decision.cluster.directory_set {
-                        if let Some(tracks) = cs.tracks_by_dir.get(keeper) {
-                            kept += tracks.len();
+                // Use cluster.tracks_by_dir directly if available (directory-set mode)
+                if !decision.cluster.tracks_by_dir.is_empty() {
+                    if let Some(tracks) = decision.cluster.tracks_by_dir.get(keeper) {
+                        kept += tracks.len();
+                    }
+                } else {
+                    // Legacy mode: search through conflict_sets
+                    for cs in &self.conflict_sets {
+                        let mut cs_dirs: Vec<_> = cs.conflict_dirs.clone();
+                        cs_dirs.sort();
+                        if cs_dirs == decision.cluster.directory_set {
+                            if let Some(tracks) = cs.tracks_by_dir.get(keeper) {
+                                kept += tracks.len();
+                            }
                         }
                     }
                 }
@@ -192,13 +202,20 @@ impl DeduplicationSession {
         let mut stats: HashMap<String, usize> = HashMap::new();
         for decision in &self.decisions {
             if let Some(keeper) = &decision.keeper_dir {
-                // Count files kept in this directory
-                for cs in &self.conflict_sets {
-                    let mut cs_dirs: Vec<_> = cs.conflict_dirs.clone();
-                    cs_dirs.sort();
-                    if cs_dirs == decision.cluster.directory_set {
-                        if let Some(tracks) = cs.tracks_by_dir.get(keeper) {
-                            *stats.entry(keeper.clone()).or_default() += tracks.len();
+                // Use cluster.tracks_by_dir directly if available (directory-set mode)
+                if !decision.cluster.tracks_by_dir.is_empty() {
+                    if let Some(tracks) = decision.cluster.tracks_by_dir.get(keeper) {
+                        *stats.entry(keeper.clone()).or_default() += tracks.len();
+                    }
+                } else {
+                    // Legacy mode: search through conflict_sets
+                    for cs in &self.conflict_sets {
+                        let mut cs_dirs: Vec<_> = cs.conflict_dirs.clone();
+                        cs_dirs.sort();
+                        if cs_dirs == decision.cluster.directory_set {
+                            if let Some(tracks) = cs.tracks_by_dir.get(keeper) {
+                                *stats.entry(keeper.clone()).or_default() += tracks.len();
+                            }
                         }
                     }
                 }
@@ -231,21 +248,29 @@ pub fn compute_directory_set_clusters(
     let mut clusters: Vec<DirectorySetCluster> = by_dir_set
         .into_iter()
         .map(|(dir_set, conflicts)| {
+            // Aggregate tracks by directory across all fingerprints in this cluster
+            let mut tracks_by_dir: HashMap<String, Vec<Track>> = HashMap::new();
+            for cs in &conflicts {
+                for (dir, tracks) in &cs.tracks_by_dir {
+                    tracks_by_dir.entry(dir.clone()).or_default().extend(tracks.clone());
+                }
+            }
+
             DirectorySetCluster {
                 magnitude: dir_set.len(),
                 fingerprints: conflicts.iter().map(|c| c.fingerprint.clone()).collect(),
-                file_count: conflicts.iter()
-                    .flat_map(|c| c.tracks_by_dir.values())
-                    .map(|t| t.len())
-                    .sum(),
+                file_count: tracks_by_dir.values().map(|t| t.len()).sum(),
                 directory_set: dir_set,
+                tracks_by_dir,
             }
         })
         .collect();
 
-    // Sort: magnitude DESC, then file_count DESC
+    // Sort: magnitude DESC, then fingerprint count DESC (high-cluster overlaps first),
+    // then file_count DESC
     clusters.sort_by(|a, b| {
         b.magnitude.cmp(&a.magnitude)
+            .then_with(|| b.fingerprints.len().cmp(&a.fingerprints.len()))
             .then_with(|| b.file_count.cmp(&a.file_count))
     });
 
@@ -254,15 +279,88 @@ pub fn compute_directory_set_clusters(
 
 /// Generate Delete pending changes for a cluster decision.
 /// Creates a change for each file in non-keeper directories.
+///
+/// Uses the cluster's tracks_by_dir directly if available (directory-set mode),
+/// otherwise falls back to searching conflict_sets (legacy mode).
 pub fn generate_cluster_changes(
     cluster: &DirectorySetCluster,
     keeper_dir: &str,
     conflict_sets: &[ConflictSet],
     corpus_root: &Path,
-    lost_files_root: &Path,
+    stash_root: &Path,
     session_id: &str,
 ) -> Vec<PendingChange> {
+    let _ = config::log_message(&format!(
+        "=== generate_cluster_changes called ===\n  keeper_dir={}\n  corpus_root={}\n  stash_root={}\n  session_id={}\n  cluster.directory_set={:?}\n  cluster.tracks_by_dir.len()={}\n  conflict_sets.len()={}",
+        keeper_dir,
+        corpus_root.display(),
+        stash_root.display(),
+        session_id,
+        cluster.directory_set,
+        cluster.tracks_by_dir.len(),
+        conflict_sets.len()
+    ));
+
     let mut changes = Vec::new();
+
+    // Use cluster.tracks_by_dir directly if available (directory-set mode)
+    if !cluster.tracks_by_dir.is_empty() {
+        let _ = config::log_message("[generate_cluster_changes] Using directory-set mode (cluster.tracks_by_dir)");
+
+        for (dir, tracks) in &cluster.tracks_by_dir {
+            let _ = config::log_message(&format!(
+                "[generate_cluster_changes] Processing dir={} with {} tracks (keeper={})",
+                dir,
+                tracks.len(),
+                dir == keeper_dir
+            ));
+
+            if dir == keeper_dir {
+                let _ = config::log_message(&format!(
+                    "[generate_cluster_changes] KEEPING {} tracks in {}",
+                    tracks.len(),
+                    dir
+                ));
+                continue; // Keep these
+            }
+
+            for track in tracks {
+                let rel_path = Path::new(&track.path)
+                    .strip_prefix(corpus_root)
+                    .unwrap_or(Path::new(&track.path));
+                let target = stash_root
+                    .join("fingerprint-dupes")
+                    .join(dir)
+                    .join(rel_path);
+
+                let _ = config::log_message(&format!(
+                    "[generate_cluster_changes] Creating DELETE change:\n    source={}\n    target={}",
+                    track.path,
+                    target.display()
+                ));
+
+                changes.push(PendingChange {
+                    id: None,
+                    session_id: session_id.to_string(),
+                    change_type: ChangeType::Delete,
+                    source_path: track.path.clone(),
+                    target_path: Some(target.to_string_lossy().to_string()),
+                    metadata_changes: None,
+                    created_at: None,
+                    status: ChangeStatus::Pending,
+                });
+            }
+        }
+
+        let _ = config::log_message(&format!(
+            "[generate_cluster_changes] Generated {} changes (directory-set mode)",
+            changes.len()
+        ));
+        return changes;
+    }
+
+    // Legacy mode: search through conflict_sets
+    let _ = config::log_message("[generate_cluster_changes] Using legacy mode (conflict_sets)");
 
     for cs in conflict_sets {
         // Only process conflicts matching EXACTLY this cluster's directory set
@@ -272,9 +370,19 @@ pub fn generate_cluster_changes(
             continue;
         }
 
+        let _ = config::log_message(&format!(
+            "[generate_cluster_changes] Matched conflict_set with fingerprint={}",
+            &cs.fingerprint[..20.min(cs.fingerprint.len())]
+        ));
+
         // Create Delete change for each non-keeper track
         for (dir, tracks) in &cs.tracks_by_dir {
             if dir == keeper_dir {
+                let _ = config::log_message(&format!(
+                    "[generate_cluster_changes] KEEPING {} tracks in {}",
+                    tracks.len(),
+                    dir
+                ));
                 continue; // Keep these
             }
 
@@ -282,10 +390,16 @@ pub fn generate_cluster_changes(
                 let rel_path = Path::new(&track.path)
                     .strip_prefix(corpus_root)
                     .unwrap_or(Path::new(&track.path));
-                let target = lost_files_root
+                let target = stash_root
                     .join("fingerprint-dupes")
                     .join(dir)
                     .join(rel_path);
+
+                let _ = config::log_message(&format!(
+                    "[generate_cluster_changes] Creating DELETE change:\n    source={}\n    target={}",
+                    track.path,
+                    target.display()
+                ));
 
                 changes.push(PendingChange {
                     id: None,
@@ -300,6 +414,11 @@ pub fn generate_cluster_changes(
             }
         }
     }
+
+    let _ = config::log_message(&format!(
+        "[generate_cluster_changes] Generated {} changes (legacy mode)",
+        changes.len()
+    ));
 
     changes
 }
@@ -472,8 +591,171 @@ pub fn compute_directory_clusters(
     clusters
 }
 
+// ============================================================================
+// Directory-Based Deduplication (Sleuthing)
+// ============================================================================
+
+/// Find duplicates BETWEEN selected directories.
+///
+/// Unlike `find_fingerprint_duplicates` which uses path prefix matching and
+/// global divergence indices, this function treats the selected directories
+/// themselves as the comparison units.
+///
+/// Example: Selecting `/playlists/{1,2,3,4}` finds:
+/// - Files in all 4 directories (by fingerprint)
+/// - Files in any 3 directories
+/// - Files in any 2 directories
+///
+/// Returns clusters sorted by magnitude (4-dir before 3-dir before 2-dir).
+pub fn find_duplicates_between_directories(
+    db: &Database,
+    selected_dirs: &[PathBuf],
+) -> Result<Vec<DirectorySetCluster>> {
+    let _ = config::log_message(&format!(
+        "=== find_duplicates_between_directories called with {} directories ===",
+        selected_dirs.len()
+    ));
+    for (i, dir) in selected_dirs.iter().enumerate() {
+        let _ = config::log_message(&format!("  dir[{}]: {}", i, dir.display()));
+    }
+
+    if selected_dirs.len() < 2 {
+        let _ = config::log_message("[find_duplicates] Less than 2 directories - returning empty");
+        return Ok(Vec::new());
+    }
+
+    // 1. For each selected directory, get all tracks with fingerprints
+    //    Build: fingerprint -> HashMap<dir_index, Vec<Track>>
+    let mut fp_to_dirs: HashMap<String, HashMap<usize, Vec<Track>>> = HashMap::new();
+
+    for (dir_idx, dir_path) in selected_dirs.iter().enumerate() {
+        let _ = config::log_message(&format!(
+            "[find_duplicates] Querying tracks in dir[{}]: {}",
+            dir_idx,
+            dir_path.display()
+        ));
+        let tracks = db.get_tracks_in_directory(dir_path)?;
+        let _ = config::log_message(&format!(
+            "[find_duplicates] Found {} tracks with fingerprints in {}",
+            tracks.len(),
+            dir_path.display()
+        ));
+        for track in tracks {
+            if let Some(fp) = &track.fingerprint {
+                fp_to_dirs
+                    .entry(fp.clone())
+                    .or_default()
+                    .entry(dir_idx)
+                    .or_default()
+                    .push(track);
+            }
+        }
+    }
+
+    let _ = config::log_message(&format!(
+        "[find_duplicates] Total unique fingerprints found: {}",
+        fp_to_dirs.len()
+    ));
+
+    // 2. Filter to only fingerprints that appear in 2+ selected directories
+    let duplicates: HashMap<_, _> = fp_to_dirs
+        .into_iter()
+        .filter(|(_, dirs)| dirs.len() >= 2)
+        .collect();
+
+    let _ = config::log_message(&format!(
+        "[find_duplicates] Fingerprints appearing in 2+ directories: {}",
+        duplicates.len()
+    ));
+
+    if duplicates.is_empty() {
+        let _ = config::log_message("[find_duplicates] No duplicates found - returning empty");
+        return Ok(Vec::new());
+    }
+
+    // 3. Group fingerprints by their exact directory set
+    //    Key = sorted Vec<dir_idx>, Value = Vec<(fingerprint, dir_tracks)>
+    let mut by_dir_set: HashMap<Vec<usize>, Vec<(String, HashMap<usize, Vec<Track>>)>> =
+        HashMap::new();
+
+    for (fp, dirs_map) in duplicates {
+        let mut dir_set: Vec<usize> = dirs_map.keys().cloned().collect();
+        dir_set.sort();
+        by_dir_set.entry(dir_set).or_default().push((fp, dirs_map));
+    }
+
+    // 4. Build DirectorySetCluster for each group
+    let mut clusters: Vec<DirectorySetCluster> = by_dir_set
+        .into_iter()
+        .map(|(dir_indices, fps_and_tracks)| {
+            // Get directory names from paths
+            let dir_names: Vec<String> = dir_indices
+                .iter()
+                .map(|&i| {
+                    selected_dirs[i]
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .collect();
+
+            // Aggregate tracks by directory name
+            let mut tracks_by_dir: HashMap<String, Vec<Track>> = HashMap::new();
+            for (_, dir_tracks) in &fps_and_tracks {
+                for (&dir_idx, tracks) in dir_tracks {
+                    let dir_name = &dir_names[dir_indices.iter().position(|&i| i == dir_idx).unwrap()];
+                    tracks_by_dir
+                        .entry(dir_name.clone())
+                        .or_default()
+                        .extend(tracks.clone());
+                }
+            }
+
+            DirectorySetCluster {
+                directory_set: dir_names,
+                fingerprints: fps_and_tracks.iter().map(|(fp, _)| fp.clone()).collect(),
+                file_count: tracks_by_dir.values().map(|t| t.len()).sum(),
+                magnitude: dir_indices.len(),
+                tracks_by_dir,
+            }
+        })
+        .collect();
+
+    // 5. Sort: magnitude DESC, then fingerprint count DESC
+    clusters.sort_by(|a, b| {
+        b.magnitude
+            .cmp(&a.magnitude)
+            .then_with(|| b.fingerprints.len().cmp(&a.fingerprints.len()))
+            .then_with(|| b.file_count.cmp(&a.file_count))
+    });
+
+    let _ = config::log_message(&format!(
+        "=== find_duplicates_between_directories complete: {} clusters ===",
+        clusters.len()
+    ));
+    for (i, cluster) in clusters.iter().enumerate() {
+        let _ = config::log_message(&format!(
+            "  cluster[{}]: magnitude={} dirs={:?} fingerprints={} files={} tracks_by_dir.keys={:?}",
+            i,
+            cluster.magnitude,
+            cluster.directory_set,
+            cluster.fingerprints.len(),
+            cluster.file_count,
+            cluster.tracks_by_dir.keys().collect::<Vec<_>>()
+        ));
+    }
+
+    Ok(clusters)
+}
+
 /// Find all fingerprint duplicates in selected directories
-/// Groups duplicates by the first differing directory component in their paths
+/// Uses a TWO-PASS approach:
+/// 1. First pass: Find the GLOBAL minimum divergence index (highest-level conflict point)
+/// 2. Second pass: Build conflict sets using that SAME index for ALL tracks
+///
+/// This ensures high-level sweeping decisions like "Playlist-A vs Playlist-B"
+/// rather than granular "album-A vs album-B" decisions.
 pub fn find_fingerprint_duplicates(
     db: &Database,
     directory_paths: &[PathBuf],
@@ -496,7 +778,33 @@ pub fn find_fingerprint_duplicates(
         }
     }
 
-    // 3. Filter to groups with 2+ tracks and build conflict sets
+    // 3. FIRST PASS: Find the GLOBAL minimum divergence index
+    //    This is the highest-level point where ANY duplicates diverge
+    let mut min_divergence_idx: Option<usize> = None;
+    for tracks in fp_groups.values() {
+        if tracks.len() < 2 {
+            continue;
+        }
+        let paths: Vec<PathBuf> = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
+        if let Ok(idx) = find_path_divergence(&paths) {
+            min_divergence_idx = Some(match min_divergence_idx {
+                Some(current) => current.min(idx),
+                None => idx,
+            });
+        }
+    }
+
+    let global_divergence_idx = match min_divergence_idx {
+        Some(idx) => idx,
+        None => return Ok(Vec::new()), // No valid divergence found
+    };
+
+    config::log_message(&format!(
+        "Global divergence index: {} (relative to corpus root)",
+        global_divergence_idx
+    ))?;
+
+    // 4. SECOND PASS: Build conflict sets using the GLOBAL divergence index
     let mut conflict_sets = Vec::new();
 
     for (fp, tracks) in fp_groups {
@@ -504,32 +812,20 @@ pub fn find_fingerprint_duplicates(
             continue; // Not a duplicate
         }
 
-        // 4. Find path divergence index for each group
-        let paths: Vec<PathBuf> = tracks.iter().map(|t| PathBuf::from(&t.path)).collect();
-
-        let divergence_idx = match find_path_divergence(&paths) {
-            Ok(idx) => idx,
-            Err(_) => {
-                // If we can't find divergence, skip this group
-                config::log_message(&format!(
-                    "Could not determine path divergence for fingerprint group with {} tracks",
-                    tracks.len()
-                ))?;
-                continue;
-            }
-        };
-
-        // 5. Group tracks by conflict key (differing directory name)
+        // Use GLOBAL divergence index for ALL tracks - this ensures consistent grouping
         let mut tracks_by_dir: HashMap<String, Vec<Track>> = HashMap::new();
         for track in tracks {
-            let conflict_key =
-                extract_conflict_key(Path::new(&track.path), corpus_root, divergence_idx);
+            let conflict_key = extract_conflict_dir(
+                Path::new(&track.path),
+                corpus_root,
+                global_divergence_idx,
+            );
             tracks_by_dir.entry(conflict_key).or_default().push(track);
         }
 
-        // 6. Only include if 2+ conflict directories
+        // Only include if 2+ conflict directories
         if tracks_by_dir.len() < 2 {
-            continue; // All tracks in same directory - not a cross-directory duplicate
+            continue; // All tracks in same directory at this level
         }
 
         let conflict_dirs: Vec<String> = tracks_by_dir.keys().cloned().collect();
@@ -542,7 +838,7 @@ pub fn find_fingerprint_duplicates(
         });
     }
 
-    // 7. Sort by conflict count (desc), then by total files (desc)
+    // 5. Sort by conflict count (desc), then by total files (desc)
     conflict_sets.sort_by(|a, b| {
         b.conflict_dirs
             .len()
@@ -555,6 +851,23 @@ pub fn find_fingerprint_duplicates(
     });
 
     Ok(conflict_sets)
+}
+
+/// Extract JUST the directory name at the divergence index (not full path).
+/// This normalizes all conflicts to the same hierarchical level.
+///
+/// For files:
+///   /corpus/web/playlists/Playlist-A/artist/album/track.flac
+///   /corpus/web/playlists/Playlist-B/artist/album/track.flac
+/// With divergence_idx=3 (counting from corpus root), returns:
+///   "Playlist-A" and "Playlist-B" (just the differing component)
+fn extract_conflict_dir(path: &Path, corpus_root: &Path, divergence_idx: usize) -> String {
+    let relative = path.strip_prefix(corpus_root).unwrap_or(path);
+    relative
+        .components()
+        .nth(divergence_idx)
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Find where paths diverge (first component index where paths differ)
@@ -606,12 +919,12 @@ fn extract_conflict_key(path: &Path, corpus_root: &Path, divergence_idx: usize) 
 /// Returns: (tracks_moved_count, tracks_skipped_due_to_missing_bitrate)
 ///
 /// This function processes fingerprint duplicates and automatically moves
-/// lower-quality versions to lost+found. If any track in a fingerprint group
+/// lower-quality versions to stash. If any track in a fingerprint group
 /// is missing bitrate data, the entire group is skipped and left for manual resolution.
 pub fn auto_remove_inferior_bitrates(
     tracks: &[Track],
     corpus_root: &Path,
-    lost_found_root: &Path,
+    stash_root: &Path,
 ) -> Result<(usize, usize)> {
     let mut moved_count = 0;
     let mut skipped_count = 0;
@@ -654,11 +967,11 @@ pub fn auto_remove_inferior_bitrates(
             .max()
             .unwrap(); // Safe: we checked all_have_bitrate
 
-        // Keep highest bitrate track(s), move rest to lost-files
+        // Keep highest bitrate track(s), move rest to stash
         for track in group {
             if track.bitrate_kbps.unwrap() < max_bitrate {
-                // Move to lost-files/fingerprint-dupes-auto/
-                match move_to_lost_found_auto(track, corpus_root, lost_found_root) {
+                // Move to stash/fingerprint-dupes-auto/
+                match move_to_stash_auto(track, corpus_root, stash_root) {
                     Ok(_) => {
                         moved_count += 1;
                         config::log_message(&format!(
@@ -683,12 +996,12 @@ pub fn auto_remove_inferior_bitrates(
     Ok((moved_count, skipped_count))
 }
 
-/// Move file to lost-files/fingerprint-dupes-auto/ preserving structure
+/// Move file to stash/fingerprint-dupes-auto/ preserving structure
 /// Used for automatic inferior-bitrate removal
-fn move_to_lost_found_auto(
+fn move_to_stash_auto(
     track: &Track,
     corpus_root: &Path,
-    lost_found_root: &Path,
+    stash_root: &Path,
 ) -> Result<()> {
     let source_path = Path::new(&track.path);
 
@@ -696,8 +1009,8 @@ fn move_to_lost_found_auto(
     let relative_path = source_path.strip_prefix(corpus_root)
         .context("Track path not within corpus root")?;
 
-    // Target: lost-files/fingerprint-dupes-auto/<relative-path>
-    let target_dir = lost_found_root.join("fingerprint-dupes-auto");
+    // Target: stash/fingerprint-dupes-auto/<relative-path>
+    let target_dir = stash_root.join("fingerprint-dupes-auto");
     let target_path = target_dir.join(relative_path);
 
     // Create parent directories
@@ -716,13 +1029,13 @@ fn move_to_lost_found_auto(
     })
 }
 
-/// Resolve a conflict by moving losers to lost+found
+/// Resolve a conflict by moving losers to stash
 /// Returns statistics about the operation
 pub fn resolve_conflict_set(
     conflict_set: &ConflictSet,
     winner_dir: &str,
     corpus_root: &Path,
-    lost_found_root: &Path,
+    stash_root: &Path,
 ) -> Result<SessionStats> {
     let mut stats = SessionStats {
         total_sets: 1,
@@ -742,11 +1055,11 @@ pub fn resolve_conflict_set(
         }
 
         for track in tracks {
-            match move_to_lost_found(track, dir, corpus_root, lost_found_root) {
+            match move_to_stash(track, dir, corpus_root, stash_root) {
                 Ok(_) => {
                     stats.files_moved += 1;
                     config::log_message(&format!(
-                        "Moved duplicate: {} -> lost+found/fingerprint-dupes/{}/",
+                        "Moved duplicate: {} -> stash/fingerprint-dupes/{}/",
                         track.path, dir
                     ))?;
                 }
@@ -761,26 +1074,26 @@ pub fn resolve_conflict_set(
     Ok(stats)
 }
 
-/// Move file to lost+found preserving directory structure
-/// Target path: lost+found/fingerprint-dupes/<conflict_dir>/<relative_path>
-fn move_to_lost_found(
+/// Move file to stash preserving directory structure
+/// Target path: stash/fingerprint-dupes/<conflict_dir>/<relative_path>
+fn move_to_stash(
     track: &Track,
     conflict_dir: &str,
     corpus_root: &Path,
-    lost_found_root: &Path,
+    stash_root: &Path,
 ) -> Result<()> {
     let relative_path = Path::new(&track.path)
         .strip_prefix(corpus_root)
         .context("Track path not in corpus")?;
 
-    let target_path = lost_found_root
+    let target_path = stash_root
         .join("fingerprint-dupes")
         .join(conflict_dir)
         .join(relative_path);
 
     // Create parent directories
     if let Some(parent) = target_path.parent() {
-        fs::create_dir_all(parent).context("Failed to create lost+found directories")?;
+        fs::create_dir_all(parent).context("Failed to create stash directories")?;
     }
 
     // Move file (try rename first, fall back to copy+delete for cross-filesystem)
@@ -921,12 +1234,14 @@ mod tests {
                 fingerprints: vec!["fp1".into()],
                 file_count: 3,
                 magnitude: 3,
+                tracks_by_dir: HashMap::new(),
             },
             DirectorySetCluster {
                 directory_set: vec!["a".into(), "b".into()],
                 fingerprints: vec!["fp2".into()],
                 file_count: 2,
                 magnitude: 2,
+                tracks_by_dir: HashMap::new(),
             },
         ];
 
@@ -944,6 +1259,7 @@ mod tests {
                 fingerprints: vec!["fp1".into()],
                 file_count: 2,
                 magnitude: 2,
+                tracks_by_dir: HashMap::new(),
             },
         ];
 
@@ -959,6 +1275,7 @@ mod tests {
             fingerprints: vec!["fp1".into()],
             file_count: 2,
             magnitude: 2,
+            tracks_by_dir: HashMap::new(), // Uses conflict_sets via legacy mode
         };
 
         let changes = generate_cluster_changes(
@@ -966,7 +1283,7 @@ mod tests {
             "keeper",
             &conflicts,
             Path::new("/corpus"),
-            Path::new("/lost-files"),
+            Path::new("/stash"),
             "session-123",
         );
 

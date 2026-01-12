@@ -43,6 +43,10 @@ pub struct TagEditorState {
     pub current_group_idx: Option<usize>,
     /// Whether focus is on value (true) or name (false) when editing
     pub focus_on_value: bool,
+    /// Scroll offset for tag field list (for songs with many tags)
+    pub tag_scroll_offset: usize,
+    /// Visible height for tag field area (set during render)
+    pub tag_visible_height: usize,
 }
 
 impl TagEditorState {
@@ -65,6 +69,8 @@ impl TagEditorState {
             duplicate_groups,
             current_group_idx: None,
             focus_on_value: true,
+            tag_scroll_offset: 0,
+            tag_visible_height: 10, // Default, updated during render
         }
     }
 
@@ -95,6 +101,8 @@ impl TagEditorState {
             duplicate_groups: groups,
             current_group_idx: Some(starting_group_idx),
             focus_on_value: true,
+            tag_scroll_offset: 0,
+            tag_visible_height: 10,
         })
     }
 
@@ -108,6 +116,10 @@ impl TagEditorState {
         }
         if self.current_field_idx > 0 {
             self.current_field_idx -= 1;
+            // Scroll up if cursor goes above visible area
+            if self.current_field_idx < self.tag_scroll_offset {
+                self.tag_scroll_offset = self.current_field_idx;
+            }
             self.load_buffers();
         }
     }
@@ -119,6 +131,12 @@ impl TagEditorState {
         let max_fields = self.tag_fields.get(self.current_track_idx).map(|f| f.len()).unwrap_or(0);
         if self.current_field_idx < max_fields.saturating_sub(1) {
             self.current_field_idx += 1;
+            // Scroll down if cursor goes below visible area
+            // Leave 1 line margin at bottom for visibility
+            let visible_end = self.tag_scroll_offset + self.tag_visible_height.saturating_sub(1);
+            if self.current_field_idx >= visible_end {
+                self.tag_scroll_offset = self.current_field_idx.saturating_sub(self.tag_visible_height.saturating_sub(2));
+            }
             self.load_buffers();
         }
     }
@@ -133,6 +151,7 @@ impl TagEditorState {
         if self.current_track_idx < self.tracks.len().saturating_sub(1) {
             self.current_track_idx += 1;
             self.current_field_idx = 0;
+            self.tag_scroll_offset = 0; // Reset scroll on track change
             self.load_buffers();
             false
         } else {
@@ -150,6 +169,7 @@ impl TagEditorState {
         if self.current_track_idx > 0 {
             self.current_track_idx -= 1;
             self.current_field_idx = 0;
+            self.tag_scroll_offset = 0; // Reset scroll on track change
             self.load_buffers();
         }
     }

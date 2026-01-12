@@ -50,6 +50,11 @@ impl TagEditorState {
                 }
                 TagEditorAction::None
             }
+            KeyCode::BackTab => {
+                // BackTab is how most terminals send Shift+Tab
+                self.prev_track();
+                TagEditorAction::None
+            }
             KeyCode::Enter => {
                 self.handle_enter();
                 TagEditorAction::None

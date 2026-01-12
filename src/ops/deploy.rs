@@ -32,7 +32,7 @@ pub struct DeploymentAction {
 #[derive(Debug, Clone)]
 pub struct LostFileAction {
     pub current_path: PathBuf,
-    pub target_path: PathBuf, // In lost-files directory
+    pub target_path: PathBuf, // In stash directory
     pub inode: i64,
 }
 
@@ -208,7 +208,7 @@ pub fn create_deployment_plan(config: &Config, db: &Database) -> Result<Vec<Depl
 pub fn execute_deployment(
     plan: &DeploymentPlan,
     library_root: &Path,
-    lost_files_root: Option<&Path>,
+    stash_root: Option<&Path>,
     dry_run: bool,
 ) -> Result<DeploymentResult> {
     let mut result = DeploymentResult {
@@ -218,15 +218,15 @@ pub fn execute_deployment(
         errors: Vec::new(),
     };
 
-    // Phase 1: Move lost files (if configured)
-    if let Some(lost_root) = lost_files_root {
+    // Phase 1: Move orphaned library files to stash (if configured)
+    if let Some(stash_path) = stash_root {
         for lost_file in &plan.lost_files {
-            let target = lost_root.join(&lost_file.target_path);
+            let target = stash_path.join(&lost_file.target_path);
 
             if !dry_run {
-                if let Err(e) = relocate_lost_file(&lost_file.current_path, &target) {
+                if let Err(e) = relocate_to_stash(&lost_file.current_path, &target) {
                     result.errors.push(format!(
-                        "Failed to move lost file {}: {}",
+                        "Failed to stash orphaned file {}: {}",
                         lost_file.current_path.display(),
                         e
                     ));
@@ -290,8 +290,8 @@ pub fn execute_deployment(
     Ok(result)
 }
 
-/// Relocate a lost file to the lost files directory
-fn relocate_lost_file(current_path: &Path, target_path: &Path) -> Result<()> {
+/// Relocate an orphaned file to the stash directory
+fn relocate_to_stash(current_path: &Path, target_path: &Path) -> Result<()> {
     // Create parent directories
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent)?;

@@ -5,7 +5,7 @@
 
 // Root directory of your music corpus
 corpus-root "/archive/corpus"
-lost-files "/archive/working/disorganized_files"
+stash-dir "/archive/working/stash"
 // Optional: Path to your legacy library that needs organization
 // useful if you are working at dissecting an existing tag-organized library into a better organization strategy :)
 legacy-library "/archive/working/legacy"

@@ -294,3 +294,14 @@ pub fn scan_directory_with_progress(
 
     Ok(result)
 }
+
+/// Find tracks in the database whose files no longer exist on disk.
+pub fn find_missing_tracks(db: &Database, source: &str) -> Result<Vec<crate::db::Track>> {
+    let tracks = db.get_all_tracks_for_source(source)?;
+    let missing: Vec<crate::db::Track> = tracks
+        .into_iter()
+        .filter(|t| !Path::new(&t.path).exists())
+        .collect();
+    Ok(missing)
+}
+

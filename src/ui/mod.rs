@@ -53,6 +53,7 @@ enum UiMode {
     DialogueSummary,
     ClusterDialogue,
     BulkReviewPrompt,
+    SessionReview,
 }
 
 /// Main application state
@@ -69,6 +70,7 @@ struct App {
     dialogue_summary: Option<dialogue::DialogueSummaryState>,
     cluster_dialogue: Option<dedup_flow::ClusterDialogueState>,
     bulk_prompt: Option<dedup_flow::BulkPromptState>,
+    session_review: Option<dedup_flow::SessionReviewState>,
 
     // Background operations
     operation: Option<OperationState>,
@@ -98,6 +100,7 @@ impl App {
             dialogue_summary: None,
             cluster_dialogue: None,
             bulk_prompt: None,
+            session_review: None,
             operation: None,
             operation_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
@@ -140,6 +143,12 @@ impl App {
                 if let Some(ref mut bulk_prompt) = self.bulk_prompt {
                     let action = bulk_prompt.handle_key(key);
                     self.handle_bulk_prompt_action(action);
+                }
+            }
+            UiMode::SessionReview => {
+                if let Some(ref mut session_review) = self.session_review {
+                    let action = session_review.handle_key(key);
+                    self.handle_session_review_action(action);
                 }
             }
         }
@@ -510,16 +519,12 @@ impl App {
                 }
             }
             dedup_flow::ClusterDialogueAction::ShowSessionReview => {
-                // TODO: Phase 5 - transition to session review
-                if let Some(ref cluster_dlg) = self.cluster_dialogue {
-                    let total = cluster_dlg.session.total_pending_changes();
-                    self.status_message = Some(format!(
-                        "Session review (TODO - Phase 5): {} pending changes",
-                        total
-                    ));
+                // Transition to session review
+                if let Some(cluster_dlg) = self.cluster_dialogue.take() {
+                    let session = cluster_dlg.into_session();
+                    self.session_review = Some(dedup_flow::SessionReviewState::new(session));
+                    self.mode = UiMode::SessionReview;
                 }
-                self.cluster_dialogue = None;
-                self.mode = UiMode::MainMenu;
             }
             dedup_flow::ClusterDialogueAction::Cancel => {
                 self.cluster_dialogue = None;
@@ -536,16 +541,12 @@ impl App {
         match action {
             dedup_flow::BulkPromptAction::None => {}
             dedup_flow::BulkPromptAction::CommitBulk => {
-                // TODO: Phase 5 - transition to session review
-                if let Some(ref bulk_prompt) = self.bulk_prompt {
-                    let total = bulk_prompt.session.total_pending_changes();
-                    self.status_message = Some(format!(
-                        "Session review (TODO - Phase 5): {} pending changes",
-                        total
-                    ));
+                // Transition to session review
+                if let Some(bulk_prompt) = self.bulk_prompt.take() {
+                    let session = bulk_prompt.into_session();
+                    self.session_review = Some(dedup_flow::SessionReviewState::new(session));
+                    self.mode = UiMode::SessionReview;
                 }
-                self.bulk_prompt = None;
-                self.mode = UiMode::MainMenu;
             }
             dedup_flow::BulkPromptAction::ContinueIndividual => {
                 // Return to cluster dialogue to process remaining 2-file conflicts
@@ -577,6 +578,44 @@ impl App {
                 self.bulk_prompt = None;
                 self.mode = UiMode::MainMenu;
                 self.status_message = Some("Deduplication cancelled".to_string());
+            }
+        }
+    }
+
+    fn handle_session_review_action(&mut self, action: dedup_flow::SessionReviewAction) {
+        match action {
+            dedup_flow::SessionReviewAction::None => {}
+            dedup_flow::SessionReviewAction::Commit => {
+                // Execute all pending changes
+                if let Some(ref session_review) = self.session_review {
+                    let total = session_review.session.total_pending_changes();
+                    // TODO: Actually execute changes via ops/changes.rs
+                    self.status_message = Some(format!(
+                        "Committed {} file moves (execution TODO)",
+                        total
+                    ));
+                }
+                self.session_review = None;
+                self.mode = UiMode::MainMenu;
+            }
+            dedup_flow::SessionReviewAction::Preview => {
+                // Dry run - show what would happen
+                if let Some(ref session_review) = self.session_review {
+                    let total = session_review.session.total_pending_changes();
+                    self.status_message = Some(format!(
+                        "Preview: {} files would be moved to lost-files/",
+                        total
+                    ));
+                }
+            }
+            dedup_flow::SessionReviewAction::Export => {
+                // Export change list to file
+                self.status_message = Some("Export change list (TODO)".to_string());
+            }
+            dedup_flow::SessionReviewAction::Cancel => {
+                self.session_review = None;
+                self.mode = UiMode::MainMenu;
+                self.status_message = Some("Session cancelled, no changes made".to_string());
             }
         }
     }
@@ -666,6 +705,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         UiMode::DialogueSummary => "Music Library Assistant - Session Summary",
         UiMode::ClusterDialogue => "Music Library Assistant - Fingerprint Deduplication",
         UiMode::BulkReviewPrompt => "Music Library Assistant - Bulk Decision Point",
+        UiMode::SessionReview => "Music Library Assistant - Session Review",
     };
 
     let header = Paragraph::new(title)
@@ -704,6 +744,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         UiMode::BulkReviewPrompt => {
             if let Some(ref mut bulk_prompt) = app.bulk_prompt {
                 bulk_prompt.render(f, area);
+            }
+        }
+        UiMode::SessionReview => {
+            if let Some(ref mut session_review) = app.session_review {
+                session_review.render(f, area);
             }
         }
     }
@@ -881,6 +926,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         UiMode::Dialogue | UiMode::DialogueSummary => "↑↓ Navigate | Enter Select | Esc Exit",
         UiMode::ClusterDialogue => "↑↓ Select | Enter Keep | Tab Skip | Esc Review",
         UiMode::BulkReviewPrompt => "↑↓ Select | Enter Choose | Esc Cancel",
+        UiMode::SessionReview => "↑↓ Select | Enter Execute | Esc Cancel",
     };
     lines.push(Line::from(hints));
 

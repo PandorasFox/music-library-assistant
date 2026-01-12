@@ -45,8 +45,6 @@ pub struct ClusterDialogueState {
     selected_dir_index: usize,
     /// List widget state for directory selection
     dir_list_state: ListState,
-    /// Whether to show detailed file list
-    show_details: bool,
     /// Corpus root path for computing relative paths
     corpus_root: String,
     /// Lost files root for delete targets
@@ -79,7 +77,6 @@ impl ClusterDialogueState {
             session,
             selected_dir_index: 0,
             dir_list_state: ListState::default(),
-            show_details: false,
             corpus_root,
             lost_files_root,
         };
@@ -90,22 +87,18 @@ impl ClusterDialogueState {
     /// Handle key input
     pub fn handle_key(&mut self, key: KeyEvent) -> ClusterDialogueAction {
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.move_selection(-1);
                 ClusterDialogueAction::Continue
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.move_selection(1);
                 ClusterDialogueAction::Continue
             }
             KeyCode::Enter => self.select_keeper(),
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            KeyCode::Tab => {
                 // Skip this cluster (defer to end)
                 self.skip_cluster()
-            }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                self.show_details = !self.show_details;
-                ClusterDialogueAction::Continue
             }
             KeyCode::Esc => {
                 // Go to session review (or cancel if no decisions)
@@ -115,7 +108,6 @@ impl ClusterDialogueState {
                     ClusterDialogueAction::ShowSessionReview
                 }
             }
-            KeyCode::Char('q') | KeyCode::Char('Q') => ClusterDialogueAction::Cancel,
             _ => ClusterDialogueAction::None,
         }
     }
@@ -268,15 +260,26 @@ impl ClusterDialogueState {
             }
         };
 
-        // Count files per directory for this cluster
-        let mut dir_file_counts: std::collections::HashMap<String, usize> =
+        // Collect detailed file info per directory for this cluster
+        let mut dir_details: std::collections::HashMap<String, Vec<(String, Option<i64>, Option<i64>, i64)>> =
             std::collections::HashMap::new();
         for cs in &self.session.conflict_sets {
             let mut cs_dirs: Vec<_> = cs.conflict_dirs.clone();
             cs_dirs.sort();
             if cs_dirs == cluster.directory_set {
                 for (dir, tracks) in &cs.tracks_by_dir {
-                    *dir_file_counts.entry(dir.clone()).or_default() += tracks.len();
+                    for track in tracks {
+                        let filename = std::path::Path::new(&track.path)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| track.path.clone());
+                        dir_details.entry(dir.clone()).or_default().push((
+                            filename,
+                            track.bitrate_kbps.map(|b| b as i64),
+                            track.sample_rate.map(|s| s as i64),
+                            track.file_size,
+                        ));
+                    }
                 }
             }
         }
@@ -286,11 +289,9 @@ impl ClusterDialogueState {
             .iter()
             .enumerate()
             .map(|(i, dir)| {
-                let count = dir_file_counts.get(dir).copied().unwrap_or(0);
                 let is_selected = i == self.selected_dir_index;
-
                 let prefix = if is_selected { ">> " } else { "   " };
-                let suffix = if is_selected { "  [KEEP]" } else { "" };
+                let suffix = if is_selected { " [KEEP]" } else { "" };
 
                 let style = if is_selected {
                     Style::default()
@@ -300,16 +301,48 @@ impl ClusterDialogueState {
                     Style::default()
                 };
 
-                ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(format!("[{}] ", i + 1), Style::default().fg(Color::DarkGray)),
-                    Span::styled(dir.clone(), style),
-                    Span::styled(
-                        format!("  ({} files)", count),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(suffix, Style::default().fg(Color::Green)),
-                ]))
+                let details = dir_details.get(dir);
+                let file_count = details.map(|d| d.len()).unwrap_or(0);
+
+                // Build detail lines for each file
+                let mut lines = vec![
+                    Line::from(vec![
+                        Span::styled(prefix, style),
+                        Span::styled(dir.clone(), style),
+                        Span::styled(
+                            format!("  ({} files)", file_count),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(suffix, Style::default().fg(Color::Green)),
+                    ]),
+                ];
+
+                // Add file details
+                if let Some(files) = details {
+                    for (filename, bitrate, sample_rate, file_size) in files.iter().take(5) {
+                        let bitrate_str = bitrate.map(|b| format!("{}kbps", b)).unwrap_or_default();
+                        let sample_str = sample_rate.map(|s| format!("{}Hz", s)).unwrap_or_default();
+                        let size_str = if *file_size >= 1_000_000 {
+                            format!("{:.1}MB", *file_size as f64 / 1_000_000.0)
+                        } else {
+                            format!("{}KB", *file_size / 1000)
+                        };
+
+                        let detail = format!("      {} {} {} {}", filename, bitrate_str, sample_str, size_str);
+                        lines.push(Line::from(Span::styled(
+                            detail,
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                    if files.len() > 5 {
+                        lines.push(Line::from(Span::styled(
+                            format!("      ... and {} more files", files.len() - 5),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+
+                ListItem::new(lines)
             })
             .collect();
 
@@ -369,16 +402,10 @@ impl ClusterDialogueState {
                 Span::raw(": Select | "),
                 Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": Keep | "),
-                Span::styled("S", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("Tab", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": Skip | "),
-                Span::styled("D", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": Details"),
-            ]),
-            Line::from(vec![
                 Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": Review pending changes | "),
-                Span::styled("Q", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": Cancel"),
+                Span::raw(": Review"),
             ]),
         ];
 

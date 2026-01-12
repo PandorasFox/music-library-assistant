@@ -52,6 +52,7 @@ enum UiMode {
     Dialogue,
     DialogueSummary,
     ClusterDialogue,
+    BulkReviewPrompt,
 }
 
 /// Main application state
@@ -67,6 +68,7 @@ struct App {
     dialogue: Option<dialogue::DialogueState>,
     dialogue_summary: Option<dialogue::DialogueSummaryState>,
     cluster_dialogue: Option<dedup_flow::ClusterDialogueState>,
+    bulk_prompt: Option<dedup_flow::BulkPromptState>,
 
     // Background operations
     operation: Option<OperationState>,
@@ -95,6 +97,7 @@ impl App {
             dialogue: None,
             dialogue_summary: None,
             cluster_dialogue: None,
+            bulk_prompt: None,
             operation: None,
             operation_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
@@ -131,6 +134,12 @@ impl App {
                 if let Some(ref mut cluster_dlg) = self.cluster_dialogue {
                     let action = cluster_dlg.handle_key(key);
                     self.handle_cluster_dialogue_action(action);
+                }
+            }
+            UiMode::BulkReviewPrompt => {
+                if let Some(ref mut bulk_prompt) = self.bulk_prompt {
+                    let action = bulk_prompt.handle_key(key);
+                    self.handle_bulk_prompt_action(action);
                 }
             }
         }
@@ -493,8 +502,12 @@ impl App {
             dedup_flow::ClusterDialogueAction::None => {}
             dedup_flow::ClusterDialogueAction::Continue => {}
             dedup_flow::ClusterDialogueAction::ShowBulkPrompt => {
-                // TODO: Phase 4 - transition to bulk prompt
-                self.status_message = Some("Bulk prompt (TODO - Phase 4)".to_string());
+                // Transition to bulk prompt - take ownership of session
+                if let Some(cluster_dlg) = self.cluster_dialogue.take() {
+                    let session = cluster_dlg.into_session();
+                    self.bulk_prompt = Some(dedup_flow::BulkPromptState::new(session));
+                    self.mode = UiMode::BulkReviewPrompt;
+                }
             }
             dedup_flow::ClusterDialogueAction::ShowSessionReview => {
                 // TODO: Phase 5 - transition to session review
@@ -515,6 +528,55 @@ impl App {
             }
             dedup_flow::ClusterDialogueAction::StatusMessage(msg) => {
                 self.status_message = Some(msg);
+            }
+        }
+    }
+
+    fn handle_bulk_prompt_action(&mut self, action: dedup_flow::BulkPromptAction) {
+        match action {
+            dedup_flow::BulkPromptAction::None => {}
+            dedup_flow::BulkPromptAction::CommitBulk => {
+                // TODO: Phase 5 - transition to session review
+                if let Some(ref bulk_prompt) = self.bulk_prompt {
+                    let total = bulk_prompt.session.total_pending_changes();
+                    self.status_message = Some(format!(
+                        "Session review (TODO - Phase 5): {} pending changes",
+                        total
+                    ));
+                }
+                self.bulk_prompt = None;
+                self.mode = UiMode::MainMenu;
+            }
+            dedup_flow::BulkPromptAction::ContinueIndividual => {
+                // Return to cluster dialogue to process remaining 2-file conflicts
+                if let Some(bulk_prompt) = self.bulk_prompt.take() {
+                    let session = bulk_prompt.into_session();
+                    // Recreate cluster dialogue with current session state
+                    // For now, mark bulk phase complete and continue
+                    let corpus_root = self.config.corpus_root.to_string_lossy().to_string();
+                    let lost_files_root = self.config.lost_files_dir
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+
+                    let mut new_state = dedup_flow::ClusterDialogueState::new(
+                        session.conflict_sets.clone(),
+                        session.session_id.clone(),
+                        corpus_root,
+                        lost_files_root,
+                    );
+                    // Restore session state
+                    new_state.session = session;
+                    new_state.session.bulk_phase_complete = true;
+
+                    self.cluster_dialogue = Some(new_state);
+                    self.mode = UiMode::ClusterDialogue;
+                }
+            }
+            dedup_flow::BulkPromptAction::Cancel => {
+                self.bulk_prompt = None;
+                self.mode = UiMode::MainMenu;
+                self.status_message = Some("Deduplication cancelled".to_string());
             }
         }
     }
@@ -603,6 +665,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         UiMode::Dialogue => "Music Library Assistant - Decision Flow",
         UiMode::DialogueSummary => "Music Library Assistant - Session Summary",
         UiMode::ClusterDialogue => "Music Library Assistant - Fingerprint Deduplication",
+        UiMode::BulkReviewPrompt => "Music Library Assistant - Bulk Decision Point",
     };
 
     let header = Paragraph::new(title)
@@ -636,6 +699,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         UiMode::ClusterDialogue => {
             if let Some(ref mut cluster_dlg) = app.cluster_dialogue {
                 cluster_dlg.render(f, area);
+            }
+        }
+        UiMode::BulkReviewPrompt => {
+            if let Some(ref mut bulk_prompt) = app.bulk_prompt {
+                bulk_prompt.render(f, area);
             }
         }
     }
@@ -811,7 +879,8 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         UiMode::MainMenu => "↑↓ Navigate | ←→ Pane | Enter Select | Q Quit",
         UiMode::TagEditor => "Tab Tracks | ↑↓ Fields | Enter Edit | Esc Exit",
         UiMode::Dialogue | UiMode::DialogueSummary => "↑↓ Navigate | Enter Select | Esc Exit",
-        UiMode::ClusterDialogue => "↑↓ Select | Enter Keep | S Skip | Esc Review",
+        UiMode::ClusterDialogue => "↑↓ Select | Enter Keep | Tab Skip | Esc Review",
+        UiMode::BulkReviewPrompt => "↑↓ Select | Enter Choose | Esc Cancel",
     };
     lines.push(Line::from(hints));
 

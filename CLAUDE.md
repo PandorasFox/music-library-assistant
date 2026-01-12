@@ -37,7 +37,8 @@ content below this point has been authored by claude, and are claude's notes on 
 1. **Read-only by default**: Analysis operations never modify corpus
 2. **Algebraic changes**: Track mutations as composable, reversible functions
 3. **Explicit mutations**: All corpus changes require explicit confirmation to commit
-4. **Resource efficiency**: hard-link deployments only; track inode+mtimes for scan efficiency...
+4. **Resource efficiency**: hard-link deployments only; track inode+mtimes for scan efficiency
+5. **Keyboard ergonomics**: Arrow keys and Enter for navigation/selection only. No number hotkeys or letter shortcuts for quick-select in menus. Typing is reserved for data entry. Mouse clicks are acceptable if available.
 
 ### Module Responsibilities
 

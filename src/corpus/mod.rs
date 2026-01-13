@@ -8,12 +8,14 @@
 //! - `db/` - Database layer (types, queries, changes)
 //! - `deduplication/` - Fingerprint-based duplicate detection and resolution
 //! - `health/` - Health issue detection, filtering, and library health
+//! - `mutations/` - Standardized mutation interface for all corpus changes
 //! - `reports/` - Report generation with ReportRenderer pattern
 
 pub mod db;
 pub mod deduplication;
 pub mod health;
 pub mod metadata;
+pub mod mutations;
 pub mod reports;
 
 

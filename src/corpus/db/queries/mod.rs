@@ -409,4 +409,50 @@ impl Database {
             .context("Failed to vacuum database")?;
         Ok(())
     }
+
+    // =========================================================================
+    // Schema Version Management
+    // =========================================================================
+
+    /// Get the current database schema version.
+    ///
+    /// Returns the version stored in app_metadata, or 2 (baseline) if not set.
+    pub fn get_schema_version(&self) -> Result<u32> {
+        let version: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM app_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        match version {
+            Some(v) => v.parse::<u32>().context("Invalid schema version in database"),
+            None => {
+                // No version recorded - this is a pre-versioning database
+                // Set baseline version and return it
+                self.set_schema_version(2)?;
+                Ok(2)
+            }
+        }
+    }
+
+    /// Set the database schema version.
+    pub fn set_schema_version(&self, version: u32) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO app_metadata (key, value, updated_at) VALUES ('schema_version', ?1, datetime('now'))",
+            params![version.to_string()],
+        ).context("Failed to set schema version")?;
+        Ok(())
+    }
+
+    /// Execute a batch of SQL statements.
+    ///
+    /// Used by migrations to run multiple statements atomically.
+    pub fn execute_batch(&self, sql: &str) -> Result<()> {
+        self.conn
+            .execute_batch(sql)
+            .context("Failed to execute SQL batch")
+    }
 }

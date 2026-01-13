@@ -15,10 +15,10 @@
 // ============================================================================
 
 /// MLA release version string (shown in title bar and reports)
-pub const MLA_VERSION: &str = "alpha 2";
+pub const MLA_VERSION: &str = "alpha 3";
 
 /// Full application title with version
-pub const MLA_TITLE: &str = "Music Library Assistant (mla alpha 2)";
+pub const MLA_TITLE: &str = "Music Library Assistant (mla alpha 3)";
 
 mod config;
 mod corpus;

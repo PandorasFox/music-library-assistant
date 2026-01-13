@@ -50,7 +50,7 @@ use std::time::Instant;
 
 use crate::config::{self, Config};
 use crate::corpus::{spawn_heartbeat, HeartbeatResult};
-use crate::corpus::db::Database;
+use crate::corpus::db::{Database, HealthIssueType};
 use crate::ops::operation::{
     log_operation_summary, OperationManager, OperationMessage, OperationProgress,
     OperationResult, OperationType, ProgressReporter,
@@ -61,6 +61,44 @@ use app::{EyeAnimation, HeartbeatRollResult};
 use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 use crate::corpus::mutations::MigrationRegistry;
+
+// ============================================================================
+// Deploy Conflict Resolution
+// ============================================================================
+
+/// Load deployment conflict groups from health issues.
+///
+/// Queries for unresolved `DeployConflict` health issues and converts them to
+/// `DuplicateGroupInfo` format for the tag editor.
+fn load_deploy_conflict_groups(db: &Database) -> Result<Vec<tag_editor::DuplicateGroupInfo>> {
+    let issues = db.get_unresolved_health_issues(Some(HealthIssueType::DeployConflict))?;
+
+    let mut groups = Vec::with_capacity(issues.len());
+
+    for issue in issues {
+        let issue_id = match issue.id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Get tracks associated with this conflict
+        let track_roles = db.get_health_issue_tracks(issue_id)?;
+        let tracks: Vec<_> = track_roles.into_iter().map(|(track, _role)| track).collect();
+
+        // Skip if fewer than 2 tracks (not really a conflict)
+        if tracks.len() < 2 {
+            continue;
+        }
+
+        groups.push(tag_editor::DuplicateGroupInfo {
+            group_id: issue_id,
+            tracks,
+            resolved: false,
+        });
+    }
+
+    Ok(groups)
+}
 
 // ============================================================================
 // Health Data Version
@@ -119,6 +157,8 @@ pub(crate) enum UiMode {
     AlbumReview,
     /// Directory-based bulk tag editor (aggregated view)
     DirectoryTagEditor,
+    /// Deploy conflict resolution - review accumulated changes before commit
+    DeployConflictReview,
 }
 
 /// Re-export from drop_flow module
@@ -158,6 +198,30 @@ impl Default for CanonCommitModalState {
             stale_deployments: 0,
         }
     }
+}
+
+/// Accumulated changes for a single deploy conflict group
+#[derive(Debug, Clone)]
+pub(crate) struct DeployConflictGroupChanges {
+    /// Health issue ID for this conflict group
+    pub group_id: i64,
+    /// Target deployment path this conflict was about
+    pub target_path: String,
+    /// Track count in this group
+    pub track_count: usize,
+    /// Pending changes for this group
+    pub changes: Vec<crate::corpus::db::PendingChange>,
+}
+
+/// State for the deploy conflict review screen
+#[derive(Debug, Clone)]
+pub(crate) struct DeployConflictReviewState {
+    /// Accumulated changes from all processed groups
+    pub groups: Vec<DeployConflictGroupChanges>,
+    /// Scroll offset for the list
+    pub scroll_offset: usize,
+    /// Selected button: 0 = Commit, 1 = Discard
+    pub selected_button: usize,
 }
 
 /// Context for what operation launched the directory browser.
@@ -210,6 +274,9 @@ struct App {
     directory_tag_editor_modal: Option<tag_editor::types::DirectoryTagEditorModal>,
     // Exit confirmation modal
     exit_confirm_modal_state: Option<ExitConfirmModalState>,
+    // Deploy conflict resolution flow
+    deploy_conflict_review: Option<DeployConflictReviewState>,
+    deploy_conflict_accumulated: Vec<DeployConflictGroupChanges>,
 
     // Background operations (supports multiple concurrent)
     operations: OperationManager,
@@ -236,6 +303,9 @@ struct App {
     // Tag editing session
     #[allow(dead_code)]
     tag_edit_session_id: String,
+
+    // First-time startup flag (indicates auto-scan was triggered)
+    first_time_scan_active: bool,
 }
 
 impl App {
@@ -274,6 +344,8 @@ impl App {
             directory_tag_editor: None,
             directory_tag_editor_modal: None,
             exit_confirm_modal_state: None,
+            deploy_conflict_review: None,
+            deploy_conflict_accumulated: Vec::new(),
             operations: OperationManager::new(),
             legacy_scan_receiver: None,
             legacy_scan_type: None,
@@ -285,6 +357,34 @@ impl App {
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
             tag_edit_session_id: uuid::Uuid::new_v4().to_string(),
+            first_time_scan_active: false,
+        }
+    }
+
+    /// Check if this is a first-time startup (no corpus tracks indexed).
+    /// If so, automatically start a corpus scan.
+    fn check_first_time_startup(&mut self) {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        // Check if there are any corpus tracks
+        let corpus_count = db.get_track_count(Some("corpus")).unwrap_or(0);
+
+        if corpus_count == 0 {
+            // First time startup - auto-start corpus scan
+            // TODO: Implement first-time config-setting flow for new users.
+            // Should prompt for: corpus root, library paths, optional legacy library.
+            // Write generated config.kdl to XDG config location.
+            self.status_message = Some("First-time setup: Scanning corpus...".to_string());
+            self.first_time_scan_active = true;
+            self.start_scan_corpus();
         }
     }
 
@@ -496,6 +596,9 @@ impl App {
                     let action = editor.handle_key(key);
                     self.handle_directory_tag_editor_action(action);
                 }
+            }
+            UiMode::DeployConflictReview => {
+                self.handle_deploy_conflict_review_key(key);
             }
         }
     }
@@ -758,7 +861,7 @@ impl App {
 
         // Spawn background thread
         std::thread::spawn(move || {
-            use crate::corpus::{detect_fingerprint_issues, detect_metadata_issues};
+            use crate::corpus::detect_fingerprint_issues;
             use std::time::Instant;
 
             let start = Instant::now();
@@ -814,7 +917,6 @@ impl App {
                 if let Ok(issues) = detect_fingerprint_issues(&db, track) {
                     _issues_found += issues.len();
                 }
-                let _ = detect_metadata_issues(&db, track);
 
                 progress.completed_items += 1;
                 reporter.update(progress.clone());
@@ -956,8 +1058,11 @@ impl App {
         }
     }
 
+    /// Start tag editor for deploy conflict resolution.
+    ///
+    /// Loads deployment conflicts from health_issues table and presents them
+    /// in the tag editor for resolution (editing tags to create unique deploy paths).
     fn start_tag_editor(&mut self) {
-        // Load duplicate groups from database
         let db_path = match config::get_db_path() {
             Ok(p) => p,
             Err(e) => {
@@ -973,45 +1078,24 @@ impl App {
             }
         };
 
-        // Get unresolved duplicate group IDs and load their tracks
-        match db.get_unresolved_duplicate_groups() {
-            Ok(group_ids) if !group_ids.is_empty() => {
-                // Load tracks for each group
-                let mut all_groups: Vec<tag_editor::DuplicateGroupInfo> = Vec::new();
-                for group_id in &group_ids {
-                    match db.get_duplicate_group_tracks(*group_id) {
-                        Ok(tracks) if !tracks.is_empty() => {
-                            all_groups.push(tag_editor::DuplicateGroupInfo {
-                                group_id: *group_id,
-                                tracks,
-                                resolved: false,
-                            });
-                        }
-                        Ok(_) => {} // Empty group, skip
-                        Err(e) => {
-                            self.status_message = Some(format!("Error loading group {}: {}", group_id, e));
-                            return;
-                        }
-                    }
-                }
-
-                if all_groups.is_empty() {
-                    self.status_message = Some("No duplicate groups with tracks found".to_string());
-                    return;
-                }
-
-                // Start with first group's tracks
-                let first_tracks = all_groups[0].tracks.clone();
-                self.tag_editor = Some(tag_editor::TagEditorState::new(first_tracks, all_groups));
-                self.mode = UiMode::TagEditor;
-            }
-            Ok(_) => {
-                self.status_message = Some("No unresolved duplicate groups found".to_string());
-            }
+        // Load deploy conflict health issues
+        let all_groups = match load_deploy_conflict_groups(&db) {
+            Ok(groups) => groups,
             Err(e) => {
-                self.status_message = Some(format!("Error loading duplicates: {}", e));
+                self.status_message = Some(format!("Error loading conflicts: {}", e));
+                return;
             }
+        };
+
+        if all_groups.is_empty() {
+            self.status_message = Some("No deployment conflicts to resolve".to_string());
+            return;
         }
+
+        // Start with first group's tracks
+        let first_tracks = all_groups[0].tracks.clone();
+        self.tag_editor = Some(tag_editor::TagEditorState::new(first_tracks, all_groups));
+        self.mode = UiMode::TagEditor;
     }
 
     fn start_decision_flow(&mut self) {
@@ -1505,12 +1589,15 @@ impl App {
             &editor.tag_fields,
         );
 
-        if changes.is_empty() {
+        // Check if we're in a deploy conflict workflow (accumulating mode)
+        let in_workflow = editor.is_in_duplicate_workflow();
+
+        // For workflow mode with advance_to_next: allow proceeding even with no changes
+        // (user might just want to skip a group without editing)
+        if changes.is_empty() && !advance_to_next {
             self.status_message = Some("No changes to save".to_string());
-            if !advance_to_next {
-                self.tag_editor = None;
-                self.mode = UiMode::MainMenu;
-            }
+            self.tag_editor = None;
+            self.mode = UiMode::MainMenu;
             return;
         }
 
@@ -1550,7 +1637,81 @@ impl App {
             }
         }
 
-        // Step 4: Execute changes through the mutation system
+        // Step 4: Handle differently based on workflow mode
+        if in_workflow && advance_to_next {
+            // ACCUMULATING MODE: Store changes for later bulk execution
+            // Extract needed data from immutable borrow first
+            let current_idx = editor.current_group_idx.unwrap_or(0);
+            let total_groups = editor.duplicate_groups.len();
+
+            // Build group info for accumulation
+            let group_info = editor.duplicate_groups.get(current_idx).map(|group| {
+                let target_path = group.tracks.first()
+                    .map(|t| {
+                        format!("{}/{}/{}",
+                            t.album_artist.as_deref()
+                                .or(t.artist.as_deref())
+                                .unwrap_or("Unknown Artist"),
+                            t.album.as_deref().unwrap_or("Unknown Album"),
+                            t.title.as_deref().unwrap_or("Unknown")
+                        )
+                    })
+                    .unwrap_or_else(|| "Unknown".to_string());
+                (group.group_id, target_path, group.tracks.len())
+            });
+
+            // Drop immutable borrow by ending the else block scope
+            // Now we can mutate
+            if let Some((group_id, target_path, track_count)) = group_info {
+                self.deploy_conflict_accumulated.push(DeployConflictGroupChanges {
+                    group_id,
+                    target_path,
+                    track_count,
+                    changes: pending_changes,
+                });
+            }
+
+            // Advance to next group
+            let next_idx = current_idx + 1;
+            if next_idx < total_groups {
+                // Move to next group
+                if let Some(ref mut editor) = self.tag_editor {
+                    editor.current_group_idx = Some(next_idx);
+                    let group = &editor.duplicate_groups[next_idx];
+                    editor.tracks = group.tracks.clone();
+                    editor.current_track_idx = 0;
+                    editor.current_field_idx = 0;
+                    // Reload tag fields from disk
+                    editor.tag_fields = editor.tracks.iter()
+                        .map(tag_editor::state::track_to_tag_fields)
+                        .collect();
+                    editor.original_tag_fields = editor.tag_fields.clone();
+                }
+
+                let groups_remaining = total_groups - next_idx;
+                self.status_message = Some(format!(
+                    "Group {} decisions saved. {} group(s) remaining.",
+                    current_idx + 1,
+                    groups_remaining
+                ));
+            } else {
+                // No more groups - transition to review screen
+                self.tag_editor = None;
+                self.deploy_conflict_review = Some(DeployConflictReviewState {
+                    groups: self.deploy_conflict_accumulated.clone(),
+                    scroll_offset: 0,
+                    selected_button: 0, // Default to Commit
+                });
+                self.mode = UiMode::DeployConflictReview;
+                self.status_message = Some(format!(
+                    "All {} groups processed. Review and commit changes.",
+                    self.deploy_conflict_accumulated.len()
+                ));
+            }
+            return;
+        }
+
+        // IMMEDIATE MODE: Execute changes now (non-workflow or SaveAll action)
         let db_path = match config::get_db_path() {
             Ok(p) => p,
             Err(e) => {
@@ -1582,7 +1743,13 @@ impl App {
         );
 
         let mut stale_count = 0;
+        let mut resolved_conflicts = 0;
         if has_path_changes {
+            // Cleanup any deployment conflicts that were resolved by these tag edits
+            if let Ok(count) = crate::corpus::health::cleanup_resolved_deployment_conflicts(&self.config, &db) {
+                resolved_conflicts = count;
+            }
+
             if let Ok(statuses) = crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
                 stale_count = statuses.iter().map(|s| s.stale.len()).sum();
             }
@@ -1601,22 +1768,40 @@ impl App {
         };
 
         let stale_msg = if stale_count > 0 {
-            format!(" ({} deployments now stale - use Deploy menu to update)", stale_count)
+            format!(" ({} deployments now stale)", stale_count)
         } else {
             String::new()
         };
 
-        self.status_message = Some(format!("{}{}", base_msg, stale_msg));
+        let resolved_msg = if resolved_conflicts > 0 {
+            format!(" ({} conflict(s) resolved)", resolved_conflicts)
+        } else {
+            String::new()
+        };
+
+        self.status_message = Some(format!("{}{}{}", base_msg, resolved_msg, stale_msg));
 
         if advance_to_next {
             // Move to next duplicate group if in duplicate workflow
             if let Some(ref mut editor) = self.tag_editor {
-                if let Some(current_idx) = editor.current_group_idx {
-                    if current_idx + 1 < editor.duplicate_groups.len() {
-                        // Advance to next group
+                if editor.current_group_idx.is_some() {
+                    // If conflicts were resolved, refresh the groups list from DB
+                    if resolved_conflicts > 0 {
+                        if let Ok(fresh_groups) = load_deploy_conflict_groups(&db) {
+                            editor.duplicate_groups = fresh_groups;
+                            // Reset to first group in refreshed list
+                            editor.current_group_idx = Some(0);
+                        }
+                    } else {
+                        // No resolution, just advance the index
+                        let current_idx = editor.current_group_idx.unwrap();
                         editor.current_group_idx = Some(current_idx + 1);
-                        // Reload tracks for new group
-                        let group = &editor.duplicate_groups[current_idx + 1];
+                    }
+
+                    // Load the next group if one exists
+                    let next_idx = editor.current_group_idx.unwrap();
+                    if next_idx < editor.duplicate_groups.len() {
+                        let group = &editor.duplicate_groups[next_idx];
                         editor.tracks = group.tracks.clone();
                         editor.current_track_idx = 0;
                         editor.current_field_idx = 0;
@@ -1630,8 +1815,8 @@ impl App {
                         self.tag_editor = None;
                         self.mode = UiMode::MainMenu;
                         self.status_message = Some(format!(
-                            "{}. All duplicate groups processed.",
-                            base_msg
+                            "{}{}{}. All conflicts processed.",
+                            base_msg, resolved_msg, stale_msg
                         ));
                     }
                 }
@@ -2650,6 +2835,134 @@ impl App {
             }
         }
     }
+
+    // =========================================================================
+    // Deploy Conflict Review Handlers
+    // =========================================================================
+
+    fn handle_deploy_conflict_review_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        let review = match &mut self.deploy_conflict_review {
+            Some(r) => r,
+            None => return,
+        };
+
+        match key.code {
+            KeyCode::Left => {
+                review.selected_button = 0; // Commit
+            }
+            KeyCode::Right => {
+                review.selected_button = 1; // Discard
+            }
+            KeyCode::Enter => {
+                if review.selected_button == 0 {
+                    // Commit all accumulated changes
+                    self.commit_deploy_conflict_changes();
+                } else {
+                    // Discard - just clear state and return to menu
+                    self.discard_deploy_conflict_changes();
+                }
+            }
+            KeyCode::Esc => {
+                // Cancel - return to menu without committing
+                self.discard_deploy_conflict_changes();
+            }
+            _ => {}
+        }
+    }
+
+    fn commit_deploy_conflict_changes(&mut self) {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                self.deploy_conflict_review = None;
+                self.deploy_conflict_accumulated.clear();
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                self.deploy_conflict_review = None;
+                self.deploy_conflict_accumulated.clear();
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        // Gather all pending changes from accumulated groups
+        let all_changes: Vec<_> = self.deploy_conflict_accumulated
+            .iter()
+            .flat_map(|g| g.changes.clone())
+            .collect();
+
+        if all_changes.is_empty() {
+            self.status_message = Some("No changes to commit".to_string());
+            self.deploy_conflict_review = None;
+            self.deploy_conflict_accumulated.clear();
+            self.mode = UiMode::MainMenu;
+            return;
+        }
+
+        // Execute all changes in bulk
+        let report = match crate::ops::changes::execute_changes(&db, &all_changes, false) {
+            Ok(r) => r,
+            Err(e) => {
+                self.status_message = Some(format!("Execution error: {}", e));
+                self.deploy_conflict_review = None;
+                self.deploy_conflict_accumulated.clear();
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        // Cleanup resolved conflicts
+        let resolved_count = crate::corpus::health::cleanup_resolved_deployment_conflicts(&self.config, &db)
+            .unwrap_or(0);
+
+        // Build status message
+        let groups_count = self.deploy_conflict_accumulated.len();
+        let base_msg = if report.failed > 0 {
+            format!(
+                "Committed {} groups: {} succeeded, {} failed",
+                groups_count, report.succeeded, report.failed
+            )
+        } else {
+            format!(
+                "Committed {} groups: {} changes applied",
+                groups_count, report.succeeded
+            )
+        };
+
+        let resolved_msg = if resolved_count > 0 {
+            format!(". {} conflict(s) resolved", resolved_count)
+        } else {
+            String::new()
+        };
+
+        self.status_message = Some(format!("{}{}", base_msg, resolved_msg));
+
+        // Clear state
+        self.deploy_conflict_review = None;
+        self.deploy_conflict_accumulated.clear();
+        self.mode = UiMode::MainMenu;
+    }
+
+    fn discard_deploy_conflict_changes(&mut self) {
+        let groups_count = self.deploy_conflict_accumulated.len();
+        self.status_message = Some(format!(
+            "Discarded changes from {} conflict group(s)",
+            groups_count
+        ));
+        self.deploy_conflict_review = None;
+        self.deploy_conflict_accumulated.clear();
+        self.mode = UiMode::MainMenu;
+    }
 }
 
 // ============================================================================
@@ -2688,6 +3001,7 @@ fn render(f: &mut Frame, app: &mut App) {
         directory_tag_editor: app.directory_tag_editor.as_mut(),
         directory_tag_editor_modal: app.directory_tag_editor_modal.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
+        deploy_conflict_review: app.deploy_conflict_review.as_ref(),
         heartbeat_result: app.heartbeat_result.as_ref(),
         heartbeat_pending: app.heartbeat_receiver.is_some(),
         eye: &app.eye,
@@ -2944,8 +3258,11 @@ pub fn run_menu(config: Config) -> Result<()> {
     // Check health data version and trigger rebuild if needed
     check_and_maybe_rebuild_health(&mut app);
 
-    // Spawn heartbeat check if enabled
-    if app.config.opinions.startup.heartbeat_on_startup {
+    // Check for first-time startup (no corpus indexed) and auto-scan
+    app.check_first_time_startup();
+
+    // Spawn heartbeat check if enabled (skip if first-time scan is running)
+    if app.config.opinions.startup.heartbeat_on_startup && !app.first_time_scan_active {
         let rx = spawn_heartbeat(&app.config);
         app.heartbeat_receiver = Some(rx);
         app.eye.set_heartbeat_pending(true);

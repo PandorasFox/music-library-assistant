@@ -1,6 +1,11 @@
 //! Directory Tag Editor Input Handling
 //!
 //! Keyboard input processing for the directory tag editor.
+//!
+//! TODO: Update controls to match deploy conflict editor pattern for group workflows:
+//! - Shift+Up/Down for track/file navigation within the group
+//! - Tab/Shift+Tab for group-to-group navigation (sibling directories)
+//! See docs/UX.md "Multi-Track Navigation Pattern" for the standard control scheme.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

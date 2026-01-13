@@ -55,6 +55,7 @@ pub struct RenderContext<'a> {
     pub directory_tag_editor: Option<&'a mut tag_editor::DirectoryTagEditorState>,
     pub directory_tag_editor_modal: Option<&'a tag_editor::types::DirectoryTagEditorModal>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
+    pub deploy_conflict_review: Option<&'a super::DeployConflictReviewState>,
     pub heartbeat_result: Option<&'a HeartbeatResult>,
     pub heartbeat_pending: bool,
     pub eye: &'a EyeAnimation,
@@ -106,6 +107,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::AlbumClusterView => Some("Album Tag Resolution"),
         super::UiMode::AlbumReview => Some("Album Tag Review"),
         super::UiMode::DirectoryTagEditor => Some("Directory Tag Editor"),
+        super::UiMode::DeployConflictReview => Some("Deploy Conflict Review"),
     };
 
     let title = match suffix {
@@ -290,7 +292,103 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 }
             }
         }
+        super::UiMode::DeployConflictReview => {
+            if let Some(ref review) = ctx.deploy_conflict_review {
+                render_deploy_conflict_review(f, area, review, ctx.status_message);
+            }
+        }
     }
+}
+
+/// Render the deploy conflict review screen
+fn render_deploy_conflict_review(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    review: &super::DeployConflictReviewState,
+    status_message: Option<&str>,
+) {
+    use ratatui::layout::Rect;
+
+    // Layout: content area | buttons | status
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(10),    // Group list
+            Constraint::Length(3),  // Buttons
+            Constraint::Length(3),  // Status
+        ])
+        .split(area);
+
+    // Render group list
+    let total_tracks: usize = review.groups.iter().map(|g| g.track_count).sum();
+    let total_changes: usize = review.groups.iter().map(|g| g.changes.len()).sum();
+
+    let mut items: Vec<ListItem> = Vec::new();
+    for (idx, group) in review.groups.iter().enumerate() {
+        let change_count = group.changes.len();
+        let line = if change_count > 0 {
+            format!(
+                "Group {}: {} tracks → {} edits  [{}]",
+                idx + 1,
+                group.track_count,
+                change_count,
+                truncate_path_display(&group.target_path, 40)
+            )
+        } else {
+            format!(
+                "Group {}: {} tracks → (no changes)  [{}]",
+                idx + 1,
+                group.track_count,
+                truncate_path_display(&group.target_path, 40)
+            )
+        };
+        items.push(ListItem::new(line));
+    }
+
+    let summary = format!(
+        "Deploy Conflict Resolution - {} groups, {} tracks, {} total edits",
+        review.groups.len(),
+        total_tracks,
+        total_changes
+    );
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(summary))
+        .style(Style::default().fg(Color::White));
+    f.render_widget(list, chunks[0]);
+
+    // Render buttons
+    let commit_style = if review.selected_button == 0 {
+        Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Green)
+    };
+    let discard_style = if review.selected_button == 1 {
+        Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Red)
+    };
+
+    let button_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(" Commit ", commit_style),
+        Span::raw("   "),
+        Span::styled(" Discard ", discard_style),
+        Span::raw("  "),
+    ]);
+
+    let buttons = Paragraph::new(button_line)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title("Actions"));
+    f.render_widget(buttons, chunks[1]);
+
+    // Render status
+    let status_text = status_message.unwrap_or("←/→ Select | Enter Confirm | Esc Cancel");
+    let status = Paragraph::new(status_text)
+        .style(Style::default().fg(Color::Yellow))
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title("Status"));
+    f.render_widget(status, chunks[2]);
 }
 
 fn render_exit_confirm_modal(
@@ -621,10 +719,10 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
                 )));
             }
 
-            // Duplicate status
-            if summary.duplicate_groups > 0 {
+            // Deploy conflict status
+            if summary.deploy_conflicts > 0 {
                 lines.push(
-                    Line::from(format!("Duplicates: {} groups", summary.duplicate_groups))
+                    Line::from(format!("Deploy conflicts: {}", summary.deploy_conflicts))
                         .style(Style::default().fg(Color::Yellow)),
                 );
             }
@@ -800,6 +898,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         | super::UiMode::AlbumArtistPopulationReview
         | super::UiMode::AlbumReview => "↑↓ Scroll | Enter Commit | Esc Cancel",
         super::UiMode::DirectoryTagEditor => "Tab/Shift+Tab Directories | ↑↓ Fields | Enter Edit | → Action | Esc Exit",
+        super::UiMode::DeployConflictReview => "←/→ Select | Enter Confirm | Esc Cancel",
     };
     lines.push(Line::from(hints));
 

@@ -141,7 +141,14 @@ Remaining:
 - Filter/search by metadata field
 - Quick statistics view
 
-### First-Time Setup Flow
+### First-Time Setup Flow [PARTIALLY IMPLEMENTED]
+
+Implemented:
+- Auto-detect empty database on startup
+- Automatically start corpus scan with progress display
+- Heartbeat now handles ongoing scanning of new files
+
+Remaining:
 - Detect missing config file on startup
 - Interactive wizard to set initial config values:
   - Corpus root directory
@@ -235,7 +242,7 @@ From PHILOSOPHY.md "misc notes":
 
 This section consolidates all TODO comments from the codebase. Keep this synchronized when adding or resolving TODOs in code.
 
-*Last updated: 2026-01-12*
+*Last updated: 2026-01-13*
 
 ### UI Stubs
 
@@ -275,13 +282,26 @@ This section consolidates all TODO comments from the codebase. Keep this synchro
 |----------|-------------|--------|
 | `db/queries/*.rs` | 17-column SELECT for row_to_track duplicated across files | Open |
 
-### Metadata Duplicate Flow
+### Deploy Conflict Resolution
 
 | Location | Description | Status |
 |----------|-------------|--------|
-| `ui/main_menu.rs:734-745` | Flow stub - needs redesign to use DeployConflicts | Open |
-| `ops/reports.rs:1109` | `populate_metadata_duplicate_groups` - candidate for removal | Open |
-| `ops/reports.rs:528` | Call site for metadata duplicate population - candidate for removal | Open |
+| `ui/tag_editor/render.rs:134-138` | Show detailed conflict info (directory paths, differing tags, fingerprint match) | Open |
+| `corpus/health/detection.rs:170-174` | Store additional conflict metadata (fingerprint_match, differing_tags) | Open |
+| `ui/tag_editor/input.rs:105` | Implement Shift+Tab to go back to previous group with accumulated state | Open |
+
+### UI Control Consistency
+
+| Location | Description | Status |
+|----------|-------------|--------|
+| `ui/tag_editor/directory_input.rs:5-8` | Update directory editor to use Multi-Track Navigation Pattern | Open |
+
+### Heartbeat Enhancements
+
+| Location | Description | Status |
+|----------|-------------|--------|
+| `corpus/health/heartbeat.rs:563-565` | Integrate DuplicateInode detection with corpus reorganization tools | Open |
+| `ui/mod.rs:350-353` | First-time config-setting flow for new users (prompt for corpus root, library paths) | Open |
 
 ### Opinions System
 

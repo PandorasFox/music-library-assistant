@@ -13,6 +13,24 @@ Tab and Shift+Tab should always be consistently paired for forward/backward navi
 
 These keys should never be used for unrelated actions. If Tab advances, Shift+Tab must go back.
 
+### Multi-Track Navigation Pattern
+
+For editors handling multiple tracks organized into groups (e.g., deploy conflicts, duplicate resolution):
+
+**Within-Group Navigation**
+- **Shift+Up**: Move to previous track in current group
+- **Shift+Down**: Move to next track in current group
+- **Up/Down**: Navigate fields within current track
+
+**Group-to-Group Navigation**
+- **Tab**: Persist current group state, advance to next group
+- **Shift+Tab**: Persist current group state, go to previous group
+- **Advancing past last group**: Proceeds to Review screen
+
+This pattern separates track navigation (Shift+arrows) from group workflow navigation (Tab), allowing intuitive movement within a group while Tab remains the "proceed forward" action.
+
+**Rationale**: In multi-group workflows like deploy conflict resolution, the operator often needs to examine and edit multiple tracks within a single conflict group before deciding to proceed. Separating track selection (Shift+arrows) from group progression (Tab) prevents accidental advancement and keeps Tab's semantic meaning consistent: "I'm done with this group, move forward."
+
 ## Operation Flow Pattern
 
 All corpus-mutating operation flows should follow the **mutation-accumulating pattern**:

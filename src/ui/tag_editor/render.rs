@@ -130,8 +130,23 @@ impl TagEditorState {
             })
             .collect();
 
+        // Show context-appropriate title
+        // TODO: Show detailed conflict info:
+        // - Directory path of each conflicting file
+        // - Whether non-deploy tags differ between tracks (genre, etc.)
+        // - Whether fingerprints match (exact duplicate vs different recordings)
+        // - Target deployment path and library name (from health issue metadata)
+        let title = if !self.duplicate_groups.is_empty() {
+            let group_info = self.current_group_idx
+                .map(|idx| format!(" [{}/{}]", idx + 1, self.duplicate_groups.len()))
+                .unwrap_or_default();
+            format!("Deploy Conflict{}", group_info)
+        } else {
+            "Tracks".to_string()
+        };
+
         let track_list =
-            List::new(track_items).block(Block::default().borders(Borders::ALL).title("Tracks"));
+            List::new(track_items).block(Block::default().borders(Borders::ALL).title(title));
         f.render_widget(track_list, area);
     }
 
@@ -273,11 +288,20 @@ impl TagEditorState {
             status_lines.push(Line::from(""));
         }
 
-        status_lines.extend(vec![
-            Line::from("Navigation: Tab/Shift+Tab = next/prev track | Left/Right = toggle name/value | Up/Down = navigate fields | Enter = edit/commit"),
-            Line::from(""),
-            Line::from("Actions: F = fill to all | Ctrl+U = clear | Esc = exit | Tab past last track to save all"),
-        ]);
+        // Show different help text depending on workflow mode
+        if self.is_in_duplicate_workflow() {
+            status_lines.extend(vec![
+                Line::from("Navigation: Shift+Up/Down = prev/next track | Up/Down = navigate fields | Tab = next group | Right = action pane"),
+                Line::from(""),
+                Line::from("Actions: F = fill to all | Ctrl+U = clear | Enter = edit/commit | Esc = exit"),
+            ]);
+        } else {
+            status_lines.extend(vec![
+                Line::from("Navigation: Tab/Shift+Tab = next/prev track | Left/Right = toggle name/value | Up/Down = navigate fields | Enter = edit/commit"),
+                Line::from(""),
+                Line::from("Actions: F = fill to all | Ctrl+U = clear | Esc = exit | Tab past last track to save all"),
+            ]);
+        }
 
         let status_para = Paragraph::new(status_lines)
             .block(Block::default().borders(Borders::ALL).title("Status"));

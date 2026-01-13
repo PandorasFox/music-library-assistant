@@ -109,6 +109,16 @@ impl TagEditorState {
     }
 
     // ========================================================================
+    // Workflow State
+    // ========================================================================
+
+    /// Returns true if this editor is in a duplicate/conflict workflow
+    /// (working through multiple groups, not editing standalone tracks)
+    pub fn is_in_duplicate_workflow(&self) -> bool {
+        self.current_group_idx.is_some()
+    }
+
+    // ========================================================================
     // Navigation
     // ========================================================================
 

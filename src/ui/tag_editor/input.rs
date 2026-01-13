@@ -15,6 +15,10 @@ impl TagEditorState {
             return self.handle_action_pane_key(key);
         }
 
+        // In duplicate workflow: Shift+arrows = track nav, Tab = group nav
+        // In standalone mode: Tab = track nav (legacy)
+        let in_workflow = self.is_in_duplicate_workflow();
+
         match key.code {
             KeyCode::Esc => {
                 if self.field_edit_state != FieldEditState::NonEditable {
@@ -26,11 +30,23 @@ impl TagEditorState {
                 }
             }
             KeyCode::Up => {
-                self.move_up();
+                if key.modifiers.contains(KeyModifiers::SHIFT) && in_workflow {
+                    // Shift+Up: navigate to previous track in group
+                    self.prev_track();
+                } else {
+                    // Plain Up: navigate fields within current track
+                    self.move_up();
+                }
                 TagEditorAction::None
             }
             KeyCode::Down => {
-                self.move_down();
+                if key.modifiers.contains(KeyModifiers::SHIFT) && in_workflow {
+                    // Shift+Down: navigate to next track in group
+                    let _ = self.next_track(); // Ignore at-end signal for track nav
+                } else {
+                    // Plain Down: navigate fields within current track
+                    self.move_down();
+                }
                 TagEditorAction::None
             }
             KeyCode::Left => {
@@ -52,24 +68,47 @@ impl TagEditorState {
                 TagEditorAction::None
             }
             KeyCode::Tab => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.prev_track();
+                if in_workflow {
+                    // In duplicate workflow: Tab advances to next group
+                    // Show change preview with save_and_next flag
+                    let changes = super::state::compute_changes(
+                        &self.original_tag_fields,
+                        &self.tag_fields,
+                    );
+                    let (grouped, single) = super::state::group_common_changes(&changes);
+                    return TagEditorAction::ShowModal(TagEditorModal::ChangePreview {
+                        grouped_changes: grouped,
+                        single_changes: single,
+                        scroll_offset: 0,
+                        save_and_next: true,
+                    });
                 } else {
-                    let at_end = self.next_track();
-                    if at_end {
-                        // Tabbing past last track triggers save modal
-                        // Default to "Return to Editing" (index 2)
-                        return TagEditorAction::ShowModal(TagEditorModal::SaveConfirmation {
-                            selected_button: 2,
-                        });
+                    // Legacy standalone mode: Tab navigates tracks
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        self.prev_track();
+                    } else {
+                        let at_end = self.next_track();
+                        if at_end {
+                            // Tabbing past last track triggers save modal
+                            return TagEditorAction::ShowModal(TagEditorModal::SaveConfirmation {
+                                selected_button: 2,
+                            });
+                        }
                     }
                 }
                 TagEditorAction::None
             }
             KeyCode::BackTab => {
-                // BackTab is how most terminals send Shift+Tab
-                self.prev_track();
-                TagEditorAction::None
+                if in_workflow {
+                    // In duplicate workflow: Shift+Tab goes to previous group
+                    // For now, just show a message since going back isn't implemented yet
+                    // TODO: Implement going back to previous group with accumulated state
+                    TagEditorAction::StatusMessage("Previous group navigation not yet implemented".to_string())
+                } else {
+                    // Legacy standalone mode: navigate tracks
+                    self.prev_track();
+                    TagEditorAction::None
+                }
             }
             KeyCode::Enter => {
                 self.handle_enter();

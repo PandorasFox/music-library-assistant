@@ -158,14 +158,59 @@ fn execute_single_change(change: &PendingChange, db: &Database, dry_run: bool) -
         }
 
         ChangeType::TagEdit => {
-            // Tag edits are handled by the metadata module
-            // The metadata_changes field contains the JSON diff
+            // Tag edits use metadata_changes JSON: { "tags": [["field", "value"], ...], "track_id": N }
+            let metadata_json = change
+                .metadata_changes
+                .as_ref()
+                .context("TagEdit requires metadata_changes")?;
+
+            let metadata: serde_json::Value = serde_json::from_str(metadata_json)
+                .with_context(|| format!("Invalid metadata JSON: {}", metadata_json))?;
+
+            let tags_array = metadata
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .context("metadata_changes must have 'tags' array")?;
+
+            let track_id = metadata
+                .get("track_id")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+
+            let session_id = &change.session_id;
+
+            // Convert JSON array to Vec<(String, String)>
+            let tags: Vec<(String, String)> = tags_array
+                .iter()
+                .filter_map(|item| {
+                    let arr = item.as_array()?;
+                    if arr.len() >= 2 {
+                        Some((
+                            arr[0].as_str()?.to_string(),
+                            arr[1].as_str()?.to_string(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let _ = config::log_message(&format!(
+                "[TAG_EDIT] path={} track_id={} tags={:?}",
+                change.source_path, track_id, tags
+            ));
+
             if dry_run {
+                let _ = config::log_message("[TAG_EDIT] DRY RUN - skipping actual write");
                 return Ok(true);
             }
 
-            // For now, tag edits are applied directly via lofty
-            // This will be enhanced to use the metadata_changes JSON
+            // Write tags to disk and update database
+            let path = Path::new(&change.source_path);
+            crate::corpus::metadata::write_tags(path, &tags, track_id, session_id)
+                .with_context(|| format!("Failed to write tags to {}", change.source_path))?;
+
+            let _ = config::log_message("[TAG_EDIT] SUCCESS");
             Ok(true)
         }
 

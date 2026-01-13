@@ -445,7 +445,12 @@ pub fn read_all_tags(path: &Path) -> Result<Vec<(String, String)>> {
                 continue;
             }
 
-            let value = format!("{:?}", item.value());
+            // Extract actual string value from ItemValue (not debug format)
+            let value = match item.value() {
+                lofty::tag::ItemValue::Text(s) => s.clone(),
+                lofty::tag::ItemValue::Locator(s) => s.clone(),
+                lofty::tag::ItemValue::Binary(_) => continue, // Skip binary data
+            };
 
             // Always add, allow duplicates (needed for multiple album_artist tags)
             all_tags.push((key, value));
@@ -465,7 +470,12 @@ pub fn read_all_tags(path: &Path) -> Result<Vec<(String, String)>> {
                 continue;
             }
 
-            let value = format!("{:?}", item.value());
+            // Extract actual string value from ItemValue (not debug format)
+            let value = match item.value() {
+                lofty::tag::ItemValue::Text(s) => s.clone(),
+                lofty::tag::ItemValue::Locator(s) => s.clone(),
+                lofty::tag::ItemValue::Binary(_) => continue, // Skip binary data
+            };
 
             // Always add, allow duplicates (needed for multiple album_artist tags)
             all_tags.push((key, value));

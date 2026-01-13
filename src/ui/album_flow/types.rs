@@ -13,6 +13,12 @@ pub struct AlbumVariant {
     pub track_count: usize,
     /// Normalized form of the album name
     pub normalized: NormalizedAlbum,
+    /// Artists found on tracks with this album name (for display)
+    pub artists: Vec<String>,
+    /// Directories containing tracks with this album name (for display)
+    pub directories: Vec<String>,
+    /// File extensions (e.g., "flac", "mp3") of tracks with this album name
+    pub file_types: Vec<String>,
 }
 
 /// A bucket of album variants that should potentially be unified.
@@ -60,8 +66,6 @@ pub struct AlbumDecision {
     pub canonical_name: String,
     /// Variant names that will be renamed to canonical
     pub variants_to_rename: Vec<String>,
-    /// Whether to flag for metadata-duplicate review
-    pub flag_for_review: bool,
     /// Generated pending changes
     pub pending_changes: Vec<crate::corpus::db::PendingChange>,
 }

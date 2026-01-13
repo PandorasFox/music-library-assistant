@@ -103,3 +103,105 @@ pub enum TagEditorAction {
     /// Update status message
     StatusMessage(String),
 }
+
+// ============================================================================
+// Directory Tag Editor Types
+// ============================================================================
+
+/// Value state for an aggregated tag field across multiple files
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AggregatedValue {
+    /// All files have the same value - directly editable
+    Consistent(String),
+    /// Files have different values - shown as "(various values)", needs two-phase Enter
+    Various,
+    /// User is confirming they want to overwrite various values
+    VariousConfirming,
+    /// User has entered a new value that will fill to all files
+    Edited(String),
+}
+
+/// Confirmation state for editing "(various values)" fields
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariousConfirmState {
+    /// First Enter pressed - showing "you sure?"
+    Confirming,
+    /// Second Enter pressed - now in edit mode
+    Editing,
+}
+
+/// An aggregated tag field representing the same field across all files
+#[derive(Debug, Clone)]
+pub struct AggregatedTagField {
+    pub name: String,
+    pub value: AggregatedValue,
+    pub original_value: AggregatedValue,
+    pub editable: bool,
+}
+
+/// Which pane has focus in the directory tag editor
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DirectoryTagEditorFocus {
+    /// Tag fields pane (middle)
+    #[default]
+    TagFields,
+    /// Action pane (right) - "Proceed" button
+    ActionPane,
+}
+
+/// Modal states for directory tag editor
+#[derive(Debug)]
+pub enum DirectoryTagEditorModal {
+    /// Change preview modal (shown before saving)
+    ChangePreview {
+        scroll_offset: usize,
+        save_and_next: bool,
+    },
+    /// Unsaved changes prompt when switching directories
+    UnsavedChanges {
+        /// Direction: true = next sibling, false = previous sibling
+        going_next: bool,
+    },
+}
+
+/// Result of handling a key press in directory tag editor
+#[derive(Debug)]
+pub enum DirectoryTagEditorAction {
+    /// No action, continue in editor
+    None,
+    /// Show a modal
+    ShowModal(DirectoryTagEditorModal),
+    /// Save all changes to files
+    SaveAll,
+    /// Save and advance to next sibling directory
+    SaveAndNext,
+    /// Exit without saving
+    Exit,
+    /// Update status message
+    StatusMessage(String),
+    /// Switch to sibling directory (true = next, false = prev)
+    SwitchDirectory(bool),
+}
+
+/// Progress message for metadata gathering
+#[derive(Debug, Clone)]
+pub enum GatheringMessage {
+    /// Found total number of files
+    TotalFiles(usize),
+    /// Processing a file (index, path)
+    Processing(usize, String),
+    /// File processed with tags
+    FileProcessed {
+        index: usize,
+        path: String,
+        tags: Vec<(String, String)>,
+    },
+    /// Error processing file
+    FileError {
+        index: usize,
+        path: String,
+        error: String,
+    },
+    /// All files processed
+    Complete,
+}

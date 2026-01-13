@@ -20,12 +20,13 @@ mod types;
 
 pub use cluster_view::{AlbumArtistClusterAction, AlbumArtistClusterState};
 pub use collation::{
-    CollationAction, CollationReviewAction, CollationReviewState, CollationSession, CollationState,
+    CollationAction, CollationDecision, CollationReviewAction, CollationReviewState,
+    CollationSession, CollationState,
 };
 pub use phase_selector::PhaseSelectorState;
 pub use population::{
-    PopulationAction, PopulationReviewAction, PopulationReviewState, PopulationSession,
-    PopulationState,
+    PopulationAction, PopulationDecision, PopulationReviewAction, PopulationReviewState,
+    PopulationSession, PopulationState,
 };
 pub use render::render_phase_selector;
 pub use review::{AlbumArtistReviewAction, AlbumArtistReviewState};

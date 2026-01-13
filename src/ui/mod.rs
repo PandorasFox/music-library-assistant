@@ -115,6 +115,8 @@ pub(crate) enum UiMode {
     AlbumClusterView,
     /// Album tag resolution - session review
     AlbumReview,
+    /// Directory-based bulk tag editor (aggregated view)
+    DirectoryTagEditor,
 }
 
 /// Re-export from drop_flow module
@@ -201,6 +203,9 @@ struct App {
     // Album canonicalization flow
     album_cluster_view: Option<album_flow::AlbumClusterState>,
     album_review: Option<album_flow::AlbumReviewState>,
+    // Directory tag editor (bulk editing)
+    directory_tag_editor: Option<tag_editor::DirectoryTagEditorState>,
+    directory_tag_editor_modal: Option<tag_editor::types::DirectoryTagEditorModal>,
     // Exit confirmation modal
     exit_confirm_modal_state: Option<ExitConfirmModalState>,
 
@@ -264,6 +269,8 @@ impl App {
             album_artist_selected_phases: Vec::new(),
             album_cluster_view: None,
             album_review: None,
+            directory_tag_editor: None,
+            directory_tag_editor_modal: None,
             exit_confirm_modal_state: None,
             operations: OperationManager::new(),
             legacy_scan_receiver: None,
@@ -477,6 +484,15 @@ impl App {
                 if let Some(ref mut review) = self.album_review {
                     let action = review.handle_key(key);
                     self.handle_album_review_action(action);
+                }
+            }
+            UiMode::DirectoryTagEditor => {
+                // Handle modal keys first if modal is active
+                if self.directory_tag_editor_modal.is_some() {
+                    self.handle_directory_tag_editor_modal_key(key);
+                } else if let Some(ref mut editor) = self.directory_tag_editor {
+                    let action = editor.handle_key(key);
+                    self.handle_directory_tag_editor_action(action);
                 }
             }
         }
@@ -1087,8 +1103,8 @@ impl App {
                 self.mode = UiMode::MainMenu;
             }
             corpus_browser::CorpusBrowserAction::EditDirectory(path) => {
-                // Load all tracks from the directory and subdirectories
-                self.start_tag_editor_for_path(&path, true);
+                // Start directory tag editor with aggregated view
+                self.start_directory_tag_editor(&path);
             }
             corpus_browser::CorpusBrowserAction::EditFile(path) => {
                 // Load single track for editing
@@ -2425,6 +2441,213 @@ impl App {
     pub fn tag_cloud(&self) -> Option<&crate::corpus::health::TagCloud> {
         self.tag_cloud.as_ref()
     }
+
+    // ========================================================================
+    // Directory Tag Editor
+    // ========================================================================
+
+    fn start_directory_tag_editor(&mut self, directory: &std::path::Path) {
+        self.corpus_browser = None;
+        self.directory_tag_editor = Some(tag_editor::DirectoryTagEditorState::start_gathering(
+            directory.to_path_buf(),
+        ));
+        self.directory_tag_editor_modal = None;
+        self.mode = UiMode::DirectoryTagEditor;
+    }
+
+    fn update_directory_tag_editor(&mut self) {
+        if let Some(ref mut editor) = self.directory_tag_editor {
+            if editor.is_gathering() {
+                let complete = editor.poll_gathering();
+                if complete {
+                    self.status_message = Some(format!(
+                        "Loaded {} files from {}",
+                        editor.files.len(),
+                        editor.current_directory.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    fn handle_directory_tag_editor_action(
+        &mut self,
+        action: tag_editor::types::DirectoryTagEditorAction,
+    ) {
+        use tag_editor::types::DirectoryTagEditorAction;
+
+        match action {
+            DirectoryTagEditorAction::None => {}
+            DirectoryTagEditorAction::ShowModal(modal) => {
+                self.directory_tag_editor_modal = Some(modal);
+            }
+            DirectoryTagEditorAction::SaveAll => {
+                self.save_directory_tag_changes(false);
+            }
+            DirectoryTagEditorAction::SaveAndNext => {
+                self.save_directory_tag_changes(true);
+            }
+            DirectoryTagEditorAction::Exit => {
+                self.directory_tag_editor = None;
+                self.directory_tag_editor_modal = None;
+                self.mode = UiMode::CorpusBrowser;
+                // Restore corpus browser if it was set
+                if self.corpus_browser.is_none() {
+                    self.start_corpus_browser();
+                }
+            }
+            DirectoryTagEditorAction::StatusMessage(msg) => {
+                self.status_message = Some(msg);
+            }
+            DirectoryTagEditorAction::SwitchDirectory(next) => {
+                if let Some(ref editor) = self.directory_tag_editor {
+                    if let Some(new_dir) = editor.switch_to_sibling(next).clone() {
+                        // Start gathering for new directory
+                        self.directory_tag_editor = Some(
+                            tag_editor::DirectoryTagEditorState::start_gathering(new_dir),
+                        );
+                    } else {
+                        let msg = if next {
+                            "No more directories after this one"
+                        } else {
+                            "No more directories before this one"
+                        };
+                        self.status_message = Some(msg.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_directory_tag_editor_modal_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        use tag_editor::types::DirectoryTagEditorModal;
+
+        let modal = match &self.directory_tag_editor_modal {
+            Some(m) => m,
+            None => return,
+        };
+
+        match modal {
+            DirectoryTagEditorModal::ChangePreview { scroll_offset, save_and_next } => {
+                let mut scroll = *scroll_offset;
+                let save_next = *save_and_next;
+
+                match key.code {
+                    KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        self.directory_tag_editor_modal = None;
+                        if save_next {
+                            self.save_directory_tag_changes(true);
+                        } else {
+                            self.save_directory_tag_changes(false);
+                        }
+                    }
+                    KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                        self.directory_tag_editor_modal = None;
+                    }
+                    KeyCode::Up => {
+                        scroll = scroll.saturating_sub(1);
+                        self.directory_tag_editor_modal =
+                            Some(DirectoryTagEditorModal::ChangePreview {
+                                scroll_offset: scroll,
+                                save_and_next: save_next,
+                            });
+                    }
+                    KeyCode::Down => {
+                        scroll += 1;
+                        self.directory_tag_editor_modal =
+                            Some(DirectoryTagEditorModal::ChangePreview {
+                                scroll_offset: scroll,
+                                save_and_next: save_next,
+                            });
+                    }
+                    _ => {}
+                }
+            }
+            DirectoryTagEditorModal::UnsavedChanges { going_next } => {
+                let next = *going_next;
+                match key.code {
+                    KeyCode::Char('s') | KeyCode::Char('S') => {
+                        // Save & Switch
+                        self.directory_tag_editor_modal = None;
+                        self.save_directory_tag_changes(false);
+                        // After saving, switch directory
+                        self.handle_directory_tag_editor_action(
+                            tag_editor::types::DirectoryTagEditorAction::SwitchDirectory(next),
+                        );
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
+                        // Discard & Switch
+                        self.directory_tag_editor_modal = None;
+                        self.handle_directory_tag_editor_action(
+                            tag_editor::types::DirectoryTagEditorAction::SwitchDirectory(next),
+                        );
+                    }
+                    KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Esc => {
+                        // Cancel
+                        self.directory_tag_editor_modal = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn save_directory_tag_changes(&mut self, switch_to_next: bool) {
+        use crate::corpus::metadata;
+
+        let editor = match &self.directory_tag_editor {
+            Some(e) => e,
+            None => return,
+        };
+
+        let changes = editor.compute_changes();
+        if changes.is_empty() {
+            self.status_message = Some("No changes to save".to_string());
+            return;
+        }
+
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for file in &editor.files {
+            // Build the new tags for this file
+            let mut new_tags: Vec<(String, String)> = Vec::new();
+
+            for change in &changes {
+                new_tags.push((change.field_name.clone(), change.new_value.clone()));
+            }
+
+            // Write the tags (track_id=0 and empty session skips DB updates)
+            if let Err(e) = metadata::write_tags(&file.path, &new_tags, 0, "") {
+                let _ = crate::config::log_message(&format!(
+                    "Error writing tags to {}: {}",
+                    file.path.display(),
+                    e
+                ));
+                error_count += 1;
+            } else {
+                success_count += 1;
+            }
+        }
+
+        self.status_message = Some(format!(
+            "Updated {} files ({} errors)",
+            success_count, error_count
+        ));
+
+        if switch_to_next {
+            if let Some(ref editor) = self.directory_tag_editor {
+                if let Some(new_dir) = editor.switch_to_sibling(true).clone() {
+                    self.directory_tag_editor = Some(
+                        tag_editor::DirectoryTagEditorState::start_gathering(new_dir),
+                    );
+                } else {
+                    self.status_message = Some("Saved. No more sibling directories.".to_string());
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -2460,6 +2683,8 @@ fn render(f: &mut Frame, app: &mut App) {
         album_artist_review: app.album_artist_review.as_mut(),
         album_cluster_view: app.album_cluster_view.as_mut(),
         album_review: app.album_review.as_mut(),
+        directory_tag_editor: app.directory_tag_editor.as_mut(),
+        directory_tag_editor_modal: app.directory_tag_editor_modal.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         heartbeat_result: app.heartbeat_result.as_ref(),
         heartbeat_pending: app.heartbeat_receiver.is_some(),
@@ -2566,6 +2791,7 @@ fn run_app<B: ratatui::backend::Backend>(
         app.update_operation_progress();
         app.update_heartbeat();
         app.update_tag_cloud();
+        app.update_directory_tag_editor();
 
         // Check if eye blink triggered a heartbeat (d20 >= 13)
         if let Some(roll_result) = app.eye.take_heartbeat_trigger() {

@@ -29,7 +29,7 @@ pub fn start(app: &mut App) {
     // Get album buckets with variants
     match db.get_album_canonicalization_buckets() {
         Ok(bucket_data) if !bucket_data.is_empty() => {
-            // Convert to AlbumBucket structs with EP/edition detection
+            // Convert to AlbumBucket structs with EP/edition detection and enhanced info
             let buckets: Vec<AlbumBucket> = bucket_data
                 .into_iter()
                 .map(|(normalized_key, variants)| {
@@ -37,10 +37,17 @@ pub fn start(app: &mut App) {
                         .into_iter()
                         .map(|(name, track_count)| {
                             let normalized = normalize_album(&name);
+                            // Fetch additional details for this variant
+                            let (artists, directories, file_types) = db
+                                .get_album_variant_details(&name)
+                                .unwrap_or_else(|_| (Vec::new(), Vec::new(), Vec::new()));
                             AlbumVariant {
                                 name,
                                 track_count,
                                 normalized,
+                                artists,
+                                directories,
+                                file_types,
                             }
                         })
                         .collect();
@@ -172,14 +179,9 @@ pub fn commit_decisions(app: &mut App, session: AlbumCanonSession) {
 
     let mut total_updated = 0;
     let mut errors = Vec::new();
-    let mut flagged_for_review = Vec::new();
 
     // Process each decision
     for decision in &session.decisions {
-        if decision.flag_for_review {
-            flagged_for_review.push(decision.canonical_name.clone());
-        }
-
         for variant_name in &decision.variants_to_rename {
             match db.get_track_ids_by_album(variant_name) {
                 Ok(track_ids) => {
@@ -194,14 +196,9 @@ pub fn commit_decisions(app: &mut App, session: AlbumCanonSession) {
     }
 
     if errors.is_empty() {
-        let flagged_msg = if !flagged_for_review.is_empty() {
-            format!(" ({} flagged for metadata review)", flagged_for_review.len())
-        } else {
-            String::new()
-        };
         app.status_message = Some(format!(
-            "Album canonicalization complete: {} tracks updated{}",
-            total_updated, flagged_msg
+            "Album canonicalization complete: {} tracks updated",
+            total_updated
         ));
     } else {
         app.status_message = Some(format!(

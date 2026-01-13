@@ -1,8 +1,8 @@
 //! Album Artist Collation Flow
 //!
-//! UI for unifying mixed-artist albums to a common album_artist (typically "Various Artists").
-//! Presents albums where tracks have different artist values and suggests a unified album_artist.
-
+//! Sequential decision-based flow for unifying mixed-artist albums to a common album_artist.
+//! Presents albums one at a time where tracks have different artist values and album_artist is unset.
+//! The user decides what album_artist value to apply (typically "Various Artists" or the dominant artist).
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -77,62 +77,91 @@ impl CollationSession {
             false
         }
     }
+
+    pub fn remaining_count(&self) -> usize {
+        self.albums.len().saturating_sub(self.current_index)
+    }
 }
 
-/// Which pane is focused
+/// Focus area within the decision view
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CollationPane {
-    Albums,
-    Artists,
-    Action,
+pub enum CollationFocus {
+    /// Selecting from the artist list
+    ArtistList,
+    /// Editing the custom value field
+    CustomField,
+    /// Action buttons
+    ActionButtons,
 }
 
-/// Focus within the Action pane
+/// Which action button is selected
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CollationActionFocus {
-    NameField,
-    ConfirmButton,
+pub enum ActionButton {
+    AcceptSuggested,
+    UseSelected,
+    UseCustom,
+    Skip,
 }
 
-/// State for the collation view
+impl ActionButton {
+    fn all() -> &'static [ActionButton] {
+        &[
+            ActionButton::AcceptSuggested,
+            ActionButton::UseSelected,
+            ActionButton::UseCustom,
+            ActionButton::Skip,
+        ]
+    }
+
+    fn label(&self, suggested: Option<&str>, selected_artist: Option<&str>) -> String {
+        match self {
+            ActionButton::AcceptSuggested => {
+                let val = suggested.unwrap_or("Various Artists");
+                format!("Accept: \"{}\"", val)
+            }
+            ActionButton::UseSelected => {
+                match selected_artist {
+                    Some(a) => format!("Use: \"{}\"", a),
+                    None => "Use selected artist".to_string(),
+                }
+            }
+            ActionButton::UseCustom => "Use custom value".to_string(),
+            ActionButton::Skip => "Skip this album".to_string(),
+        }
+    }
+}
+
+/// State for the collation view - presents one album at a time
 #[derive(Debug, Clone)]
 pub struct CollationState {
     session: CollationSession,
-    focused_pane: CollationPane,
-    albums_cursor: usize,
-    albums_list_state: ListState,
-    artists_cursor: usize,
-    artists_list_state: ListState,
-    action_focus: CollationActionFocus,
-    album_artist_value: String,
+    focus: CollationFocus,
+    /// Currently selected artist in the list
+    artist_cursor: usize,
+    artist_list_state: ListState,
+    /// Custom value being typed
+    custom_value: String,
     text_cursor: usize,
-    status_message: Option<String>,
-    confirmed: bool,
+    /// Which action button is highlighted
+    action_cursor: usize,
+    action_list_state: ListState,
 }
 
 impl CollationState {
     pub fn new(session: CollationSession) -> Self {
-        let album_artist_value = session
-            .current_album()
-            .and_then(|a| a.suggested_album_artist.clone())
-            .unwrap_or_else(|| "Various Artists".to_string());
-        let text_cursor = album_artist_value.len();
-
         let mut state = Self {
             session,
-            focused_pane: CollationPane::Albums,
-            albums_cursor: 0,
-            albums_list_state: ListState::default(),
-            artists_cursor: 0,
-            artists_list_state: ListState::default(),
-            action_focus: CollationActionFocus::NameField,
-            album_artist_value,
-            text_cursor,
-            status_message: None,
-            confirmed: false,
+            focus: CollationFocus::ActionButtons,
+            artist_cursor: 0,
+            artist_list_state: ListState::default(),
+            custom_value: String::new(),
+            text_cursor: 0,
+            action_cursor: 0,
+            action_list_state: ListState::default(),
         };
-        state.albums_list_state.select(Some(0));
-        state.artists_list_state.select(Some(0));
+        state.artist_list_state.select(Some(0));
+        state.action_list_state.select(Some(0));
+        state.reset_for_current_album();
         state
     }
 
@@ -140,301 +169,331 @@ impl CollationState {
         self.session
     }
 
+    fn reset_for_current_album(&mut self) {
+        self.artist_cursor = 0;
+        self.artist_list_state.select(Some(0));
+        self.custom_value.clear();
+        self.text_cursor = 0;
+        self.action_cursor = 0;
+        self.action_list_state.select(Some(0));
+        self.focus = CollationFocus::ActionButtons;
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> CollationAction {
         match key.code {
-            KeyCode::Tab => return self.advance_to_next_album(),
-            KeyCode::BackTab => return self.go_to_previous_album(),
             KeyCode::Esc => return CollationAction::ShowReview,
-            KeyCode::Right => {
-                match self.focused_pane {
-                    CollationPane::Albums => {
-                        self.focused_pane = CollationPane::Artists;
-                        return CollationAction::Continue;
-                    }
-                    CollationPane::Artists => {
-                        self.focused_pane = CollationPane::Action;
-                        return CollationAction::Continue;
-                    }
-                    CollationPane::Action => {
-                        if matches!(self.action_focus, CollationActionFocus::NameField) {
-                            if self.text_cursor < self.album_artist_value.len() {
-                                self.text_cursor += 1;
-                                return CollationAction::Continue;
-                            }
-                        }
-                    }
-                }
+            KeyCode::Tab => {
+                // Cycle focus: ActionButtons -> ArtistList -> CustomField -> ActionButtons
+                self.focus = match self.focus {
+                    CollationFocus::ActionButtons => CollationFocus::ArtistList,
+                    CollationFocus::ArtistList => CollationFocus::CustomField,
+                    CollationFocus::CustomField => CollationFocus::ActionButtons,
+                };
+                return CollationAction::Continue;
             }
-            KeyCode::Left => {
-                match self.focused_pane {
-                    CollationPane::Action => {
-                        if matches!(self.action_focus, CollationActionFocus::NameField)
-                            && self.text_cursor > 0
-                        {
-                            self.text_cursor -= 1;
-                            return CollationAction::Continue;
-                        } else {
-                            self.focused_pane = CollationPane::Artists;
-                            return CollationAction::Continue;
-                        }
-                    }
-                    CollationPane::Artists => {
-                        self.focused_pane = CollationPane::Albums;
-                        return CollationAction::Continue;
-                    }
-                    CollationPane::Albums => {}
-                }
+            KeyCode::BackTab => {
+                // Reverse cycle
+                self.focus = match self.focus {
+                    CollationFocus::ActionButtons => CollationFocus::CustomField,
+                    CollationFocus::ArtistList => CollationFocus::ActionButtons,
+                    CollationFocus::CustomField => CollationFocus::ArtistList,
+                };
+                return CollationAction::Continue;
             }
             _ => {}
         }
 
-        match self.focused_pane {
-            CollationPane::Albums => self.handle_albums_key(key),
-            CollationPane::Artists => self.handle_artists_key(key),
-            CollationPane::Action => self.handle_action_key(key),
-        }
-    }
-
-    fn handle_albums_key(&mut self, key: KeyEvent) -> CollationAction {
-        match key.code {
-            KeyCode::Up => {
-                if self.albums_cursor > 0 {
-                    self.albums_cursor -= 1;
-                    self.albums_list_state.select(Some(self.albums_cursor));
-                    self.update_for_current_album();
-                }
-                CollationAction::Continue
-            }
-            KeyCode::Down => {
-                if self.albums_cursor + 1 < self.session.albums.len() {
-                    self.albums_cursor += 1;
-                    self.albums_list_state.select(Some(self.albums_cursor));
-                    self.update_for_current_album();
-                }
-                CollationAction::Continue
-            }
-            KeyCode::Enter => {
-                // Move focus to action pane
-                self.focused_pane = CollationPane::Action;
-                CollationAction::Continue
-            }
-            _ => CollationAction::None,
-        }
-    }
-
-    fn handle_artists_key(&mut self, key: KeyEvent) -> CollationAction {
-        let current_album = match self.session.albums.get(self.albums_cursor) {
-            Some(a) => a,
-            None => return CollationAction::None,
-        };
-
-        match key.code {
-            KeyCode::Up => {
-                if self.artists_cursor > 0 {
-                    self.artists_cursor -= 1;
-                    self.artists_list_state.select(Some(self.artists_cursor));
-                }
-                CollationAction::Continue
-            }
-            KeyCode::Down => {
-                if self.artists_cursor + 1 < current_album.artists.len() {
-                    self.artists_cursor += 1;
-                    self.artists_list_state.select(Some(self.artists_cursor));
-                }
-                CollationAction::Continue
-            }
-            KeyCode::Enter => {
-                // Use this artist as the album_artist
-                if let Some((artist_name, _)) = current_album.artists.get(self.artists_cursor) {
-                    self.album_artist_value = artist_name.clone();
-                    self.text_cursor = self.album_artist_value.len();
-                }
-                CollationAction::Continue
-            }
-            _ => CollationAction::None,
+        match self.focus {
+            CollationFocus::ActionButtons => self.handle_action_key(key),
+            CollationFocus::ArtistList => self.handle_artist_key(key),
+            CollationFocus::CustomField => self.handle_custom_key(key),
         }
     }
 
     fn handle_action_key(&mut self, key: KeyEvent) -> CollationAction {
         match key.code {
-            KeyCode::Up | KeyCode::Down => {
-                self.action_focus = match self.action_focus {
-                    CollationActionFocus::NameField => CollationActionFocus::ConfirmButton,
-                    CollationActionFocus::ConfirmButton => CollationActionFocus::NameField,
-                };
-                CollationAction::Continue
-            }
-            KeyCode::Enter => {
-                match self.action_focus {
-                    CollationActionFocus::NameField => {
-                        self.action_focus = CollationActionFocus::ConfirmButton;
-                    }
-                    CollationActionFocus::ConfirmButton => {
-                        return self.confirm_and_record_decision();
-                    }
+            KeyCode::Up => {
+                if self.action_cursor > 0 {
+                    self.action_cursor -= 1;
+                    self.action_list_state.select(Some(self.action_cursor));
                 }
                 CollationAction::Continue
             }
-            KeyCode::Char(c) => {
-                if matches!(self.action_focus, CollationActionFocus::NameField) {
-                    self.album_artist_value.insert(self.text_cursor, c);
-                    self.text_cursor += 1;
+            KeyCode::Down => {
+                let max = ActionButton::all().len().saturating_sub(1);
+                if self.action_cursor < max {
+                    self.action_cursor += 1;
+                    self.action_list_state.select(Some(self.action_cursor));
                 }
                 CollationAction::Continue
             }
-            KeyCode::Backspace => {
-                if matches!(self.action_focus, CollationActionFocus::NameField)
-                    && self.text_cursor > 0
-                {
-                    self.text_cursor -= 1;
-                    self.album_artist_value.remove(self.text_cursor);
-                }
-                CollationAction::Continue
-            }
-            KeyCode::Delete => {
-                if matches!(self.action_focus, CollationActionFocus::NameField)
-                    && self.text_cursor < self.album_artist_value.len()
-                {
-                    self.album_artist_value.remove(self.text_cursor);
-                }
+            KeyCode::Enter => self.execute_action(),
+            KeyCode::Left => {
+                self.focus = CollationFocus::ArtistList;
                 CollationAction::Continue
             }
             _ => CollationAction::None,
         }
     }
 
-    fn update_for_current_album(&mut self) {
-        self.artists_cursor = 0;
-        self.artists_list_state.select(Some(0));
-        self.confirmed = false;
+    fn handle_artist_key(&mut self, key: KeyEvent) -> CollationAction {
+        let artist_count = self.session.current_album()
+            .map(|a| a.artists.len())
+            .unwrap_or(0);
 
-        if let Some(album) = self.session.albums.get(self.albums_cursor) {
-            self.album_artist_value = album
-                .suggested_album_artist
-                .clone()
-                .unwrap_or_else(|| "Various Artists".to_string());
-            self.text_cursor = self.album_artist_value.len();
+        match key.code {
+            KeyCode::Up => {
+                if self.artist_cursor > 0 {
+                    self.artist_cursor -= 1;
+                    self.artist_list_state.select(Some(self.artist_cursor));
+                }
+                CollationAction::Continue
+            }
+            KeyCode::Down => {
+                if self.artist_cursor + 1 < artist_count {
+                    self.artist_cursor += 1;
+                    self.artist_list_state.select(Some(self.artist_cursor));
+                }
+                CollationAction::Continue
+            }
+            KeyCode::Enter => {
+                // Use selected artist - set action to UseSelected and execute
+                self.action_cursor = 1; // UseSelected
+                self.action_list_state.select(Some(1));
+                self.execute_action()
+            }
+            KeyCode::Right => {
+                self.focus = CollationFocus::ActionButtons;
+                CollationAction::Continue
+            }
+            _ => CollationAction::None,
         }
     }
 
-    fn confirm_and_record_decision(&mut self) -> CollationAction {
-        let current_album = match self.session.albums.get(self.albums_cursor) {
-            Some(a) => a,
-            None => return CollationAction::None,
+    fn handle_custom_key(&mut self, key: KeyEvent) -> CollationAction {
+        match key.code {
+            KeyCode::Char(c) => {
+                self.custom_value.insert(self.text_cursor, c);
+                self.text_cursor += 1;
+                CollationAction::Continue
+            }
+            KeyCode::Backspace => {
+                if self.text_cursor > 0 {
+                    self.text_cursor -= 1;
+                    self.custom_value.remove(self.text_cursor);
+                }
+                CollationAction::Continue
+            }
+            KeyCode::Delete => {
+                if self.text_cursor < self.custom_value.len() {
+                    self.custom_value.remove(self.text_cursor);
+                }
+                CollationAction::Continue
+            }
+            KeyCode::Left => {
+                if self.text_cursor > 0 {
+                    self.text_cursor -= 1;
+                } else {
+                    self.focus = CollationFocus::ArtistList;
+                }
+                CollationAction::Continue
+            }
+            KeyCode::Right => {
+                if self.text_cursor < self.custom_value.len() {
+                    self.text_cursor += 1;
+                } else {
+                    self.focus = CollationFocus::ActionButtons;
+                }
+                CollationAction::Continue
+            }
+            KeyCode::Enter => {
+                // Use custom value if not empty
+                if !self.custom_value.trim().is_empty() {
+                    self.action_cursor = 2; // UseCustom
+                    self.action_list_state.select(Some(2));
+                    self.execute_action()
+                } else {
+                    CollationAction::Continue
+                }
+            }
+            KeyCode::Up | KeyCode::Down => {
+                self.focus = CollationFocus::ActionButtons;
+                CollationAction::Continue
+            }
+            _ => CollationAction::None,
+        }
+    }
+
+    fn execute_action(&mut self) -> CollationAction {
+        let action = ActionButton::all()
+            .get(self.action_cursor)
+            .copied()
+            .unwrap_or(ActionButton::Skip);
+
+        match action {
+            ActionButton::AcceptSuggested => {
+                if let Some(album) = self.session.current_album() {
+                    let value = album.suggested_album_artist
+                        .clone()
+                        .unwrap_or_else(|| "Various Artists".to_string());
+                    self.record_decision(value);
+                }
+                self.advance_to_next()
+            }
+            ActionButton::UseSelected => {
+                if let Some(album) = self.session.current_album() {
+                    if let Some((artist, _)) = album.artists.get(self.artist_cursor) {
+                        self.record_decision(artist.clone());
+                    }
+                }
+                self.advance_to_next()
+            }
+            ActionButton::UseCustom => {
+                if !self.custom_value.trim().is_empty() {
+                    self.record_decision(self.custom_value.trim().to_string());
+                    self.advance_to_next()
+                } else {
+                    // Focus on custom field if empty
+                    self.focus = CollationFocus::CustomField;
+                    CollationAction::Continue
+                }
+            }
+            ActionButton::Skip => {
+                self.advance_to_next()
+            }
+        }
+    }
+
+    fn record_decision(&mut self, chosen_album_artist: String) {
+        let album = match self.session.current_album() {
+            Some(a) => a.clone(),
+            None => return,
         };
 
-        // Generate pending changes for setting album_artist on all tracks
-        let mut pending_changes = Vec::new();
-
-        // We'll create a TagEdit change for each track that needs updating
-        // For now, we track the album + chosen album_artist
-        // The actual track_ids will be resolved at commit time
-        pending_changes.push(PendingChange {
+        let pending_changes = vec![PendingChange {
             id: None,
             session_id: self.session.session_id.clone(),
             change_type: ChangeType::TagEdit,
-            source_path: format!("[album:{}]", current_album.album_name),
+            source_path: format!("[album:{}]", album.album_name),
             target_path: None,
             metadata_changes: Some(
                 serde_json::json!({
                     "operation": "collation",
-                    "album": current_album.album_name,
-                    "new_album_artist": self.album_artist_value,
-                    "artist_count": current_album.artists.len(),
-                    "total_tracks": current_album.total_tracks,
+                    "album": album.album_name,
+                    "new_album_artist": chosen_album_artist,
+                    "artist_count": album.artists.len(),
+                    "total_tracks": album.total_tracks,
                 })
                 .to_string(),
             ),
             created_at: None,
             status: ChangeStatus::Pending,
-        });
+        }];
 
-        let decision = CollationDecision {
-            album_name: current_album.album_name.clone(),
-            chosen_album_artist: self.album_artist_value.clone(),
+        self.session.decisions.push(CollationDecision {
+            album_name: album.album_name,
+            chosen_album_artist,
             pending_changes,
-        };
-
-        self.session.decisions.push(decision);
-        self.confirmed = true;
-
-        let msg = format!(
-            "Set album_artist='{}' for '{}'",
-            self.album_artist_value, current_album.album_name
-        );
-        self.status_message = Some(msg.clone());
-
-        CollationAction::StatusMessage(msg)
+        });
     }
 
-    fn advance_to_next_album(&mut self) -> CollationAction {
-        if self.albums_cursor + 1 < self.session.albums.len() {
-            self.albums_cursor += 1;
-            self.albums_list_state.select(Some(self.albums_cursor));
-            self.update_for_current_album();
-            CollationAction::Continue
-        } else {
+    fn advance_to_next(&mut self) -> CollationAction {
+        self.session.advance();
+        if self.session.is_complete() {
             CollationAction::SessionComplete
+        } else {
+            self.reset_for_current_album();
+            CollationAction::Continue
         }
     }
 
-    fn go_to_previous_album(&mut self) -> CollationAction {
-        if self.albums_cursor > 0 {
-            self.albums_cursor -= 1;
-            self.albums_list_state.select(Some(self.albums_cursor));
-            self.update_for_current_album();
-        }
-        CollationAction::Continue
-    }
-
-    /// Render the collation view
+    /// Render the collation decision view
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
-        // Three-pane layout: Albums | Artists | Action
-        let chunks = Layout::default()
+        if self.session.is_complete() || self.session.current_album().is_none() {
+            let message = Paragraph::new("All albums have been reviewed.\nPress ESC to see review.")
+                .block(Block::default().borders(Borders::ALL).title("Complete"));
+            frame.render_widget(message, area);
+            return;
+        }
+
+        // Two-column layout: Info (left) | Actions (right)
+        let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(35),
-                Constraint::Percentage(35),
-                Constraint::Percentage(30),
+                Constraint::Percentage(60),
+                Constraint::Percentage(40),
             ])
             .split(area);
 
-        self.render_albums_pane(frame, chunks[0]);
-        self.render_artists_pane(frame, chunks[1]);
-        self.render_action_pane(frame, chunks[2]);
+        self.render_album_info(frame, main_chunks[0]);
+        self.render_actions(frame, main_chunks[1]);
     }
 
-    fn render_albums_pane(&mut self, frame: &mut Frame, area: Rect) {
-        let focused = matches!(self.focused_pane, CollationPane::Albums);
+    fn render_album_info(&mut self, frame: &mut Frame, area: Rect) {
+        let album = match self.session.current_album() {
+            Some(a) => a,
+            None => return,
+        };
 
-        let title = format!(
-            " Albums ({}/{}) ",
-            self.albums_cursor + 1,
-            self.session.albums.len()
+        // Vertical split: Header | Artists list
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(8), // Header with album info
+                Constraint::Min(6),    // Artists list
+            ])
+            .split(area);
+
+        // Header: Album info
+        let progress = format!(
+            "Album {}/{} ({} remaining)",
+            self.session.current_index + 1,
+            self.session.albums.len(),
+            self.session.remaining_count().saturating_sub(1)
         );
 
-        let items: Vec<ListItem> = self
-            .session
-            .albums
+        let existing_str = album.existing_album_artist
+            .as_deref()
+            .unwrap_or("[not set]");
+
+        let suggested_str = album.suggested_album_artist
+            .as_deref()
+            .unwrap_or("Various Artists");
+
+        let header_lines = vec![
+            Line::from(Span::styled(progress, Style::default().fg(Color::Cyan))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Album: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&album.album_name, Style::default().add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("Tracks: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!("{}", album.total_tracks)),
+                Span::styled("  Artists: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!("{}", album.artists.len())),
+            ]),
+            Line::from(vec![
+                Span::styled("Current: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(existing_str),
+            ]),
+            Line::from(vec![
+                Span::styled("Suggested: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(suggested_str, Style::default().fg(Color::Green)),
+            ]),
+        ];
+
+        let header = Paragraph::new(header_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Album Artist Collation "));
+        frame.render_widget(header, chunks[0]);
+
+        // Artists list
+        let focused = matches!(self.focus, CollationFocus::ArtistList);
+        let items: Vec<ListItem> = album.artists
             .iter()
             .enumerate()
-            .map(|(idx, album)| {
-                let is_selected = idx == self.albums_cursor;
-                let has_decision = self
-                    .session
-                    .decisions
-                    .iter()
-                    .any(|d| d.album_name == album.album_name);
-
-                let prefix = if has_decision { "[x] " } else { "[ ] " };
-                let content = format!(
-                    "{}{} ({} artists, {} tracks)",
-                    prefix,
-                    album.album_name,
-                    album.artists.len(),
-                    album.total_tracks
-                );
-
+            .map(|(idx, (artist, count))| {
+                let is_selected = idx == self.artist_cursor;
                 let style = if is_selected && focused {
                     Style::default()
                         .bg(Color::Blue)
@@ -442,189 +501,111 @@ impl CollationState {
                         .add_modifier(Modifier::BOLD)
                 } else if is_selected {
                     Style::default().bg(Color::DarkGray)
-                } else if has_decision {
-                    Style::default().fg(Color::Green)
                 } else {
                     Style::default()
                 };
-
-                ListItem::new(content).style(style)
+                ListItem::new(format!("{} ({} tracks)", artist, count)).style(style)
             })
             .collect();
 
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(if focused {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            });
-
-        let list = List::new(items).block(block);
-
-        frame.render_stateful_widget(list, area, &mut self.albums_list_state);
-    }
-
-    fn render_artists_pane(&mut self, frame: &mut Frame, area: Rect) {
-        let focused = matches!(self.focused_pane, CollationPane::Artists);
-
-        let current_album = self.session.albums.get(self.albums_cursor);
-
-        let items: Vec<ListItem> = if let Some(album) = current_album {
-            album
-                .artists
-                .iter()
-                .enumerate()
-                .map(|(idx, (artist, count))| {
-                    let is_selected = idx == self.artists_cursor;
-
-                    let content = format!("{} ({} tracks)", artist, count);
-
-                    let style = if is_selected && focused {
-                        Style::default()
-                            .bg(Color::Blue)
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else if is_selected {
-                        Style::default().bg(Color::DarkGray)
-                    } else {
-                        Style::default()
-                    };
-
-                    ListItem::new(content).style(style)
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-
-        let title = format!(" Artists on Album ");
-
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(if focused {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            });
-
-        let list = List::new(items).block(block);
-
-        frame.render_stateful_widget(list, area, &mut self.artists_list_state);
-    }
-
-    fn render_action_pane(&self, frame: &mut Frame, area: Rect) {
-        let focused = matches!(self.focused_pane, CollationPane::Action);
-
-        let block = Block::default()
-            .title(" Set Album Artist ")
-            .borders(Borders::ALL)
-            .border_style(if focused {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            });
-
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // Label
-                Constraint::Length(3), // Input field
-                Constraint::Length(1), // Spacer
-                Constraint::Length(3), // Confirm button
-                Constraint::Length(1), // Spacer
-                Constraint::Min(0),    // Status/info
-            ])
-            .split(inner);
-
-        // Label
-        let label = Paragraph::new("Album Artist:");
-        frame.render_widget(label, chunks[0]);
-
-        // Text input
-        let input_style = if focused
-            && matches!(self.action_focus, CollationActionFocus::NameField)
-        {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let display_text = if focused
-            && matches!(self.action_focus, CollationActionFocus::NameField)
-        {
-            let before = &self.album_artist_value[..self.text_cursor];
-            let cursor = "|";
-            let after = &self.album_artist_value[self.text_cursor..];
-            format!("{}{}{}", before, cursor, after)
-        } else {
-            self.album_artist_value.clone()
-        };
-
-        let input_block = Block::default().borders(Borders::ALL).style(input_style);
-        let input = Paragraph::new(display_text).block(input_block);
-        frame.render_widget(input, chunks[1]);
-
-        // Confirm button
-        let button_focused =
-            focused && matches!(self.action_focus, CollationActionFocus::ConfirmButton);
-        let button_style = if button_focused {
-            Style::default()
-                .bg(Color::Green)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD)
-        } else if self.confirmed {
-            Style::default().fg(Color::Green)
+        let border_style = if focused {
+            Style::default().fg(Color::Cyan)
         } else {
             Style::default().fg(Color::DarkGray)
         };
 
-        let button_text = if self.confirmed {
-            "[ Confirmed ]"
+        let artist_list = List::new(items)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(" Artists (Tab to focus, Enter to use) "));
+
+        frame.render_stateful_widget(artist_list, chunks[1], &mut self.artist_list_state);
+    }
+
+    fn render_actions(&mut self, frame: &mut Frame, area: Rect) {
+        let album = self.session.current_album();
+
+        // Vertical split: Custom field | Action buttons
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4), // Custom input
+                Constraint::Min(8),    // Action buttons
+            ])
+            .split(area);
+
+        // Custom value input
+        let custom_focused = matches!(self.focus, CollationFocus::CustomField);
+        let display_text = if custom_focused {
+            let before = &self.custom_value[..self.text_cursor];
+            let after = &self.custom_value[self.text_cursor..];
+            format!("{}|{}", before, after)
         } else {
-            "[ Confirm ]"
+            self.custom_value.clone()
         };
 
-        let button = Paragraph::new(button_text)
-            .style(button_style)
-            .block(Block::default().borders(Borders::ALL));
-        frame.render_widget(button, chunks[3]);
+        let input_style = if custom_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
 
-        // Status/info
-        if let Some(album) = self.session.albums.get(self.albums_cursor) {
-            let info_lines = vec![
-                Line::from(vec![
-                    Span::styled("Existing: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(
-                        album
-                            .existing_album_artist
-                            .as_deref()
-                            .unwrap_or("[none]"),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled("Suggested: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(
-                        album
-                            .suggested_album_artist
-                            .as_deref()
-                            .unwrap_or("Various Artists"),
-                    ),
-                ]),
-            ];
+        let custom_input = Paragraph::new(display_text)
+            .style(input_style)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(if custom_focused {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                })
+                .title(" Custom Value "));
+        frame.render_widget(custom_input, chunks[0]);
 
-            let info = Paragraph::new(info_lines).wrap(Wrap { trim: true });
-            frame.render_widget(info, chunks[5]);
-        }
+        // Action buttons
+        let actions_focused = matches!(self.focus, CollationFocus::ActionButtons);
+        let suggested = album.and_then(|a| a.suggested_album_artist.as_deref());
+        let selected_artist = album.and_then(|a| {
+            a.artists.get(self.artist_cursor).map(|(name, _)| name.as_str())
+        });
+
+        let items: Vec<ListItem> = ActionButton::all()
+            .iter()
+            .enumerate()
+            .map(|(idx, action)| {
+                let is_selected = idx == self.action_cursor;
+                let style = if is_selected && actions_focused {
+                    Style::default()
+                        .bg(Color::Blue)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_selected {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(action.label(suggested, selected_artist)).style(style)
+            })
+            .collect();
+
+        let border_style = if actions_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let action_list = List::new(items)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(" Actions (Enter to select) "));
+
+        frame.render_stateful_widget(action_list, chunks[1], &mut self.action_list_state);
     }
 
     pub fn get_status_message(&self) -> Option<&str> {
-        self.status_message.as_deref()
+        None
     }
 }
 
@@ -798,7 +779,7 @@ impl CollationReviewState {
         let is_focused = matches!(self.focus, CollationReviewFocus::DecisionList);
 
         if self.session.decisions.is_empty() {
-            let empty = Paragraph::new("No decisions made yet. Press Shift+Tab to go back.")
+            let empty = Paragraph::new("No decisions made. Press Shift+Tab to go back.")
                 .style(Style::default().fg(Color::DarkGray))
                 .block(Block::default().borders(Borders::ALL).title("Decisions"));
             f.render_widget(empty, area);

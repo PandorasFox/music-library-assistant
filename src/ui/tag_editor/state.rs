@@ -358,129 +358,86 @@ impl TagEditorState {
 
 /// Convert a Track to editable tag fields.
 ///
-/// Priority order: track_number, title, artist, album, album_artist, date, genre, isrc
+/// Database-first design: Core fields come from the Track struct (database),
+/// extended fields (comment, composer, etc.) come from disk.
+///
+/// Priority order: track_number, title, artist, album, album_artist, genre, isrc
 /// Optimized for compilation tagging workflow (common: track_number -> title -> artist)
 /// Read-only fields (path, file_type, duration, bitrate) are NOT included.
 pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
-    let path = Path::new(&track.path);
-
-    // Try to read all tags from the file (as Vec to preserve duplicates)
-    let all_tags_vec: Vec<(String, String)> = match metadata::read_all_tags(path) {
-        Ok(tags) => tags,
-        Err(_) => {
-            // If reading fails, fall back to database fields only
-            let mut vec = Vec::new();
-            if let Some(ref artist) = track.artist {
-                vec.push(("artist".to_string(), artist.clone()));
-            }
-            if let Some(ref album) = track.album {
-                vec.push(("album".to_string(), album.clone()));
-            }
-            if let Some(ref album_artist) = track.album_artist {
-                vec.push(("album_artist".to_string(), album_artist.clone()));
-            }
-            if let Some(ref title) = track.title {
-                vec.push(("title".to_string(), title.clone()));
-            }
-            if let Some(track_num) = track.track_number {
-                vec.push(("track_number".to_string(), track_num.to_string()));
-            }
-            if let Some(ref isrc) = track.isrc {
-                vec.push(("isrc".to_string(), isrc.clone()));
-            }
-            vec
-        }
-    };
-
     let mut tag_fields = Vec::new();
 
-    // Priority fields in specific order (name, is_unique_per_track)
-    // Optimized for compilation tagging: track_number -> title -> artist
-    let priority_fields = vec![
-        ("track_number", true), // Unique per track
-        ("title", true),        // Unique per track
-        ("artist", false),
-        ("album", false),
-        ("album_artist", false), // Can have multiple values
-        ("date", false),
-        ("genre", false),
-        ("isrc", false),
-    ];
+    // =========================================================================
+    // CORE FIELDS (from database Track struct)
+    // These are the source of truth - database values always shown
+    // =========================================================================
 
-    // Add priority fields first (handle album_artist specially for multiple values)
-    for (field_name, is_unique) in &priority_fields {
-        let matching_values: Vec<String> = all_tags_vec
-            .iter()
-            .filter(|(k, _)| k == field_name)
-            .map(|(_, v)| v.clone())
-            .collect();
+    // 1. track_number (unique per track)
+    tag_fields.push(TagField {
+        name: "track_number".to_string(),
+        value: track.track_number.map(|n| n.to_string()).unwrap_or_default(),
+        editable: true,
+        is_unique_per_track: true,
+    });
 
-        if field_name == &"album_artist" {
-            // Allow multiple album_artist entries
-            if matching_values.is_empty() {
-                // Add one empty field if none exist
-                tag_fields.push(TagField {
-                    name: field_name.to_string(),
-                    value: String::new(),
-                    editable: true,
-                    is_unique_per_track: *is_unique,
-                });
-            } else {
-                // Add all existing album_artist values
-                for value in matching_values {
-                    tag_fields.push(TagField {
-                        name: field_name.to_string(),
-                        value,
-                        editable: true,
-                        is_unique_per_track: *is_unique,
-                    });
-                }
-            }
-        } else {
-            // Single value for other fields (use first if multiple exist)
-            if *is_unique && matching_values.len() > 1 {
-                let _ = crate::config::log_message(&format!(
-                    "Warning: Multiple {} tags found ({}), using first value",
-                    field_name,
-                    matching_values.len()
-                ));
-            }
-            tag_fields.push(TagField {
-                name: field_name.to_string(),
-                value: matching_values.first().cloned().unwrap_or_default(),
-                editable: true,
-                is_unique_per_track: *is_unique,
-            });
-        }
-    }
+    // 2. title (unique per track)
+    tag_fields.push(TagField {
+        name: "title".to_string(),
+        value: track.title.clone().unwrap_or_default(),
+        editable: true,
+        is_unique_per_track: true,
+    });
 
-    // Add other tags alphabetically (excluding priority fields and read-only fields)
-    let skip_fields: HashSet<&str> = priority_fields
-        .iter()
-        .map(|(name, _)| *name)
-        .chain(
-            ["bitrate", "sample_rate", "duration", "path", "file_type"]
-                .iter()
-                .copied(),
-        )
-        .collect();
+    // 3. artist
+    tag_fields.push(TagField {
+        name: "artist".to_string(),
+        value: track.artist.clone().unwrap_or_default(),
+        editable: true,
+        is_unique_per_track: false,
+    });
 
-    let mut other_tags: Vec<_> = all_tags_vec
-        .iter()
-        .filter(|(key, _)| !skip_fields.contains(key.as_str()))
-        .collect();
-    other_tags.sort_by_key(|(key, _)| key.as_str());
+    // 4. album
+    tag_fields.push(TagField {
+        name: "album".to_string(),
+        value: track.album.clone().unwrap_or_default(),
+        editable: true,
+        is_unique_per_track: false,
+    });
 
-    for (key, value) in other_tags {
-        tag_fields.push(TagField {
-            name: key.clone(),
-            value: value.clone(),
-            editable: true,
-            is_unique_per_track: false,
-        });
-    }
+    // 5. album_artist
+    tag_fields.push(TagField {
+        name: "album_artist".to_string(),
+        value: track.album_artist.clone().unwrap_or_default(),
+        editable: true,
+        is_unique_per_track: false,
+    });
 
-    // Add "New Tag" line as last interactable field
+    // 6. genre
+    tag_fields.push(TagField {
+        name: "genre".to_string(),
+        value: track.genre.clone().unwrap_or_default(),
+        editable: true,
+        is_unique_per_track: false,
+    });
+
+    // 7. isrc
+    tag_fields.push(TagField {
+        name: "isrc".to_string(),
+        value: track.isrc.clone().unwrap_or_default(),
+        editable: true,
+        is_unique_per_track: false,
+    });
+
+    // =========================================================================
+    // EXTENDED FIELDS (from disk)
+    // Tags that exist in the file but aren't in the Track struct
+    // =========================================================================
+    let extended = load_extended_fields_from_disk(&track.path);
+    tag_fields.extend(extended);
+
+    // =========================================================================
+    // NEW TAG placeholder
+    // =========================================================================
     tag_fields.push(TagField {
         name: "New Tag".to_string(),
         value: "[Press Enter to create]".to_string(),
@@ -489,6 +446,48 @@ pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
     });
 
     tag_fields
+}
+
+/// Load extended fields from disk that aren't stored in the Track struct.
+/// Returns fields sorted alphabetically.
+fn load_extended_fields_from_disk(path: &str) -> Vec<TagField> {
+    // Core fields we get from database - skip these from disk
+    let core_fields: HashSet<&str> = [
+        "artist", "album", "album_artist", "title",
+        "track_number", "genre", "isrc",
+        // Also skip read-only technical fields
+        "bitrate", "sample_rate", "duration", "path", "file_type",
+    ].into_iter().collect();
+
+    let disk_path = Path::new(path);
+    let all_tags = match metadata::read_all_tags(disk_path) {
+        Ok(tags) => tags,
+        Err(e) => {
+            let _ = crate::config::log_message(&format!(
+                "Warning: Could not read extended tags from {}: {}",
+                path, e
+            ));
+            return Vec::new();
+        }
+    };
+
+    // Filter to only extended fields, sort alphabetically
+    let mut extended: Vec<_> = all_tags
+        .into_iter()
+        .filter(|(key, _)| !core_fields.contains(key.as_str()))
+        .collect();
+    extended.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    // Convert to TagField
+    extended
+        .into_iter()
+        .map(|(name, value)| TagField {
+            name,
+            value,
+            editable: true,
+            is_unique_per_track: false,
+        })
+        .collect()
 }
 
 /// Compute all changes between original and current tag fields

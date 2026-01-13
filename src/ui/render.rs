@@ -52,6 +52,8 @@ pub struct RenderContext<'a> {
     pub album_artist_review: Option<&'a mut album_artist_flow::AlbumArtistReviewState>,
     pub album_cluster_view: Option<&'a mut album_flow::AlbumClusterState>,
     pub album_review: Option<&'a mut album_flow::AlbumReviewState>,
+    pub directory_tag_editor: Option<&'a mut tag_editor::DirectoryTagEditorState>,
+    pub directory_tag_editor_modal: Option<&'a tag_editor::types::DirectoryTagEditorModal>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub heartbeat_result: Option<&'a HeartbeatResult>,
     pub heartbeat_pending: bool,
@@ -103,6 +105,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::AlbumArtistReview => Some("Album Artist Review"),
         super::UiMode::AlbumClusterView => Some("Album Tag Resolution"),
         super::UiMode::AlbumReview => Some("Album Tag Review"),
+        super::UiMode::DirectoryTagEditor => Some("Directory Tag Editor"),
     };
 
     let title = match suffix {
@@ -255,6 +258,36 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::AlbumReview => {
             if let Some(ref mut review) = ctx.album_review {
                 review.render(f, area);
+            }
+        }
+        super::UiMode::DirectoryTagEditor => {
+            if let Some(ref mut editor) = ctx.directory_tag_editor {
+                editor.render(f, area, ctx.status_message);
+            }
+            // Render modal on top if present
+            if let Some(ref modal) = ctx.directory_tag_editor_modal {
+                use tag_editor::types::DirectoryTagEditorModal;
+                match modal {
+                    DirectoryTagEditorModal::ChangePreview { scroll_offset, .. } => {
+                        if let Some(ref editor) = ctx.directory_tag_editor {
+                            let changes = editor.compute_changes();
+                            tag_editor::directory_render::render_directory_change_preview_modal(
+                                f,
+                                area,
+                                &changes,
+                                editor.files.len(),
+                                *scroll_offset,
+                            );
+                        }
+                    }
+                    DirectoryTagEditorModal::UnsavedChanges { going_next } => {
+                        tag_editor::directory_render::render_unsaved_changes_modal(
+                            f,
+                            area,
+                            *going_next,
+                        );
+                    }
+                }
             }
         }
     }
@@ -766,6 +799,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         | super::UiMode::AlbumArtistCollationReview
         | super::UiMode::AlbumArtistPopulationReview
         | super::UiMode::AlbumReview => "↑↓ Scroll | Enter Commit | Esc Cancel",
+        super::UiMode::DirectoryTagEditor => "Tab/Shift+Tab Directories | ↑↓ Fields | Enter Edit | → Action | Esc Exit",
     };
     lines.push(Line::from(hints));
 

@@ -134,8 +134,6 @@ impl AlbumReviewState {
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let flagged_count = self.session.decisions.iter().filter(|d| d.flag_for_review).count();
-
         let header_text = vec![
             Line::from(vec![
                 Span::styled("Album Canonicalization Review", Style::default().add_modifier(Modifier::BOLD)),
@@ -146,14 +144,6 @@ impl AlbumReviewState {
                     self.session.decision_count(),
                     self.session.total_affected_tracks()
                 )),
-                if flagged_count > 0 {
-                    Span::styled(
-                        format!(" ({} flagged for review)", flagged_count),
-                        Style::default().fg(Color::Yellow),
-                    )
-                } else {
-                    Span::raw("")
-                },
             ]),
         ];
 
@@ -173,19 +163,12 @@ impl AlbumReviewState {
             .map(|(idx, decision)| {
                 let is_cursor = idx == self.cursor_idx;
 
-                let flag_indicator = if decision.flag_for_review {
-                    Span::styled(" [!]", Style::default().fg(Color::Yellow))
-                } else {
-                    Span::raw("")
-                };
-
                 let content = Line::from(vec![
                     Span::raw(format!(
                         "{} variants → '{}'",
                         decision.variants_to_rename.len(),
                         decision.canonical_name
                     )),
-                    flag_indicator,
                 ]);
 
                 let style = if is_cursor && focused {

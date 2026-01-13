@@ -12,7 +12,13 @@
 //! - `state`: TagEditorState and conversion functions
 //! - `input`: Keyboard input handling
 //! - `render`: UI rendering functions
+//! - `directory_state`: DirectoryTagEditorState for bulk directory editing
+//! - `directory_input`: Input handling for directory editor
+//! - `directory_render`: Rendering for directory editor
 
+mod directory_input;
+pub mod directory_render;
+pub mod directory_state;
 mod input;
 mod render;
 pub mod state;
@@ -27,4 +33,12 @@ pub use state::TagEditorState;
 pub use types::{
     DuplicateGroupInfo, DuplicateGroupType, FieldEditState, GroupedChange, TagChange,
     TagEditorAction, TagEditorModal, TagField,
+};
+
+// Directory tag editor exports
+pub use directory_state::{DirectoryTagChange, DirectoryTagEditorState};
+#[allow(unused_imports)]
+pub use types::{
+    AggregatedTagField, AggregatedValue, DirectoryTagEditorAction, DirectoryTagEditorFocus,
+    DirectoryTagEditorModal, GatheringMessage, VariousConfirmState,
 };

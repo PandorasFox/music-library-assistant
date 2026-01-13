@@ -2,8 +2,6 @@
 //!
 //! All UI rendering functions for the tag editor.
 
-#![allow(dead_code)]
-
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -106,7 +104,7 @@ impl TagEditorState {
 
         self.render_track_list(f, three_column[0]);
         self.render_tag_fields(f, three_column[1]);
-        self.render_search_panel(f, three_column[2]);
+        self.render_action_panel(f, three_column[2]);
     }
 
     fn render_track_list(&self, f: &mut Frame, area: Rect) {
@@ -139,6 +137,7 @@ impl TagEditorState {
 
     fn render_tag_fields(&mut self, f: &mut Frame, area: Rect) {
         let fields = &self.tag_fields[self.current_track_idx];
+        let original_fields = &self.original_tag_fields[self.current_track_idx];
 
         // Calculate visible height (area height minus 2 for borders)
         let visible_height = area.height.saturating_sub(2) as usize;
@@ -151,12 +150,26 @@ impl TagEditorState {
             .map(|(idx, field)| {
                 let is_current = idx == self.current_field_idx;
 
+                // Check if this field has been modified from original
+                let is_modified = original_fields
+                    .iter()
+                    .find(|orig| orig.name == field.name)
+                    .map(|orig| orig.value != field.value)
+                    .unwrap_or(true); // New fields are considered modified
+
                 let name_display =
                     if is_current && matches!(self.field_edit_state, FieldEditState::EditingName) {
                         self.name_buffer.clone() + "_"
                     } else {
                         field.name.clone()
                     };
+
+                // Prepend edit indicator if modified
+                let name_with_indicator = if is_modified {
+                    format!("✎ {}", name_display)
+                } else {
+                    format!("  {}", name_display)
+                };
 
                 let value_display =
                     if is_current && matches!(self.field_edit_state, FieldEditState::EditingValue) {
@@ -173,12 +186,14 @@ impl TagEditorState {
                         ""
                     };
 
-                let line_text = format!("{:18} : {}{}", name_display, value_display, fill_button);
+                let line_text = format!("{:18} : {}{}", name_with_indicator, value_display, fill_button);
 
                 let style = if is_current {
                     Style::default()
                         .bg(Color::DarkGray)
                         .add_modifier(Modifier::BOLD)
+                } else if is_modified {
+                    Style::default().fg(Color::Yellow)
                 } else {
                     Style::default()
                 };
@@ -208,11 +223,46 @@ impl TagEditorState {
         f.render_widget(tag_para, area);
     }
 
-    fn render_search_panel(&self, f: &mut Frame, area: Rect) {
-        let search_para = Paragraph::new(vec![Line::from("(TODO)")])
-            .block(Block::default().borders(Borders::ALL).title("Search"))
+    fn render_action_panel(&self, f: &mut Frame, area: Rect) {
+        use super::types::TagEditorFocus;
+
+        let is_focused = matches!(self.focus, TagEditorFocus::ActionPane);
+
+        // Count pending changes
+        let changes = super::state::compute_changes(&self.original_tag_fields, &self.tag_fields);
+        let change_count = changes.len();
+
+        let button_style = if is_focused {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+
+        let lines = vec![
+            Line::from(""),
+            Line::from(if is_focused { "[ Proceed ]" } else { "  Proceed  " }).style(button_style),
+            Line::from(""),
+            Line::from(format!("{} changes", change_count)).style(Style::default().fg(Color::DarkGray)),
+        ];
+
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let action_para = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Action")
+                    .border_style(border_style),
+            )
             .alignment(Alignment::Center);
-        f.render_widget(search_para, area);
+        f.render_widget(action_para, area);
     }
 
     fn render_status_box(&self, f: &mut Frame, area: Rect, status_message: Option<&str>) {

@@ -20,7 +20,7 @@ use crate::ops::operation::{OperationProgress, OperationType, ProgressContext};
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::{calculate_rolling_throughput, centered_rect, format_bytes_binary, format_eta, truncate_path_display};
 use super::main_menu::MainMenuState;
-use super::{canon_flow, dedup_flow, deploy_flow, dialogue, dir_browser, tag_editor};
+use super::{album_artist_flow, album_flow, canon_flow, dedup_flow, deploy_flow, dialogue, dir_browser, tag_editor};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -30,7 +30,9 @@ pub struct RenderContext<'a> {
     pub status_message: Option<&'a str>,
     pub main_menu: &'a mut MainMenuState,
     pub tag_editor: Option<&'a mut tag_editor::TagEditorState>,
+    pub tag_editor_modal: Option<&'a tag_editor::TagEditorModal>,
     pub dir_browser: Option<&'a mut dir_browser::DirBrowserState>,
+    pub corpus_browser: Option<&'a mut super::corpus_browser::CorpusBrowserState>,
     pub dialogue: Option<&'a mut dialogue::DialogueState>,
     pub dialogue_summary: Option<&'a mut dialogue::DialogueSummaryState>,
     pub cluster_dialogue: Option<&'a mut dedup_flow::ClusterDialogueState>,
@@ -41,6 +43,15 @@ pub struct RenderContext<'a> {
     pub canon_cluster_view: Option<&'a mut canon_flow::ClusterViewState>,
     pub canon_session_review: Option<&'a mut canon_flow::ReviewState>,
     pub canon_commit_modal_state: Option<&'a super::CanonCommitModalState>,
+    pub album_artist_phase_selector: Option<&'a album_artist_flow::PhaseSelectorState>,
+    pub album_artist_cluster_view: Option<&'a mut album_artist_flow::AlbumArtistClusterState>,
+    pub album_artist_collation: Option<&'a mut album_artist_flow::CollationState>,
+    pub album_artist_collation_review: Option<&'a mut album_artist_flow::CollationReviewState>,
+    pub album_artist_population: Option<&'a mut album_artist_flow::PopulationState>,
+    pub album_artist_population_review: Option<&'a mut album_artist_flow::PopulationReviewState>,
+    pub album_artist_review: Option<&'a mut album_artist_flow::AlbumArtistReviewState>,
+    pub album_cluster_view: Option<&'a mut album_flow::AlbumClusterState>,
+    pub album_review: Option<&'a mut album_flow::AlbumReviewState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub heartbeat_result: Option<&'a HeartbeatResult>,
     pub heartbeat_pending: bool,
@@ -82,6 +93,16 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::CanonSessionReview => Some("Artist Canonicalization Review"),
         super::UiMode::CanonCommitModal => Some("Artist Canonicalization"),
         super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
+        super::UiMode::CorpusBrowser => Some("Corpus Browser"),
+        super::UiMode::AlbumArtistPhaseSelector => Some("Album Artist Resolution"),
+        super::UiMode::AlbumArtistClusterView => Some("Album Artist Canonicalization"),
+        super::UiMode::AlbumArtistCollation => Some("Album Artist Collation"),
+        super::UiMode::AlbumArtistCollationReview => Some("Album Artist Collation Review"),
+        super::UiMode::AlbumArtistPopulation => Some("Album Artist Population"),
+        super::UiMode::AlbumArtistPopulationReview => Some("Album Artist Population Review"),
+        super::UiMode::AlbumArtistReview => Some("Album Artist Review"),
+        super::UiMode::AlbumClusterView => Some("Album Tag Resolution"),
+        super::UiMode::AlbumReview => Some("Album Tag Review"),
     };
 
     let title = match suffix {
@@ -105,6 +126,28 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::TagEditor => {
             if let Some(ref mut editor) = ctx.tag_editor {
                 editor.render(f, area, ctx.status_message);
+            }
+            // Render modal on top if present
+            if let Some(ref modal) = ctx.tag_editor_modal {
+                match modal {
+                    tag_editor::TagEditorModal::SaveConfirmation { selected_button } => {
+                        tag_editor::render_save_confirmation_modal(f, area, *selected_button);
+                    }
+                    tag_editor::TagEditorModal::ChangePreview {
+                        grouped_changes,
+                        single_changes,
+                        scroll_offset,
+                        ..
+                    } => {
+                        tag_editor::render_change_preview_modal(
+                            f,
+                            area,
+                            grouped_changes,
+                            single_changes,
+                            *scroll_offset,
+                        );
+                    }
+                }
             }
         }
         super::UiMode::DirBrowser => {
@@ -160,6 +203,59 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         }
         super::UiMode::ExitConfirmModal => {
             render_exit_confirm_modal(f, area, ctx.exit_confirm_modal_state);
+        }
+        super::UiMode::CorpusBrowser => {
+            if let Some(ref mut browser) = ctx.corpus_browser {
+                browser.render(f, area);
+            }
+        }
+        super::UiMode::AlbumArtistPhaseSelector => {
+            // Render main menu as background
+            ctx.main_menu.render(f, area, &Some(ctx.config.clone()));
+            // Render phase selector popup on top
+            if let Some(ref selector) = ctx.album_artist_phase_selector {
+                album_artist_flow::render_phase_selector(f, selector);
+            }
+        }
+        super::UiMode::AlbumArtistClusterView => {
+            if let Some(ref mut cluster_view) = ctx.album_artist_cluster_view {
+                cluster_view.render(f, area);
+            }
+        }
+        super::UiMode::AlbumArtistReview => {
+            if let Some(ref mut review) = ctx.album_artist_review {
+                review.render(f, area);
+            }
+        }
+        super::UiMode::AlbumArtistCollation => {
+            if let Some(ref mut collation) = ctx.album_artist_collation {
+                collation.render(f, area);
+            }
+        }
+        super::UiMode::AlbumArtistCollationReview => {
+            if let Some(ref mut review) = ctx.album_artist_collation_review {
+                review.render(f, area);
+            }
+        }
+        super::UiMode::AlbumArtistPopulation => {
+            if let Some(ref mut population) = ctx.album_artist_population {
+                population.render(f, area);
+            }
+        }
+        super::UiMode::AlbumArtistPopulationReview => {
+            if let Some(ref mut review) = ctx.album_artist_population_review {
+                review.render(f, area);
+            }
+        }
+        super::UiMode::AlbumClusterView => {
+            if let Some(ref mut cluster_view) = ctx.album_cluster_view {
+                cluster_view.render(f, area);
+            }
+        }
+        super::UiMode::AlbumReview => {
+            if let Some(ref mut review) = ctx.album_review {
+                review.render(f, area);
+            }
         }
     }
 }
@@ -657,6 +753,17 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::CanonSessionReview => "↑↓ Scroll | Tab Focus | Enter Commit | Esc Cancel",
         super::UiMode::CanonCommitModal => "↑↓ Select | Enter Confirm | Esc Main Menu",
         super::UiMode::ExitConfirmModal => "←→ Select | Enter/Space Confirm | Y Yes | N/Esc No",
+        // Placeholder hints for unimplemented modes
+        super::UiMode::CorpusBrowser => "↑↓ Navigate | ←→ Expand | Enter Edit | Esc Exit",
+        super::UiMode::AlbumArtistPhaseSelector => "Space Toggle | Enter Proceed | Esc Cancel",
+        super::UiMode::AlbumArtistClusterView
+        | super::UiMode::AlbumClusterView => "↑↓ Navigate | Space Toggle | Tab Next | Esc Review",
+        super::UiMode::AlbumArtistCollation
+        | super::UiMode::AlbumArtistPopulation => "↑↓ Navigate | Enter Confirm | Esc Exit",
+        super::UiMode::AlbumArtistReview
+        | super::UiMode::AlbumArtistCollationReview
+        | super::UiMode::AlbumArtistPopulationReview
+        | super::UiMode::AlbumReview => "↑↓ Scroll | Enter Commit | Esc Cancel",
     };
     lines.push(Line::from(hints));
 

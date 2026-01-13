@@ -2,7 +2,7 @@
 //!
 //! These filters are applied during health issue detection to avoid false positives.
 
-use crate::db::Track;
+use crate::corpus::db::Track;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -126,6 +126,7 @@ mod tests {
             album_artist: None,
             title: Some("Title".to_string()),
             track_number: track_num,
+            genre: None,
             duration_ms: Some(180000),
             bitrate_kbps: Some(320),
             sample_rate: Some(44100),

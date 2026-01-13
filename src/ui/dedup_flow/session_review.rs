@@ -12,7 +12,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::deduplication::DeduplicationSession;
+use crate::corpus::deduplication::DeduplicationSession;
 
 /// Actions returned from the session review
 #[derive(Debug, Clone)]

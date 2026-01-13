@@ -31,7 +31,7 @@ use ratatui::{
 };
 
 use super::session::{CanonDecision, CanonSession};
-use crate::db::{ChangeStatus, ChangeType, PendingChange};
+use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
 use crate::ui::app::flip_coin;
 
 /// Which pane is currently focused
@@ -495,7 +495,7 @@ impl ClusterViewState {
             Ok(p) => p,
             Err(_) => return vec![],
         };
-        let db = match crate::db::Database::open(&db_path) {
+        let db = match crate::corpus::db::Database::open(&db_path) {
             Ok(db) => db,
             Err(_) => return vec![],
         };

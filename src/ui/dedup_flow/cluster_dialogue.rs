@@ -14,7 +14,7 @@ use ratatui::{
 };
 use std::path::Path;
 
-use crate::deduplication::{
+use crate::corpus::deduplication::{
     compute_directory_set_clusters, find_divergence_root, generate_cluster_changes,
     ClusterDecision, ConflictSet, DeduplicationSession,
 };
@@ -88,7 +88,7 @@ impl ClusterDialogueState {
     /// Used by sleuthing (directory-set based deduplication) which builds
     /// clusters directly from selected directories.
     pub fn new_from_clusters(
-        clusters: Vec<crate::deduplication::DirectorySetCluster>,
+        clusters: Vec<crate::corpus::deduplication::DirectorySetCluster>,
         session_id: String,
         corpus_root: String,
         stash_root: String,
@@ -292,7 +292,7 @@ impl ClusterDialogueState {
     }
 
     fn should_offer_bulk_review(&self) -> bool {
-        crate::deduplication::should_offer_bulk_review(
+        crate::corpus::deduplication::should_offer_bulk_review(
             &self.session.clusters,
             self.session.current_index,
         )

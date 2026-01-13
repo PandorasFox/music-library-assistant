@@ -15,18 +15,14 @@
 // ============================================================================
 
 /// MLA release version string (shown in title bar and reports)
-pub const MLA_VERSION: &str = "alpha 1";
+pub const MLA_VERSION: &str = "alpha 2";
 
 /// Full application title with version
-pub const MLA_TITLE: &str = "Music Library Assistant (mla alpha 1)";
+pub const MLA_TITLE: &str = "Music Library Assistant (mla alpha 2)";
 
 mod config;
 mod corpus;
-mod db;
-mod deduplication;
-mod metadata;
 mod ops;
-mod progress;
 mod ui;
 
 use anyhow::Result;

@@ -8,12 +8,7 @@
 //! - **missing_from_disk**: Indexed files that no longer exist on disk
 //! - **new_on_disk**: Audio files in corpus not yet indexed
 //! - **library_health**: Per-library deployment status (healthy, pending, stale, orphans)
-//!
-//! ## TODO: Health Warnings
-//!
-//! The heartbeat should generate health warnings for:
-//! - Files in corpus that are not indexed (resolvable by running a scan)
-//! - Consider adding health_issues entries for these to surface in reports
+//! - **health_issues**: Creates health issue entries for unindexed files
 
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
@@ -22,7 +17,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::config::{self, Config};
-use crate::db::Database;
+use crate::corpus::db::Database;
 
 use super::library::{check_all_libraries_health, LibraryHealthResult};
 
@@ -131,13 +126,16 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
     // Get indexed inodes from scan_state for corpus
     let indexed_inodes = get_indexed_inodes(&db);
 
-    // Walk corpus directory and collect audio file inodes
-    let disk_inodes = walk_corpus_inodes(corpus_root);
+    // Walk corpus directory and collect audio file inodes and paths
+    let (disk_inodes, disk_inode_paths) = walk_corpus_inodes_with_paths(corpus_root);
 
     // Calculate differences
     let missing_inodes: HashSet<i64> = indexed_inodes.difference(&disk_inodes).cloned().collect();
     let missing_from_disk = missing_inodes.len();
-    let new_on_disk = disk_inodes.difference(&indexed_inodes).count();
+
+    // Find new files (not in index)
+    let new_inodes: HashSet<i64> = disk_inodes.difference(&indexed_inodes).cloned().collect();
+    let new_on_disk = new_inodes.len();
 
     // Log missing files for debugging
     if missing_from_disk > 0 {
@@ -150,6 +148,11 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
                 let _ = config::log_message(&format!("  - {}", path));
             }
         }
+    }
+
+    // Create health issues for unindexed files (grouped by directory)
+    if new_on_disk > 0 {
+        create_missing_from_index_issues(&db, &new_inodes, &disk_inode_paths);
     }
 
     // Check library health
@@ -176,20 +179,27 @@ fn get_indexed_inodes(db: &Database) -> HashSet<i64> {
     db.get_all_scan_state_inodes("corpus").unwrap_or_default()
 }
 
-/// Walk corpus directory and collect inodes of audio files
-fn walk_corpus_inodes(root: &Path) -> HashSet<i64> {
+/// Walk corpus directory and collect inodes of audio files along with their paths
+fn walk_corpus_inodes_with_paths(root: &Path) -> (HashSet<i64>, std::collections::HashMap<i64, String>) {
+    use std::collections::HashMap;
+
     let mut inodes = HashSet::new();
+    let mut inode_paths: HashMap<i64, String> = HashMap::new();
 
     if !root.exists() {
-        return inodes;
+        return (inodes, inode_paths);
     }
 
-    walk_dir_recursive(root, &mut inodes);
-    inodes
+    walk_dir_recursive_with_paths(root, &mut inodes, &mut inode_paths);
+    (inodes, inode_paths)
 }
 
-/// Recursively walk directory and collect audio file inodes
-fn walk_dir_recursive(dir: &Path, inodes: &mut HashSet<i64>) {
+/// Recursively walk directory and collect audio file inodes and paths
+fn walk_dir_recursive_with_paths(
+    dir: &Path,
+    inodes: &mut HashSet<i64>,
+    inode_paths: &mut std::collections::HashMap<i64, String>,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -199,12 +209,72 @@ fn walk_dir_recursive(dir: &Path, inodes: &mut HashSet<i64>) {
         let path = entry.path();
 
         if path.is_dir() {
-            walk_dir_recursive(&path, inodes);
+            walk_dir_recursive_with_paths(&path, inodes, inode_paths);
         } else if is_audio_file(&path) {
             if let Ok(metadata) = std::fs::metadata(&path) {
-                inodes.insert(metadata.ino() as i64);
+                let inode = metadata.ino() as i64;
+                inodes.insert(inode);
+                inode_paths.insert(inode, path.to_string_lossy().to_string());
             }
         }
+    }
+}
+
+/// Create health issues for files missing from the index, grouped by directory
+fn create_missing_from_index_issues(
+    db: &Database,
+    new_inodes: &HashSet<i64>,
+    inode_paths: &std::collections::HashMap<i64, String>,
+) {
+    use crate::corpus::db::{HealthIssue, HealthIssueType, HealthIssueSeverity};
+    use std::collections::HashMap;
+
+    // Group new files by parent directory
+    let mut by_directory: HashMap<String, Vec<String>> = HashMap::new();
+
+    for inode in new_inodes {
+        if let Some(path) = inode_paths.get(inode) {
+            let parent = std::path::Path::new(path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "[root]".to_string());
+            by_directory.entry(parent).or_default().push(path.clone());
+        }
+    }
+
+    // Create/update health issue for each directory
+    for (directory, files) in by_directory {
+        let issue_key = format!("missing_from_index:{}", directory);
+
+        // Check if issue already exists
+        if db.get_health_issue_by_key(HealthIssueType::MissingFromIndex, &issue_key)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            // Issue already exists, skip (will be cleared when files are scanned)
+            continue;
+        }
+
+        let metadata = serde_json::json!({
+            "directory": directory,
+            "file_count": files.len(),
+            "sample_files": files.iter().take(5).collect::<Vec<_>>(),
+        });
+
+        let issue = HealthIssue {
+            id: None,
+            issue_type: HealthIssueType::MissingFromIndex,
+            issue_key,
+            severity: HealthIssueSeverity::Informational,
+            discovered_at: None,
+            resolved_at: None,
+            resolution_type: None,
+            resolution_session: None,
+            metadata_json: Some(metadata.to_string()),
+        };
+
+        let _ = db.insert_health_issue(&issue);
     }
 }
 

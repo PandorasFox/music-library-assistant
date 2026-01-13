@@ -2,16 +2,14 @@
 //!
 //! Core state structure and conversion functions.
 
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::db::Track;
-use crate::metadata;
+use crate::corpus::db::Track;
+use crate::corpus::metadata;
 
 use super::types::{
-    DuplicateGroupInfo, FieldEditState, GroupedChange, TagChange, TagField,
+    DuplicateGroupInfo, FieldEditState, GroupedChange, TagChange, TagEditorFocus, TagField,
 };
 
 /// Tag editor navigation state
@@ -47,6 +45,8 @@ pub struct TagEditorState {
     pub tag_scroll_offset: usize,
     /// Visible height for tag field area (set during render)
     pub tag_visible_height: usize,
+    /// Which pane currently has focus
+    pub focus: TagEditorFocus,
 }
 
 impl TagEditorState {
@@ -71,6 +71,7 @@ impl TagEditorState {
             focus_on_value: true,
             tag_scroll_offset: 0,
             tag_visible_height: 10, // Default, updated during render
+            focus: TagEditorFocus::TagFields,
         }
     }
 
@@ -103,6 +104,7 @@ impl TagEditorState {
             focus_on_value: true,
             tag_scroll_offset: 0,
             tag_visible_height: 10,
+            focus: TagEditorFocus::TagFields,
         })
     }
 

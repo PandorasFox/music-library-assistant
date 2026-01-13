@@ -3,9 +3,7 @@
 //! Provides a three-column navigation system:
 //! - Left pane: Categories (Build Indices, Insight, Corpus Ops, etc.)
 //! - Middle pane: Commands within selected category
-//! - Right pane: Info/description for highlighted command (TODO placeholders)
-
-#![allow(dead_code)]
+//! - Right pane: Info/description for highlighted command
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -18,7 +16,7 @@ use ratatui::{
 
 use crate::config::Config;
 use crate::corpus::HeartbeatResult;
-use crate::db::CorpusSummary;
+use crate::corpus::db::CorpusSummary;
 
 // ============================================================================
 // Types
@@ -117,16 +115,25 @@ pub enum TransitionTarget {
     DropMissingConfirm,
     /// Artist name canonicalization flow
     CanonFlow,
+    /// Genre tag canonicalization flow
+    GenreCanonFlow,
+    /// Corpus browser with metadata preview
+    CorpusBrowser,
+    /// Album artist resolution flow (phase selector)
+    AlbumArtistFlow,
+    /// Album tag resolution flow
+    AlbumFlow,
 }
 
-/// Report types (mirrored from legacy code)
+/// Report types
+///
+/// Note: Quality and Duplicates reports were removed as redundant.
+/// The Health report now covers all duplicate and canonicalization issues.
 #[derive(Debug, Clone, Copy)]
 pub enum ReportType {
     GenerateAll,
     Legacy,
     Deployment,
-    Quality,
-    Duplicates,
     Health,
     KnownVariants,
 }
@@ -473,6 +480,10 @@ impl MainMenuState {
                         TransitionTarget::DropMissingConfirm => "Shows list of missing files for review",
                         TransitionTarget::PendingChangesView => "Shows queued changes",
                         TransitionTarget::CanonFlow => "Opens artist canonicalization workflow",
+                        TransitionTarget::GenreCanonFlow => "Opens genre canonicalization workflow",
+                        TransitionTarget::CorpusBrowser => "Browse corpus files with metadata preview",
+                        TransitionTarget::AlbumArtistFlow => "Unified album artist resolution workflow",
+                        TransitionTarget::AlbumFlow => "Album tag canonicalization with EP detection",
                     };
                     lines.push(desc.to_string());
                 }
@@ -500,15 +511,10 @@ impl MainMenuState {
                 lines.push(format!("Duplicate groups: {}", summary.duplicate_groups));
                 lines.push(format!("  Fingerprint: {}", hs.fingerprint_duplicates));
                 lines.push(format!("  Metadata: {}", hs.metadata_duplicates));
+                lines.push(format!("Canonicalization issues: {}", hs.canonicalization_issues));
                 lines.push(format!("Auto-resolvable: {}", hs.auto_resolvable));
                 lines.push(format!("Manual review: {}", hs.manual_review));
                 lines.push(format!("Known variants: {}", hs.known_variants));
-            }
-            ReportType::Duplicates => {
-                lines.push("─── Duplicate Status ───".to_string());
-                lines.push(format!("Groups pending: {}", summary.duplicate_groups));
-                lines.push(format!("Fingerprint matches: {}", hs.fingerprint_duplicates));
-                lines.push(format!("Metadata collisions: {}", hs.metadata_duplicates));
             }
             ReportType::Deployment => {
                 lines.push("─── Deployment Status ───".to_string());
@@ -520,12 +526,6 @@ impl MainMenuState {
                     lines.push("No deployment stats available.".to_string());
                 }
             }
-            ReportType::Quality => {
-                lines.push("─── Quality Status ───".to_string());
-                lines.push(format!("Canonicalization issues: {}", hs.canonicalization_issues));
-                lines.push(format!("Missing tags: {}", hs.missing_tag_issues));
-                lines.push(format!("Quality variants: {}", hs.quality_variants));
-            }
             ReportType::Legacy => {
                 lines.push("─── Legacy Analysis ───".to_string());
                 lines.push("Compares legacy library against corpus.".to_string());
@@ -533,10 +533,9 @@ impl MainMenuState {
             }
             ReportType::GenerateAll => {
                 lines.push("Generates all configured reports:".to_string());
-                lines.push("  - Health status".to_string());
-                lines.push("  - Duplicate detection".to_string());
+                lines.push("  - Health status (duplicates + canonicalization)".to_string());
                 lines.push("  - Deployment coverage".to_string());
-                lines.push("  - Quality analysis".to_string());
+                lines.push("  - Known variants".to_string());
             }
             ReportType::KnownVariants => {
                 lines.push("─── Known Variants ───".to_string());
@@ -618,35 +617,21 @@ fn build_insight_category() -> Category {
                 action: CommandAction::Background(BackgroundTask::GenerateReport {
                     report_type: ReportType::GenerateAll,
                 }),
-                description: "TODO: Generate all configured reports".to_string(),
+                description: "Run all configured health and status reports".to_string(),
             },
             Command {
                 label: "Legacy Library Report".to_string(),
                 action: CommandAction::Background(BackgroundTask::GenerateReport {
                     report_type: ReportType::Legacy,
                 }),
-                description: "TODO: Report on legacy library coverage".to_string(),
+                description: "Compare legacy library coverage against corpus".to_string(),
             },
             Command {
                 label: "Corpus Deployment Report".to_string(),
                 action: CommandAction::Background(BackgroundTask::GenerateReport {
                     report_type: ReportType::Deployment,
                 }),
-                description: "TODO: Report on deployment status".to_string(),
-            },
-            Command {
-                label: "Quality Report (Canonicalization)".to_string(),
-                action: CommandAction::Background(BackgroundTask::GenerateReport {
-                    report_type: ReportType::Quality,
-                }),
-                description: "TODO: Report on metadata quality".to_string(),
-            },
-            Command {
-                label: "Duplicate Detection Report".to_string(),
-                action: CommandAction::Background(BackgroundTask::GenerateReport {
-                    report_type: ReportType::Duplicates,
-                }),
-                description: "TODO: Report on detected duplicates".to_string(),
+                description: "Show deployment status across all libraries".to_string(),
             },
         ],
         action: None,
@@ -702,10 +687,18 @@ fn build_corpus_ops_category() -> Category {
     Category {
         name: "Corpus-mutating Operations".to_string(),
         commands: vec![
+            // -----------------------------------------------------------------
+            // Corpus Browser - browse and edit tags in-place
+            // -----------------------------------------------------------------
+            Command {
+                label: "Corpus Browser".to_string(),
+                action: CommandAction::Transition(TransitionTarget::CorpusBrowser),
+                description: "Browse corpus files and edit tags with metadata preview".to_string(),
+            },
             Command {
                 label: "Metadata Deduplication (Tag Editor)".to_string(),
                 action: CommandAction::Transition(TransitionTarget::TagEditor),
-                description: "TODO: Resolve metadata conflicts across duplicate tracks".to_string(),
+                description: "Unify conflicting tags across duplicate tracks".to_string(),
             },
             Command {
                 label: "Sleuthing (Fingerprint Deduplication)".to_string(),
@@ -720,39 +713,36 @@ fn build_corpus_ops_category() -> Category {
                 description: "Resolve artist name spelling variants".to_string(),
             },
             // -----------------------------------------------------------------
-            // Album Artist Health Flows (Stubs)
-            // -----------------------------------------------------------------
-            // TODO: These three flows should eventually be unified into a single
-            // "Album Artist Health Restoration" flow. See design notes above.
+            // Album Artist Resolution - unified flow with phase selector
+            // Consolidates: Canonicalization, Collation (was Inference), Population
             // -----------------------------------------------------------------
             Command {
-                label: "Album Artist Canonicalization".to_string(),
-                action: CommandAction::Background(BackgroundTask::Stub),
-                description: "STUB: Resolve album_artist capitalization/spelling variants".to_string(),
-            },
-            Command {
-                label: "Album Artist Inference (Album Patterns)".to_string(),
-                action: CommandAction::Background(BackgroundTask::Stub),
-                description: "STUB: Infer album_artist from tracks sharing album + track numbers".to_string(),
-            },
-            Command {
-                label: "Album Artist Population".to_string(),
-                action: CommandAction::Background(BackgroundTask::Stub),
-                description: "STUB: Populate missing album_artist from artist field".to_string(),
+                label: "Album Artist Resolution".to_string(),
+                action: CommandAction::Transition(TransitionTarget::AlbumArtistFlow),
+                description: "Unified flow: canonicalization, collation, population".to_string(),
             },
             // -----------------------------------------------------------------
-            // Album Tag Resolution Flow (Stub)
-            // -----------------------------------------------------------------
-            // Handles cases where album tags differ only by suffix patterns like:
-            // - "Album Name EP" vs "Album Name"
-            // - "Album Name (Deluxe)" vs "Album Name"
-            // - "Album Name [Remaster]" vs "Album Name"
-            // Needs backing health metric to detect these near-matches.
+            // Album Tag Resolution Flow
+            // Handles album tag variants (EP/Deluxe/Remaster suffixes) with
+            // fingerprint overlap detection for near-match grouping.
             // -----------------------------------------------------------------
             Command {
                 label: "Album Tag Resolution".to_string(),
-                action: CommandAction::Background(BackgroundTask::Stub),
+                action: CommandAction::Transition(TransitionTarget::AlbumFlow),
                 description: "Resolve album tag variants (EP/Deluxe/Remaster suffixes)".to_string(),
+            },
+            // -----------------------------------------------------------------
+            // Stub entries for future flows
+            // -----------------------------------------------------------------
+            Command {
+                label: "Metadata Duplicates Resolution".to_string(),
+                action: CommandAction::Message("Coming soon".to_string()),
+                description: "STUB: Resolve metadata-based duplicates".to_string(),
+            },
+            Command {
+                label: "Genre Tag Canonicalization".to_string(),
+                action: CommandAction::Transition(TransitionTarget::GenreCanonFlow),
+                description: "Resolve genre spelling variants (Hip Hop vs Hip-Hop)".to_string(),
             },
         ],
         action: None,
@@ -771,7 +761,7 @@ fn build_deployment_category() -> Category {
             Command {
                 label: "View Pending Changes".to_string(),
                 action: CommandAction::Transition(TransitionTarget::PendingChangesView),
-                description: "TODO: Review queued changes before commit".to_string(),
+                description: "Preview and commit pending corpus changes".to_string(),
             },
         ],
         action: None,
@@ -784,7 +774,7 @@ fn build_intake_category() -> Category {
         commands: vec![Command {
             label: "(Coming Soon)".to_string(),
             action: CommandAction::Message("Intake workflow not yet implemented".to_string()),
-            description: "TODO: Import external material into corpus".to_string(),
+            description: "Scan and import new material into corpus".to_string(),
         }],
         action: None,
     }

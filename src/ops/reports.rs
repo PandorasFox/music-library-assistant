@@ -9,8 +9,8 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::config;
-use crate::db::{Database, Track};
-use crate::deduplication::{
+use crate::corpus::db::{Database, Track};
+use crate::corpus::deduplication::{
     compare_track_quality, durations_within_tolerance, is_same_album_different_tracks,
     QualityVerdict,
 };
@@ -851,7 +851,7 @@ fn group_by_deployment_path<'a>(
 // Health Summary Functions (reading from health_issues table)
 // ============================================================================
 
-use crate::db::{HealthIssue, HealthIssueType, HealthIssueSeverity, HealthSummary};
+use crate::corpus::db::{HealthIssue, HealthIssueType, HealthIssueSeverity, HealthSummary};
 
 /// Get the current health summary from the database.
 /// This reads from the health_issues table for fast cached results.

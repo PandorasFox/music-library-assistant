@@ -11,7 +11,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::progress::{MtimeMismatchStats, ScanMessage, ScanProgress, ScanResult};
+use super::progress::{MtimeMismatchStats, ScanMessage, ScanProgress, ScanResult};
 
 // ============================================================================
 // Progress Types

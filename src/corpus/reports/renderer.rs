@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 
-use crate::db::Database;
+use crate::corpus::db::Database;
 
 /// Summary data returned from a report for UI display.
 ///

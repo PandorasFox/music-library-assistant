@@ -43,53 +43,36 @@ This document catalogs planned features and improvements for MLA. Items are loos
 
 ---
 
-## Album Artist Health Restoration
+## Album Artist Health Restoration [IMPLEMENTED]
+
+> Implemented in `src/ui/album_artist_flow/` with phase selector, canonicalization, collation, and population flows.
 
 A unified meta-flow for resolving album_artist issues across the corpus. This is critical for proper deployment path computation since deployment paths use album_artist.
 
-### Three Sub-Flows
+### Three Sub-Flows [COMPLETE]
 
-1. **Album Artist Canonicalization**
-   - Similar to Artist Name Canonicalization flow
-   - Groups album_artist values by normalized form (case-insensitive)
-   - Presents buckets of variants for squashing to canonical form
-   - Example: "Dragonforce" vs "DragonForce" vs "DRAGONFORCE"
+1. **Album Artist Canonicalization** - `album_artist_flow/cluster_view.rs`
+2. **Album Artist Collation** - `album_artist_flow/collation.rs` (unify mixed-artist albums to "Various Artists")
+3. **Album Artist Population** - `album_artist_flow/population.rs` (bulk-fill missing album_artist)
 
-2. **Album Artist Inference (Album Patterns)**
-   - Detects tracks that likely belong to the same album but have no album_artist
-   - Groups by: similar album name + presence of track numbers + similar artist
-   - Presents candidates for album_artist inference
-   - Requires new health metrics and computations
+### Remaining Work
 
-3. **Album Artist Population**
-   - Tracks with album + artist but no explicit album_artist
-   - Simple case: copy artist to album_artist
-   - May need operator confirmation for compilation albums
+- Actual tag writes on commit (currently logs only) - `mod.rs:2053`
+- ~~Collation/Population review flows~~ - DONE (review states with commit handlers)
 
-### Design Requirements
+---
 
-- **Transformed State Reasoning**: Each sub-flow should see the corpus as it WILL BE after earlier flows' mutations are applied. Use virtual overlay of pending mutations.
+## Album Tag Resolution [IMPLEMENTED]
 
-- **Progressive Resolution**: Prevent redundant work by computing metrics against the in-memory transformed state.
+> Implemented in `src/ui/album_flow/` with EP/edition detection.
 
-- **3-Pane/3-Stage Review**: Final review showing all three categories of changes before commit. Each pane independently reviewable.
+- Album canonicalization with EP/LP/edition variant detection
+- Uses `album_normalization.rs` for format/edition parsing
+- Flags buckets with format variants for metadata-duplicate review
 
-- **Final Resolution Display**: Summary showing overall transformed state, how many tracks affected, post-mutation album_artist distribution.
+### Remaining Work
 
-### Health Metrics Needed
-
-- Album artist capitalization variant buckets (group by normalized form)
-- Tracks with album + track_number but missing album_artist (grouped by album similarity)
-- Tracks with album + artist but missing album_artist
-- Album coherence score (do all tracks in an "album" agree on album_artist?)
-
-### Implementation Notes
-
-- Share mutation accumulation infrastructure with canon_flow
-- Virtual corpus state: HashMap<track_id, PendingChange> overlay
-- Review panes can reuse CanonSessionReview patterns
-- Consider "back" navigation between flows (not just within)
-- Menu entries stubbed in `src/ui/main_menu.rs`
+None - album flow is complete.
 
 ---
 
@@ -143,13 +126,20 @@ A unified meta-flow for resolving album_artist issues across the corpus. This is
 
 ## UI Improvements
 
-### Corpus Catalogue Browser (TABLE STAKES)
-- TUI interface to browse and search the indexed corpus
-- Table view with sortable columns (artist, album, title, path, bitrate, etc.)
-- Filter/search by any metadata field
-- Navigate to tag editor for selected track(s)
-- Quick statistics view (total tracks, artists, albums, bitrate distribution)
-- This is fundamental functionality that should exist
+### Corpus Browser [PARTIALLY IMPLEMENTED]
+
+> Basic implementation in `src/ui/corpus_browser/` with two-pane layout (directory tree + metadata preview).
+
+Implemented:
+- Directory tree navigation with track counts
+- Metadata preview pane (bitrate, duration, sample rate, tags)
+- Enter on directory/file to open tag editor
+
+Remaining:
+- ~~Tag editor track loading from corpus browser~~ - DONE (`start_tag_editor_for_path()`)
+- Table view with sortable columns
+- Filter/search by metadata field
+- Quick statistics view
 
 ### First-Time Setup Flow
 - Detect missing config file on startup
@@ -159,8 +149,15 @@ A unified meta-flow for resolving album_artist issues across the corpus. This is
   - Optional legacy library path
 - Write generated config.kdl to appropriate XDG location
 
-### Tag Editor
-- Search functionality within tags (currently shows "(TODO)")
+### Tag Editor [PARTIALLY IMPROVED]
+
+Implemented:
+- Edit indicator (pencil icon) for modified fields
+- Action pane with Proceed button (replaced search pane)
+
+Remaining:
+- ~~Actual tag saving to disk~~ - DONE (`save_tag_editor_changes()` with `metadata::write_tags()`)
+- Search functionality within tags
 - Better multi-value tag handling (multiple album_artist entries)
 - Batch operations across all loaded tracks
 
@@ -184,7 +181,7 @@ A unified meta-flow for resolving album_artist issues across the corpus. This is
   - "Report on detected duplicates"
 
 ### Decision Flow
-- Count actual pending changes (currently hardcoded to 0)
+- ~~Count actual pending changes (currently hardcoded to 0)~~ - DONE
 - Metadata conflict resolution across duplicate tracks
 - Audio fingerprint duplicate resolution
 
@@ -238,49 +235,51 @@ From PHILOSOPHY.md "misc notes":
 
 This section consolidates all TODO comments from the codebase. Keep this synchronized when adding or resolving TODOs in code.
 
+*Last updated: 2026-01-12*
+
 ### UI Stubs
 
-| Location | Description |
-|----------|-------------|
-| `src/ui/mod.rs:850` | Pending changes view stub |
-| `src/ui/mod.rs:1122-1123` | Modal display handling stub |
-| `src/ui/mod.rs:1132-1133` | Tag saving stub |
-| `src/ui/mod.rs:1148` | Change commit stub |
-| `src/ui/mod.rs:1352` | Export change list stub |
-| `src/ui/tag_editor/render.rs:212` | Search panel shows "(TODO)" |
-| `src/ui/dialogue.rs:231` | Pending changes count hardcoded to 0 |
+| Location | Description | Status |
+|----------|-------------|--------|
+| `mod.rs:888` | Pending changes view stub | Open |
+| ~~`mod.rs:1068-1072`~~ | ~~Corpus browser → tag editor track loading~~ | DONE |
+| `mod.rs:1209-1210` | Modal display handling stub | In Progress |
+| `mod.rs:1240-1271` | Tag editor commit flow (save to disk, stale deployment check) | DONE |
+| ~~`mod.rs:1289`~~ | ~~Change commit stub~~ | DONE |
+| ~~`mod.rs:1493`~~ | ~~Export change list stub~~ | DONE |
+| ~~`dialogue.rs:231`~~ | ~~Pending changes count hardcoded to 0~~ | DONE |
+
+### Flow Commits (Tag Changes Not Written to Disk)
+
+| Location | Description | Status |
+|----------|-------------|--------|
+| `mod.rs:2053` | Album artist canonicalization commit (logs only) | DONE |
+| ~~`mod.rs:2121`~~ | ~~Collation review flow~~ | DONE |
+| ~~`mod.rs:2147`~~ | ~~Population review flow~~ | DONE |
 
 ### Health System
 
-| Location | Description |
-|----------|-------------|
-| `src/health/detection.rs:5` | Out-of-band tag change detection module |
-| `src/health/heartbeat.rs:12` | Health warnings system |
-| `src/ui/canon_flow/mod.rs:40` | Health check: tags mismatching on-disk vs in-index |
-| `src/ui/canon_flow/session.rs:140` | Health check: tags mismatching on-disk vs in-index |
-| `src/db/changes.rs:49` | OutOfBandTagChange health check resolution UI |
-| `src/ops/changes.rs:379` | Operations flow for resolving OutOfBandTagChange mutations |
+| Location | Description | Status |
+|----------|-------------|--------|
+| ~~`corpus/health/detection.rs:5`~~ | ~~Out-of-band tag change detection module~~ | DONE |
+| ~~`corpus/health/heartbeat.rs:12`~~ | ~~Health warnings system~~ | DONE |
+| `canon_flow/mod.rs:40` | Health check: tags mismatching on-disk vs in-index | Open |
+| `canon_flow/session.rs:140` | Health check: tags mismatching on-disk vs in-index | Open |
+| `db/changes.rs:49` | OutOfBandTagChange health check resolution UI | Open |
+| `ops/changes.rs:379` | Operations flow for resolving OutOfBandTagChange mutations | Open |
+| `corpus/health/detection.rs` | Artist/album_artist canonicalization mismatch detection | Open |
 
 ### Opinions System
 
 | Location | Description |
 |----------|-------------|
-| `src/ui/app.rs:172` | Resolve coin-flip actions to Opinion in the future |
+| `ui/app.rs:187` | Resolve coin-flip actions to Opinion in the future |
 
 ### Menu Descriptions
 
-All items in `src/ui/main_menu.rs` with "TODO:" descriptions need proper explanatory text:
+~~Items in `src/ui/main_menu.rs` with "TODO:" descriptions~~ - **ALL DONE**
 
-| Location | Item |
-|----------|------|
-| `src/ui/main_menu.rs:566` | "Generate all configured reports" |
-| `src/ui/main_menu.rs:573` | "Report on legacy library coverage" |
-| `src/ui/main_menu.rs:580` | "Report on deployment status" |
-| `src/ui/main_menu.rs:587` | "Report on metadata quality" |
-| `src/ui/main_menu.rs:594` | "Report on detected duplicates" |
-| `src/ui/main_menu.rs:607` | "Resolve metadata conflicts across duplicate tracks" |
-| `src/ui/main_menu.rs:637` | "Review queued changes before commit" |
-| `src/ui/main_menu.rs:649` | "Import external material into corpus" |
+All menu descriptions have been updated with meaningful text.
 
 ---
 

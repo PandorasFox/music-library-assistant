@@ -5,11 +5,16 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::state::TagEditorState;
-use super::types::{FieldEditState, TagEditorAction, TagEditorModal};
+use super::types::{FieldEditState, TagEditorAction, TagEditorFocus, TagEditorModal};
 
 impl TagEditorState {
     /// Handle a key event
     pub fn handle_key(&mut self, key: KeyEvent) -> TagEditorAction {
+        // Handle action pane separately
+        if matches!(self.focus, TagEditorFocus::ActionPane) {
+            return self.handle_action_pane_key(key);
+        }
+
         match key.code {
             KeyCode::Esc => {
                 if self.field_edit_state != FieldEditState::NonEditable {
@@ -29,11 +34,21 @@ impl TagEditorState {
                 TagEditorAction::None
             }
             KeyCode::Left => {
-                self.focus_on_value = false;
+                if self.field_edit_state == FieldEditState::NonEditable {
+                    self.focus_on_value = false;
+                }
                 TagEditorAction::None
             }
             KeyCode::Right => {
-                self.focus_on_value = true;
+                if self.field_edit_state == FieldEditState::NonEditable {
+                    if self.focus_on_value {
+                        // Right from value field -> action pane
+                        self.focus = TagEditorFocus::ActionPane;
+                    } else {
+                        // Right from name field -> value field
+                        self.focus_on_value = true;
+                    }
+                }
                 TagEditorAction::None
             }
             KeyCode::Tab => {
@@ -81,6 +96,36 @@ impl TagEditorState {
                     self.delete_char();
                 }
                 TagEditorAction::None
+            }
+            _ => TagEditorAction::None,
+        }
+    }
+
+    /// Handle keys when action pane is focused
+    fn handle_action_pane_key(&mut self, key: KeyEvent) -> TagEditorAction {
+        match key.code {
+            KeyCode::Left | KeyCode::Esc => {
+                // Return to tag fields
+                self.focus = TagEditorFocus::TagFields;
+                TagEditorAction::None
+            }
+            KeyCode::Enter => {
+                // Show change preview modal
+                let changes = super::state::compute_changes(
+                    &self.original_tag_fields,
+                    &self.tag_fields,
+                );
+                let (grouped, single) = super::state::group_common_changes(&changes);
+                if grouped.is_empty() && single.is_empty() {
+                    TagEditorAction::StatusMessage("No changes to save".to_string())
+                } else {
+                    TagEditorAction::ShowModal(TagEditorModal::ChangePreview {
+                        grouped_changes: grouped,
+                        single_changes: single,
+                        scroll_offset: 0,
+                        save_and_next: false,
+                    })
+                }
             }
             _ => TagEditorAction::None,
         }

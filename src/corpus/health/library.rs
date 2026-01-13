@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::db::Database;
+use crate::corpus::db::Database;
 use crate::ops::deploy::compute_deployment_path;
 
 /// Deployment status for a single file
@@ -170,22 +170,16 @@ pub fn check_all_libraries_health(config: &Config, db: &Database) -> Vec<Library
 }
 
 /// Get corpus tracks that should be deployed to a specific library
-fn get_deployable_corpus_tracks(
+pub fn get_deployable_corpus_tracks(
     config: &Config,
     db: &Database,
     library_name: &str,
-) -> Vec<crate::db::Track> {
+) -> Vec<crate::corpus::db::Track> {
     let mut all_tracks = Vec::new();
 
-    for mapping in &config.deploy_mappings {
-        if mapping.library_names.contains(&library_name.to_string()) {
-            for corpus_relative_path in &mapping.corpus_relative_paths {
-                let corpus_path = config.corpus_root.join(corpus_relative_path);
-                if let Ok(tracks) = db.get_tracks_by_corpus_path_prefix(&corpus_path.to_string_lossy())
-                {
-                    all_tracks.extend(tracks);
-                }
-            }
+    for corpus_path in config.get_corpus_paths_for_library(library_name) {
+        if let Ok(tracks) = db.get_tracks_by_corpus_path_prefix(&corpus_path.to_string_lossy()) {
+            all_tracks.extend(tracks);
         }
     }
 
@@ -193,7 +187,7 @@ fn get_deployable_corpus_tracks(
 }
 
 /// Walk a library directory and collect all files with their inodes
-fn walk_library_files(root: &Path) -> Vec<(PathBuf, i64)> {
+pub fn walk_library_files(root: &Path) -> Vec<(PathBuf, i64)> {
     let mut files = Vec::new();
 
     if !root.exists() {
@@ -224,7 +218,7 @@ fn walk_library_recursive(dir: &Path, files: &mut Vec<(PathBuf, i64)>) {
 }
 
 /// Get list of all configured library names
-fn get_configured_library_names(config: &Config) -> Vec<String> {
+pub fn get_configured_library_names(config: &Config) -> Vec<String> {
     let mut names = HashSet::new();
     for mapping in &config.deploy_mappings {
         for name in &mapping.library_names {
@@ -237,7 +231,7 @@ fn get_configured_library_names(config: &Config) -> Vec<String> {
 use crate::config::AUDIO_EXTENSIONS;
 
 /// Check if path has audio file extension
-fn is_audio_file(path: &Path) -> bool {
+pub fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
@@ -250,8 +244,8 @@ pub fn generate_orphan_cleanup_mutations(
     library_name: &str,
     stash_root: &Path,
     session_id: &str,
-) -> Vec<crate::db::PendingChange> {
-    use crate::db::{ChangeStatus, ChangeType, PendingChange};
+) -> Vec<crate::corpus::db::PendingChange> {
+    use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
 
     orphans
         .iter()

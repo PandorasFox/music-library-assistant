@@ -5,15 +5,16 @@
 //! NOTE: Core deployment logic implemented but UI integration pending.
 //! See docs/FUTURE_FEATURES.md for planned integration.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::db::{Database, Track};
+use crate::corpus::db::{Database, Track};
+use crate::corpus::health::library::{
+    get_configured_library_names, get_deployable_corpus_tracks, walk_library_files,
+};
 
 #[derive(Debug, Clone)]
 pub struct DeploymentPlan {
@@ -370,8 +371,8 @@ pub fn plan_deployment_as_mutations(
     library_root: &Path,
     stash_root: Option<&Path>,
     session_id: &str,
-) -> Vec<crate::db::PendingChange> {
-    use crate::db::{ChangeStatus, ChangeType, PendingChange};
+) -> Vec<crate::corpus::db::PendingChange> {
+    use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
 
     let mut changes = Vec::new();
 
@@ -422,7 +423,7 @@ pub fn plan_all_deployments_as_mutations(
     config: &Config,
     db: &Database,
     session_id: &str,
-) -> Result<Vec<crate::db::PendingChange>> {
+) -> Result<Vec<crate::corpus::db::PendingChange>> {
     let plans = create_deployment_plan(config, db)?;
     let mut all_changes = Vec::new();
 
@@ -471,82 +472,6 @@ pub fn generate_dry_run_report(config: &Config, db: &Database) -> Result<Vec<Dry
 // ============================================================================
 // Full Deployment Status Computation
 // ============================================================================
-
-/// Audio file extensions
-const AUDIO_EXTENSIONS: &[&str] = &["flac", "mp3", "ogg", "m4a", "opus", "wav", "aiff", "aif"];
-
-/// Check if path has audio file extension
-fn is_audio_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
-        .unwrap_or(false)
-}
-
-/// Walk a library directory and collect all files with their inodes
-fn walk_library_files(root: &Path) -> Vec<(PathBuf, i64)> {
-    let mut files = Vec::new();
-
-    if !root.exists() {
-        return files;
-    }
-
-    walk_library_recursive(root, &mut files);
-    files
-}
-
-fn walk_library_recursive(dir: &Path, files: &mut Vec<(PathBuf, i64)>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-
-        if path.is_dir() {
-            walk_library_recursive(&path, files);
-        } else if is_audio_file(&path) {
-            if let Ok(metadata) = std::fs::metadata(&path) {
-                files.push((path, metadata.ino() as i64));
-            }
-        }
-    }
-}
-
-/// Get corpus tracks that should be deployed to a specific library
-fn get_deployable_corpus_tracks(
-    config: &Config,
-    db: &Database,
-    library_name: &str,
-) -> Vec<Track> {
-    let mut all_tracks = Vec::new();
-
-    for mapping in &config.deploy_mappings {
-        if mapping.library_names.contains(&library_name.to_string()) {
-            for corpus_relative_path in &mapping.corpus_relative_paths {
-                let corpus_path = config.corpus_root.join(corpus_relative_path);
-                if let Ok(tracks) = db.get_tracks_by_corpus_path_prefix(&corpus_path.to_string_lossy())
-                {
-                    all_tracks.extend(tracks);
-                }
-            }
-        }
-    }
-
-    all_tracks
-}
-
-/// Get list of all configured library names
-fn get_configured_library_names(config: &Config) -> Vec<String> {
-    let mut names = HashSet::new();
-    for mapping in &config.deploy_mappings {
-        for name in &mapping.library_names {
-            names.insert(name.clone());
-        }
-    }
-    names.into_iter().collect()
-}
 
 /// Compute comprehensive deployment status with stale and conflict detection
 ///
@@ -697,8 +622,8 @@ pub fn deployment_status_to_mutations(
     library_root: &Path,
     stash_root: Option<&Path>,
     session_id: &str,
-) -> Vec<crate::db::PendingChange> {
-    use crate::db::{ChangeStatus, ChangeType, PendingChange};
+) -> Vec<crate::corpus::db::PendingChange> {
+    use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
 
     let mut changes = Vec::new();
 
@@ -778,7 +703,7 @@ pub fn all_deployment_statuses_to_mutations(
     statuses: &[FullDeploymentStatus],
     config: &Config,
     session_id: &str,
-) -> Vec<crate::db::PendingChange> {
+) -> Vec<crate::corpus::db::PendingChange> {
     let mut all_changes = Vec::new();
 
     for status in statuses {
@@ -817,6 +742,7 @@ mod tests {
             album_artist: Some("Album Artist".to_string()),
             title: Some("Track Title".to_string()),
             track_number: Some(1),
+            genre: None,
             duration_ms: Some(180000),
             bitrate_kbps: None,
             sample_rate: None,
@@ -845,6 +771,7 @@ mod tests {
             album_artist: None,
             title: Some("Single Track".to_string()),
             track_number: None,
+            genre: None,
             duration_ms: Some(180000),
             bitrate_kbps: None,
             sample_rate: None,
@@ -870,6 +797,7 @@ mod tests {
             album_artist: None,
             title: Some("Title".to_string()),
             track_number: Some(5),
+            genre: None,
             duration_ms: Some(180000),
             bitrate_kbps: None,
             sample_rate: None,

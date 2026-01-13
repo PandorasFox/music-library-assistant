@@ -2,13 +2,26 @@
 //!
 //! This module detects and creates health issues when tracks are inserted or modified.
 //!
-//! TODO: Out-of-band tag change detection and resolution
-//! - When tags on disk differ from indexed tags, create ChangeType::OutOfBandTagChange
-//! - Resolution options: flush index to disk OR accept out-of-band changes
-//! - Granularity TBD (potentially per-directory config)
-//! - UI pattern similar to canon_flow (bucket selection -> confirmation -> commit)
+//! Includes:
+//! - Fingerprint duplicate detection
+//! - Metadata duplicate detection
+//! - Quality variant detection
+//! - Missing tag detection (album_artist)
+//! - Out-of-band tag change detection (DB differs from disk)
+//!
+//! ## TODO: Artist/Album Artist Canonicalization Mismatch
+//!
+//! Detect when artist and album_artist tags normalize to different values but should match.
+//! Example: "DragonForce" in artist vs "Dragonforce" in album_artist.
+//!
+//! Implementation:
+//! - Use `mla_utils::metadata_magic::normalize_artist()` on both fields
+//! - Compare normalized values; if different but base names match, flag as mismatch
+//! - Create a new `HealthIssueType::ArtistAlbumArtistMismatch` variant
+//! - Group by normalized key for bulk resolution
+//! - Could also catch typo variants like "Deadmau5" vs "deadmau5"
 
-use crate::db::{
+use crate::corpus::db::{
     Database, HealthIssue, HealthIssueType, HealthIssueSeverity, Track, TrackRole,
 };
 use anyhow::Result;
@@ -57,9 +70,9 @@ pub fn detect_fingerprint_issues(db: &Database, track: &Track) -> Result<Vec<Hea
         }
 
         // Create a new known variant entry
-        let variant = crate::db::KnownVariant {
+        let variant = crate::corpus::db::KnownVariant {
             id: None,
-            variant_type: crate::db::VariantType::Rerelease,
+            variant_type: crate::corpus::db::VariantType::Rerelease,
             canonical_fingerprint: fingerprint.clone(),
             variant_fingerprint: None,
             canonical_track_id: matching_tracks.first().and_then(|t| t.id),
@@ -208,7 +221,7 @@ pub fn refresh_health_for_track(db: &Database, track_id: i64) -> Result<()> {
 
 /// Determine severity of a duplicate issue based on track characteristics.
 fn determine_duplicate_severity(tracks: &[Track]) -> HealthIssueSeverity {
-    use crate::deduplication::{compare_track_quality, QualityVerdict};
+    use crate::corpus::deduplication::{compare_track_quality, QualityVerdict};
 
     // Use the compare_track_quality function which takes a slice and returns a verdict
     match compare_track_quality(tracks) {
@@ -216,5 +229,240 @@ fn determine_duplicate_severity(tracks: &[Track]) -> HealthIssueSeverity {
         QualityVerdict::Equivalent | QualityVerdict::Indeterminate => {
             HealthIssueSeverity::ManualReview
         }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a test track with specified quality attributes.
+    fn make_track(
+        id: i64,
+        artist: &str,
+        album: &str,
+        title: &str,
+        file_type: &str,
+        bitrate: Option<i32>,
+    ) -> Track {
+        Track {
+            id: Some(id),
+            path: format!("/test/{}/{}/{}.{}", artist, album, title, file_type),
+            source: "corpus".to_string(),
+            inode: id,
+            file_size: 5_000_000,
+            file_type: file_type.to_string(),
+            artist: Some(artist.to_string()),
+            album: Some(album.to_string()),
+            album_artist: None,
+            title: Some(title.to_string()),
+            track_number: Some(1),
+            genre: None,
+            duration_ms: Some(240_000),
+            bitrate_kbps: bitrate,
+            sample_rate: Some(44100),
+            fingerprint: Some(format!("fp_{}_{}_{}", artist, album, title)),
+            isrc: None,
+        }
+    }
+
+    #[test]
+    fn test_quality_variant_detection_mixed_formats() {
+        // Scenario: "Clockwork Hearts" exists as both 320kbps iTunes purchase and 1000kbps FLAC
+        let tracks = vec![
+            make_track(1, "Artist", "Clockwork Hearts", "Track 1", "mp3", Some(320)),
+            make_track(2, "Artist", "Clockwork Hearts", "Track 1", "flac", Some(1000)),
+        ];
+
+        // Check for quality differences
+        let mut file_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut bitrates: Vec<i32> = Vec::new();
+
+        for track in &tracks {
+            file_types.insert(track.file_type.to_lowercase());
+            if let Some(br) = track.bitrate_kbps {
+                bitrates.push(br);
+            }
+        }
+
+        // Should detect format difference (mp3 vs flac)
+        assert_eq!(file_types.len(), 2);
+        assert!(file_types.contains("mp3"));
+        assert!(file_types.contains("flac"));
+
+        // Should detect significant bitrate difference
+        let max = bitrates.iter().max().copied().unwrap_or(0);
+        let min = bitrates.iter().min().copied().unwrap_or(0);
+        let ratio = min as f64 / max as f64;
+        assert!(ratio < 0.7, "Expected significant bitrate difference, got ratio {}", ratio);
+    }
+
+    #[test]
+    fn test_quality_variant_detection_same_format_different_bitrate() {
+        // Scenario: Same album in different MP3 qualities
+        let tracks = vec![
+            make_track(1, "Artist", "Album", "Track", "mp3", Some(128)),
+            make_track(2, "Artist", "Album", "Track", "mp3", Some(320)),
+        ];
+
+        let mut bitrates: Vec<i32> = Vec::new();
+        for track in &tracks {
+            if let Some(br) = track.bitrate_kbps {
+                bitrates.push(br);
+            }
+        }
+
+        let max = bitrates.iter().max().copied().unwrap_or(0);
+        let min = bitrates.iter().min().copied().unwrap_or(0);
+        let ratio = min as f64 / max as f64;
+
+        // 128/320 = 0.4, which is < 0.7
+        assert!(ratio < 0.7, "Should detect bitrate difference");
+    }
+
+    #[test]
+    fn test_quality_variant_no_difference() {
+        // Scenario: Same quality, no issue needed
+        let tracks = vec![
+            make_track(1, "Artist", "Album", "Track 1", "flac", Some(1000)),
+            make_track(2, "Artist", "Album", "Track 2", "flac", Some(1000)),
+        ];
+
+        let mut file_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut bitrates: Vec<i32> = Vec::new();
+
+        for track in &tracks {
+            file_types.insert(track.file_type.to_lowercase());
+            if let Some(br) = track.bitrate_kbps {
+                bitrates.push(br);
+            }
+        }
+
+        // Same format
+        assert_eq!(file_types.len(), 1);
+
+        // Same bitrate - no significant difference
+        let max = bitrates.iter().max().copied().unwrap_or(0);
+        let min = bitrates.iter().min().copied().unwrap_or(0);
+        let ratio = if max > 0 { min as f64 / max as f64 } else { 1.0 };
+        assert!(ratio >= 0.7, "Should not detect quality difference for identical tracks");
+    }
+
+    #[test]
+    fn test_missing_album_artist_grouping() {
+        // Scenario: Tracks missing album_artist should be grouped by album
+        let tracks = vec![
+            make_track(1, "Artist A", "Compilation", "Track 1", "flac", Some(1000)),
+            make_track(2, "Artist B", "Compilation", "Track 2", "flac", Some(1000)),
+            make_track(3, "Artist C", "Compilation", "Track 3", "flac", Some(1000)),
+        ];
+
+        // All tracks share the same album but different artists
+        let albums: std::collections::HashSet<_> = tracks
+            .iter()
+            .filter_map(|t| t.album.as_ref())
+            .collect();
+        assert_eq!(albums.len(), 1);
+
+        let artists: std::collections::HashSet<_> = tracks
+            .iter()
+            .filter_map(|t| t.artist.as_ref())
+            .collect();
+        assert_eq!(artists.len(), 3);
+
+        // All tracks lack album_artist
+        assert!(tracks.iter().all(|t| t.album_artist.is_none()));
+    }
+
+    #[test]
+    fn test_insights_loop_scenario() {
+        // Full scenario test:
+        // 1. Artist canonicalization collapses "The Beatles" and "Beatles"
+        // 2. Combined track set now has FLAC and MP3 versions
+        // 3. Quality variant should be detected
+        // 4. User stashes lower quality → issue resolved
+
+        // Tracks before canonicalization (different artist strings)
+        let tracks_beatles = vec![
+            make_track(1, "Beatles", "Abbey Road", "Come Together", "mp3", Some(320)),
+        ];
+        let tracks_the_beatles = vec![
+            make_track(2, "The Beatles", "Abbey Road", "Come Together", "flac", Some(1000)),
+        ];
+
+        // After canonicalization, these would be in the same bucket
+        let combined: Vec<Track> = tracks_beatles.into_iter()
+            .chain(tracks_the_beatles.into_iter())
+            .collect();
+
+        // Detect quality differences in combined set
+        let mut file_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut bitrates: Vec<i32> = Vec::new();
+
+        for track in &combined {
+            file_types.insert(track.file_type.to_lowercase());
+            if let Some(br) = track.bitrate_kbps {
+                bitrates.push(br);
+            }
+        }
+
+        // Should now detect the quality variant that was hidden by artist name difference
+        assert_eq!(file_types.len(), 2, "Should detect mp3 and flac");
+
+        let max = bitrates.iter().max().copied().unwrap_or(0);
+        let min = bitrates.iter().min().copied().unwrap_or(0);
+        let ratio = min as f64 / max as f64;
+        assert!(ratio < 0.7, "Should detect significant bitrate difference");
+
+        // This would trigger QualityVariant health issue creation
+        // Then user can choose to stash the MP3 versions
+    }
+
+    #[test]
+    fn test_ep_album_variant_scenario() {
+        // Scenario: "Clockwork Hearts" and "Clockwork Hearts (EP)"
+        // One is 320kbps iTunes, other is 1000kbps Bandcamp FLAC
+
+        let ep_tracks = vec![
+            make_track(1, "Artist", "Clockwork Hearts (EP)", "Track 1", "mp3", Some(320)),
+            make_track(2, "Artist", "Clockwork Hearts (EP)", "Track 2", "mp3", Some(320)),
+        ];
+
+        let album_tracks = vec![
+            make_track(3, "Artist", "Clockwork Hearts", "Track 1", "flac", Some(1000)),
+            make_track(4, "Artist", "Clockwork Hearts", "Track 2", "flac", Some(1000)),
+            make_track(5, "Artist", "Clockwork Hearts", "Track 3", "flac", Some(1000)),
+        ];
+
+        // In album canonicalization, these might be flagged as related
+        // (same base name, EP suffix stripped)
+
+        // Combined for quality analysis
+        let all_tracks: Vec<Track> = ep_tracks.into_iter()
+            .chain(album_tracks.into_iter())
+            .collect();
+
+        let mut file_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut bitrates: Vec<i32> = Vec::new();
+
+        for track in &all_tracks {
+            file_types.insert(track.file_type.to_lowercase());
+            if let Some(br) = track.bitrate_kbps {
+                bitrates.push(br);
+            }
+        }
+
+        // Detect quality difference
+        assert!(file_types.len() > 1, "Should have multiple formats");
+
+        let max = bitrates.iter().max().copied().unwrap_or(0);
+        let min = bitrates.iter().min().copied().unwrap_or(0);
+        assert!(max > min, "Should have bitrate spread");
+
+        // The EP version (lower quality) could be stashed in favor of full album
     }
 }

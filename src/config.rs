@@ -2,23 +2,16 @@
 //!
 //! KDL configuration parsing, path utilities, and logging.
 
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// Canonical list of audio file extensions supported by MLA.
-/// All modules should reference this constant to ensure consistency.
-pub const AUDIO_EXTENSIONS: &[&str] = &[
-    "flac", "mp3", "ogg", "m4a", "opus", "wav", "aiff", "aif", "aac", "wma", "ape", "wv",
-];
-
-/// Check if a file extension is a supported audio format.
-pub fn is_audio_extension(ext: &str) -> bool {
-    AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str())
-}
+// Re-export utilities from mla-utils for backward compatibility
+pub use mla_utils::{
+    get_config_dir, get_data_dir, get_db_path, get_operations_log_path,
+    is_audio_extension, log_message, log_scan_error, AUDIO_EXTENSIONS,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -199,6 +192,22 @@ impl Config {
         sources
     }
 
+    /// Get all corpus paths that deploy to a specific library
+    ///
+    /// Returns absolute paths to corpus directories that are configured
+    /// to deploy to the given library name.
+    pub fn get_corpus_paths_for_library(&self, library_name: &str) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        for mapping in &self.deploy_mappings {
+            if mapping.library_names.contains(&library_name.to_string()) {
+                for corpus_relative_path in &mapping.corpus_relative_paths {
+                    paths.push(self.corpus_root.join(corpus_relative_path));
+                }
+            }
+        }
+        paths
+    }
+
     /// Validate that all configured paths exist and support required operations
     /// Tests hard link capability for deployment and atomic moves to stash
     pub fn validate_same_filesystem(&self) -> Result<()> {
@@ -350,95 +359,6 @@ impl Config {
 
         Ok(())
     }
-}
-
-/// Get the config directory path ($XDG_CONFIG_HOME/mla/ or ~/.config/mla/)
-pub fn get_config_dir() -> Result<PathBuf> {
-    let config_home = std::env::var("XDG_CONFIG_HOME")
-        .ok()
-        .and_then(|s| {
-            if s.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(s))
-            }
-        })
-        .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
-        .context("Failed to determine config directory")?;
-
-    Ok(config_home.join("mla"))
-}
-
-/// Get the data directory path ($XDG_DATA_HOME/mla/ or ~/.local/share/mla/)
-pub fn get_data_dir() -> Result<PathBuf> {
-    let data_home = std::env::var("XDG_DATA_HOME")
-        .ok()
-        .and_then(|s| {
-            if s.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(s))
-            }
-        })
-        .or_else(|| dirs::home_dir().map(|home| home.join(".local").join("share")))
-        .context("Failed to determine data directory")?;
-
-    let data_dir = data_home.join("mla");
-
-    // Ensure the directory exists
-    if !data_dir.exists() {
-        fs::create_dir_all(&data_dir).context("Failed to create data directory")?;
-    }
-
-    Ok(data_dir)
-}
-
-/// Get the database path (~/.local/share/mla/mla.db)
-pub fn get_db_path() -> Result<PathBuf> {
-    Ok(get_data_dir()?.join("mla.db"))
-}
-
-/// Get the log path for stderr-type logging and warnings
-/// Now located in XDG data directory: ~/.local/share/mla/mla.log
-pub fn get_log_path() -> Result<PathBuf> {
-    Ok(get_data_dir()?.join("mla.log"))
-}
-
-/// Get the path for operation summary logs
-/// Located at ~/.local/share/mla/operations-overview.log
-pub fn get_operations_log_path() -> Result<PathBuf> {
-    Ok(get_data_dir()?.join("operations-overview.log"))
-}
-
-/// Log a message (error, warning, etc.) to the main log file
-pub fn log_message(message: &str) -> Result<()> {
-    use std::io::Write;
-
-    let log_path = get_log_path()?;
-
-    // Ensure parent directory exists
-    if let Some(parent) = log_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    // Append to log file with timestamp
-    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    let log_entry = format!("[{}] {}\n", timestamp, message);
-
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
-
-    file.write_all(log_entry.as_bytes())?;
-
-    Ok(())
-}
-
-/// Log a scan error to the log file
-/// Deprecated alias for log_message, kept for backward compatibility
-pub fn log_scan_error(message: &str) -> Result<()> {
-    log_message(message)
 }
 
 /// Load config from $XDG_CONFIG_HOME/mla/config.kdl (or ~/.config/mla/config.kdl if XDG_CONFIG_HOME is not set)

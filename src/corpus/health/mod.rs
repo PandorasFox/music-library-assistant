@@ -19,7 +19,7 @@
 //! - **Fingerprint Duplicates**: Exact fingerprint match across files
 //! - **Legitimate Re-releases**: Same fingerprint, different album metadata
 //! - **Metadata Collisions**: Same artist/album/title, different fingerprint
-//! - **Canonicalization Issues**: Artist name variants needing unification
+//! - **Tag Canonicalization**: Tag value variants needing unification (artist, genre, album, etc.)
 //! - **Quality Variants**: Same content, different quality (FLAC vs MP3)
 //!
 //! ## Library Health
@@ -29,14 +29,24 @@
 //! - **Stale Deployments**: Tag changes caused incorrect library paths
 //! - **Orphans**: Library files without corpus backing
 
+pub mod album_normalization;
 mod canonicalization;
+pub mod collision;
 mod detection;
 pub mod filter;
 mod heartbeat;
 pub mod library;
+pub mod normalization;
+pub mod tag_cloud;
 
 pub use canonicalization::detect_and_store_canonicalizations;
-pub use detection::{detect_fingerprint_issues, detect_metadata_issues};
+pub use collision::{
+    get_album_artist_collisions, get_album_collisions, get_artist_collisions,
+    get_genre_collisions, TagCollision,
+};
+pub use detection::{
+    detect_fingerprint_issues, detect_metadata_issues,
+};
 #[allow(unused_imports)]
 pub use filter::{
     durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks,
@@ -47,3 +57,4 @@ pub use library::{
     check_all_libraries_health, check_library_health, generate_orphan_cleanup_mutations,
     LibraryHealthResult, OrphanFile, StaleDeployment,
 };
+pub use tag_cloud::{spawn_tag_cloud_build, TagCloud};

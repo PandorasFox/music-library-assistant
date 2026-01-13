@@ -1,0 +1,24 @@
+//! Central Database Module
+//!
+//! Core of MLA's toolkit architecture. Common data layer for all operations.
+//!
+//! This module is organized into:
+//! - `types`: Core data structures (Track, ScanStateEntry, DeploymentStats, Health types)
+//! - `changes`: Algebraic change tracking types
+//! - `decisions`: Conversational decision flow types
+//! - `queries`: All database operations
+
+pub mod changes;
+pub mod decisions;
+pub mod queries;
+pub mod types;
+
+// Re-export core types
+pub use changes::{ChangeStatus, ChangeType, PendingChange};
+pub use decisions::{Decision, DecisionOutcome, DecisionStack};
+pub use queries::Database;
+pub use types::{CorpusSummary, ScanStateEntry, Track};
+pub use types::{
+    HealthIssue, HealthIssueSeverity, HealthIssueType, HealthSummary, KnownVariant,
+    ResolutionType, TrackRole, VariantType,
+};

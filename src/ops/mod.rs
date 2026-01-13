@@ -7,5 +7,9 @@ pub mod changes;
 pub mod dedup;
 pub mod deploy;
 pub mod operation;
+pub mod progress;
 pub mod reports;
 pub mod scanner;
+
+// Re-export progress types for convenience
+pub use progress::ScanMessage;

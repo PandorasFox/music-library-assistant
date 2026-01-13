@@ -1,9 +1,24 @@
 //! TUI Module
 //!
 //! Modular UI components for the Music Library Assistant.
+//!
+//! # Module Structure
+//!
+//! Flow handlers should NOT be added directly to `impl App` in this file.
+//! Instead, create coordinator modules in flow submodules:
+//! - `ui/canon_flow/coordinator.rs` - Artist/genre canonicalization
+//! - `ui/album_flow/coordinator.rs` - Album tag resolution
+//! - `ui/album_artist_flow/coordinator.rs` - Album artist resolution
+//! - `ui/dedup_flow/coordinator.rs` - Deduplication workflow
+//!
+//! App methods should be thin delegation wrappers to these modules.
+//! This keeps `mod.rs` focused on core App lifecycle and event dispatch.
 
+pub mod album_artist_flow;
+pub mod album_flow;
 pub mod app;
 pub mod canon_flow;
+pub mod corpus_browser;
 pub mod dedup_flow;
 pub mod deploy_flow;
 pub mod dialogue;
@@ -12,8 +27,8 @@ pub mod drop_flow;
 pub mod flows;
 pub mod helpers;
 pub mod main_menu;
-pub mod picker;
 pub mod render;
+pub mod shared;
 pub mod tag_editor;
 
 use anyhow::Result;
@@ -35,15 +50,14 @@ use std::time::Instant;
 
 use crate::config::{self, Config};
 use crate::corpus::{spawn_heartbeat, HeartbeatResult};
-use crate::db::Database;
+use crate::corpus::db::Database;
 use crate::ops::operation::{
     log_operation_summary, OperationManager, OperationMessage, OperationProgress,
     OperationResult, OperationType, ProgressReporter,
 };
-use crate::ops::{reports, scanner};
-use crate::progress::ScanMessage;
+use crate::ops::{reports, scanner, ScanMessage};
 
-use app::EyeAnimation;
+use app::{EyeAnimation, HeartbeatRollResult};
 use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 // ============================================================================
@@ -81,6 +95,26 @@ pub(crate) enum UiMode {
     CanonCommitModal,
     /// Exit confirmation modal (when operations are in progress)
     ExitConfirmModal,
+    /// Corpus browser with directory tree and metadata preview
+    CorpusBrowser,
+    /// Album artist resolution - phase selector popup
+    AlbumArtistPhaseSelector,
+    /// Album artist resolution - canonicalization cluster view
+    AlbumArtistClusterView,
+    /// Album artist resolution - collation flow
+    AlbumArtistCollation,
+    /// Album artist resolution - collation review
+    AlbumArtistCollationReview,
+    /// Album artist resolution - population flow
+    AlbumArtistPopulation,
+    /// Album artist resolution - population review
+    AlbumArtistPopulationReview,
+    /// Album artist resolution - session review
+    AlbumArtistReview,
+    /// Album tag resolution - cluster view
+    AlbumClusterView,
+    /// Album tag resolution - session review
+    AlbumReview,
 }
 
 /// Re-export from drop_flow module
@@ -105,11 +139,11 @@ impl Default for ExitConfirmModalState {
 #[derive(Debug, Clone)]
 pub(crate) struct CanonCommitModalState {
     /// Currently selected option (0 = main menu, 1 = deployment review)
-    selected_option: usize,
+    pub(crate) selected_option: usize,
     /// Number of tracks updated in the database
-    tracks_updated: usize,
+    pub(crate) tracks_updated: usize,
     /// Number of deployments that are now stale
-    stale_deployments: usize,
+    pub(crate) stale_deployments: usize,
 }
 
 impl Default for CanonCommitModalState {
@@ -140,8 +174,10 @@ struct App {
     mode: UiMode,
     main_menu: MainMenuState,
     tag_editor: Option<tag_editor::TagEditorState>,
+    tag_editor_modal: Option<tag_editor::TagEditorModal>,
     dir_browser: Option<dir_browser::DirBrowserState>,
     browser_context: Option<BrowserContext>,
+    corpus_browser: Option<corpus_browser::CorpusBrowserState>,
     dialogue: Option<dialogue::DialogueState>,
     dialogue_summary: Option<dialogue::DialogueSummaryState>,
     cluster_dialogue: Option<dedup_flow::ClusterDialogueState>,
@@ -153,6 +189,18 @@ struct App {
     canon_cluster_view: Option<canon_flow::ClusterViewState>,
     canon_session_review: Option<canon_flow::ReviewState>,
     canon_commit_modal_state: Option<CanonCommitModalState>,
+    // Album artist resolution flow
+    album_artist_phase_selector: Option<album_artist_flow::PhaseSelectorState>,
+    album_artist_cluster_view: Option<album_artist_flow::AlbumArtistClusterState>,
+    album_artist_collation: Option<album_artist_flow::CollationState>,
+    album_artist_collation_review: Option<album_artist_flow::CollationReviewState>,
+    album_artist_population: Option<album_artist_flow::PopulationState>,
+    album_artist_population_review: Option<album_artist_flow::PopulationReviewState>,
+    album_artist_review: Option<album_artist_flow::AlbumArtistReviewState>,
+    album_artist_selected_phases: Vec<album_artist_flow::AlbumArtistPhase>,
+    // Album canonicalization flow
+    album_cluster_view: Option<album_flow::AlbumClusterState>,
+    album_review: Option<album_flow::AlbumReviewState>,
     // Exit confirmation modal
     exit_confirm_modal_state: Option<ExitConfirmModalState>,
 
@@ -165,6 +213,12 @@ struct App {
     // Startup heartbeat
     heartbeat_result: Option<HeartbeatResult>,
     heartbeat_receiver: Option<mpsc::Receiver<HeartbeatResult>>,
+    /// Last heartbeat roll result (Normal vs Expensive)
+    last_heartbeat_roll: Option<HeartbeatRollResult>,
+
+    // Tag cloud for canonicalization detection (cached, invalidated after mutations)
+    tag_cloud: Option<crate::corpus::health::TagCloud>,
+    tag_cloud_receiver: Option<mpsc::Receiver<anyhow::Result<crate::corpus::health::TagCloud>>>,
 
     // Throughput tracking for rolling average (timestamp, bytes_processed)
     throughput_samples: VecDeque<(Instant, u64)>,
@@ -186,8 +240,10 @@ impl App {
             status_message: None,
             mode: UiMode::MainMenu,
             tag_editor: None,
+            tag_editor_modal: None,
             dir_browser: None,
             browser_context: None,
+            corpus_browser: None,
             dialogue: None,
             dialogue_summary: None,
             cluster_dialogue: None,
@@ -198,12 +254,25 @@ impl App {
             canon_cluster_view: None,
             canon_session_review: None,
             canon_commit_modal_state: None,
+            album_artist_phase_selector: None,
+            album_artist_cluster_view: None,
+            album_artist_collation: None,
+            album_artist_collation_review: None,
+            album_artist_population: None,
+            album_artist_population_review: None,
+            album_artist_review: None,
+            album_artist_selected_phases: Vec::new(),
+            album_cluster_view: None,
+            album_review: None,
             exit_confirm_modal_state: None,
             operations: OperationManager::new(),
             legacy_scan_receiver: None,
             legacy_scan_type: None,
             heartbeat_result: None,
             heartbeat_receiver: None,
+            last_heartbeat_roll: None,
+            tag_cloud: None,
+            tag_cloud_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
             tag_edit_session_id: uuid::Uuid::new_v4().to_string(),
@@ -217,7 +286,10 @@ impl App {
                 self.handle_menu_action(action);
             }
             UiMode::TagEditor => {
-                if let Some(ref mut editor) = self.tag_editor {
+                // If there's a modal active, handle modal keys first
+                if self.tag_editor_modal.is_some() {
+                    self.handle_tag_editor_modal_key(key);
+                } else if let Some(ref mut editor) = self.tag_editor {
                     let action = editor.handle_key(key);
                     self.handle_tag_editor_action(action);
                 }
@@ -345,6 +417,66 @@ impl App {
                         }
                         _ => {}
                     }
+                }
+            }
+            UiMode::CorpusBrowser => {
+                if let Some(ref mut browser) = self.corpus_browser {
+                    let action = browser.handle_key(key);
+                    self.handle_corpus_browser_action(action);
+                }
+            }
+            UiMode::AlbumArtistPhaseSelector => {
+                if let Some(ref mut selector) = self.album_artist_phase_selector {
+                    let action = selector.handle_key(key);
+                    self.handle_album_artist_phase_action(action);
+                }
+            }
+            UiMode::AlbumArtistClusterView => {
+                if let Some(ref mut cluster_view) = self.album_artist_cluster_view {
+                    let action = cluster_view.handle_key(key);
+                    self.handle_album_artist_cluster_action(action);
+                }
+            }
+            UiMode::AlbumArtistReview => {
+                if let Some(ref mut review) = self.album_artist_review {
+                    let action = review.handle_key(key);
+                    self.handle_album_artist_review_action(action);
+                }
+            }
+            UiMode::AlbumArtistCollation => {
+                if let Some(ref mut collation) = self.album_artist_collation {
+                    let action = collation.handle_key(key);
+                    self.handle_album_artist_collation_action(action);
+                }
+            }
+            UiMode::AlbumArtistCollationReview => {
+                if let Some(ref mut review) = self.album_artist_collation_review {
+                    let action = review.handle_key(key);
+                    self.handle_album_artist_collation_review_action(action);
+                }
+            }
+            UiMode::AlbumArtistPopulation => {
+                if let Some(ref mut population) = self.album_artist_population {
+                    let action = population.handle_key(key);
+                    self.handle_album_artist_population_action(action);
+                }
+            }
+            UiMode::AlbumArtistPopulationReview => {
+                if let Some(ref mut review) = self.album_artist_population_review {
+                    let action = review.handle_key(key);
+                    self.handle_album_artist_population_review_action(action);
+                }
+            }
+            UiMode::AlbumClusterView => {
+                if let Some(ref mut cluster_view) = self.album_cluster_view {
+                    let action = cluster_view.handle_key(key);
+                    self.handle_album_cluster_action(action);
+                }
+            }
+            UiMode::AlbumReview => {
+                if let Some(ref mut review) = self.album_review {
+                    let action = review.handle_key(key);
+                    self.handle_album_review_action(action);
                 }
             }
         }
@@ -500,8 +632,6 @@ impl App {
             ReportType::GenerateAll => "all",
             ReportType::Legacy => "legacy",
             ReportType::Deployment => "deployment",
-            ReportType::Quality => "quality",
-            ReportType::Duplicates => "duplicates",
             ReportType::Health => "health",
             ReportType::KnownVariants => "known_variants",
         };
@@ -538,8 +668,7 @@ impl App {
             // Determine which reports to generate
             let report_tasks: Vec<(&str, std::path::PathBuf)> = match report_type {
                 ReportType::GenerateAll => vec![
-                    ("duplicates", reports_dir.join("duplicates.txt")),
-                    ("quality", reports_dir.join("quality.txt")),
+                    ("health", reports_dir.join("health.txt")),
                     ("deployment", reports_dir.join("deployment.txt")),
                     ("known_variants", reports_dir.join("known_variants.txt")),
                 ],
@@ -548,12 +677,6 @@ impl App {
                 ],
                 ReportType::Deployment => vec![
                     ("deployment", reports_dir.join("deployment.txt")),
-                ],
-                ReportType::Quality => vec![
-                    ("quality", reports_dir.join("quality.txt")),
-                ],
-                ReportType::Duplicates => vec![
-                    ("duplicates", reports_dir.join("duplicates.txt")),
                 ],
                 ReportType::Health => vec![
                     ("health", reports_dir.join("health.txt")),
@@ -580,8 +703,6 @@ impl App {
                 reporter.update(progress.clone());
 
                 let result = match name {
-                    "duplicates" => reports::generate_duplicate_report(&path),
-                    "quality" => reports::generate_quality_report(&path),
                     "deployment" => reports::generate_deployment_report(&path),
                     "legacy" => reports::generate_legacy_report(&path),
                     "health" => reports::generate_health_report(&path),
@@ -659,7 +780,7 @@ impl App {
             reporter.force_update(progress.clone());
 
             // Run health detection on each track
-            let mut issues_found = 0;
+            let mut _issues_found = 0;
             for track in &with_fingerprints {
                 if reporter.is_cancelled() {
                     reporter.cancelled();
@@ -673,7 +794,7 @@ impl App {
                 });
 
                 if let Ok(issues) = detect_fingerprint_issues(&db, track) {
-                    issues_found += issues.len();
+                    _issues_found += issues.len();
                 }
                 let _ = detect_metadata_issues(&db, track);
 
@@ -802,6 +923,18 @@ impl App {
             TransitionTarget::CanonFlow => {
                 self.start_canon_flow();
             }
+            TransitionTarget::GenreCanonFlow => {
+                self.start_genre_canon_flow();
+            }
+            TransitionTarget::CorpusBrowser => {
+                self.start_corpus_browser();
+            }
+            TransitionTarget::AlbumArtistFlow => {
+                self.start_album_artist_flow();
+            }
+            TransitionTarget::AlbumFlow => {
+                self.start_album_flow();
+            }
         }
     }
 
@@ -865,7 +998,7 @@ impl App {
 
     fn start_decision_flow(&mut self) {
         // Use fingerprint-based deduplication with directory set clustering
-        use crate::deduplication::find_fingerprint_duplicates;
+        use crate::corpus::deduplication::find_fingerprint_duplicates;
 
         let db_path = match config::get_db_path() {
             Ok(p) => p,
@@ -937,6 +1070,101 @@ impl App {
         self.mode = UiMode::DirBrowser;
     }
 
+    fn start_corpus_browser(&mut self) {
+        let config = corpus_browser::CorpusBrowserConfig::default();
+        self.corpus_browser = Some(corpus_browser::CorpusBrowserState::new(
+            self.config.corpus_root.clone(),
+            config,
+        ));
+        self.mode = UiMode::CorpusBrowser;
+    }
+
+    fn handle_corpus_browser_action(&mut self, action: corpus_browser::CorpusBrowserAction) {
+        match action {
+            corpus_browser::CorpusBrowserAction::None => {}
+            corpus_browser::CorpusBrowserAction::Cancel => {
+                self.corpus_browser = None;
+                self.mode = UiMode::MainMenu;
+            }
+            corpus_browser::CorpusBrowserAction::EditDirectory(path) => {
+                // Load all tracks from the directory and subdirectories
+                self.start_tag_editor_for_path(&path, true);
+            }
+            corpus_browser::CorpusBrowserAction::EditFile(path) => {
+                // Load single track for editing
+                self.start_tag_editor_for_path(&path, false);
+            }
+        }
+    }
+
+    fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
+        let db_path = match crate::config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                self.corpus_browser = None;
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        let db = match crate::corpus::db::Database::open(&db_path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                self.corpus_browser = None;
+                self.mode = UiMode::MainMenu;
+                return;
+            }
+        };
+
+        // Load tracks from database
+        let tracks = if recursive {
+            // Get all tracks in directory and subdirectories (no fingerprint filter)
+            match db.get_tracks_for_tag_editing(path) {
+                Ok(t) => t,
+                Err(e) => {
+                    self.status_message = Some(format!(
+                        "Query error for path '{}': {}",
+                        path.display(),
+                        e
+                    ));
+                    self.corpus_browser = None;
+                    self.mode = UiMode::MainMenu;
+                    return;
+                }
+            }
+        } else {
+            // Get single track by exact path
+            let path_str = path.to_string_lossy();
+            db.get_track_by_path(&path_str)
+                .ok()
+                .flatten()
+                .map(|t| vec![t])
+                .unwrap_or_default()
+        };
+
+        if tracks.is_empty() {
+            self.status_message = Some(format!(
+                "No indexed tracks at: {}",
+                path.display()
+            ));
+            self.corpus_browser = None;
+            self.mode = UiMode::MainMenu;
+            return;
+        }
+
+        // Create tag editor with tracks (no duplicate groups for corpus browser)
+        self.tag_editor = Some(tag_editor::TagEditorState::new(tracks.clone(), Vec::new()));
+        self.status_message = Some(format!(
+            "Loaded {} track(s) from {}",
+            tracks.len(),
+            path.display()
+        ));
+        self.corpus_browser = None;
+        self.mode = UiMode::TagEditor;
+    }
+
     fn handle_dir_browser_action(&mut self, action: dir_browser::DirBrowserAction) {
         match action {
             dir_browser::DirBrowserAction::None => {}
@@ -963,7 +1191,7 @@ impl App {
     }
 
     fn start_sleuthing_with_paths(&mut self, paths: Vec<std::path::PathBuf>) {
-        use crate::deduplication::find_duplicates_between_directories;
+        use crate::corpus::deduplication::find_duplicates_between_directories;
 
         let _ = config::log_message("=== start_sleuthing_with_paths called ===");
         for (i, path) in paths.iter().enumerate() {
@@ -1065,9 +1293,8 @@ impl App {
             tag_editor::TagEditorAction::SaveAndNext => {
                 self.save_tag_editor_changes(true);
             }
-            tag_editor::TagEditorAction::ShowModal(_modal) => {
-                // TODO: Handle modals
-                self.status_message = Some("Modal display (TODO)".to_string());
+            tag_editor::TagEditorAction::ShowModal(modal) => {
+                self.tag_editor_modal = Some(modal);
             }
             tag_editor::TagEditorAction::StatusMessage(msg) => {
                 self.status_message = Some(msg);
@@ -1075,11 +1302,234 @@ impl App {
         }
     }
 
-    fn save_tag_editor_changes(&mut self, _advance_to_next: bool) {
-        // TODO: Implement actual saving
-        self.status_message = Some("Saving changes (TODO)".to_string());
-        self.tag_editor = None;
-        self.mode = UiMode::MainMenu;
+    fn handle_tag_editor_modal_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        let modal = match self.tag_editor_modal.take() {
+            Some(m) => m,
+            None => return,
+        };
+
+        match modal {
+            tag_editor::TagEditorModal::SaveConfirmation { mut selected_button } => {
+                match key.code {
+                    KeyCode::Left => {
+                        selected_button = selected_button.saturating_sub(1);
+                        self.tag_editor_modal =
+                            Some(tag_editor::TagEditorModal::SaveConfirmation { selected_button });
+                    }
+                    KeyCode::Right => {
+                        selected_button = (selected_button + 1).min(2);
+                        self.tag_editor_modal =
+                            Some(tag_editor::TagEditorModal::SaveConfirmation { selected_button });
+                    }
+                    KeyCode::Enter => {
+                        match selected_button {
+                            0 => {
+                                // Save All
+                                self.save_tag_editor_changes(false);
+                            }
+                            1 => {
+                                // Save & Next
+                                self.save_tag_editor_changes(true);
+                            }
+                            2 => {
+                                // Return to editor
+                                self.tag_editor_modal = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    KeyCode::Esc => {
+                        // Cancel modal, return to editor
+                        self.tag_editor_modal = None;
+                    }
+                    _ => {
+                        // Put modal back
+                        self.tag_editor_modal =
+                            Some(tag_editor::TagEditorModal::SaveConfirmation { selected_button });
+                    }
+                }
+            }
+            tag_editor::TagEditorModal::ChangePreview {
+                grouped_changes,
+                single_changes,
+                mut scroll_offset,
+                save_and_next,
+            } => {
+                match key.code {
+                    KeyCode::Up => {
+                        scroll_offset = scroll_offset.saturating_sub(1);
+                        self.tag_editor_modal = Some(tag_editor::TagEditorModal::ChangePreview {
+                            grouped_changes,
+                            single_changes,
+                            scroll_offset,
+                            save_and_next,
+                        });
+                    }
+                    KeyCode::Down => {
+                        scroll_offset += 1;
+                        self.tag_editor_modal = Some(tag_editor::TagEditorModal::ChangePreview {
+                            grouped_changes,
+                            single_changes,
+                            scroll_offset,
+                            save_and_next,
+                        });
+                    }
+                    KeyCode::Enter => {
+                        // Proceed with save
+                        self.save_tag_editor_changes(save_and_next);
+                    }
+                    KeyCode::Esc => {
+                        // Cancel modal
+                        self.tag_editor_modal = None;
+                    }
+                    _ => {
+                        self.tag_editor_modal = Some(tag_editor::TagEditorModal::ChangePreview {
+                            grouped_changes,
+                            single_changes,
+                            scroll_offset,
+                            save_and_next,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn save_tag_editor_changes(&mut self, advance_to_next: bool) {
+        use std::collections::HashMap;
+
+        // Step 1: Compute changes from tag editor
+        let Some(ref editor) = self.tag_editor else {
+            self.status_message = Some("No tag editor state".to_string());
+            return;
+        };
+
+        let changes = tag_editor::state::compute_changes(
+            &editor.original_tag_fields,
+            &editor.tag_fields,
+        );
+
+        if changes.is_empty() {
+            self.status_message = Some("No changes to save".to_string());
+            if !advance_to_next {
+                self.tag_editor = None;
+                self.mode = UiMode::MainMenu;
+            }
+            return;
+        }
+
+        // Step 2: Group changes by track index
+        let mut changes_by_track: HashMap<usize, Vec<(String, String)>> = HashMap::new();
+        for change in &changes {
+            changes_by_track
+                .entry(change.track_idx)
+                .or_default()
+                .push((change.field_name.clone(), change.new_value.clone()));
+        }
+
+        // Step 3: Write tags to disk for each track
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let mut success_count = 0;
+        let mut error_count = 0;
+        let mut errors: Vec<String> = Vec::new();
+
+        for (track_idx, track_changes) in changes_by_track {
+            if let Some(track) = editor.tracks.get(track_idx) {
+                let track_id = track.id.unwrap_or(0);
+                let path = std::path::Path::new(&track.path);
+
+                match crate::corpus::metadata::write_tags(path, &track_changes, track_id, &session_id) {
+                    Ok(_) => {
+                        success_count += 1;
+                        let _ = config::log_message(&format!(
+                            "Tags saved for: {} ({} fields)",
+                            track.path,
+                            track_changes.len()
+                        ));
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        errors.push(format!("{}: {}", track.path, e));
+                        let _ = config::log_message(&format!(
+                            "ERROR saving tags for {}: {}",
+                            track.path, e
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Step 4: Check for stale deployments (if any path-affecting tags changed)
+        let path_affecting_fields = ["artist", "album", "album_artist"];
+        let has_path_changes = changes.iter().any(|c|
+            path_affecting_fields.contains(&c.field_name.as_str())
+        );
+
+        let mut stale_count = 0;
+        if has_path_changes {
+            if let Ok(db_path) = config::get_db_path() {
+                if let Ok(db) = Database::open(&db_path) {
+                    if let Ok(statuses) = crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
+                        stale_count = statuses.iter().map(|s| s.stale.len()).sum();
+                    }
+                }
+            }
+        }
+
+        // Build status message
+        let base_msg = if error_count > 0 {
+            format!(
+                "Saved {} track(s), {} failed: {}",
+                success_count,
+                error_count,
+                errors.first().unwrap_or(&String::new())
+            )
+        } else {
+            format!("Saved {} track(s)", success_count)
+        };
+
+        let stale_msg = if stale_count > 0 {
+            format!(" ({} deployments now stale - use Deploy menu to update)", stale_count)
+        } else {
+            String::new()
+        };
+
+        self.status_message = Some(format!("{}{}", base_msg, stale_msg));
+
+        if advance_to_next {
+            // Move to next duplicate group if in duplicate workflow
+            if let Some(ref mut editor) = self.tag_editor {
+                if let Some(current_idx) = editor.current_group_idx {
+                    if current_idx + 1 < editor.duplicate_groups.len() {
+                        // Advance to next group
+                        editor.current_group_idx = Some(current_idx + 1);
+                        // Reload tracks for new group
+                        let group = &editor.duplicate_groups[current_idx + 1];
+                        editor.tracks = group.tracks.clone();
+                        editor.current_track_idx = 0;
+                        editor.current_field_idx = 0;
+                        // Reload tag fields from disk
+                        editor.tag_fields = editor.tracks.iter()
+                            .map(tag_editor::state::track_to_tag_fields)
+                            .collect();
+                        editor.original_tag_fields = editor.tag_fields.clone();
+                    } else {
+                        // No more groups
+                        self.tag_editor = None;
+                        self.mode = UiMode::MainMenu;
+                        self.status_message = Some(format!(
+                            "{}. All duplicate groups processed.",
+                            base_msg
+                        ));
+                    }
+                }
+            }
+        } else {
+            self.tag_editor = None;
+            self.mode = UiMode::MainMenu;
+        }
     }
 
     fn handle_dialogue_result(&mut self, result: dialogue::DialogueResult) {
@@ -1092,7 +1542,53 @@ impl App {
                 self.mode = UiMode::DialogueSummary;
             }
             dialogue::DialogueResult::Commit => {
-                self.status_message = Some("Changes committed (TODO)".to_string());
+                // Execute pending changes from accepted decisions
+                if let Some(ref summary) = self.dialogue_summary {
+                    if summary.pending_changes.is_empty() {
+                        self.status_message = Some("No changes to commit".to_string());
+                    } else {
+                        let db_path = match crate::config::get_db_path() {
+                            Ok(p) => p,
+                            Err(e) => {
+                                self.status_message = Some(format!("Config error: {}", e));
+                                self.dialogue_summary = None;
+                                self.mode = UiMode::MainMenu;
+                                return;
+                            }
+                        };
+                        match crate::corpus::db::Database::open(&db_path) {
+                            Ok(db) => {
+                                match crate::ops::changes::execute_changes(
+                                    &db,
+                                    &summary.pending_changes,
+                                    false, // dry_run = false
+                                ) {
+                                    Ok(report) => {
+                                        let msg = if report.failed > 0 {
+                                            format!(
+                                                "Committed {} changes ({} failed, {} skipped)",
+                                                report.succeeded, report.failed, report.skipped
+                                            )
+                                        } else {
+                                            format!("Committed {} changes", report.succeeded)
+                                        };
+                                        self.status_message = Some(msg);
+                                        self.invalidate_tag_cloud();
+                                    }
+                                    Err(e) => {
+                                        self.status_message =
+                                            Some(format!("Commit error: {}", e));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.status_message = Some(format!("Database error: {}", e));
+                            }
+                        }
+                    }
+                } else {
+                    self.status_message = Some("No summary state".to_string());
+                }
                 self.dialogue_summary = None;
                 self.mode = UiMode::MainMenu;
             }
@@ -1253,6 +1749,7 @@ impl App {
                                 "Committed: {} succeeded, {} failed, {} skipped",
                                 report.succeeded, report.failed, report.skipped
                             ));
+                            self.invalidate_tag_cloud();
                         }
                         Err(e) => {
                             let _ = config::log_message(&format!("ERROR: Change execution failed: {}", e));
@@ -1296,7 +1793,53 @@ impl App {
             }
             dedup_flow::SessionReviewAction::Export => {
                 // Export change list to file
-                self.status_message = Some("Export change list (TODO)".to_string());
+                if let Some(ref session_review) = self.session_review {
+                    match config::get_data_dir() {
+                        Ok(data_dir) => {
+                            let reports_dir = data_dir.join("reports");
+                            if let Err(e) = std::fs::create_dir_all(&reports_dir) {
+                                self.status_message = Some(format!("Failed to create reports dir: {}", e));
+                                return;
+                            }
+
+                            let filename = format!(
+                                "dedup_export_{}.json",
+                                chrono::Utc::now().format("%Y%m%d_%H%M%S")
+                            );
+                            let path = reports_dir.join(&filename);
+
+                            let export_data = serde_json::json!({
+                                "session_id": &session_review.session.session_id,
+                                "decisions_count": session_review.session.decisions.len(),
+                                "decisions": session_review.session.decisions.iter().map(|d| {
+                                    serde_json::json!({
+                                        "keeper_dir": d.keeper_dir,
+                                        "cluster_directories": &d.cluster.directory_set,
+                                        "cluster_file_count": d.cluster.file_count,
+                                        "pending_changes_count": d.pending_changes.len(),
+                                    })
+                                }).collect::<Vec<_>>(),
+                                "exported_at": chrono::Utc::now().to_rfc3339(),
+                            });
+
+                            match std::fs::write(&path, serde_json::to_string_pretty(&export_data).unwrap_or_default()) {
+                                Ok(_) => {
+                                    self.status_message = Some(format!(
+                                        "Exported {} decisions to {}",
+                                        session_review.session.decisions.len(),
+                                        path.display()
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.status_message = Some(format!("Export failed: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.status_message = Some(format!("Config error: {}", e));
+                        }
+                    }
+                }
             }
             dedup_flow::SessionReviewAction::Cancel => {
                 let _ = config::log_message("=== SESSION REVIEW: CANCELLED ===");
@@ -1436,309 +1979,83 @@ impl App {
 
     // ========================================================================
     // Artist Canonicalization Flow Handlers
+    // (Delegates to canon_flow::coordinator)
     // ========================================================================
 
     fn start_canon_flow(&mut self) {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
+        canon_flow::coordinator::start(self);
+    }
 
-        // Get artist buckets with variants
-        match db.get_artist_canonicalization_buckets() {
-            Ok(bucket_data) if !bucket_data.is_empty() => {
-                // Convert to ArtistBucket structs
-                let buckets: Vec<canon_flow::ArtistBucket> = bucket_data
-                    .into_iter()
-                    .map(|(normalized_key, variants)| canon_flow::ArtistBucket {
-                        normalized_key,
-                        variants: variants
-                            .into_iter()
-                            .map(|(name, track_count)| canon_flow::ArtistVariant {
-                                name,
-                                track_count,
-                                selected_for_squash: false,
-                            })
-                            .collect(),
-                    })
-                    .collect();
-
-                let session = canon_flow::CanonSession::new(
-                    uuid::Uuid::new_v4().to_string(),
-                    buckets,
-                );
-
-                self.canon_cluster_view = Some(canon_flow::ClusterViewState::new(session));
-                self.mode = UiMode::CanonClusterView;
-            }
-            Ok(_) => {
-                self.status_message = Some("No artist name variants found - corpus is clean!".to_string());
-            }
-            Err(e) => {
-                self.status_message = Some(format!("Error loading artist buckets: {}", e));
-            }
-        }
+    fn start_genre_canon_flow(&mut self) {
+        canon_flow::coordinator::start_genre(self);
     }
 
     fn handle_canon_cluster_action(&mut self, action: canon_flow::ClusterViewAction) {
-        match action {
-            canon_flow::ClusterViewAction::None => {}
-            canon_flow::ClusterViewAction::Continue => {}
-            canon_flow::ClusterViewAction::SessionComplete => {
-                // All buckets processed, go to review
-                self.transition_to_canon_review();
-            }
-            canon_flow::ClusterViewAction::ShowSessionReview => {
-                self.transition_to_canon_review();
-            }
-            canon_flow::ClusterViewAction::StatusMessage(msg) => {
-                self.status_message = Some(msg);
-            }
-        }
-    }
-
-    fn transition_to_canon_review(&mut self) {
-        if let Some(cluster_view) = self.canon_cluster_view.take() {
-            let session = cluster_view.into_session();
-
-            if session.decisions.is_empty() {
-                self.status_message = Some("No decisions made".to_string());
-                self.mode = UiMode::MainMenu;
-            } else {
-                self.canon_session_review = Some(canon_flow::ReviewState::new(session));
-                self.mode = UiMode::CanonSessionReview;
-            }
-        }
+        canon_flow::coordinator::handle_cluster_action(self, action);
     }
 
     fn handle_canon_review_action(&mut self, action: canon_flow::ReviewAction) {
-        match action {
-            canon_flow::ReviewAction::None => {}
-            canon_flow::ReviewAction::Continue => {}
-            canon_flow::ReviewAction::Commit => {
-                self.commit_canon_changes();
-            }
-            canon_flow::ReviewAction::Cancel => {
-                self.canon_session_review = None;
-                self.mode = UiMode::MainMenu;
-                self.status_message = Some("Artist canonicalization cancelled".to_string());
-            }
-            canon_flow::ReviewAction::BackToClusterView => {
-                // Return to cluster view to add more decisions
-                if let Some(review) = self.canon_session_review.take() {
-                    let session = review.into_session();
-                    self.canon_cluster_view = Some(canon_flow::ClusterViewState::new(session));
-                    self.mode = UiMode::CanonClusterView;
-                }
-            }
-        }
+        canon_flow::coordinator::handle_review_action(self, action);
     }
 
-    fn commit_canon_changes(&mut self) {
-        let _ = config::log_message("=== CANON REVIEW: COMMIT REQUESTED ===");
+    // ========================================================================
+    // Album Artist Resolution Flow Handlers
+    // (Delegates to album_artist_flow::coordinator)
+    // ========================================================================
 
-        // Get all pending changes from decisions
-        let all_changes: Vec<_> = if let Some(ref review) = self.canon_session_review {
-            review.session().decisions
-                .iter()
-                .flat_map(|d| d.pending_changes.clone())
-                .collect()
-        } else {
-            vec![]
-        };
-
-        let _ = config::log_message(&format!(
-            "Total pending tag changes to execute: {}",
-            all_changes.len()
-        ));
-
-        if all_changes.is_empty() {
-            self.canon_session_review = None;
-            self.mode = UiMode::MainMenu;
-            self.status_message = Some("No changes to commit".to_string());
-            return;
-        }
-
-        // Open database
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                self.canon_session_review = None;
-                self.mode = UiMode::MainMenu;
-                return;
-            }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                self.canon_session_review = None;
-                self.mode = UiMode::MainMenu;
-                return;
-            }
-        };
-
-        // Update database artist fields directly
-        let mut succeeded = 0;
-        let mut failed = 0;
-
-        for change in &all_changes {
-            if let Some(ref metadata_json) = change.metadata_changes {
-                if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) {
-                    let new_artist = metadata.get("new_artist")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let old_artist = metadata.get("old_artist")
-                        .and_then(|v| v.as_str());
-
-                    // Get track ID by path
-                    if let Ok(Some(track)) = db.get_track_by_path(&change.source_path) {
-                        if let Some(track_id) = track.id {
-                            match db.update_artist_for_tracks(&[track_id], new_artist) {
-                                Ok(_) => {
-                                    succeeded += 1;
-                                    // Record tag mismatch: disk still has old value, DB now has new value
-                                    if let Err(e) = db.record_tag_mismatch(
-                                        track_id,
-                                        "artist",
-                                        Some(new_artist),  // db_value
-                                        old_artist,        // disk_value
-                                    ) {
-                                        let _ = config::log_message(&format!(
-                                            "Failed to record tag mismatch for {}: {}",
-                                            change.source_path, e
-                                        ));
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = config::log_message(&format!(
-                                        "Failed to update artist for {}: {}",
-                                        change.source_path, e
-                                    ));
-                                    failed += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let _ = config::log_message(&format!(
-            "Canon commit complete: {} succeeded, {} failed",
-            succeeded, failed
-        ));
-
-        // Compute stale deployment count
-        let stale_count = match crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
-            Ok(statuses) => statuses.iter().map(|s| s.stale.len()).sum(),
-            Err(_) => 0,
-        };
-
-        let _ = config::log_message(&format!(
-            "Stale deployments after commit: {}",
-            stale_count
-        ));
-
-        // Show commit modal with options
-        self.canon_session_review = None;
-        self.canon_commit_modal_state = Some(CanonCommitModalState {
-            selected_option: 1, // Default to deployment review
-            tracks_updated: succeeded,
-            stale_deployments: stale_count,
-        });
-        self.mode = UiMode::CanonCommitModal;
-
-        // Start background tag-flush operation
-        self.start_canon_tag_flush(all_changes);
+    fn start_album_artist_flow(&mut self) {
+        album_artist_flow::coordinator::start(self);
     }
 
-    fn start_canon_tag_flush(&mut self, changes: Vec<crate::db::PendingChange>) {
-        let change_count = changes.len();
+    fn handle_album_artist_phase_action(&mut self, action: album_artist_flow::PhaseSelectorAction) {
+        album_artist_flow::coordinator::handle_phase_action(self, action);
+    }
 
-        // Add operation to manager
-        let (id, tx, cancel_flag) = self.operations.add(OperationType::ExecutingChanges {
-            session_id: "canon_tag_flush".to_string(),
-            change_count,
-        });
+    fn handle_album_artist_cluster_action(&mut self, action: album_artist_flow::AlbumArtistClusterAction) {
+        album_artist_flow::coordinator::handle_cluster_action(self, action);
+    }
 
-        let _ = config::log_message(&format!(
-            "Starting background tag flush for {} tracks [{}]",
-            change_count, id
-        ));
+    fn handle_album_artist_review_action(&mut self, action: album_artist_flow::AlbumArtistReviewAction) {
+        album_artist_flow::coordinator::handle_review_action(self, action);
+    }
 
-        // Spawn background thread to write tags to disk
-        std::thread::spawn(move || {
-            use std::time::Instant;
+    fn handle_album_artist_collation_action(&mut self, action: album_artist_flow::CollationAction) {
+        album_artist_flow::coordinator::handle_collation_action(self, action);
+    }
 
-            let start = Instant::now();
-            let mut reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
+    fn handle_album_artist_collation_review_action(
+        &mut self,
+        action: album_artist_flow::CollationReviewAction,
+    ) {
+        album_artist_flow::coordinator::handle_collation_review_action(self, action);
+    }
 
-            let mut progress = OperationProgress::new(changes.len());
-            reporter.force_update(progress.clone());
+    fn handle_album_artist_population_action(&mut self, action: album_artist_flow::PopulationAction) {
+        album_artist_flow::coordinator::handle_population_action(self, action);
+    }
 
-            let mut succeeded = 0;
-            let mut failed = 0;
-            let mut errors = Vec::new();
-            let mut flushed_paths = Vec::new();
+    fn handle_album_artist_population_review_action(
+        &mut self,
+        action: album_artist_flow::PopulationReviewAction,
+    ) {
+        album_artist_flow::coordinator::handle_population_review_action(self, action);
+    }
 
-            for change in &changes {
-                if reporter.is_cancelled() {
-                    reporter.cancelled();
-                    return;
-                }
+    // ========================================================================
+    // Album Canonicalization Flow Handlers
+    // (Delegates to album_flow::coordinator)
+    // ========================================================================
 
-                progress.current_item = Some(change.source_path.clone());
-                reporter.update(progress.clone());
+    fn handle_album_cluster_action(&mut self, action: album_flow::AlbumClusterAction) {
+        album_flow::coordinator::handle_cluster_action(self, action);
+    }
 
-                // Parse metadata to get new artist
-                if let Some(ref metadata_json) = change.metadata_changes {
-                    if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) {
-                        let new_artist = metadata.get("new_artist")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+    fn handle_album_review_action(&mut self, action: album_flow::AlbumReviewAction) {
+        album_flow::coordinator::handle_review_action(self, action);
+    }
 
-                        // Write tag to file using lofty
-                        match crate::metadata::write_artist_tag(&change.source_path, new_artist) {
-                            Ok(_) => {
-                                succeeded += 1;
-                                flushed_paths.push(change.source_path.clone());
-                            }
-                            Err(e) => {
-                                errors.push(format!("{}: {}", change.source_path, e));
-                                failed += 1;
-                            }
-                        }
-                    }
-                }
-
-                progress.completed_items += 1;
-                reporter.update(progress.clone());
-            }
-
-            // Store flushed paths in result data for mismatch cleanup
-            let result = OperationResult {
-                succeeded,
-                skipped: 0,
-                failed,
-                duration: start.elapsed(),
-                bytes_processed: None,
-                errors,
-                data: Some(crate::ops::operation::ResultData::TagFlush { flushed_paths }),
-            };
-            reporter.complete(result);
-        });
+    fn start_album_flow(&mut self) {
+        album_flow::coordinator::start(self);
     }
 
     fn update_operation_progress(&mut self) {
@@ -1748,11 +2065,13 @@ impl App {
             // Log operation summary
             log_operation_summary(&result, &op_type);
 
-            // Handle tag flush completion - clear tag mismatches
+            // Handle tag flush completion - clear tag mismatches and invalidate tag cloud
             if let OperationType::ExecutingChanges { ref session_id, .. } = op_type {
                 if session_id == "canon_tag_flush" {
                     self.clear_tag_mismatches_for_flushed(&result);
                 }
+                // Invalidate tag cloud after any change execution (tags may have changed)
+                self.invalidate_tag_cloud();
             }
 
             // Format completion message
@@ -1955,6 +2274,56 @@ impl App {
             }
         }
     }
+
+    // ========================================================================
+    // Tag Cloud (canonicalization detection cache)
+    // ========================================================================
+
+    /// Start building tag cloud in background (non-blocking).
+    #[allow(dead_code)]
+    fn start_tag_cloud_build(&mut self) {
+        if self.tag_cloud_receiver.is_none() {
+            self.tag_cloud_receiver = Some(crate::corpus::health::spawn_tag_cloud_build());
+        }
+    }
+
+    /// Check if tag cloud build completed (call in update loop).
+    fn update_tag_cloud(&mut self) {
+        if let Some(ref rx) = self.tag_cloud_receiver {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(cloud) => {
+                        let _ = crate::config::log_message(&format!(
+                            "TagCloud ready: {} tracks, {} artist collisions, {} genre collisions",
+                            cloud.track_count(),
+                            cloud.artist_collision_count(),
+                            cloud.genre_collision_count()
+                        ));
+                        self.tag_cloud = Some(cloud);
+                    }
+                    Err(e) => {
+                        let _ = crate::config::log_message(&format!(
+                            "TagCloud build failed: {}",
+                            e
+                        ));
+                    }
+                }
+                self.tag_cloud_receiver = None;
+            }
+        }
+    }
+
+    /// Invalidate the tag cloud (call after mutations).
+    pub fn invalidate_tag_cloud(&mut self) {
+        self.tag_cloud = None;
+        self.tag_cloud_receiver = None;
+    }
+
+    /// Get the current tag cloud, if available.
+    #[allow(dead_code)]
+    pub fn tag_cloud(&self) -> Option<&crate::corpus::health::TagCloud> {
+        self.tag_cloud.as_ref()
+    }
 }
 
 // ============================================================================
@@ -1968,7 +2337,9 @@ fn render(f: &mut Frame, app: &mut App) {
         status_message: app.status_message.as_deref(),
         main_menu: &mut app.main_menu,
         tag_editor: app.tag_editor.as_mut(),
+        tag_editor_modal: app.tag_editor_modal.as_ref(),
         dir_browser: app.dir_browser.as_mut(),
+        corpus_browser: app.corpus_browser.as_mut(),
         dialogue: app.dialogue.as_mut(),
         dialogue_summary: app.dialogue_summary.as_mut(),
         cluster_dialogue: app.cluster_dialogue.as_mut(),
@@ -1979,6 +2350,15 @@ fn render(f: &mut Frame, app: &mut App) {
         canon_cluster_view: app.canon_cluster_view.as_mut(),
         canon_session_review: app.canon_session_review.as_mut(),
         canon_commit_modal_state: app.canon_commit_modal_state.as_ref(),
+        album_artist_phase_selector: app.album_artist_phase_selector.as_ref(),
+        album_artist_cluster_view: app.album_artist_cluster_view.as_mut(),
+        album_artist_collation: app.album_artist_collation.as_mut(),
+        album_artist_collation_review: app.album_artist_collation_review.as_mut(),
+        album_artist_population: app.album_artist_population.as_mut(),
+        album_artist_population_review: app.album_artist_population_review.as_mut(),
+        album_artist_review: app.album_artist_review.as_mut(),
+        album_cluster_view: app.album_cluster_view.as_mut(),
+        album_review: app.album_review.as_mut(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         heartbeat_result: app.heartbeat_result.as_ref(),
         heartbeat_pending: app.heartbeat_receiver.is_some(),
@@ -2084,12 +2464,20 @@ fn run_app<B: ratatui::backend::Backend>(
         app.eye.update();
         app.update_operation_progress();
         app.update_heartbeat();
+        app.update_tag_cloud();
 
-        // Check if eye blink triggered a heartbeat (d20 rolled 13)
-        if app.eye.take_heartbeat_trigger() && app.heartbeat_receiver.is_none() {
-            let rx = spawn_heartbeat(&app.config);
-            app.heartbeat_receiver = Some(rx);
-            app.eye.set_heartbeat_pending(true);
+        // Check if eye blink triggered a heartbeat (d20 >= 13)
+        if let Some(roll_result) = app.eye.take_heartbeat_trigger() {
+            if app.heartbeat_receiver.is_none() {
+                // Both Normal (14-20) and Expensive (13) trigger heartbeat
+                // Expensive roll result can also run cleanup operations after heartbeat
+                let rx = spawn_heartbeat(&app.config);
+                app.heartbeat_receiver = Some(rx);
+                app.eye.set_heartbeat_pending(true);
+
+                // Store roll result for potential expensive operations after heartbeat
+                app.last_heartbeat_roll = Some(roll_result);
+            }
         }
 
         terminal.draw(|f| render(f, app))?;

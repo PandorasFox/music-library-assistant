@@ -17,7 +17,7 @@ use ratatui::{
     Frame,
 };
 
-use super::session::{CanonDecision, CanonSession};
+use super::session::CanonSession;
 
 /// Which button is focused
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

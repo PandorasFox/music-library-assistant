@@ -3,7 +3,7 @@
 //! Defines the data structures for tracking canonicalization decisions
 //! across the multi-phase dialogue workflow.
 
-use crate::db::changes::PendingChange;
+use crate::corpus::db::changes::PendingChange;
 
 /// Represents one artist name bucket with all its variants.
 /// Buckets are formed by normalizing artist names (lowercase, trimmed).

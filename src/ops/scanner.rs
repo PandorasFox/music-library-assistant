@@ -13,9 +13,9 @@ use walkdir::WalkDir;
 
 use crate::config;
 use crate::corpus;
-use crate::db::Database;
-use crate::metadata;
-use crate::progress::{MtimeMismatchStats, ScanMessage, ScanProgress, ScanResult};
+use crate::corpus::db::Database;
+use crate::corpus::metadata;
+use super::progress::{MtimeMismatchStats, ScanMessage, ScanProgress, ScanResult};
 
 #[derive(Debug, Clone)]
 struct FileInfo {
@@ -134,7 +134,7 @@ pub fn scan_directory_with_progress(
     progress_tx: Option<mpsc::Sender<ScanMessage>>,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<ScanResult> {
-    use crate::db::ScanStateEntry;
+    use crate::corpus::db::ScanStateEntry;
     use std::collections::HashSet;
 
     let start_time = Instant::now();
@@ -246,7 +246,7 @@ pub fn scan_directory_with_progress(
         // Run health detection for tracks with fingerprints
         if track.fingerprint.is_some() {
             // Create a track with the ID for health detection
-            let track_with_id = crate::db::Track {
+            let track_with_id = crate::corpus::db::Track {
                 id: Some(track_id),
                 ..track.clone()
             };
@@ -305,9 +305,9 @@ pub fn scan_directory_with_progress(
 }
 
 /// Find tracks in the database whose files no longer exist on disk.
-pub fn find_missing_tracks(db: &Database, source: &str) -> Result<Vec<crate::db::Track>> {
+pub fn find_missing_tracks(db: &Database, source: &str) -> Result<Vec<crate::corpus::db::Track>> {
     let tracks = db.get_all_tracks_for_source(source)?;
-    let missing: Vec<crate::db::Track> = tracks
+    let missing: Vec<crate::corpus::db::Track> = tracks
         .into_iter()
         .filter(|t| !Path::new(&t.path).exists())
         .collect();

@@ -29,10 +29,11 @@
 //! - Esc: Cancel and discard
 
 pub mod cluster_view;
+pub mod coordinator;
 pub mod review;
 pub mod session;
 
-pub use cluster_view::{ActionFocus, CanonPane, ClusterViewAction, ClusterViewState};
+pub use cluster_view::{ClusterViewAction, ClusterViewState};
 pub use review::{ReviewAction, ReviewState};
 #[allow(unused_imports)]
 pub use session::{ArtistBucket, ArtistVariant, CanonDecision, CanonSession};

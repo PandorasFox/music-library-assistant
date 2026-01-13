@@ -13,7 +13,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::db::{Decision, DecisionOutcome, DecisionStack};
+use crate::corpus::db::{Decision, DecisionOutcome, DecisionStack};
 
 // ============================================================================
 // Types
@@ -66,6 +66,8 @@ pub struct DialogueSummaryState {
     pub deferred_count: usize,
     pub patterns_learned: Vec<String>,
     pub changes_pending: usize,
+    /// The actual pending changes to commit (from accepted decisions)
+    pub pending_changes: Vec<crate::corpus::db::PendingChange>,
     /// Selected action in summary (0 = Commit, 1 = Revert, 2 = Return)
     pub action_index: usize,
     pub action_list_state: ListState,
@@ -223,12 +225,26 @@ impl DialogueState {
             .filter(|(_, o)| *o == DecisionOutcome::Defer)
             .count();
 
+        // Collect pending changes from accepted decisions
+        let pending_changes: Vec<crate::corpus::db::PendingChange> = self
+            .stack
+            .resolved
+            .iter()
+            .filter(|(_, o)| {
+                *o == DecisionOutcome::Accept || *o == DecisionOutcome::AcceptPattern
+            })
+            .flat_map(|(decision, _)| decision.pending_changes.clone())
+            .collect();
+
+        let changes_pending = pending_changes.len();
+
         let mut summary = DialogueSummaryState {
             accepted_count: accepted,
             rejected_count: rejected,
             deferred_count: deferred,
             patterns_learned: self.stack.ignore_patterns.clone(),
-            changes_pending: 0, // TODO: count actual pending changes
+            changes_pending,
+            pending_changes,
             action_index: 0,
             action_list_state: ListState::default(),
         };

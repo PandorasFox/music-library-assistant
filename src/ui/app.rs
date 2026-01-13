@@ -1,9 +1,6 @@
 //! Application State and Event Loop
 //!
 //! Provides the core application structure with mode-based UI dispatch.
-//! This module is being phased in to replace the monolithic menu.rs.
-
-#![allow(dead_code)]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -98,6 +95,21 @@ pub enum BlinkType {
     Flutter,
 }
 
+/// Result of rolling d20 for heartbeat trigger.
+///
+/// - `Nothing` (1-12, 60%): No action
+/// - `Normal` (14-20, 35%): Standard heartbeat check
+/// - `Expensive` (13, 5%): Expensive cleanup operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeartbeatRollResult {
+    /// No heartbeat triggered (rolled 1-12)
+    Nothing,
+    /// Normal heartbeat (rolled 14-20)
+    Normal,
+    /// Expensive cleaning operations (rolled 13)
+    Expensive,
+}
+
 /// Eye animation controller
 #[derive(Debug)]
 pub struct EyeAnimation {
@@ -108,8 +120,8 @@ pub struct EyeAnimation {
     pub flutter_count: u8,
     /// When true, eye stays closed (waiting for startup heartbeat)
     pub heartbeat_pending: bool,
-    /// Flag set when a blink completes and d20 rolled 13 (trigger heartbeat)
-    pub trigger_heartbeat: bool,
+    /// Set when a blink completes and d20 triggers heartbeat (>= 13)
+    heartbeat_roll_result: Option<HeartbeatRollResult>,
 }
 
 impl Default for EyeAnimation {
@@ -121,7 +133,7 @@ impl Default for EyeAnimation {
             current_blink_type: BlinkType::Normal,
             flutter_count: 0,
             heartbeat_pending: false,
-            trigger_heartbeat: false,
+            heartbeat_roll_result: None,
         }
     }
 }
@@ -186,12 +198,24 @@ pub fn flip_coin() -> bool {
 }
 
 impl EyeAnimation {
+    /// Check and clear the heartbeat roll result.
+    ///
+    /// Returns `Some(result)` if a heartbeat was triggered, `None` otherwise.
+    pub fn take_heartbeat_trigger(&mut self) -> Option<HeartbeatRollResult> {
+        self.heartbeat_roll_result.take()
+    }
 
-    /// Check and clear the trigger_heartbeat flag
-    pub fn take_heartbeat_trigger(&mut self) -> bool {
-        let triggered = self.trigger_heartbeat;
-        self.trigger_heartbeat = false;
-        triggered
+    /// Roll d20 and interpret result for heartbeat triggering.
+    ///
+    /// - 1-12 (60%): Nothing
+    /// - 13 (5%): Expensive cleanup operations
+    /// - 14-20 (35%): Normal heartbeat
+    fn roll_heartbeat() -> HeartbeatRollResult {
+        match Self::roll_d20() {
+            13 => HeartbeatRollResult::Expensive,
+            14..=20 => HeartbeatRollResult::Normal,
+            _ => HeartbeatRollResult::Nothing,
+        }
     }
 
     /// Choose random blink type (weighted towards normal)
@@ -277,9 +301,10 @@ impl EyeAnimation {
                         self.state_start_time = now;
                         self.next_blink_delay_secs = Self::random_blink_delay();
 
-                        // Blink completed - roll d20, trigger heartbeat on 13
-                        if Self::roll_d20() == 13 {
-                            self.trigger_heartbeat = true;
+                        // Blink completed - roll d20 for heartbeat (>= 13)
+                        let roll = Self::roll_heartbeat();
+                        if roll != HeartbeatRollResult::Nothing {
+                            self.heartbeat_roll_result = Some(roll);
                         }
                     }
                 }
@@ -307,9 +332,10 @@ impl EyeAnimation {
                         self.state_start_time = now;
                         self.next_blink_delay_secs = Self::random_blink_delay();
 
-                        // Flutter blink completed - roll d20, trigger heartbeat on 13
-                        if Self::roll_d20() == 13 {
-                            self.trigger_heartbeat = true;
+                        // Flutter blink completed - roll d20 for heartbeat (>= 13)
+                        let roll = Self::roll_heartbeat();
+                        if roll != HeartbeatRollResult::Nothing {
+                            self.heartbeat_roll_result = Some(roll);
                         }
                     }
                 }

@@ -1,22 +1,21 @@
 //! Corpus Module
 //!
-//! Unified API for corpus health, analysis, and reporting. This module brings
-//! together related functionality that was previously scattered across multiple
-//! top-level modules.
+//! Unified API for corpus indexing, health, analysis, and reporting. This module
+//! is the core domain for understanding and maintaining the audio corpus.
 //!
 //! ## Submodules
 //!
+//! - `db/` - Database layer (types, queries, changes)
+//! - `deduplication/` - Fingerprint-based duplicate detection and resolution
 //! - `health/` - Health issue detection, filtering, and library health
-//! - `fingerprint/` - Fingerprint quality analysis and comparison
 //! - `reports/` - Report generation with ReportRenderer pattern
-//!
-//! ## Future Additions
-//!
-//! - `summary` - Aggregated corpus and health summaries
 
-pub mod fingerprint;
+pub mod db;
+pub mod deduplication;
 pub mod health;
+pub mod metadata;
 pub mod reports;
+
 
 // Re-export commonly used items from health
 pub use health::{
@@ -39,3 +38,4 @@ pub use health::library::{
 pub use health::filter::{
     durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks,
 };
+

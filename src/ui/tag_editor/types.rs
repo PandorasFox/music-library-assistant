@@ -2,9 +2,7 @@
 //!
 //! Core type definitions for the tag editor workflow.
 
-#![allow(dead_code)]
-
-use crate::db::Track;
+use crate::corpus::db::Track;
 
 /// Edit mode for tag fields
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +13,18 @@ pub enum FieldEditState {
     EditingName,
     /// User is editing the tag value
     EditingValue,
+}
+
+/// Which pane currently has focus in the tag editor
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TagEditorFocus {
+    /// Track list pane (left)
+    TrackList,
+    /// Tag fields pane (middle)
+    #[default]
+    TagFields,
+    /// Action pane (right) - "Proceed" button
+    ActionPane,
 }
 
 /// A single tag field with its metadata

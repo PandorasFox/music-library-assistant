@@ -6,7 +6,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config;
-use crate::db::{ChangeStatus, ChangeType, Database, PendingChange, Track};
+use crate::corpus::db::{ChangeStatus, ChangeType, Database, PendingChange, Track};
 use crate::ops::{changes, scanner};
 
 /// State for drop missing confirmation dialog.

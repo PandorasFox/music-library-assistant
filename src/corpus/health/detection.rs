@@ -8,6 +8,7 @@
 //! - Quality variant detection
 //! - Missing tag detection (album_artist)
 //! - Out-of-band tag change detection (DB differs from disk)
+//! - Deployment conflict detection
 //!
 //! ## TODO: Artist/Album Artist Canonicalization Mismatch
 //!
@@ -21,12 +22,17 @@
 //! - Group by normalized key for bulk resolution
 //! - Could also catch typo variants like "Deadmau5" vs "deadmau5"
 
+use std::collections::HashMap;
+
+use crate::config::Config;
 use crate::corpus::db::{
     Database, HealthIssue, HealthIssueType, HealthIssueSeverity, Track, TrackRole,
 };
+use crate::ops::deploy::compute_deployment_path;
 use anyhow::Result;
 
 use super::filter::{durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks};
+use super::library::{get_configured_library_names, get_deployable_corpus_tracks};
 
 /// Default duration tolerance for fingerprint matching (10%)
 const DEFAULT_DURATION_TOLERANCE: f64 = 0.10;
@@ -230,6 +236,176 @@ fn determine_duplicate_severity(tracks: &[Track]) -> HealthIssueSeverity {
             HealthIssueSeverity::ManualReview
         }
     }
+}
+
+// ============================================================================
+// Deployment Conflict Detection
+// ============================================================================
+
+/// Detect deployment conflicts for all configured libraries.
+///
+/// A deployment conflict occurs when multiple corpus tracks would deploy to the same
+/// target path in a library (based on their metadata: album_artist/album/track/title).
+///
+/// This function:
+/// 1. Iterates over all configured libraries
+/// 2. Computes target paths for all deployable corpus tracks
+/// 3. Detects conflicts (multiple tracks -> same path)
+/// 4. Creates/updates health issues in the database
+///
+/// Returns the number of new conflicts detected.
+pub fn detect_deployment_conflicts(config: &Config, db: &Database) -> Result<usize> {
+    let library_names = get_configured_library_names(config);
+    let mut new_issues = 0;
+
+    for library_name in library_names {
+        new_issues += detect_deployment_conflicts_for_library(config, db, &library_name)?;
+    }
+
+    Ok(new_issues)
+}
+
+/// Detect deployment conflicts for a specific library.
+///
+/// Returns the number of new conflicts detected.
+pub fn detect_deployment_conflicts_for_library(
+    config: &Config,
+    db: &Database,
+    library_name: &str,
+) -> Result<usize> {
+    // Get all corpus tracks deployable to this library
+    let corpus_tracks = get_deployable_corpus_tracks(config, db, library_name);
+
+    // Build target_path -> tracks map
+    let mut target_path_map: HashMap<String, Vec<Track>> = HashMap::new();
+    for track in corpus_tracks {
+        let target = compute_deployment_path(&track);
+        let target_str = target.display().to_string();
+        target_path_map.entry(target_str).or_default().push(track);
+    }
+
+    let mut new_issues = 0;
+
+    // Process conflicts (multiple tracks -> same path)
+    for (target_path, tracks) in target_path_map {
+        if tracks.len() < 2 {
+            continue; // No conflict
+        }
+
+        // Issue key format: library_name:target_path
+        let issue_key = format!("{}:{}", library_name, target_path);
+
+        // Check if issue already exists
+        if let Some(existing) = db.get_health_issue_by_key(HealthIssueType::DeployConflict, &issue_key)? {
+            // Issue exists - ensure all tracks are members
+            if let Some(issue_id) = existing.id {
+                let existing_tracks = db.get_health_issue_tracks(issue_id)?;
+                for track in &tracks {
+                    if let Some(track_id) = track.id {
+                        if !existing_tracks.iter().any(|(t, _)| t.id == Some(track_id)) {
+                            db.add_health_issue_track(issue_id, track_id, TrackRole::Member)?;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Create new health issue
+        let metadata = serde_json::json!({
+            "library_name": library_name,
+            "target_path": target_path,
+            "track_count": tracks.len(),
+        });
+
+        let issue = HealthIssue {
+            id: None,
+            issue_type: HealthIssueType::DeployConflict,
+            issue_key,
+            severity: HealthIssueSeverity::ManualReview,
+            discovered_at: None,
+            resolved_at: None,
+            resolution_type: None,
+            resolution_session: None,
+            metadata_json: Some(metadata.to_string()),
+        };
+
+        let issue_id = db.insert_health_issue(&issue)?;
+
+        // Add all conflicting tracks as members
+        for track in &tracks {
+            if let Some(track_id) = track.id {
+                db.add_health_issue_track(issue_id, track_id, TrackRole::Member)?;
+            }
+        }
+
+        new_issues += 1;
+    }
+
+    Ok(new_issues)
+}
+
+/// Resolve deployment conflicts that are no longer valid.
+///
+/// This should be called after tag edits or track deletions that might
+/// have resolved conflicts (e.g., renaming a track so it no longer
+/// collides with another).
+///
+/// Returns the number of issues resolved.
+pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> Result<usize> {
+    use crate::corpus::db::ResolutionType;
+
+    let library_names = get_configured_library_names(config);
+    let mut resolved_count = 0;
+
+    // Get all unresolved deploy conflict issues
+    let issues = db.get_unresolved_health_issues(Some(HealthIssueType::DeployConflict))?;
+
+    for issue in issues {
+        let issue_id = match issue.id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Parse library name from issue key (format: "library_name:target_path")
+        let parts: Vec<&str> = issue.issue_key.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+        let library_name = parts[0];
+
+        // Skip if library is no longer configured
+        if !library_names.contains(&library_name.to_string()) {
+            db.resolve_health_issue(issue_id, ResolutionType::Ignored, None)?;
+            resolved_count += 1;
+            continue;
+        }
+
+        // Get tracks currently in this issue
+        let issue_tracks = db.get_health_issue_tracks(issue_id)?;
+
+        // Check if tracks still conflict
+        let tracks: Vec<Track> = issue_tracks.into_iter().map(|(t, _)| t).collect();
+
+        // Recompute target paths for these tracks
+        let mut target_path_map: HashMap<String, Vec<&Track>> = HashMap::new();
+        for track in &tracks {
+            let target = compute_deployment_path(track);
+            let target_str = target.display().to_string();
+            target_path_map.entry(target_str).or_default().push(track);
+        }
+
+        // Check if any path still has multiple tracks
+        let still_conflicts = target_path_map.values().any(|v| v.len() > 1);
+
+        if !still_conflicts {
+            // Conflict resolved - mark issue as resolved
+            db.resolve_health_issue(issue_id, ResolutionType::Merged, None)?;
+            resolved_count += 1;
+        }
+    }
+
+    Ok(resolved_count)
 }
 
 // ============================================================================

@@ -60,6 +60,8 @@ use crate::ops::{reports, scanner, ScanMessage};
 use app::{EyeAnimation, HeartbeatRollResult};
 use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
+use crate::corpus::mutations::MigrationRegistry;
+
 // ============================================================================
 // Health Data Version
 // ============================================================================
@@ -2742,6 +2744,188 @@ fn check_and_maybe_rebuild_health(app: &mut App) {
 }
 
 // ============================================================================
+// Database Migration Check
+// ============================================================================
+
+/// Check for pending database migrations and run them with a blocking UI.
+///
+/// This runs before the main app loop starts to ensure the database schema
+/// is up to date. Shows a blocking dialog during migration execution.
+fn check_and_run_migrations<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+) -> Result<()> {
+    use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    // Open database
+    let db_path = match config::get_db_path() {
+        Ok(p) => p,
+        Err(_) => return Ok(()), // No database path configured, skip migrations
+    };
+
+    let db = match Database::open(&db_path) {
+        Ok(d) => d,
+        Err(_) => return Ok(()), // Can't open database, skip migrations
+    };
+
+    // Check if migrations are needed
+    let registry = MigrationRegistry::new();
+    if !registry.needs_migration(&db) {
+        return Ok(());
+    }
+
+    // Get pending migration descriptions
+    let pending = registry.pending_descriptions(&db);
+    let migration_count = pending.len();
+
+    // Render blocking migration dialog
+    terminal.draw(|f| {
+        let area = f.area();
+
+        // Center the dialog
+        let dialog_width = 60.min(area.width.saturating_sub(4));
+        let dialog_height = (migration_count as u16 + 8).min(area.height.saturating_sub(4));
+
+        let dialog_area = Rect {
+            x: (area.width.saturating_sub(dialog_width)) / 2,
+            y: (area.height.saturating_sub(dialog_height)) / 2,
+            width: dialog_width,
+            height: dialog_height,
+        };
+
+        // Clear the area behind the dialog
+        f.render_widget(Clear, dialog_area);
+
+        // Build migration list text
+        let mut lines = vec![
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::from("Database migrations required:").style(
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            ratatui::text::Line::from(""),
+        ];
+
+        for desc in &pending {
+            lines.push(ratatui::text::Line::from(format!("  • {}", desc)));
+        }
+
+        lines.push(ratatui::text::Line::from(""));
+        lines.push(
+            ratatui::text::Line::from("Running migrations... please wait.")
+                .style(Style::default().fg(Color::Cyan)),
+        );
+
+        let paragraph = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Database Migration ")
+                    .title_alignment(Alignment::Center)
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)),
+            )
+            .alignment(Alignment::Left);
+
+        f.render_widget(paragraph, dialog_area);
+    })?;
+
+    // Execute migrations
+    let result = registry.apply_all_pending(&db);
+
+    match result {
+        Ok(count) => {
+            // Show completion message briefly
+            terminal.draw(|f| {
+                let area = f.area();
+                let dialog_width = 50.min(area.width.saturating_sub(4));
+                let dialog_height = 7;
+
+                let dialog_area = Rect {
+                    x: (area.width.saturating_sub(dialog_width)) / 2,
+                    y: (area.height.saturating_sub(dialog_height)) / 2,
+                    width: dialog_width,
+                    height: dialog_height,
+                };
+
+                f.render_widget(Clear, dialog_area);
+
+                let paragraph = Paragraph::new(vec![
+                    ratatui::text::Line::from(""),
+                    ratatui::text::Line::from(format!("✓ {} migration(s) completed successfully", count))
+                        .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    ratatui::text::Line::from(""),
+                    ratatui::text::Line::from("Starting application...")
+                        .style(Style::default().fg(Color::DarkGray)),
+                ])
+                .block(
+                    Block::default()
+                        .title(" Migration Complete ")
+                        .title_alignment(Alignment::Center)
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Green)),
+                )
+                .alignment(Alignment::Center);
+
+                f.render_widget(paragraph, dialog_area);
+            })?;
+
+            // Brief pause to show completion
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            Ok(())
+        }
+        Err(e) => {
+            // Show error and wait for keypress
+            terminal.draw(|f| {
+                let area = f.area();
+                let dialog_width = 60.min(area.width.saturating_sub(4));
+                let dialog_height = 10;
+
+                let dialog_area = Rect {
+                    x: (area.width.saturating_sub(dialog_width)) / 2,
+                    y: (area.height.saturating_sub(dialog_height)) / 2,
+                    width: dialog_width,
+                    height: dialog_height,
+                };
+
+                f.render_widget(Clear, dialog_area);
+
+                let paragraph = Paragraph::new(vec![
+                    ratatui::text::Line::from(""),
+                    ratatui::text::Line::from("✗ Migration failed")
+                        .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                    ratatui::text::Line::from(""),
+                    ratatui::text::Line::from(format!("{}", e))
+                        .style(Style::default().fg(Color::Red)),
+                    ratatui::text::Line::from(""),
+                    ratatui::text::Line::from("Press any key to continue...")
+                        .style(Style::default().fg(Color::DarkGray)),
+                ])
+                .block(
+                    Block::default()
+                        .title(" Migration Error ")
+                        .title_alignment(Alignment::Center)
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Red)),
+                )
+                .alignment(Alignment::Center);
+
+                f.render_widget(paragraph, dialog_area);
+            })?;
+
+            // Wait for any keypress
+            loop {
+                if let Ok(Event::Key(_)) = event::read() {
+                    break;
+                }
+            }
+
+            // Continue anyway - app will handle errors as they arise
+            Ok(())
+        }
+    }
+}
+
+// ============================================================================
 // Entry Point
 // ============================================================================
 
@@ -2751,6 +2935,9 @@ pub fn run_menu(config: Config) -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // Check for and run database migrations before starting app
+    check_and_run_migrations(&mut terminal)?;
 
     let mut app = App::new(config);
 

@@ -94,13 +94,11 @@ impl MigrationRegistry {
 
                     INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
                     SELECT id, 'track_number', CAST(track_number AS TEXT), 'disk' FROM tracks WHERE track_number IS NOT NULL;
-
-                    -- Update schema version
-                    INSERT OR REPLACE INTO db_admin (key, value, updated_at)
-                    VALUES ('schema_version', '3', datetime('now'));
                     "#,
-                )
-                .context("Failed to apply migration 2->3: track_tags table")
+                )?;
+
+                // Update schema version using the proper table
+                db.set_schema_version(3)
             },
         });
 

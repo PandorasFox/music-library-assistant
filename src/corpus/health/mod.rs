@@ -28,6 +28,7 @@
 //! - **Not Deployed**: Corpus files missing from library
 //! - **Stale Deployments**: Tag changes caused incorrect library paths
 //! - **Orphans**: Library files without corpus backing
+//! - **Deployment Conflicts**: Multiple corpus files would deploy to same path
 
 pub mod album_normalization;
 mod canonicalization;
@@ -45,7 +46,8 @@ pub use collision::{
     get_genre_collisions, TagCollision,
 };
 pub use detection::{
-    detect_fingerprint_issues, detect_metadata_issues,
+    cleanup_resolved_deployment_conflicts, detect_deployment_conflicts,
+    detect_deployment_conflicts_for_library, detect_fingerprint_issues, detect_metadata_issues,
 };
 #[allow(unused_imports)]
 pub use filter::{

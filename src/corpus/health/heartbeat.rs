@@ -38,6 +38,8 @@ pub struct HeartbeatResult {
     pub pending_tag_flushes: usize,
     /// Health results for each configured library
     pub library_health: Vec<LibraryHealthResult>,
+    /// Number of deployment conflicts detected (multiple tracks -> same path)
+    pub deployment_conflicts: usize,
     /// How long the check took
     pub duration: Duration,
 }
@@ -58,17 +60,27 @@ impl HeartbeatResult {
         self.pending_tag_flushes == 0
     }
 
+    /// Returns true if there are no deployment conflicts
+    pub fn are_deployments_conflict_free(&self) -> bool {
+        self.deployment_conflicts == 0
+    }
+
     /// Returns true if everything is healthy
     pub fn is_healthy(&self) -> bool {
-        self.is_corpus_healthy() && self.are_libraries_healthy() && self.are_tags_synced()
+        self.is_corpus_healthy()
+            && self.are_libraries_healthy()
+            && self.are_tags_synced()
+            && self.are_deployments_conflict_free()
     }
 
     /// Total count of library issues across all libraries
     pub fn total_library_issues(&self) -> usize {
-        self.library_health
+        let per_library: usize = self
+            .library_health
             .iter()
             .map(|l| l.not_deployed + l.stale + l.orphans)
-            .sum()
+            .sum();
+        per_library + self.deployment_conflicts
     }
 }
 
@@ -103,6 +115,7 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
                 new_on_disk: 0,
                 pending_tag_flushes: 0,
                 library_health: Vec::new(),
+                deployment_conflicts: 0,
                 duration: start.elapsed(),
             };
         }
@@ -118,6 +131,7 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
                 new_on_disk: 0,
                 pending_tag_flushes: 0,
                 library_health: Vec::new(),
+                deployment_conflicts: 0,
                 duration: start.elapsed(),
             };
         }
@@ -161,6 +175,12 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
     // Check for pending tag flushes (DB differs from disk)
     let pending_tag_flushes = db.get_tag_mismatch_count().unwrap_or(0);
 
+    // Detect deployment conflicts (multiple corpus files -> same library path)
+    // This also cleans up any previously detected conflicts that are now resolved
+    let _ = super::detection::cleanup_resolved_deployment_conflicts(config, &db);
+    let deployment_conflicts = super::detection::detect_deployment_conflicts(config, &db)
+        .unwrap_or(0);
+
     HeartbeatResult {
         indexed_count: indexed_inodes.len(),
         disk_count: disk_inodes.len(),
@@ -168,6 +188,7 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
         new_on_disk,
         pending_tag_flushes,
         library_health,
+        deployment_conflicts,
         duration: start.elapsed(),
     }
 }

@@ -39,10 +39,6 @@ impl Database {
 
         let db = Database { conn };
         db.initialize_schema()?;
-        db.migrate_add_fingerprint()?;
-        db.migrate_add_isrc()?;
-        db.migrate_add_genre()?;
-        db.migrate_unified_tag_canonicalization()?;
         Ok(db)
     }
 
@@ -61,10 +57,12 @@ impl Database {
                 album_artist TEXT,
                 title TEXT,
                 track_number INTEGER,
+                genre TEXT,
                 duration_ms INTEGER,
                 bitrate_kbps INTEGER,
                 sample_rate INTEGER,
                 fingerprint TEXT,
+                isrc TEXT,
                 scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -76,6 +74,8 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_title ON tracks(title);
             CREATE INDEX IF NOT EXISTS idx_duration ON tracks(duration_ms);
             CREATE INDEX IF NOT EXISTS idx_fingerprint ON tracks(fingerprint);
+            CREATE INDEX IF NOT EXISTS idx_genre ON tracks(genre);
+            CREATE INDEX IF NOT EXISTS idx_isrc ON tracks(isrc);
 
             CREATE TABLE IF NOT EXISTS scan_history (
                 id INTEGER PRIMARY KEY,
@@ -259,6 +259,12 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_tag_mismatches_track ON tag_mismatches(track_id);
 
+            -- Performance indexes for canonicalization queries (LOWER() for case-insensitive grouping)
+            CREATE INDEX IF NOT EXISTS idx_tracks_artist_lower ON tracks(LOWER(artist));
+            CREATE INDEX IF NOT EXISTS idx_tracks_album_artist_lower ON tracks(LOWER(album_artist));
+            CREATE INDEX IF NOT EXISTS idx_tracks_album_lower ON tracks(LOWER(album));
+            CREATE INDEX IF NOT EXISTS idx_tracks_genre_lower ON tracks(LOWER(genre));
+
             -- Application metadata (version tracking, etc.)
             CREATE TABLE IF NOT EXISTS app_metadata (
                 key TEXT PRIMARY KEY,
@@ -267,137 +273,6 @@ impl Database {
             );
             "#
         ).context("Failed to initialize database schema")?;
-
-        Ok(())
-    }
-
-    /// Migrate existing databases to add fingerprint column
-    fn migrate_add_fingerprint(&self) -> Result<()> {
-        let has_column: bool = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name='fingerprint'",
-                params![],
-                |row| {
-                    let count: i64 = row.get(0)?;
-                    Ok(count > 0)
-                },
-            )
-            .unwrap_or(false);
-
-        if !has_column {
-            self.conn
-                .execute("ALTER TABLE tracks ADD COLUMN fingerprint TEXT", params![])
-                .context("Failed to add fingerprint column")?;
-
-            self.conn
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_fingerprint ON tracks(fingerprint)",
-                    params![],
-                )
-                .context("Failed to create fingerprint index")?;
-        }
-
-        Ok(())
-    }
-
-    /// Migrate existing databases to add ISRC column
-    fn migrate_add_isrc(&self) -> Result<()> {
-        let has_column: bool = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name='isrc'",
-                params![],
-                |row| {
-                    let count: i64 = row.get(0)?;
-                    Ok(count > 0)
-                },
-            )
-            .unwrap_or(false);
-
-        if !has_column {
-            self.conn
-                .execute("ALTER TABLE tracks ADD COLUMN isrc TEXT", params![])
-                .context("Failed to add ISRC column")?;
-
-            self.conn
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_isrc ON tracks(isrc)",
-                    params![],
-                )
-                .context("Failed to create ISRC index")?;
-        }
-
-        Ok(())
-    }
-
-    /// Migrate existing databases to add genre column
-    fn migrate_add_genre(&self) -> Result<()> {
-        let has_column: bool = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name='genre'",
-                params![],
-                |row| {
-                    let count: i64 = row.get(0)?;
-                    Ok(count > 0)
-                },
-            )
-            .unwrap_or(false);
-
-        if !has_column {
-            self.conn
-                .execute("ALTER TABLE tracks ADD COLUMN genre TEXT", params![])
-                .context("Failed to add genre column")?;
-        }
-
-        Ok(())
-    }
-
-    /// Migrate from artist_canonicalization to unified tag_canonicalization table.
-    /// Also adds performance indexes on tracks table for canonicalization queries.
-    fn migrate_unified_tag_canonicalization(&self) -> Result<()> {
-        // Check if old table exists
-        let old_table_exists: bool = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artist_canonicalization'",
-                params![],
-                |row| {
-                    let count: i64 = row.get(0)?;
-                    Ok(count > 0)
-                },
-            )
-            .unwrap_or(false);
-
-        if old_table_exists {
-            // Migrate existing artist canonicalization data
-            self.conn.execute(
-                r#"
-                INSERT OR IGNORE INTO tag_canonicalization
-                    (tag_name, canonical_value, variant_value, confidence, auto_detected, confirmed_at)
-                SELECT 'artist', canonical_name, variant_name, confidence, auto_detected, confirmed_at
-                FROM artist_canonicalization
-                "#,
-                params![],
-            ).context("Failed to migrate artist_canonicalization data")?;
-
-            // Drop the old table
-            self.conn
-                .execute("DROP TABLE IF EXISTS artist_canonicalization", params![])
-                .context("Failed to drop artist_canonicalization table")?;
-        }
-
-        // Add performance indexes on tracks table for canonicalization queries
-        // These speed up GROUP BY LOWER(tag) queries during detection
-        self.conn.execute_batch(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_tracks_artist_lower ON tracks(LOWER(artist));
-            CREATE INDEX IF NOT EXISTS idx_tracks_album_artist_lower ON tracks(LOWER(album_artist));
-            CREATE INDEX IF NOT EXISTS idx_tracks_album_lower ON tracks(LOWER(album));
-            CREATE INDEX IF NOT EXISTS idx_tracks_genre_lower ON tracks(LOWER(genre));
-            "#,
-        ).context("Failed to create tag canonicalization indexes")?;
 
         Ok(())
     }

@@ -713,13 +713,13 @@ fn build_corpus_ops_category() -> Category {
                 description: "Resolve artist name spelling variants".to_string(),
             },
             // -----------------------------------------------------------------
-            // Album Artist Resolution - unified flow with phase selector
-            // Consolidates: Canonicalization, Collation (was Inference), Population
+            // Album Artist Resolution - STUBBED OUT FOR REDESIGN
+            // TODO: Needs complete redesign of gathering logic and UI presentation
             // -----------------------------------------------------------------
             Command {
                 label: "Album Artist Resolution".to_string(),
-                action: CommandAction::Transition(TransitionTarget::AlbumArtistFlow),
-                description: "Unified flow: canonicalization, collation, population".to_string(),
+                action: CommandAction::Message("Stubbed - needs redesign".to_string()),
+                description: "STUB: canonicalization, collation, population (disabled)".to_string(),
             },
             // -----------------------------------------------------------------
             // Album Tag Resolution Flow
@@ -732,12 +732,16 @@ fn build_corpus_ops_category() -> Category {
                 description: "Resolve album tag variants (EP/Deluxe/Remaster suffixes)".to_string(),
             },
             // -----------------------------------------------------------------
-            // Stub entries for future flows
+            // Metadata Duplicates Resolution - NEEDS REDESIGN
+            // TODO: This flow should be updated to pull from DeployConflicts
+            // (from deploy_flow) as its conflict source set, not from the
+            // current metadata duplicate detection in reports.rs. The
+            // DeployConflict health issue type already tracks path collisions.
             // -----------------------------------------------------------------
             Command {
                 label: "Metadata Duplicates Resolution".to_string(),
-                action: CommandAction::Message("Coming soon".to_string()),
-                description: "STUB: Resolve metadata-based duplicates".to_string(),
+                action: CommandAction::Message("Stubbed - needs redesign to use DeployConflicts as source".to_string()),
+                description: "STUB: Resolve tracks that would deploy to same path".to_string(),
             },
             Command {
                 label: "Genre Tag Canonicalization".to_string(),

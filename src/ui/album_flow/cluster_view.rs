@@ -9,6 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
@@ -33,7 +34,6 @@ pub enum Pane {
 pub enum ActionFocus {
     NameField,
     SquashButton,
-    FlagReviewToggle,
 }
 
 /// State for the album cluster view.
@@ -48,7 +48,6 @@ pub struct AlbumClusterState {
     canonical_name: String,
     text_cursor: usize,
     squash_confirmed: bool,
-    flag_for_review: bool,
     status_message: Option<String>,
     /// Quality analysis for current bucket
     quality_analysis: Option<QualityAnalysis>,
@@ -66,12 +65,6 @@ impl AlbumClusterState {
             .unwrap_or_default();
         let text_cursor = canonical_name.len();
 
-        // Check if current bucket has edition variants that might need review
-        let flag_for_review = session
-            .current_bucket()
-            .map(|b| b.has_edition_variants || b.has_format_variants)
-            .unwrap_or(false);
-
         let mut state = Self {
             session,
             focused_pane: Pane::Variants,
@@ -82,7 +75,6 @@ impl AlbumClusterState {
             canonical_name,
             text_cursor,
             squash_confirmed: false,
-            flag_for_review,
             status_message: None,
             quality_analysis: None,
             quality_state: None,
@@ -186,19 +178,10 @@ impl AlbumClusterState {
 
     fn handle_action_key(&mut self, key: KeyEvent) -> AlbumClusterAction {
         match key.code {
-            KeyCode::Up => {
-                self.action_focus = match self.action_focus {
-                    ActionFocus::NameField => ActionFocus::FlagReviewToggle,
-                    ActionFocus::SquashButton => ActionFocus::NameField,
-                    ActionFocus::FlagReviewToggle => ActionFocus::SquashButton,
-                };
-                AlbumClusterAction::Continue
-            }
-            KeyCode::Down => {
+            KeyCode::Up | KeyCode::Down => {
                 self.action_focus = match self.action_focus {
                     ActionFocus::NameField => ActionFocus::SquashButton,
-                    ActionFocus::SquashButton => ActionFocus::FlagReviewToggle,
-                    ActionFocus::FlagReviewToggle => ActionFocus::NameField,
+                    ActionFocus::SquashButton => ActionFocus::NameField,
                 };
                 AlbumClusterAction::Continue
             }
@@ -210,15 +193,6 @@ impl AlbumClusterState {
                     ActionFocus::SquashButton => {
                         self.toggle_squash_state();
                     }
-                    ActionFocus::FlagReviewToggle => {
-                        self.flag_for_review = !self.flag_for_review;
-                    }
-                }
-                AlbumClusterAction::Continue
-            }
-            KeyCode::Char(' ') => {
-                if matches!(self.action_focus, ActionFocus::FlagReviewToggle) {
-                    self.flag_for_review = !self.flag_for_review;
                 }
                 AlbumClusterAction::Continue
             }
@@ -340,7 +314,6 @@ impl AlbumClusterState {
             bucket,
             canonical_name: self.canonical_name.clone(),
             variants_to_rename,
-            flag_for_review: self.flag_for_review,
             pending_changes,
         };
 
@@ -386,7 +359,6 @@ impl AlbumClusterState {
                 .map(|v| v.name.clone())
                 .unwrap_or_default();
             self.text_cursor = self.canonical_name.len();
-            self.flag_for_review = bucket.has_edition_variants || bucket.has_format_variants;
         }
     }
 
@@ -423,8 +395,29 @@ impl AlbumClusterState {
 
     fn render_variants_pane(&mut self, frame: &mut Frame, area: Rect) {
         let focused = matches!(self.focused_pane, Pane::Variants);
-        let bucket = self.session.current_bucket();
+        // Clone bucket data to avoid borrow issues with self.list_state
+        let bucket = self.session.current_bucket().cloned();
 
+        // Split area: half for album list, half for info panel
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        // Render album list in top half
+        self.render_album_list(frame, chunks[0], focused, bucket.as_ref());
+
+        // Render info panel in bottom half
+        self.render_album_info_panel(frame, chunks[1], focused, bucket.as_ref());
+    }
+
+    fn render_album_list(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        focused: bool,
+        bucket: Option<&super::types::AlbumBucket>,
+    ) {
         let title = format!(
             " Albums ({}/{}) - {} ",
             self.session.current_index + 1,
@@ -457,12 +450,7 @@ impl AlbumClusterState {
                             .map(|e| format!(" ({})", e))
                             .unwrap_or_default();
 
-                        let content = format!(
-                            "{}{}{}{} ({} tracks)",
-                            prefix, variant.name, format_str, edition_str, variant.track_count
-                        );
-
-                        let style = if is_cursor && focused {
+                        let base_style = if is_cursor && focused {
                             Style::default()
                                 .bg(Color::Blue)
                                 .fg(Color::White)
@@ -475,7 +463,17 @@ impl AlbumClusterState {
                             Style::default()
                         };
 
-                        ListItem::new(content).style(style)
+                        // Single-line item (details shown in info panel below)
+                        ListItem::new(Line::from(vec![
+                            Span::styled(prefix.to_string(), base_style),
+                            Span::styled(variant.name.clone(), base_style),
+                            Span::styled(format_str.to_string(), base_style),
+                            Span::styled(edition_str.clone(), base_style),
+                            Span::styled(
+                                format!(" ({} tracks)", variant.track_count),
+                                base_style,
+                            ),
+                        ]))
                     })
                     .collect()
             })
@@ -492,6 +490,103 @@ impl AlbumClusterState {
 
         let list = List::new(items).block(block);
         frame.render_stateful_widget(list, area, &mut self.list_state);
+    }
+
+    fn render_album_info_panel(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        focused: bool,
+        bucket: Option<&super::types::AlbumBucket>,
+    ) {
+        let block = Block::default()
+            .title(" Album Details ")
+            .borders(Borders::ALL)
+            .border_style(if focused {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            });
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Get the currently hovered variant
+        let variant = bucket.and_then(|b| b.variants.get(self.cursor_idx));
+
+        let Some(variant) = variant else {
+            let empty = Paragraph::new("No album selected")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(empty, inner);
+            return;
+        };
+
+        let label_style = Style::default().fg(Color::DarkGray);
+        let value_style = Style::default().fg(Color::White);
+        let highlight_style = Style::default().fg(Color::Yellow);
+
+        let mut lines = Vec::new();
+
+        // Album name
+        lines.push(Line::from(vec![
+            Span::styled("Album: ", label_style),
+            Span::styled(&variant.name, value_style.add_modifier(Modifier::BOLD)),
+        ]));
+
+        // Format type
+        let format_str = match variant.normalized.format_type {
+            crate::corpus::health::album_normalization::AlbumFormat::EP => "EP",
+            crate::corpus::health::album_normalization::AlbumFormat::LP => "LP",
+            crate::corpus::health::album_normalization::AlbumFormat::Standard => "Standard",
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Format: ", label_style),
+            Span::styled(format_str, value_style),
+        ]));
+
+        // Edition if present
+        if let Some(edition) = &variant.normalized.edition {
+            lines.push(Line::from(vec![
+                Span::styled("Edition: ", label_style),
+                Span::styled(edition.as_str(), highlight_style),
+            ]));
+        }
+
+        // Track count
+        lines.push(Line::from(vec![
+            Span::styled("Tracks: ", label_style),
+            Span::styled(variant.track_count.to_string(), value_style),
+        ]));
+
+        // Artists
+        if !variant.artists.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Artists: ", label_style),
+                Span::styled(variant.artists.join(", "), value_style),
+            ]));
+        }
+
+        // File types
+        if !variant.file_types.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("File Types: ", label_style),
+                Span::styled(variant.file_types.join(", "), value_style),
+            ]));
+        }
+
+        // Directories (show all, each on its own line if multiple)
+        if !variant.directories.is_empty() {
+            lines.push(Line::from(Span::styled("Directories:", label_style)));
+            for dir in &variant.directories {
+                lines.push(Line::from(vec![
+                    Span::styled("  ", label_style),
+                    Span::styled(dir.as_str(), Style::default().fg(Color::Cyan)),
+                ]));
+            }
+        }
+
+        let para = Paragraph::new(lines);
+        frame.render_widget(para, inner);
     }
 
     fn render_action_pane(&self, frame: &mut Frame, area: Rect) {
@@ -516,8 +611,6 @@ impl AlbumClusterState {
                 Constraint::Length(3), // Input field
                 Constraint::Length(1), // Spacer
                 Constraint::Length(3), // Squash button
-                Constraint::Length(1), // Spacer
-                Constraint::Length(3), // Flag review toggle
                 Constraint::Min(0),    // Status
             ])
             .split(inner);
@@ -570,34 +663,10 @@ impl AlbumClusterState {
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(squash_btn, chunks[3]);
 
-        // Flag for review toggle
-        let flag_focused = focused && matches!(self.action_focus, ActionFocus::FlagReviewToggle);
-        let flag_style = if flag_focused {
-            Style::default()
-                .bg(Color::Yellow)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD)
-        } else if self.flag_for_review {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-
-        let flag_text = if self.flag_for_review {
-            "[x] Flag for metadata review"
-        } else {
-            "[ ] Flag for metadata review"
-        };
-
-        let flag_toggle = Paragraph::new(flag_text)
-            .style(flag_style)
-            .block(Block::default().borders(Borders::ALL));
-        frame.render_widget(flag_toggle, chunks[5]);
-
         // Status
         if let Some(msg) = &self.status_message {
             let status = Paragraph::new(msg.as_str()).style(Style::default().fg(Color::Green));
-            frame.render_widget(status, chunks[6]);
+            frame.render_widget(status, chunks[4]);
         }
     }
 

@@ -1119,10 +1119,10 @@ impl App {
         };
 
         // Load tracks from database
-        let tracks = if recursive {
+        let (tracks, selected_idx) = if recursive {
             // Get all tracks in directory and subdirectories (no fingerprint filter)
             match db.get_tracks_for_tag_editing(path) {
-                Ok(t) => t,
+                Ok(t) => (t, 0usize),
                 Err(e) => {
                     self.status_message = Some(format!(
                         "Query error for path '{}': {}",
@@ -1135,13 +1135,85 @@ impl App {
                 }
             }
         } else {
-            // Get single track by exact path
-            let path_str = path.to_string_lossy();
-            db.get_track_by_path(&path_str)
-                .ok()
-                .flatten()
-                .map(|t| vec![t])
-                .unwrap_or_default()
+            // Get all tracks in the same directory for cycling with tab/shift-tab
+            let parent_dir = match path.parent() {
+                Some(p) => p,
+                None => {
+                    self.status_message = Some(format!(
+                        "Cannot determine parent directory: {}",
+                        path.display()
+                    ));
+                    self.corpus_browser = None;
+                    self.mode = UiMode::MainMenu;
+                    return;
+                }
+            };
+
+            // Load all tracks from parent directory (non-recursive, just this folder)
+            let dir_tracks = match db.get_tracks_for_tag_editing(parent_dir) {
+                Ok(t) => t,
+                Err(e) => {
+                    self.status_message = Some(format!(
+                        "Query error for directory '{}': {}",
+                        parent_dir.display(),
+                        e
+                    ));
+                    self.corpus_browser = None;
+                    self.mode = UiMode::MainMenu;
+                    return;
+                }
+            };
+
+            // Filter to only tracks directly in this directory (not subdirectories)
+            let path_str = path.to_string_lossy().to_string();
+            let parent_str = parent_dir.to_string_lossy().to_string();
+            let tracks_in_dir: Vec<_> = dir_tracks
+                .into_iter()
+                .filter(|t| {
+                    // Check if track is directly in parent_dir (no additional path separators)
+                    if let Some(rel) = t.path.strip_prefix(&parent_str) {
+                        let rel = rel.trim_start_matches(std::path::MAIN_SEPARATOR);
+                        !rel.contains(std::path::MAIN_SEPARATOR)
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            // Find the index of the selected track
+            let selected_idx = tracks_in_dir
+                .iter()
+                .position(|t| t.path == path_str)
+                .unwrap_or(0);
+
+            if tracks_in_dir.is_empty() {
+                // Fallback: try to get just the single track
+                let path_str = path.to_string_lossy();
+                match db.get_track_by_path(&path_str) {
+                    Ok(Some(track)) => (vec![track], 0),
+                    Ok(None) => {
+                        self.status_message = Some(format!(
+                            "Track not in index: {}",
+                            path.display()
+                        ));
+                        self.corpus_browser = None;
+                        self.mode = UiMode::MainMenu;
+                        return;
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!(
+                            "Query error for '{}': {}",
+                            path.display(),
+                            e
+                        ));
+                        self.corpus_browser = None;
+                        self.mode = UiMode::MainMenu;
+                        return;
+                    }
+                }
+            } else {
+                (tracks_in_dir, selected_idx)
+            }
         };
 
         if tracks.is_empty() {
@@ -1155,7 +1227,10 @@ impl App {
         }
 
         // Create tag editor with tracks (no duplicate groups for corpus browser)
-        self.tag_editor = Some(tag_editor::TagEditorState::new(tracks.clone(), Vec::new()));
+        let mut editor = tag_editor::TagEditorState::new(tracks.clone(), Vec::new());
+        // Position on the selected track
+        editor.current_track_idx = selected_idx;
+        self.tag_editor = Some(editor);
         self.status_message = Some(format!(
             "Loaded {} track(s) from {}",
             tracks.len(),
@@ -1399,6 +1474,7 @@ impl App {
 
     fn save_tag_editor_changes(&mut self, advance_to_next: bool) {
         use std::collections::HashMap;
+        use crate::corpus::db::PendingChange;
 
         // Step 1: Compute changes from tag editor
         let Some(ref editor) = self.tag_editor else {
@@ -1429,39 +1505,59 @@ impl App {
                 .push((change.field_name.clone(), change.new_value.clone()));
         }
 
-        // Step 3: Write tags to disk for each track
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let mut success_count = 0;
-        let mut error_count = 0;
-        let mut errors: Vec<String> = Vec::new();
+        // Step 3: Create PendingChange records for each track
+        let session_id = self.tag_edit_session_id.clone();
+        let mut pending_changes: Vec<PendingChange> = Vec::new();
 
-        for (track_idx, track_changes) in changes_by_track {
-            if let Some(track) = editor.tracks.get(track_idx) {
+        for (track_idx, track_changes) in &changes_by_track {
+            if let Some(track) = editor.tracks.get(*track_idx) {
                 let track_id = track.id.unwrap_or(0);
-                let path = std::path::Path::new(&track.path);
 
-                match crate::corpus::metadata::write_tags(path, &track_changes, track_id, &session_id) {
-                    Ok(_) => {
-                        success_count += 1;
-                        let _ = config::log_message(&format!(
-                            "Tags saved for: {} ({} fields)",
-                            track.path,
-                            track_changes.len()
-                        ));
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        errors.push(format!("{}: {}", track.path, e));
-                        let _ = config::log_message(&format!(
-                            "ERROR saving tags for {}: {}",
-                            track.path, e
-                        ));
-                    }
-                }
+                // Build metadata JSON: { "tags": [["field", "value"], ...], "track_id": N }
+                let tags_json: Vec<serde_json::Value> = track_changes
+                    .iter()
+                    .map(|(k, v)| serde_json::json!([k, v]))
+                    .collect();
+
+                let metadata = serde_json::json!({
+                    "tags": tags_json,
+                    "track_id": track_id,
+                });
+
+                pending_changes.push(PendingChange::tag_edit(
+                    &session_id,
+                    &track.path,
+                    metadata,
+                ));
             }
         }
 
-        // Step 4: Check for stale deployments (if any path-affecting tags changed)
+        // Step 4: Execute changes through the mutation system
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        let report = match crate::ops::changes::execute_changes(&db, &pending_changes, false) {
+            Ok(r) => r,
+            Err(e) => {
+                self.status_message = Some(format!("Execution error: {}", e));
+                return;
+            }
+        };
+
+        // Step 5: Check for stale deployments (if any path-affecting tags changed)
         let path_affecting_fields = ["artist", "album", "album_artist"];
         let has_path_changes = changes.iter().any(|c|
             path_affecting_fields.contains(&c.field_name.as_str())
@@ -1469,25 +1565,21 @@ impl App {
 
         let mut stale_count = 0;
         if has_path_changes {
-            if let Ok(db_path) = config::get_db_path() {
-                if let Ok(db) = Database::open(&db_path) {
-                    if let Ok(statuses) = crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
-                        stale_count = statuses.iter().map(|s| s.stale.len()).sum();
-                    }
-                }
+            if let Ok(statuses) = crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
+                stale_count = statuses.iter().map(|s| s.stale.len()).sum();
             }
         }
 
         // Build status message
-        let base_msg = if error_count > 0 {
+        let base_msg = if report.failed > 0 {
             format!(
                 "Saved {} track(s), {} failed: {}",
-                success_count,
-                error_count,
-                errors.first().unwrap_or(&String::new())
+                report.succeeded,
+                report.failed,
+                report.errors.first().unwrap_or(&String::new())
             )
         } else {
-            format!("Saved {} track(s)", success_count)
+            format!("Saved {} track(s)", report.succeeded)
         };
 
         let stale_msg = if stale_count > 0 {
@@ -2000,45 +2092,54 @@ impl App {
 
     // ========================================================================
     // Album Artist Resolution Flow Handlers
-    // (Delegates to album_artist_flow::coordinator)
+    // STUBBED OUT - Flow needs complete redesign
     // ========================================================================
 
+    #[allow(dead_code)]
     fn start_album_artist_flow(&mut self) {
-        album_artist_flow::coordinator::start(self);
+        // STUB: Flow disabled pending redesign
+        self.status_message = Some("Album Artist Resolution: stubbed for redesign".to_string());
     }
 
-    fn handle_album_artist_phase_action(&mut self, action: album_artist_flow::PhaseSelectorAction) {
-        album_artist_flow::coordinator::handle_phase_action(self, action);
+    #[allow(dead_code)]
+    fn handle_album_artist_phase_action(&mut self, _action: album_artist_flow::PhaseSelectorAction) {
+        // STUB: No-op
     }
 
-    fn handle_album_artist_cluster_action(&mut self, action: album_artist_flow::AlbumArtistClusterAction) {
-        album_artist_flow::coordinator::handle_cluster_action(self, action);
+    #[allow(dead_code)]
+    fn handle_album_artist_cluster_action(&mut self, _action: album_artist_flow::AlbumArtistClusterAction) {
+        // STUB: No-op
     }
 
-    fn handle_album_artist_review_action(&mut self, action: album_artist_flow::AlbumArtistReviewAction) {
-        album_artist_flow::coordinator::handle_review_action(self, action);
+    #[allow(dead_code)]
+    fn handle_album_artist_review_action(&mut self, _action: album_artist_flow::AlbumArtistReviewAction) {
+        // STUB: No-op
     }
 
-    fn handle_album_artist_collation_action(&mut self, action: album_artist_flow::CollationAction) {
-        album_artist_flow::coordinator::handle_collation_action(self, action);
+    #[allow(dead_code)]
+    fn handle_album_artist_collation_action(&mut self, _action: album_artist_flow::CollationAction) {
+        // STUB: No-op
     }
 
+    #[allow(dead_code)]
     fn handle_album_artist_collation_review_action(
         &mut self,
-        action: album_artist_flow::CollationReviewAction,
+        _action: album_artist_flow::CollationReviewAction,
     ) {
-        album_artist_flow::coordinator::handle_collation_review_action(self, action);
+        // STUB: No-op
     }
 
-    fn handle_album_artist_population_action(&mut self, action: album_artist_flow::PopulationAction) {
-        album_artist_flow::coordinator::handle_population_action(self, action);
+    #[allow(dead_code)]
+    fn handle_album_artist_population_action(&mut self, _action: album_artist_flow::PopulationAction) {
+        // STUB: No-op
     }
 
+    #[allow(dead_code)]
     fn handle_album_artist_population_review_action(
         &mut self,
-        action: album_artist_flow::PopulationReviewAction,
+        _action: album_artist_flow::PopulationReviewAction,
     ) {
-        album_artist_flow::coordinator::handle_population_review_action(self, action);
+        // STUB: No-op
     }
 
     // ========================================================================

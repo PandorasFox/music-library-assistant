@@ -373,9 +373,11 @@ impl Database {
 
     /// Get full tracks for a specific album_artist name (for quality analysis).
     pub fn get_tracks_by_album_artist(&self, album_artist_name: &str) -> Result<Vec<crate::corpus::db::types::Track>> {
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             r#"SELECT id, path, source, inode, file_size, file_type,
-                      artist, album, album_artist, title, track_number,
+                      artist, album, album_artist, title, track_number, genre,
                       duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
                FROM tracks
                WHERE album_artist = ?1 AND source = 'corpus'"#,
@@ -396,12 +398,14 @@ impl Database {
             return Ok(Vec::new());
         }
 
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let placeholders: Vec<String> = (1..=album_artist_names.len())
             .map(|i| format!("?{}", i))
             .collect();
         let sql = format!(
             r#"SELECT id, path, source, inode, file_size, file_type,
-                      artist, album, album_artist, title, track_number,
+                      artist, album, album_artist, title, track_number, genre,
                       duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
                FROM tracks
                WHERE album_artist IN ({}) AND source = 'corpus'"#,
@@ -698,6 +702,57 @@ impl Database {
         });
 
         Ok(result)
+    }
+
+    /// Get detailed info for a specific album name: artists, directories, and file types.
+    /// Used to enhance album variant display with richer context.
+    pub fn get_album_variant_details(
+        &self,
+        album_name: &str,
+    ) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
+        // Get distinct artists
+        let mut artist_stmt = self.conn.prepare(
+            r#"SELECT DISTINCT artist FROM tracks
+               WHERE source = 'corpus' AND album = ?1 AND artist IS NOT NULL AND artist != ''
+               ORDER BY artist"#,
+        )?;
+        let artists: Vec<String> = artist_stmt
+            .query_map(params![album_name], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Get distinct parent directories (extract from path)
+        let mut dir_stmt = self.conn.prepare(
+            r#"SELECT DISTINCT
+                  CASE
+                    WHEN INSTR(path, '/') > 0
+                    THEN SUBSTR(path, 1, LENGTH(path) - LENGTH(REPLACE(path, '/', '')) - LENGTH(SUBSTR(path, LENGTH(path) - LENGTH(REPLACE(path, '/', '')) + 1)))
+                    ELSE path
+                  END as dir
+               FROM tracks
+               WHERE source = 'corpus' AND album = ?1
+               ORDER BY dir"#,
+        )?;
+        let directories: Vec<String> = dir_stmt
+            .query_map(params![album_name], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .take(5) // Limit to 5 directories for display
+            .collect();
+
+        // Get distinct file extensions
+        let mut ext_stmt = self.conn.prepare(
+            r#"SELECT DISTINCT
+                  LOWER(SUBSTR(path, LENGTH(path) - INSTR(REVERSE(path), '.') + 2)) as ext
+               FROM tracks
+               WHERE source = 'corpus' AND album = ?1
+               ORDER BY ext"#,
+        )?;
+        let file_types: Vec<String> = ext_stmt
+            .query_map(params![album_name], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok((artists, directories, file_types))
     }
 
     /// Get track IDs for a specific album name (exact match, corpus only).

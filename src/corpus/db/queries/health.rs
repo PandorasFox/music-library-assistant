@@ -169,9 +169,11 @@ impl Database {
 
     /// Get tracks for a health issue.
     pub fn get_health_issue_tracks(&self, issue_id: i64) -> Result<Vec<(Track, TrackRole)>> {
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             r#"SELECT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
-                      t.artist, t.album, t.album_artist, t.title, t.track_number,
+                      t.artist, t.album, t.album_artist, t.title, t.track_number, t.genre,
                       t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint, t.isrc,
                       hit.role
                FROM health_issue_tracks hit
@@ -181,7 +183,7 @@ impl Database {
 
         let rows = stmt.query_map(params![issue_id], |row| {
             let track = Self::row_to_track(row)?;
-            let role_str: String = row.get(16)?;
+            let role_str: String = row.get(17)?;
             let role = TrackRole::from_str(&role_str).unwrap_or(TrackRole::Member);
             Ok((track, role))
         })?;

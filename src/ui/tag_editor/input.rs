@@ -58,8 +58,9 @@ impl TagEditorState {
                     let at_end = self.next_track();
                     if at_end {
                         // Tabbing past last track triggers save modal
+                        // Default to "Return to Editing" (index 2)
                         return TagEditorAction::ShowModal(TagEditorModal::SaveConfirmation {
-                            selected_button: 0,
+                            selected_button: 2,
                         });
                     }
                 }
@@ -74,22 +75,28 @@ impl TagEditorState {
                 self.handle_enter();
                 TagEditorAction::None
             }
-            KeyCode::Char('f') | KeyCode::Char('F') => {
-                if self.fill_to_all() {
-                    TagEditorAction::StatusMessage("Value copied to all tracks".to_string())
-                } else {
-                    TagEditorAction::None
-                }
-            }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.clear_current_field();
                 TagEditorAction::None
             }
             KeyCode::Char(c) => {
                 if self.field_edit_state != FieldEditState::NonEditable {
+                    // In edit mode: insert character
                     self.insert_char(c);
+                    TagEditorAction::None
+                } else {
+                    // Not editing: check for hotkeys
+                    match c {
+                        'f' | 'F' => {
+                            if self.fill_to_all() {
+                                TagEditorAction::StatusMessage("Value copied to all tracks".to_string())
+                            } else {
+                                TagEditorAction::None
+                            }
+                        }
+                        _ => TagEditorAction::None,
+                    }
                 }
-                TagEditorAction::None
             }
             KeyCode::Backspace => {
                 if self.field_edit_state != FieldEditState::NonEditable {

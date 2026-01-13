@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 use std::collections::VecDeque;
@@ -267,9 +267,8 @@ fn render_exit_confirm_modal(
 ) {
     let popup_area = centered_rect(50, 35, area);
 
-    // Clear background
-    let clear = Block::default().style(Style::default().bg(Color::Reset));
-    f.render_widget(clear, area);
+    // Clear the area first to prevent bleed-through
+    f.render_widget(Clear, popup_area);
 
     let selected_no = state.map(|s| s.selected_no).unwrap_or(true);
 
@@ -321,10 +320,12 @@ fn render_exit_confirm_modal(
 
     let modal = Paragraph::new(lines)
         .alignment(Alignment::Center)
+        .style(Style::default().bg(Color::Black))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow))
+                .style(Style::default().bg(Color::Black))
                 .title(" Warning ")
                 .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         );
@@ -339,9 +340,8 @@ pub fn render_canon_commit_modal(
 ) {
     let popup_area = centered_rect(60, 50, area);
 
-    // Clear background
-    let clear = Block::default().style(Style::default().bg(Color::Reset));
-    f.render_widget(clear, area);
+    // Clear the area first to prevent bleed-through
+    f.render_widget(Clear, popup_area);
 
     let (tracks_updated, stale_count, selected) = match state {
         Some(s) => (s.tracks_updated, s.stale_deployments, s.selected_option),
@@ -407,10 +407,12 @@ pub fn render_canon_commit_modal(
 
     let modal = Paragraph::new(lines)
         .alignment(Alignment::Center)
+        .style(Style::default().bg(Color::Black))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green))
+                .style(Style::default().bg(Color::Black))
                 .title("Complete"),
         );
     f.render_widget(modal, popup_area);

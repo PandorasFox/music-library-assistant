@@ -5,8 +5,8 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -293,35 +293,31 @@ impl TagEditorState {
 pub fn render_save_confirmation_modal(f: &mut Frame, area: Rect, selected_button: usize) {
     use super::super::helpers::centered_rect;
 
-    let popup_area = centered_rect(60, 30, area);
+    let popup_area = centered_rect(70, 20, area);
 
-    // Clear background
-    let clear_block = Block::default().style(Style::default().bg(Color::Reset));
-    f.render_widget(clear_block, area);
+    // Clear the area first to prevent bleed-through
+    f.render_widget(Clear, popup_area);
 
-    // Modal box
+    // Modal box with opaque background
     let modal_block = Block::default()
         .borders(Borders::ALL)
         .title("Save Changes?")
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black));
 
     let inner = modal_block.inner(popup_area);
     f.render_widget(modal_block, popup_area);
 
+    // Build button spans for horizontal layout
     let buttons = [
-        "[ Save All Changes ]",
-        "[ Save All & Next Set ]",
-        "[ Return to Editing ]",
+        ("[ Save ]", 0),
+        ("[ Save & Next ]", 1),
+        ("[ Return ]", 2),
     ];
 
-    let mut button_lines: Vec<Line> = vec![
-        Line::from(""),
-        Line::from("All edits will be written to files."),
-        Line::from(""),
-    ];
-
-    for (i, label) in buttons.iter().enumerate() {
-        let style = if i == selected_button {
+    let mut button_spans: Vec<Span> = Vec::new();
+    for (i, (label, idx)) in buttons.iter().enumerate() {
+        let style = if *idx == selected_button {
             Style::default()
                 .bg(Color::Cyan)
                 .fg(Color::Black)
@@ -329,19 +325,25 @@ pub fn render_save_confirmation_modal(f: &mut Frame, area: Rect, selected_button
         } else {
             Style::default().fg(Color::White)
         };
-        button_lines.push(Line::from(*label).style(style));
+        button_spans.push(Span::styled(*label, style));
         if i < buttons.len() - 1 {
-            button_lines.push(Line::from(""));
+            button_spans.push(Span::raw("  "));
         }
     }
 
-    button_lines.push(Line::from(""));
-    button_lines.push(
-        Line::from("Use Left/Right to select, Enter to confirm, Esc to cancel")
+    let lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from("All edits will be written to files."),
+        Line::from(""),
+        Line::from(button_spans),
+        Line::from(""),
+        Line::from("←→ Select | Enter Confirm | Esc Cancel")
             .style(Style::default().fg(Color::DarkGray)),
-    );
+    ];
 
-    let paragraph = Paragraph::new(button_lines).alignment(Alignment::Center);
+    let paragraph = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(Color::Black));
     f.render_widget(paragraph, inner);
 }
 
@@ -357,15 +359,15 @@ pub fn render_change_preview_modal(
 
     let modal_area = centered_rect(80, 80, area);
 
-    // Clear background
-    let clear_block = Block::default().style(Style::default().bg(Color::Reset));
-    f.render_widget(clear_block, area);
+    // Clear the area first to prevent bleed-through
+    f.render_widget(Clear, modal_area);
 
-    // Modal box
+    // Modal box with opaque background
     let modal_block = Block::default()
         .borders(Borders::ALL)
         .title("Review Changes Before Saving")
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black));
 
     let inner = modal_block.inner(modal_area);
     f.render_widget(modal_block, modal_area);
@@ -482,6 +484,6 @@ pub fn render_change_preview_modal(
         .take(inner.height as usize)
         .collect();
 
-    let paragraph = Paragraph::new(visible_lines);
+    let paragraph = Paragraph::new(visible_lines).style(Style::default().bg(Color::Black));
     f.render_widget(paragraph, inner);
 }

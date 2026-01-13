@@ -525,6 +525,9 @@ pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
 
     // Populate database with metadata duplicates for resolution UI
     // This allows the "Duplicate Resolution" menu to load and process these groups
+    // TODO: CANDIDATE FOR REMOVAL - This call site populates metadata duplicates from
+    // report-time detection. This approach is being superseded by DeployConflicts.
+    // See populate_metadata_duplicate_groups doc comment for details.
     populate_metadata_duplicate_groups(&db, &track_groups, &cfg)?;
 
     // === FINGERPRINT-BASED DUPLICATE DETECTION ===
@@ -1099,6 +1102,13 @@ fn truncate_key(key: &str, max_len: usize) -> String {
 /// This function takes the metadata duplicates detected during report generation
 /// and inserts them into the duplicate_groups and duplicate_group_members tables
 /// so that the resolution UI can load and process them.
+///
+/// TODO: CANDIDATE FOR REMOVAL - This metadata duplicate detection approach is
+/// being superseded by the DeployConflict health issue system. The "Metadata
+/// Duplicates Resolution" flow should be updated to pull from DeployConflicts
+/// (computed in deploy.rs compute_deployment_status) instead of this separate
+/// detection path. Once that redesign is complete, this function and its call
+/// sites can be removed.
 fn populate_metadata_duplicate_groups(
     db: &Database,
     track_groups: &HashMap<String, Vec<&Track>>,

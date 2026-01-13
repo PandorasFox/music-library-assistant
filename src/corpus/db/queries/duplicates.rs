@@ -26,9 +26,11 @@ impl Database {
     }
 
     pub fn get_duplicate_group_tracks(&self, group_id: i64) -> Result<Vec<Track>> {
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
-                    t.artist, t.album, t.album_artist, t.title, t.track_number,
+                    t.artist, t.album, t.album_artist, t.title, t.track_number, t.genre,
                     t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint, t.isrc
              FROM tracks t
              INNER JOIN duplicate_group_members dgm ON t.id = dgm.track_id

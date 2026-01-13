@@ -269,6 +269,20 @@ This section consolidates all TODO comments from the codebase. Keep this synchro
 | `ops/changes.rs:379` | Operations flow for resolving OutOfBandTagChange mutations | Open |
 | `corpus/health/detection.rs` | Artist/album_artist canonicalization mismatch detection | Open |
 
+### Database Query Patterns
+
+| Location | Description | Status |
+|----------|-------------|--------|
+| `db/queries/*.rs` | 17-column SELECT for row_to_track duplicated across files | Open |
+
+### Metadata Duplicate Flow
+
+| Location | Description | Status |
+|----------|-------------|--------|
+| `ui/main_menu.rs:734-745` | Flow stub - needs redesign to use DeployConflicts | Open |
+| `ops/reports.rs:1109` | `populate_metadata_duplicate_groups` - candidate for removal | Open |
+| `ops/reports.rs:528` | Call site for metadata duplicate population - candidate for removal | Open |
+
 ### Opinions System
 
 | Location | Description |

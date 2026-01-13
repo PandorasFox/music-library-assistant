@@ -217,9 +217,11 @@ impl Database {
 
     /// Get a track by its ID.
     pub fn get_track_by_id(&self, track_id: i64) -> Result<Option<Track>> {
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let result = self.conn.query_row(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number,
+                    artist, album, album_artist, title, track_number, genre,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
              FROM tracks WHERE id = ?1",
             params![track_id],
@@ -235,9 +237,11 @@ impl Database {
 
     /// Get a track by its exact path.
     pub fn get_track_by_path(&self, path: &str) -> Result<Option<Track>> {
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let result = self.conn.query_row(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number,
+                    artist, album, album_artist, title, track_number, genre,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
              FROM tracks WHERE path = ?1",
             params![path],
@@ -253,9 +257,11 @@ impl Database {
 
     /// Get all tracks with a specific fingerprint.
     pub fn get_tracks_by_fingerprint(&self, fingerprint: &str) -> Result<Vec<Track>> {
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number,
+                    artist, album, album_artist, title, track_number, genre,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
              FROM tracks
              WHERE fingerprint = ?1
@@ -277,9 +283,11 @@ impl Database {
         album: &str,
         title: &str,
     ) -> Result<Vec<Track>> {
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number,
+                    artist, album, album_artist, title, track_number, genre,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
              FROM tracks
              WHERE LOWER(COALESCE(artist, '')) = LOWER(?1)
@@ -321,6 +329,8 @@ impl Database {
             return Ok(Vec::new());
         }
 
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let conditions: Vec<String> = path_prefixes
             .iter()
             .enumerate()
@@ -330,7 +340,7 @@ impl Database {
 
         let query = format!(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number,
+                    artist, album, album_artist, title, track_number, genre,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
              FROM tracks
              WHERE source = ?1 AND fingerprint IS NOT NULL AND ({})
@@ -361,9 +371,11 @@ impl Database {
     pub fn get_tracks_in_directory(&self, dir_path: &std::path::Path) -> Result<Vec<Track>> {
         let path_prefix = format!("{}%", dir_path.to_string_lossy());
 
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number,
+                    artist, album, album_artist, title, track_number, genre,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
              FROM tracks
              WHERE source = 'corpus' AND fingerprint IS NOT NULL AND path LIKE ?1
@@ -389,9 +401,11 @@ impl Database {
             format!("{}{}%", dir_str, std::path::MAIN_SEPARATOR)
         };
 
+        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
+        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number,
+                    artist, album, album_artist, title, track_number, genre,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
              FROM tracks
              WHERE path LIKE ?1

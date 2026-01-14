@@ -20,7 +20,7 @@ use super::{
 ///
 /// Loads album buckets with variants from the database and initializes
 /// the cluster view with EP/edition detection.
-pub fn start(app: &mut App) {
+pub(crate) fn start(app: &mut App) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => return,
@@ -99,7 +99,7 @@ pub fn start(app: &mut App) {
 // ============================================================================
 
 /// Handle cluster view actions.
-pub fn handle_cluster_action(app: &mut App, action: AlbumClusterAction) {
+pub(crate) fn handle_cluster_action(app: &mut App, action: AlbumClusterAction) {
     match action {
         AlbumClusterAction::None => {}
         AlbumClusterAction::Continue => {}
@@ -138,7 +138,7 @@ pub fn handle_cluster_action(app: &mut App, action: AlbumClusterAction) {
 }
 
 /// Handle review actions.
-pub fn handle_review_action(app: &mut App, action: AlbumReviewAction) {
+pub(crate) fn handle_review_action(app: &mut App, action: AlbumReviewAction) {
     match action {
         AlbumReviewAction::None => {}
         AlbumReviewAction::Continue => {}
@@ -168,7 +168,7 @@ pub fn handle_review_action(app: &mut App, action: AlbumReviewAction) {
 // ============================================================================
 
 /// Commit album decisions to the database.
-pub fn commit_decisions(app: &mut App, session: AlbumCanonSession) {
+pub(crate) fn commit_decisions(app: &mut App, session: AlbumCanonSession) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => {

@@ -234,7 +234,7 @@ enum BrowserContext {
 }
 
 /// Main application state
-struct App {
+pub(crate) struct App {
     config: Config,
     should_quit: bool,
     status_message: Option<String>,
@@ -3069,7 +3069,7 @@ fn check_and_maybe_rebuild_health(app: &mut App) {
 fn check_and_run_migrations<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
 ) -> Result<()> {
-    use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+    use ratatui::layout::{Alignment, Rect};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 

@@ -49,8 +49,7 @@ pub mod file_ops;
 pub mod executor;
 
 pub use types::*;
-pub use grouping::group_by_file;
-pub use migration::{Migration, MigrationRegistry};
+pub use migration::MigrationRegistry;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -166,30 +165,40 @@ impl MutationDispatcher {
 
     /// Execute a single mutation (internal helper).
     fn execute_single(&self, mutation: &Mutation) -> MutationResult {
-        let start = std::time::Instant::now();
-
-        // TODO: Delegate to appropriate executor based on mutation type
-        // For now, return a placeholder success
-        let (success, error) = match mutation {
-            Mutation::DbMigration { migration_id, .. } => {
-                // Execute migration via MigrationRegistry
-                match MigrationRegistry::new().apply_migration(&self.db, *migration_id) {
-                    Ok(()) => (true, None),
-                    Err(e) => (false, Some(e.to_string())),
+        // Delegate to appropriate executor based on mutation category
+        match mutation.category() {
+            MutationCategory::TagEdit => {
+                // Tag edits require session ID for audit trail
+                let session_id = format!("session_{}", std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis());
+                tag_edit::execute_single(&self.db, mutation, &session_id)
+            }
+            MutationCategory::Indexing => {
+                indexing::execute_single(&self.db, mutation)
+            }
+            MutationCategory::FileMove | MutationCategory::FileCopy |
+            MutationCategory::FileDelete | MutationCategory::Deployment => {
+                file_ops::execute_single(Some(&self.db), mutation)
+            }
+            MutationCategory::Migration => {
+                let start = std::time::Instant::now();
+                let (success, error) = if let Mutation::DbMigration { migration_id, .. } = mutation {
+                    match MigrationRegistry::new().apply_migration(&self.db, *migration_id) {
+                        Ok(()) => (true, None),
+                        Err(e) => (false, Some(e.to_string())),
+                    }
+                } else {
+                    (false, Some("Invalid mutation for Migration category".to_string()))
+                };
+                MutationResult {
+                    mutation: mutation.clone(),
+                    success,
+                    error,
+                    duration_ms: start.elapsed().as_millis() as u64,
                 }
             }
-            _ => {
-                // Placeholder for other mutation types
-                // TODO: Implement in respective modules
-                (true, None)
-            }
-        };
-
-        MutationResult {
-            mutation: mutation.clone(),
-            success,
-            error,
-            duration_ms: start.elapsed().as_millis() as u64,
         }
     }
 

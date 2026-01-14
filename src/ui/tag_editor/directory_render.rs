@@ -10,6 +10,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::widgets::{PaneConfig, ThreePaneLayout};
+
 use super::directory_state::{DirectoryTagChange, DirectoryTagEditorState};
 use super::types::{AggregatedValue, DirectoryTagEditorFocus, VariousConfirmState};
 
@@ -59,14 +61,7 @@ impl DirectoryTagEditorState {
         let current_file = gathering
             .current_file
             .as_ref()
-            .map(|f| {
-                // Truncate long paths
-                if f.len() > 40 {
-                    format!("...{}", &f[f.len() - 37..])
-                } else {
-                    f.clone()
-                }
-            })
+            .map(|f| crate::ui::helpers::truncate_left(f, 40))
             .unwrap_or_default();
 
         let lines = vec![
@@ -194,18 +189,16 @@ impl DirectoryTagEditorState {
     }
 
     fn render_three_column(&mut self, f: &mut Frame, area: Rect) {
-        let three_column = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(30), // File list
-                Constraint::Percentage(60), // Tag editor
-                Constraint::Percentage(10), // Action panel
-            ])
-            .split(area);
+        // Use widget for consistent three-pane layout
+        let layout = ThreePaneLayout::horizontal()
+            .left(PaneConfig::new("", 30))
+            .middle(PaneConfig::new("", 60))
+            .right(PaneConfig::new("", 10))
+            .build(area);
 
-        self.render_file_list(f, three_column[0]);
-        self.render_tag_fields(f, three_column[1]);
-        self.render_action_panel(f, three_column[2]);
+        self.render_file_list(f, layout.left.area);
+        self.render_tag_fields(f, layout.middle.area);
+        self.render_action_panel(f, layout.right.area);
     }
 
     fn render_file_list(&mut self, f: &mut Frame, area: Rect) {

@@ -10,6 +10,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::widgets::{PaneConfig, ThreePaneLayout};
+
 use super::state::TagEditorState;
 use super::types::{FieldEditState, GroupedChange, TagChange};
 
@@ -93,18 +95,16 @@ impl TagEditorState {
     }
 
     fn render_three_column(&mut self, f: &mut Frame, area: Rect) {
-        let three_column = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(30), // Track list
-                Constraint::Percentage(60), // Tag editor
-                Constraint::Percentage(10), // Search panel
-            ])
-            .split(area);
+        // Use widget for consistent three-pane layout
+        let layout = ThreePaneLayout::horizontal()
+            .left(PaneConfig::new("", 30))
+            .middle(PaneConfig::new("", 60))
+            .right(PaneConfig::new("", 10))
+            .build(area);
 
-        self.render_track_list(f, three_column[0]);
-        self.render_tag_fields(f, three_column[1]);
-        self.render_action_panel(f, three_column[2]);
+        self.render_track_list(f, layout.left.area);
+        self.render_tag_fields(f, layout.middle.area);
+        self.render_action_panel(f, layout.right.area);
     }
 
     fn render_track_list(&self, f: &mut Frame, area: Rect) {

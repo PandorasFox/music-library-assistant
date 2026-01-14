@@ -23,7 +23,7 @@ use super::{
 ///
 /// Loads artist buckets with variants from the database and initializes
 /// the cluster view.
-pub fn start(app: &mut App) {
+pub(crate) fn start(app: &mut App) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => return,
@@ -67,7 +67,7 @@ pub fn start(app: &mut App) {
 ///
 /// Uses TagCloud to detect genre collisions and reports findings.
 /// (Full UI coming later - currently just logs and reports)
-pub fn start_genre(app: &mut App) {
+pub(crate) fn start_genre(app: &mut App) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => return,
@@ -112,7 +112,7 @@ pub fn start_genre(app: &mut App) {
 // ============================================================================
 
 /// Handle cluster view actions.
-pub fn handle_cluster_action(app: &mut App, action: ClusterViewAction) {
+pub(crate) fn handle_cluster_action(app: &mut App, action: ClusterViewAction) {
     match action {
         ClusterViewAction::None => {}
         ClusterViewAction::Continue => {}
@@ -144,7 +144,7 @@ fn transition_to_review(app: &mut App) {
 }
 
 /// Handle session review actions.
-pub fn handle_review_action(app: &mut App, action: ReviewAction) {
+pub(crate) fn handle_review_action(app: &mut App, action: ReviewAction) {
     match action {
         ReviewAction::None => {}
         ReviewAction::Continue => {}
@@ -175,7 +175,7 @@ pub fn handle_review_action(app: &mut App, action: ReviewAction) {
 ///
 /// Updates artist tags in the database, records tag mismatches,
 /// and starts a background tag flush to update files on disk.
-pub fn commit_changes(app: &mut App) {
+pub(crate) fn commit_changes(app: &mut App) {
     let _ = config::log_message("=== CANON REVIEW: COMMIT REQUESTED ===");
 
     // Get all pending changes from decisions
@@ -288,7 +288,7 @@ pub fn commit_changes(app: &mut App) {
 }
 
 /// Start background tag flush to write artist tags to disk.
-pub fn start_tag_flush(app: &mut App, changes: Vec<PendingChange>) {
+pub(crate) fn start_tag_flush(app: &mut App, changes: Vec<PendingChange>) {
     let change_count = changes.len();
 
     // Add operation to manager

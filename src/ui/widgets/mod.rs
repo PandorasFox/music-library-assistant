@@ -17,8 +17,17 @@ mod list;
 mod modal;
 mod status;
 
-pub use controls::{presets as control_presets, ControlsHint, ControlsStyle, KeyBinding};
+// Layout widgets
 pub use layout::{FocusablePane, PaneConfig, PaneStyle, ThreePaneLayout, TwoPaneLayout};
-pub use list::{SelectableItem, SelectableList, SelectableListState, SelectableListStyle, SimpleList};
+
+// Modal widgets
 pub use modal::{centered_rect, ConfirmationModal, Modal, ModalButton, ModalStyle, ScrollableModal};
+
+// Controls hint widgets
+pub use controls::{presets as control_presets, ControlsHint, ControlsStyle, KeyBinding};
+
+// List widgets
+pub use list::{SelectableItem, SelectableList, SelectableListState, SelectableListStyle, SimpleList};
+
+// Status widgets
 pub use status::{HealthStatus, StatusColor, StatusIndicator};

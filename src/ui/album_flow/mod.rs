@@ -10,7 +10,7 @@
 //! metadata-duplicate review to handle potential fingerprint overlaps.
 
 mod cluster_view;
-pub mod coordinator;
+pub(crate) mod coordinator;
 mod review;
 mod session;
 mod types;

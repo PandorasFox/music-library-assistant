@@ -10,7 +10,7 @@
 
 mod cluster_view;
 mod collation;
-pub mod coordinator;
+pub(crate) mod coordinator;
 mod phase_selector;
 mod population;
 mod render;
@@ -20,12 +20,12 @@ mod types;
 
 pub use cluster_view::{AlbumArtistClusterAction, AlbumArtistClusterState};
 pub use collation::{
-    CollationAction, CollationDecision, CollationReviewAction, CollationReviewState,
+    CollationAction, CollationReviewAction, CollationReviewState,
     CollationSession, CollationState,
 };
 pub use phase_selector::PhaseSelectorState;
 pub use population::{
-    PopulationAction, PopulationDecision, PopulationReviewAction, PopulationReviewState,
+    PopulationAction, PopulationReviewAction, PopulationReviewState,
     PopulationSession, PopulationState,
 };
 pub use render::render_phase_selector;

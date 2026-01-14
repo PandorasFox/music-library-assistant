@@ -29,7 +29,7 @@
 //! - Esc: Cancel and discard
 
 pub mod cluster_view;
-pub mod coordinator;
+pub(crate) mod coordinator;
 pub mod review;
 pub mod session;
 

@@ -26,13 +26,13 @@ use super::{
 // ============================================================================
 
 /// Start the album artist resolution flow (phase selector).
-pub fn start(app: &mut App) {
+pub(crate) fn start(app: &mut App) {
     app.album_artist_phase_selector = Some(PhaseSelectorState::new());
     app.mode = UiMode::AlbumArtistPhaseSelector;
 }
 
 /// Handle phase selector actions.
-pub fn handle_phase_action(app: &mut App, action: PhaseSelectorAction) {
+pub(crate) fn handle_phase_action(app: &mut App, action: PhaseSelectorAction) {
     match action {
         PhaseSelectorAction::None => {}
         PhaseSelectorAction::Cancel => {
@@ -57,7 +57,7 @@ pub fn handle_phase_action(app: &mut App, action: PhaseSelectorAction) {
 // ============================================================================
 
 /// Start the canonicalization phase.
-pub fn start_canonicalization(app: &mut App) {
+pub(crate) fn start_canonicalization(app: &mut App) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => {
@@ -100,7 +100,7 @@ pub fn start_canonicalization(app: &mut App) {
 }
 
 /// Handle canonicalization cluster view actions.
-pub fn handle_cluster_action(app: &mut App, action: AlbumArtistClusterAction) {
+pub(crate) fn handle_cluster_action(app: &mut App, action: AlbumArtistClusterAction) {
     match action {
         AlbumArtistClusterAction::None => {}
         AlbumArtistClusterAction::Continue => {}
@@ -139,7 +139,7 @@ pub fn handle_cluster_action(app: &mut App, action: AlbumArtistClusterAction) {
 }
 
 /// Handle canonicalization review actions.
-pub fn handle_review_action(app: &mut App, action: AlbumArtistReviewAction) {
+pub(crate) fn handle_review_action(app: &mut App, action: AlbumArtistReviewAction) {
     match action {
         AlbumArtistReviewAction::None => {}
         AlbumArtistReviewAction::Continue => {}
@@ -167,7 +167,7 @@ pub fn handle_review_action(app: &mut App, action: AlbumArtistReviewAction) {
 }
 
 /// Commit canonicalization decisions to the database.
-pub fn commit_canonicalization_decisions(app: &mut App, session: AlbumArtistCanonSession) {
+pub(crate) fn commit_canonicalization_decisions(app: &mut App, session: AlbumArtistCanonSession) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => {
@@ -213,7 +213,7 @@ pub fn commit_canonicalization_decisions(app: &mut App, session: AlbumArtistCano
 // ============================================================================
 
 /// Launch the collation phase.
-pub fn launch_collation(app: &mut App) {
+pub(crate) fn launch_collation(app: &mut App) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => {
@@ -241,7 +241,7 @@ pub fn launch_collation(app: &mut App) {
 }
 
 /// Handle collation actions.
-pub fn handle_collation_action(app: &mut App, action: CollationAction) {
+pub(crate) fn handle_collation_action(app: &mut App, action: CollationAction) {
     match action {
         CollationAction::None => {}
         CollationAction::Continue => {}
@@ -285,7 +285,7 @@ pub fn handle_collation_action(app: &mut App, action: CollationAction) {
 }
 
 /// Handle collation review actions.
-pub fn handle_collation_review_action(app: &mut App, action: CollationReviewAction) {
+pub(crate) fn handle_collation_review_action(app: &mut App, action: CollationReviewAction) {
     match action {
         CollationReviewAction::None => {}
         CollationReviewAction::Continue => {}
@@ -314,7 +314,7 @@ pub fn handle_collation_review_action(app: &mut App, action: CollationReviewActi
 }
 
 /// Commit collation decisions to the database.
-pub fn commit_collation_decisions(app: &mut App, session: CollationSession) {
+pub(crate) fn commit_collation_decisions(app: &mut App, session: CollationSession) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => return,
@@ -367,7 +367,7 @@ pub fn commit_collation_decisions(app: &mut App, session: CollationSession) {
 // ============================================================================
 
 /// Launch the population phase.
-pub fn launch_population(app: &mut App) {
+pub(crate) fn launch_population(app: &mut App) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => {
@@ -395,7 +395,7 @@ pub fn launch_population(app: &mut App) {
 }
 
 /// Handle population actions.
-pub fn handle_population_action(app: &mut App, action: PopulationAction) {
+pub(crate) fn handle_population_action(app: &mut App, action: PopulationAction) {
     match action {
         PopulationAction::None => {}
         PopulationAction::Continue => {}
@@ -439,7 +439,7 @@ pub fn handle_population_action(app: &mut App, action: PopulationAction) {
 }
 
 /// Handle population review actions.
-pub fn handle_population_review_action(app: &mut App, action: PopulationReviewAction) {
+pub(crate) fn handle_population_review_action(app: &mut App, action: PopulationReviewAction) {
     match action {
         PopulationReviewAction::None => {}
         PopulationReviewAction::Continue => {}
@@ -468,7 +468,7 @@ pub fn handle_population_review_action(app: &mut App, action: PopulationReviewAc
 }
 
 /// Commit population decisions to the database.
-pub fn commit_population_decisions(app: &mut App, session: PopulationSession) {
+pub(crate) fn commit_population_decisions(app: &mut App, session: PopulationSession) {
     let db = match open_database(&mut app.status_message) {
         Some(db) => db,
         None => return,

@@ -59,8 +59,8 @@ content below this point has been authored by claude, and are claude's notes on 
 | `ui/mod.rs` | TUI entry point and mode dispatch |
 | `ui/render.rs` | TUI rendering functions |
 | `ui/app.rs` | Application state, eye animation, operation tracking |
-| `ui/main_menu.rs` | Command action types (being phased out) |
 | `ui/tag_editor/` | Multi-track metadata editing module |
+| `ui/tree_browser/` | Unified tree browser with variant modes (CorpusBrowser, DirectorySelector) |
 | `ui/helpers.rs` | Shared rendering utilities and formatters |
 | `ui/widgets/` | Reusable UI components (lists, layouts, status, modals) |
 | `ui/insights_view/` | Real-time computed insights view (main entry point) |
@@ -115,17 +115,10 @@ Insights are categorized as:
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `ui/canon_flow/` | Active | Artist/genre canonicalization - functional |
-| `ui/album_flow/` | Active | Album tag resolution - functional |
+| `ui/tree_browser/` | Active | Unified tree browser: CorpusBrowser + DirectorySelector variants |
 | `ui/deploy_flow/` | Active | Deployment preview and execution |
 | `ui/insights_view/` | Active | Main entry point - lateral view ring |
-
-### Partially Active Modules
-
-| Module | Status | Notes |
-|--------|--------|-------|
-| `ui/main_menu.rs` | Phasing out | Still provides CommandAction, BackgroundTask types; MainMenu mode is dead |
-| `ui/dir_browser/` | Unused | Directory browser exists but has no active flows |
+| `ui/drop_flow.rs` | Active | Drop missing files from index |
 
 Focus new work on the Insights system, which presents data to the user and provides entry points into resolution flows.
 

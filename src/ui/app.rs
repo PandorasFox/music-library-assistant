@@ -5,25 +5,6 @@
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 // ============================================================================
-// UI Mode Enum
-// ============================================================================
-
-/// Current UI mode - determines which module handles rendering and input
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UiMode {
-    /// Multi-pane main menu with categories and commands
-    MainMenu,
-    /// Tag editor for metadata editing
-    TagEditor,
-    /// Dialogue-based decision flow
-    Dialogue,
-    /// Dialogue summary after completing a flow
-    DialogueSummary,
-    /// Legacy sub-menus (being phased out)
-    LegacyMenu,
-}
-
-// ============================================================================
 // Eye Animation State Machine
 // ============================================================================
 

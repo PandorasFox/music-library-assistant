@@ -7,7 +7,6 @@ pub mod background;
 pub mod changes;
 pub mod daemon;
 pub mod decisions;
-pub mod dedup;
 pub mod deploy;
 
 // Re-export commonly used types

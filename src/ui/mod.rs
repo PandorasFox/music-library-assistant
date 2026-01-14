@@ -3,15 +3,14 @@
 //! Modular UI components for the Music Library Assistant.
 
 pub mod app;
-pub mod corpus_browser;
 pub mod deploy_flow;
-pub mod dir_browser;
 pub mod drop_flow;
 pub mod flows;
 pub mod helpers;
 pub mod insights_view;
 pub mod render;
 pub mod tag_editor;
+pub mod tree_browser;
 pub mod widgets;
 
 use anyhow::Result;
@@ -242,8 +241,7 @@ pub(crate) struct App {
     mode: UiMode,
     tag_editor: Option<tag_editor::TagEditorState>,
     tag_editor_modal: Option<tag_editor::TagEditorModal>,
-    dir_browser: Option<dir_browser::DirBrowserState>,
-    corpus_browser: Option<corpus_browser::CorpusBrowserState>,
+    tree_browser: Option<tree_browser::TreeBrowserState>,
     drop_missing_state: Option<DropMissingState>,
     deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
     // Directory tag editor (bulk editing)
@@ -296,8 +294,7 @@ impl App {
             mode: UiMode::Insights,
             tag_editor: None,
             tag_editor_modal: None,
-            dir_browser: None,
-            corpus_browser: None,
+            tree_browser: None,
             drop_missing_state: None,
             deployment_preview: None,
             directory_tag_editor: None,
@@ -332,9 +329,9 @@ impl App {
                 }
             }
             UiMode::DirBrowser => {
-                if let Some(ref mut browser) = self.dir_browser {
+                if let Some(ref mut browser) = self.tree_browser {
                     let action = browser.handle_key(key);
-                    self.handle_dir_browser_action(action);
+                    self.handle_tree_browser_action(action);
                 }
             }
             UiMode::DropMissingConfirmation => {
@@ -382,9 +379,9 @@ impl App {
                 }
             }
             UiMode::CorpusBrowser => {
-                if let Some(ref mut browser) = self.corpus_browser {
+                if let Some(ref mut browser) = self.tree_browser {
                     let action = browser.handle_key(key);
-                    self.handle_corpus_browser_action(action);
+                    self.handle_tree_browser_action(action);
                 }
             }
             UiMode::DirectoryTagEditor => {
@@ -646,38 +643,57 @@ impl App {
     }
 
     fn start_corpus_browser(&mut self) {
-        let config = corpus_browser::CorpusBrowserConfig::default();
-        self.corpus_browser = Some(corpus_browser::CorpusBrowserState::new(
+        let config = tree_browser::CorpusBrowserConfig::default();
+        self.tree_browser = Some(tree_browser::TreeBrowserState::corpus_browser(
             self.config.corpus_root.clone(),
             config,
         ));
         self.mode = UiMode::CorpusBrowser;
     }
 
-    fn handle_corpus_browser_action(&mut self, action: corpus_browser::CorpusBrowserAction) {
+    fn start_directory_selector(&mut self, title: &str) {
+        let config = tree_browser::DirectorySelectorConfig::for_sleuthing();
+        self.tree_browser = Some(tree_browser::TreeBrowserState::directory_selector(
+            self.config.corpus_root.clone(),
+            title,
+            config,
+        ));
+        self.mode = UiMode::DirBrowser;
+    }
+
+    fn handle_tree_browser_action(&mut self, action: tree_browser::TreeBrowserAction) {
         match action {
-            corpus_browser::CorpusBrowserAction::None => {}
-            corpus_browser::CorpusBrowserAction::Cancel => {
-                self.corpus_browser = None;
+            tree_browser::TreeBrowserAction::None => {}
+            tree_browser::TreeBrowserAction::Cancel => {
+                self.tree_browser = None;
                 self.mode = UiMode::Insights;
             }
-            corpus_browser::CorpusBrowserAction::EditDirectory(path) => {
+            tree_browser::TreeBrowserAction::EditDirectory(path) => {
                 // Start directory tag editor with aggregated view
                 self.start_directory_tag_editor(&path);
             }
-            corpus_browser::CorpusBrowserAction::EditFile(path) => {
+            tree_browser::TreeBrowserAction::EditFile(path) => {
                 // Load single track for editing
                 self.start_tag_editor_for_path(&path, false);
             }
-            corpus_browser::CorpusBrowserAction::CycleNext => {
+            tree_browser::TreeBrowserAction::CycleNext => {
                 // Corpus Browser → Insights
-                self.corpus_browser = None;
+                self.tree_browser = None;
                 self.start_insights_view();
             }
-            corpus_browser::CorpusBrowserAction::CyclePrev => {
+            tree_browser::TreeBrowserAction::CyclePrev => {
                 // Corpus Browser → Deploy
-                self.corpus_browser = None;
+                self.tree_browser = None;
                 self.start_deployment_preview();
+            }
+            tree_browser::TreeBrowserAction::SelectPaths(paths) => {
+                // Directory selector completed - currently unused, placeholder for dedup flows
+                let _ = crate::config::log_message(&format!(
+                    "Directory selector returned {} paths (flow not yet wired)",
+                    paths.len()
+                ));
+                self.tree_browser = None;
+                self.mode = UiMode::Insights;
             }
         }
     }
@@ -687,7 +703,7 @@ impl App {
             Ok(p) => p,
             Err(e) => {
                 self.status_message = Some(format!("Config error: {}", e));
-                self.corpus_browser = None;
+                self.tree_browser = None;
                 self.mode = UiMode::Insights;
                 return;
             }
@@ -697,7 +713,7 @@ impl App {
             Ok(d) => d,
             Err(e) => {
                 self.status_message = Some(format!("Database error: {}", e));
-                self.corpus_browser = None;
+                self.tree_browser = None;
                 self.mode = UiMode::Insights;
                 return;
             }
@@ -714,7 +730,7 @@ impl App {
                         path.display(),
                         e
                     ));
-                    self.corpus_browser = None;
+                    self.tree_browser = None;
                     self.mode = UiMode::Insights;
                     return;
                 }
@@ -728,7 +744,7 @@ impl App {
                         "Cannot determine parent directory: {}",
                         path.display()
                     ));
-                    self.corpus_browser = None;
+                    self.tree_browser = None;
                     self.mode = UiMode::Insights;
                     return;
                 }
@@ -743,7 +759,7 @@ impl App {
                         parent_dir.display(),
                         e
                     ));
-                    self.corpus_browser = None;
+                    self.tree_browser = None;
                     self.mode = UiMode::Insights;
                     return;
                 }
@@ -781,7 +797,7 @@ impl App {
                             "Track not in index: {}",
                             path.display()
                         ));
-                        self.corpus_browser = None;
+                        self.tree_browser = None;
                         self.mode = UiMode::Insights;
                         return;
                     }
@@ -791,7 +807,7 @@ impl App {
                             path.display(),
                             e
                         ));
-                        self.corpus_browser = None;
+                        self.tree_browser = None;
                         self.mode = UiMode::Insights;
                         return;
                     }
@@ -806,7 +822,7 @@ impl App {
                 "No indexed tracks at: {}",
                 path.display()
             ));
-            self.corpus_browser = None;
+            self.tree_browser = None;
             self.mode = UiMode::Insights;
             return;
         }
@@ -821,24 +837,10 @@ impl App {
             tracks.len(),
             path.display()
         ));
-        self.corpus_browser = None;
+        self.tree_browser = None;
         self.mode = UiMode::TagEditor;
     }
 
-    fn handle_dir_browser_action(&mut self, action: dir_browser::DirBrowserAction) {
-        match action {
-            dir_browser::DirBrowserAction::None => {}
-            dir_browser::DirBrowserAction::Cancel => {
-                self.dir_browser = None;
-                self.mode = UiMode::Insights;
-            }
-            dir_browser::DirBrowserAction::Proceed(_paths) => {
-                // Directory browser flow is currently unused
-                self.dir_browser = None;
-                self.mode = UiMode::Insights;
-            }
-        }
-    }
 
     fn handle_tag_editor_action(&mut self, action: tag_editor::TagEditorAction) {
         match action {
@@ -1429,7 +1431,7 @@ impl App {
     // ========================================================================
 
     fn start_directory_tag_editor(&mut self, directory: &std::path::Path) {
-        self.corpus_browser = None;
+        self.tree_browser = None;
         self.directory_tag_editor = Some(tag_editor::DirectoryTagEditorState::start_gathering(
             directory.to_path_buf(),
         ));
@@ -1474,7 +1476,7 @@ impl App {
                 self.directory_tag_editor_modal = None;
                 self.mode = UiMode::CorpusBrowser;
                 // Restore corpus browser if it was set
-                if self.corpus_browser.is_none() {
+                if self.tree_browser.is_none() {
                     self.start_corpus_browser();
                 }
             }
@@ -1771,8 +1773,7 @@ fn render(f: &mut Frame, app: &mut App) {
         status_message: app.status_message.as_deref(),
         tag_editor: app.tag_editor.as_mut(),
         tag_editor_modal: app.tag_editor_modal.as_ref(),
-        dir_browser: app.dir_browser.as_mut(),
-        corpus_browser: app.corpus_browser.as_mut(),
+        tree_browser: app.tree_browser.as_mut(),
         drop_missing_state: app.drop_missing_state.as_ref(),
         deployment_preview: app.deployment_preview.as_mut(),
         directory_tag_editor: app.directory_tag_editor.as_mut(),

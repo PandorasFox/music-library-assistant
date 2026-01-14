@@ -20,7 +20,7 @@ use crate::flows::background::BackgroundTask;
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{deploy_flow, dir_browser, insights_view, tag_editor};
+use super::{deploy_flow, insights_view, tag_editor, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -30,8 +30,7 @@ pub struct RenderContext<'a> {
     pub status_message: Option<&'a str>,
     pub tag_editor: Option<&'a mut tag_editor::TagEditorState>,
     pub tag_editor_modal: Option<&'a tag_editor::TagEditorModal>,
-    pub dir_browser: Option<&'a mut dir_browser::DirBrowserState>,
-    pub corpus_browser: Option<&'a mut super::corpus_browser::CorpusBrowserState>,
+    pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub drop_missing_state: Option<&'a super::DropMissingState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub directory_tag_editor: Option<&'a mut tag_editor::DirectoryTagEditorState>,
@@ -152,7 +151,7 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             }
         }
         super::UiMode::DirBrowser => {
-            if let Some(ref mut browser) = ctx.dir_browser {
+            if let Some(ref mut browser) = ctx.tree_browser {
                 browser.render(f, area);
             }
         }
@@ -168,7 +167,7 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             render_exit_confirm_modal(f, area, ctx.exit_confirm_modal_state);
         }
         super::UiMode::CorpusBrowser => {
-            if let Some(ref mut browser) = ctx.corpus_browser {
+            if let Some(ref mut browser) = ctx.tree_browser {
                 browser.render(f, area);
             }
         }

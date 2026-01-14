@@ -249,48 +249,27 @@ fn process_source(db: &Database, source: &str, root: &Path) -> SourceScanResult 
     let missing_from_disk = remaining_missing.len();
     let new_on_disk = remaining_new.len();
 
-    // Log missing files for debugging
-    if missing_from_disk > 0 {
+    // Create MissingFromDisk issues for indexed files not on disk
+    // These need operator decision to drop from index
+    if !remaining_missing.is_empty() {
         if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes(source, &remaining_missing) {
             let _ = config::log_message(&format!(
-                "Heartbeat: {} {} files missing from disk:",
+                "Heartbeat: {} {} files missing from disk",
                 missing_from_disk, source
             ));
-            for path in &missing_paths {
-                let _ = config::log_message(&format!("  - {}", path));
-            }
+            create_missing_from_disk_issues(db, source, &remaining_missing, &missing_paths);
         }
     }
 
-    // Scan new files that aren't relocations
-    let files_scanned = if !remaining_new.is_empty() {
-        scan_new_files(db, source, &remaining_new, &disk_inode_paths)
-    } else {
-        0
-    };
-
-    // Create health issues for files that couldn't be scanned
-    let unscanned_count = new_on_disk.saturating_sub(files_scanned);
-    if unscanned_count > 0 {
-        // Filter to only unscanned inodes for health issue creation
-        let scanned_paths: HashSet<String> = remaining_new.iter()
-            .filter_map(|inode| disk_inode_paths.get(inode))
-            .take(files_scanned)
-            .cloned()
-            .collect();
-
-        let unscanned_inodes: HashSet<i64> = remaining_new.iter()
-            .filter(|inode| {
-                disk_inode_paths.get(inode)
-                    .map(|p| !scanned_paths.contains(p))
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-
-        if !unscanned_inodes.is_empty() {
-            create_missing_from_index_issues(db, &unscanned_inodes, &disk_inode_paths);
-        }
+    // Create MissingFromIndex issues for all new files on disk
+    // These need operator decision to scan and index
+    // NOTE: We no longer auto-scan - all actions must go through operations
+    if !remaining_new.is_empty() {
+        let _ = config::log_message(&format!(
+            "Heartbeat: {} new {} files need indexing",
+            new_on_disk, source
+        ));
+        create_missing_from_index_issues(db, &remaining_new, &disk_inode_paths);
     }
 
     SourceScanResult {
@@ -298,7 +277,7 @@ fn process_source(db: &Database, source: &str, root: &Path) -> SourceScanResult 
         disk_count: disk_inodes.len(),
         missing_from_disk,
         new_on_disk,
-        files_scanned,
+        files_scanned: 0, // No auto-scanning anymore
         files_relocated,
     }
 }
@@ -409,6 +388,74 @@ fn create_missing_from_index_issues(
     }
 }
 
+/// Create health issues for indexed files missing from disk, grouped by directory
+fn create_missing_from_disk_issues(
+    db: &Database,
+    source: &str,
+    missing_inodes: &HashSet<i64>,
+    missing_paths: &[String],
+) {
+    use crate::corpus::db::{HealthIssue, HealthIssueType, HealthIssueSeverity};
+    use std::collections::HashMap;
+
+    // Group missing files by parent directory
+    let mut by_directory: HashMap<String, Vec<String>> = HashMap::new();
+
+    for path in missing_paths {
+        let parent = std::path::Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "[root]".to_string());
+        by_directory.entry(parent).or_default().push(path.clone());
+    }
+
+    // Create/update health issue for each directory
+    for (directory, files) in by_directory {
+        let issue_key = format!("missing_from_disk:{}:{}", source, directory);
+
+        // Check if issue already exists
+        if db.get_health_issue_by_key(HealthIssueType::MissingFromDisk, &issue_key)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            // Issue already exists, skip (will be cleared when files are dropped/restored)
+            continue;
+        }
+
+        // Get track IDs for these paths (for resolution)
+        let track_ids: Vec<i64> = files.iter()
+            .filter_map(|path| db.get_track_by_path(path).ok().flatten())
+            .filter_map(|track| track.id)
+            .collect();
+
+        let metadata = serde_json::json!({
+            "source": source,
+            "directory": directory,
+            "file_count": files.len(),
+            "sample_files": files.iter().take(5).collect::<Vec<_>>(),
+            "track_ids": track_ids,
+        });
+
+        let issue = HealthIssue {
+            id: None,
+            issue_type: HealthIssueType::MissingFromDisk,
+            issue_key,
+            severity: HealthIssueSeverity::ManualReview,
+            discovered_at: None,
+            resolved_at: None,
+            resolution_type: None,
+            resolution_session: None,
+            metadata_json: Some(metadata.to_string()),
+        };
+
+        let _ = db.insert_health_issue(&issue);
+    }
+
+    // Suppress unused warning for missing_inodes since we use paths directly
+    let _ = missing_inodes;
+}
+
 /// Check if path has audio file extension
 fn is_audio_file(path: &Path) -> bool {
     path.extension()
@@ -507,6 +554,11 @@ fn detect_file_relocations(
 
 /// Scan new files and add them to the index.
 /// Returns the count of files successfully scanned.
+///
+/// TODO: This function is no longer called from heartbeat. Scanning should now go
+/// through the operations system (RescanFiles) which produces mutations (IndexTrack).
+/// Keep this code as reference for the signal handler implementation, then remove.
+#[allow(dead_code)]
 fn scan_new_files(
     db: &Database,
     source: &str,

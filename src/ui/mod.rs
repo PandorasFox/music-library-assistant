@@ -30,6 +30,7 @@ pub mod main_menu;
 pub mod render;
 pub mod shared;
 pub mod tag_editor;
+pub mod widgets;
 
 use anyhow::Result;
 use crossterm::{

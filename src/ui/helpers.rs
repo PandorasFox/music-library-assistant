@@ -2,52 +2,45 @@
 //!
 //! Common helpers used across multiple UI modules to avoid code duplication.
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-
 use crate::config;
 use crate::corpus::db::Database;
 
-/// Create a centered rectangle within a parent area.
-///
-/// Used for modal dialogs and popups.
-pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}
+// Re-export centered_rect from widgets module
+pub use super::widgets::centered_rect;
 
 // ============================================================================
 // Formatting Utilities
 // ============================================================================
 
-/// Truncate a file path for display, UTF-8 safe.
+/// Truncate a string from the left, UTF-8 safe. Result: `...visible_end`
 ///
-/// If the path is longer than `max_len`, it will be truncated from the left
-/// with "..." prefix.
-pub fn truncate_path_display(path: &str, max_len: usize) -> String {
-    if path.chars().count() <= max_len {
-        return path.to_string();
+/// Keeps the rightmost `max_chars` characters. Useful for paths where
+/// the filename/end is most relevant.
+pub fn truncate_left(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s.to_string();
     }
+    let skip = char_count.saturating_sub(max_chars - 3);
+    format!("...{}", s.chars().skip(skip).collect::<String>())
+}
 
-    // Take the last max_len-3 characters
-    let chars: Vec<char> = path.chars().collect();
-    let start = chars.len().saturating_sub(max_len - 3);
-    let truncated: String = chars[start..].iter().collect();
-    format!("...{}", truncated)
+/// Truncate a string from the right, UTF-8 safe. Result: `visible_start...`
+///
+/// Keeps the leftmost `max_chars` characters. Useful for tags/labels where
+/// the start is most relevant.
+pub fn truncate_right(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s.to_string();
+    }
+    format!("{}...", s.chars().take(max_chars - 3).collect::<String>())
+}
+
+/// Alias for backward compatibility.
+#[inline]
+pub fn truncate_path_display(path: &str, max_len: usize) -> String {
+    truncate_left(path, max_len)
 }
 
 /// Format bytes using binary SI units (KiB, MiB, GiB, TiB).

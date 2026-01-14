@@ -4,9 +4,9 @@
 //! Displays healthy, to_deploy, stale, orphan, and conflict counts.
 //! Allows the librarian to confirm (generate mutations) or cancel.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
@@ -14,6 +14,7 @@ use ratatui::{
 };
 
 use crate::ops::deploy::FullDeploymentStatus;
+use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 /// Actions returned from the deployment preview
 #[derive(Debug, Clone)]
@@ -24,6 +25,10 @@ pub enum DeploymentPreviewAction {
     Confirm,
     /// Cancel and return to main menu
     Cancel,
+    /// Cycle to next view in lateral ring (Tab)
+    CycleNext,
+    /// Cycle to previous view in lateral ring (Shift-Tab)
+    CyclePrev,
 }
 
 /// State for the deployment preview
@@ -106,13 +111,22 @@ impl DeploymentPreviewState {
                 }
                 DeploymentPreviewAction::None
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                // Toggle focus between libraries and actions
+            KeyCode::Left | KeyCode::Right => {
+                // Toggle focus between libraries (left pane) and actions (right pane)
                 if !self.statuses.is_empty() {
                     self.focus = if self.focus == 0 { 1 } else { 0 };
                 }
                 DeploymentPreviewAction::None
             }
+            // Tab/Shift-Tab for lateral view cycling
+            KeyCode::Tab => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    DeploymentPreviewAction::CyclePrev
+                } else {
+                    DeploymentPreviewAction::CycleNext
+                }
+            }
+            KeyCode::BackTab => DeploymentPreviewAction::CyclePrev,
             KeyCode::Enter => {
                 if self.focus == 1 {
                     match self.selected_action {
@@ -131,20 +145,35 @@ impl DeploymentPreviewState {
 
     /// Render the deployment preview
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        let chunks = Layout::default()
+        // Layout: Title bar at top (3 rows for borders), content below
+        let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8),  // Summary
-                Constraint::Min(10),    // Library details
-                Constraint::Length(8),  // Actions
-                Constraint::Length(3),  // Controls
+                Constraint::Length(UnifiedTitleBar::height()), // Title bar with borders
+                Constraint::Length(6),                          // Summary
+                Constraint::Min(10),                            // 3-pane content
             ])
             .split(area);
 
-        self.render_summary(f, chunks[0]);
-        self.render_library_details(f, chunks[1]);
-        self.render_actions(f, chunks[2]);
-        self.render_controls(f, chunks[3]);
+        // Render unified title bar
+        let titlebar = UnifiedTitleBar::new(LateralView::Deploy);
+        titlebar.render(f, main_chunks[0]);
+
+        self.render_summary(f, main_chunks[1]);
+
+        // 3-pane layout: Libraries | Details | Actions
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(25), // Library list
+                Constraint::Percentage(50), // Details
+                Constraint::Percentage(25), // Actions
+            ])
+            .split(main_chunks[2]);
+
+        self.render_library_list(f, content_chunks[0]);
+        self.render_selected_details(f, content_chunks[1]);
+        self.render_actions(f, content_chunks[2]);
     }
 
     fn render_summary(&self, f: &mut Frame, area: Rect) {
@@ -194,23 +223,14 @@ impl DeploymentPreviewState {
         f.render_widget(para, area);
     }
 
-    fn render_library_details(&mut self, f: &mut Frame, area: Rect) {
+    fn render_library_list(&mut self, f: &mut Frame, area: Rect) {
         if self.statuses.is_empty() {
-            let para = Paragraph::new("No libraries configured for deployment")
+            let para = Paragraph::new("No libraries configured")
                 .block(Block::default().borders(Borders::ALL).title("Libraries"));
             f.render_widget(para, area);
             return;
         }
 
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(30), // Library list
-                Constraint::Percentage(70), // Details
-            ])
-            .split(area);
-
-        // Library list
         let items: Vec<ListItem> = self
             .statuses
             .iter()
@@ -251,9 +271,10 @@ impl DeploymentPreviewState {
                     Style::default()
                 }),
         );
-        f.render_stateful_widget(list, chunks[0], &mut self.library_list_state);
+        f.render_stateful_widget(list, area, &mut self.library_list_state);
+    }
 
-        // Selected library details
+    fn render_selected_details(&self, f: &mut Frame, area: Rect) {
         if let Some(status) = self.statuses.get(self.selected_library) {
             let mut lines = vec![
                 Line::from(Span::styled(
@@ -316,7 +337,11 @@ impl DeploymentPreviewState {
 
             let para = Paragraph::new(lines)
                 .block(Block::default().borders(Borders::ALL).title("Details"));
-            f.render_widget(para, chunks[1]);
+            f.render_widget(para, area);
+        } else {
+            let para = Paragraph::new("No library selected")
+                .block(Block::default().borders(Borders::ALL).title("Details"));
+            f.render_widget(para, area);
         }
     }
 
@@ -373,23 +398,5 @@ impl DeploymentPreviewState {
                 }),
         );
         f.render_stateful_widget(list, area, &mut self.action_list_state);
-    }
-
-    fn render_controls(&self, f: &mut Frame, area: Rect) {
-        let controls = Line::from(vec![
-            Span::styled("Up/Down", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": Navigate | "),
-            Span::styled("Tab", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": Switch focus | "),
-            Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": Select | "),
-            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": Cancel"),
-        ]);
-
-        let para = Paragraph::new(controls)
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL));
-        f.render_widget(para, area);
     }
 }

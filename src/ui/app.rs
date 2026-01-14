@@ -122,6 +122,8 @@ pub struct EyeAnimation {
     pub heartbeat_pending: bool,
     /// Set when a blink completes and d20 triggers heartbeat (>= 13)
     heartbeat_roll_result: Option<HeartbeatRollResult>,
+    /// When true, next blink completion guarantees heartbeat (bypasses d20)
+    force_next_heartbeat: bool,
 }
 
 impl Default for EyeAnimation {
@@ -134,6 +136,7 @@ impl Default for EyeAnimation {
             flutter_count: 0,
             heartbeat_pending: false,
             heartbeat_roll_result: None,
+            force_next_heartbeat: false,
         }
     }
 }
@@ -301,10 +304,15 @@ impl EyeAnimation {
                         self.state_start_time = now;
                         self.next_blink_delay_secs = Self::random_blink_delay();
 
-                        // Blink completed - roll d20 for heartbeat (>= 13)
-                        let roll = Self::roll_heartbeat();
-                        if roll != HeartbeatRollResult::Nothing {
-                            self.heartbeat_roll_result = Some(roll);
+                        // Blink completed - check forced heartbeat or roll d20
+                        if self.force_next_heartbeat {
+                            self.heartbeat_roll_result = Some(HeartbeatRollResult::Normal);
+                            self.force_next_heartbeat = false;
+                        } else {
+                            let roll = Self::roll_heartbeat();
+                            if roll != HeartbeatRollResult::Nothing {
+                                self.heartbeat_roll_result = Some(roll);
+                            }
                         }
                     }
                 }
@@ -332,10 +340,15 @@ impl EyeAnimation {
                         self.state_start_time = now;
                         self.next_blink_delay_secs = Self::random_blink_delay();
 
-                        // Flutter blink completed - roll d20 for heartbeat (>= 13)
-                        let roll = Self::roll_heartbeat();
-                        if roll != HeartbeatRollResult::Nothing {
-                            self.heartbeat_roll_result = Some(roll);
+                        // Flutter blink completed - check forced heartbeat or roll d20
+                        if self.force_next_heartbeat {
+                            self.heartbeat_roll_result = Some(HeartbeatRollResult::Normal);
+                            self.force_next_heartbeat = false;
+                        } else {
+                            let roll = Self::roll_heartbeat();
+                            if roll != HeartbeatRollResult::Nothing {
+                                self.heartbeat_roll_result = Some(roll);
+                            }
                         }
                     }
                 }
@@ -367,6 +380,32 @@ impl EyeAnimation {
             self.state = EyeAnimationState::Closed;
             self.state_start_time = Instant::now();
         }
+    }
+
+    /// Schedule a guaranteed heartbeat on the next blink completion.
+    ///
+    /// This is lazy scheduling - the heartbeat won't run until the next
+    /// natural blink completes, but it's guaranteed to trigger then
+    /// (bypassing the d20 roll).
+    ///
+    /// Use this after mutations complete to refresh signals.
+    pub fn schedule_heartbeat(&mut self) {
+        self.force_next_heartbeat = true;
+    }
+
+    /// Trigger an immediate flutter blink sequence.
+    ///
+    /// Use this when entering the insights view to:
+    /// 1. Give visual feedback (rapid blink)
+    /// 2. Guarantee a heartbeat at the end of the flutter
+    ///
+    /// The flutter consists of 3 rapid blinks before returning to idle.
+    pub fn trigger_flutter(&mut self) {
+        self.current_blink_type = BlinkType::Flutter;
+        self.flutter_count = 2; // Will do 3 total (initial + 2 more)
+        self.state = EyeAnimationState::Closing;
+        self.state_start_time = Instant::now();
+        self.force_next_heartbeat = true; // Guarantee heartbeat after flutter
     }
 }
 

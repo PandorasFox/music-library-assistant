@@ -8,22 +8,37 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::widgets::{LateralView, UnifiedTitleBar};
+
 use super::state::CorpusBrowserState;
 
 impl CorpusBrowserState {
     /// Render the corpus browser.
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
+        // Layout: Title bar at top (3 rows for borders), content below
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(UnifiedTitleBar::height()), // Title bar with borders
+                Constraint::Min(5),                             // Content
+            ])
+            .split(area);
+
+        // Render unified title bar
+        let titlebar = UnifiedTitleBar::new(LateralView::CorpusBrowser);
+        titlebar.render(f, main_chunks[0]);
+
         // Two-pane layout: 2/3 tree, 1/3 preview
-        let chunks = Layout::default()
+        let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Percentage(65),
                 Constraint::Percentage(35),
             ])
-            .split(area);
+            .split(main_chunks[1]);
 
-        self.render_tree_pane(f, chunks[0]);
-        self.render_preview_pane(f, chunks[1]);
+        self.render_tree_pane(f, content_chunks[0]);
+        self.render_preview_pane(f, content_chunks[1]);
 
         // Render overlays
         if self.is_match_selection_mode() {

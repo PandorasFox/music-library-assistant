@@ -1,5 +1,19 @@
 //! Multi-pane Main Menu Navigation
 //!
+//! **TODO: DEPRECATED MODULE**
+//!
+//! This module provided the main menu UI, which has been replaced by the Insights
+//! view as the primary interface. The following types may still be in use:
+//! - `CommandAction` - action dispatch enum for menu commands
+//! - `TransitionTarget` - target modes for state transitions
+//! - `BackgroundTask` / `ReportType` - background operation identifiers
+//! - `DirBrowserContext` - context for directory browser launches
+//! - `MainMenuState` - may be removable (state updates now go unused)
+//!
+//! Review call sites in mod.rs for actual usage. Most menu-based flows are now
+//! inaccessible until wired through the Insights view's flow launcher.
+//!
+//! Original description:
 //! Provides a three-column navigation system:
 //! - Left pane: Categories (Build Indices, Insight, Corpus Ops, etc.)
 //! - Middle pane: Commands within selected category
@@ -125,6 +139,8 @@ pub enum TransitionTarget {
     AlbumArtistFlow,
     /// Album tag resolution flow
     AlbumFlow,
+    /// Corpus insights view (lateral view ring)
+    Insights,
 }
 
 /// Report types
@@ -480,6 +496,7 @@ impl MainMenuState {
                         TransitionTarget::CorpusBrowser => "Browse corpus files with metadata preview",
                         TransitionTarget::AlbumArtistFlow => "Unified album artist resolution workflow",
                         TransitionTarget::AlbumFlow => "Album tag canonicalization with EP detection",
+                        TransitionTarget::Insights => "Real-time computed insights over health signals",
                     };
                     lines.push(desc.to_string());
                 }
@@ -568,6 +585,11 @@ fn build_insight_category() -> Category {
     Category {
         name: "Insight & Health".to_string(),
         commands: vec![
+            Command {
+                label: "Corpus Insights".to_string(),
+                action: CommandAction::Transition(TransitionTarget::Insights),
+                description: "View real-time computed insights over health signals".to_string(),
+            },
             Command {
                 label: "Health Status".to_string(),
                 action: CommandAction::Background(BackgroundTask::GenerateReport {

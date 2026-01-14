@@ -36,6 +36,7 @@ pub mod collision;
 mod detection;
 pub mod filter;
 mod heartbeat;
+pub mod insights;
 pub mod library;
 pub mod normalization;
 pub mod tag_cloud;
@@ -56,3 +57,9 @@ pub use library::{
     LibraryHealthResult, OrphanFile, StaleDeployment,
 };
 pub use tag_cloud::{spawn_tag_cloud_build, TagCloud};
+
+// Insights - computed views over signals
+pub use insights::{
+    compute_one_dim_insights, spawn_multi_dim_insight, FlowType, Insight, InsightSeverity,
+    MultiDimInsightType,
+};

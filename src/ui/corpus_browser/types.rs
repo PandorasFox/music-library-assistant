@@ -67,6 +67,10 @@ pub enum CorpusBrowserAction {
     EditFile(PathBuf),
     /// User pressed Esc - cancel and return to previous mode
     Cancel,
+    /// Cycle to next view in lateral ring (Tab)
+    CycleNext,
+    /// Cycle to previous view in lateral ring (Shift-Tab)
+    CyclePrev,
 }
 
 /// Search mode state for type-to-jump functionality.

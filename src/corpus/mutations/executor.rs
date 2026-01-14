@@ -381,7 +381,7 @@ pub fn execute_with_progress(
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use super::super::types::TagEdit;
+    use super::super::types::{TagEdit, WorkUnit};
 
     #[test]
     fn test_empty_execution() {

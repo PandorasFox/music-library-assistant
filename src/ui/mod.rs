@@ -26,6 +26,7 @@ pub mod dir_browser;
 pub mod drop_flow;
 pub mod flows;
 pub mod helpers;
+pub mod insights_view;
 pub mod main_menu;
 pub mod render;
 pub mod shared;
@@ -59,6 +60,9 @@ use crate::ops::operation::{
 use crate::ops::{reports, scanner, ScanMessage};
 
 use app::{EyeAnimation, HeartbeatRollResult};
+// TODO: main_menu module is deprecated. Insights is now the main view.
+// Review main_menu.rs for code that may still be needed (e.g., CommandAction, TransitionTarget).
+// See main_menu.rs for details on what functionality lived there.
 use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 use crate::corpus::mutations::MigrationRegistry;
@@ -160,6 +164,10 @@ pub(crate) enum UiMode {
     DirectoryTagEditor,
     /// Deploy conflict resolution - review accumulated changes before commit
     DeployConflictReview,
+    /// Full-screen insights view (part of lateral view ring)
+    Insights,
+    /// Loading splash screen - centered eye with status message
+    LoadingSplash,
 }
 
 /// Re-export from drop_flow module
@@ -168,15 +176,92 @@ pub(crate) use drop_flow::DropMissingState;
 /// State for the exit confirmation modal.
 /// Default selection is "No" (stay in application).
 /// Pressing Esc/Enter/Space when selected_no=true returns to main menu.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ExitConfirmModalState {
     /// True = "No" selected (default), False = "Yes" selected
     pub selected_no: bool,
+    /// True if operations are in progress (shows warning), False for simple exit prompt
+    pub has_operations: bool,
 }
 
-impl Default for ExitConfirmModalState {
-    fn default() -> Self {
-        Self { selected_no: true }
+impl ExitConfirmModalState {
+    pub fn new(has_operations: bool) -> Self {
+        Self {
+            selected_no: true,
+            has_operations,
+        }
+    }
+}
+
+/// Type of loading operation for the splash screen
+#[derive(Debug, Clone)]
+pub(crate) enum LoadingType {
+    /// Initial corpus heartbeat check
+    Heartbeat,
+    /// Corpus scan in progress
+    CorpusScan,
+    /// Legacy library scan
+    LegacyScan,
+    /// General operation with custom message
+    Operation(String),
+}
+
+impl LoadingType {
+    /// Get the display message for this loading type
+    pub fn message(&self) -> &str {
+        match self {
+            LoadingType::Heartbeat => "Checking corpus health...",
+            LoadingType::CorpusScan => "Scanning corpus...",
+            LoadingType::LegacyScan => "Scanning legacy library...",
+            LoadingType::Operation(msg) => msg,
+        }
+    }
+}
+
+/// State for the loading splash screen
+#[derive(Debug, Clone)]
+pub(crate) struct LoadingSplashState {
+    /// Type of loading operation
+    pub loading_type: LoadingType,
+    /// Optional progress (0.0 to 1.0)
+    pub progress: Option<f32>,
+    /// Optional progress detail (e.g., "1234 / 5678 files")
+    pub progress_detail: Option<String>,
+    /// Mode to transition to when loading completes
+    pub target_mode: UiMode,
+}
+
+impl LoadingSplashState {
+    /// Create a new loading splash for heartbeat
+    pub fn heartbeat() -> Self {
+        Self {
+            loading_type: LoadingType::Heartbeat,
+            progress: None,
+            progress_detail: None,
+            target_mode: UiMode::Insights,
+        }
+    }
+
+    /// Create a loading splash for a scan operation
+    pub fn scan(is_corpus: bool) -> Self {
+        Self {
+            loading_type: if is_corpus {
+                LoadingType::CorpusScan
+            } else {
+                LoadingType::LegacyScan
+            },
+            progress: None,
+            progress_detail: None,
+            target_mode: UiMode::Insights,
+        }
+    }
+
+    /// Update progress
+    pub fn set_progress(&mut self, completed: usize, total: usize) {
+        if total > 0 {
+            self.progress = Some(completed as f32 / total as f32);
+            self.progress_detail = Some(format!("{} / {} files", completed, total));
+        }
     }
 }
 
@@ -275,9 +360,13 @@ pub(crate) struct App {
     directory_tag_editor_modal: Option<tag_editor::types::DirectoryTagEditorModal>,
     // Exit confirmation modal
     exit_confirm_modal_state: Option<ExitConfirmModalState>,
+    // Loading splash screen
+    loading_splash_state: Option<LoadingSplashState>,
     // Deploy conflict resolution flow
     deploy_conflict_review: Option<DeployConflictReviewState>,
     deploy_conflict_accumulated: Vec<DeployConflictGroupChanges>,
+    // Insights view (lateral view ring)
+    insights_view: Option<insights_view::InsightsViewState>,
 
     // Background operations (supports multiple concurrent)
     operations: OperationManager,
@@ -316,7 +405,7 @@ impl App {
             config,
             should_quit: false,
             status_message: None,
-            mode: UiMode::MainMenu,
+            mode: UiMode::Insights,
             tag_editor: None,
             tag_editor_modal: None,
             dir_browser: None,
@@ -345,8 +434,10 @@ impl App {
             directory_tag_editor: None,
             directory_tag_editor_modal: None,
             exit_confirm_modal_state: None,
+            loading_splash_state: None,
             deploy_conflict_review: None,
             deploy_conflict_accumulated: Vec::new(),
+            insights_view: None,
             operations: OperationManager::new(),
             legacy_scan_receiver: None,
             legacy_scan_type: None,
@@ -392,6 +483,8 @@ impl App {
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         match self.mode {
             UiMode::MainMenu => {
+                // TODO: Dead code - MainMenu mode is no longer reachable.
+                // Insights is now the main view. See main_menu.rs for details.
                 let action = self.main_menu.handle_key(key);
                 self.handle_menu_action(action);
             }
@@ -475,7 +568,7 @@ impl App {
                                 0 => {
                                     // Return to main menu
                                     self.canon_commit_modal_state = None;
-                                    self.mode = UiMode::MainMenu;
+                                    self.mode = UiMode::Insights;
                                 }
                                 1 => {
                                     // Proceed to deployment review
@@ -488,7 +581,7 @@ impl App {
                         KeyCode::Esc => {
                             // Esc also returns to main menu
                             self.canon_commit_modal_state = None;
-                            self.mode = UiMode::MainMenu;
+                            self.mode = UiMode::Insights;
                         }
                         _ => {}
                     }
@@ -503,27 +596,27 @@ impl App {
                         }
                         KeyCode::Enter | KeyCode::Char(' ') => {
                             if state.selected_no {
-                                // "No" selected - return to main menu with Exit highlighted
+                                // "No" selected - return to Insights view
                                 self.exit_confirm_modal_state = None;
-                                self.mode = UiMode::MainMenu;
+                                self.mode = UiMode::Insights;
                             } else {
                                 // "Yes" selected - actually quit
                                 self.should_quit = true;
                             }
                         }
                         KeyCode::Esc => {
-                            // Esc returns to main menu with Exit highlighted
+                            // Esc returns to Insights view
                             self.exit_confirm_modal_state = None;
-                            self.mode = UiMode::MainMenu;
+                            self.mode = UiMode::Insights;
                         }
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             // 'y' confirms exit
                             self.should_quit = true;
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') => {
-                            // 'n' cancels
+                            // 'n' cancels - return to Insights view
                             self.exit_confirm_modal_state = None;
-                            self.mode = UiMode::MainMenu;
+                            self.mode = UiMode::Insights;
                         }
                         _ => {}
                     }
@@ -601,7 +694,92 @@ impl App {
             UiMode::DeployConflictReview => {
                 self.handle_deploy_conflict_review_key(key);
             }
+            UiMode::Insights => {
+                if let Some(ref mut view) = self.insights_view {
+                    let action = view.handle_key(key);
+                    self.handle_insights_action(action);
+                }
+            }
+            UiMode::LoadingSplash => {
+                // Loading splash ignores most keys - can't interact during loading
+                // Could potentially allow Esc to cancel certain operations in the future
+            }
         }
+    }
+
+    fn handle_insights_action(&mut self, action: insights_view::InsightsAction) {
+        match action {
+            insights_view::InsightsAction::None => {}
+            insights_view::InsightsAction::RequestQuit => {
+                // Check if operations are pending
+                if self.has_pending_operations() {
+                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                } else {
+                    // Show exit confirmation modal
+                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
+                    self.mode = UiMode::ExitConfirmModal;
+                }
+            }
+            insights_view::InsightsAction::CycleNext => {
+                // Insights → Deploy
+                self.insights_view = None;
+                self.start_deployment_preview();
+            }
+            insights_view::InsightsAction::CyclePrev => {
+                // Insights → Corpus Browser
+                self.insights_view = None;
+                self.start_corpus_browser();
+            }
+            insights_view::InsightsAction::LaunchFlow => {
+                // Stub: flows not yet implemented
+                self.status_message = Some("Flows not yet implemented".to_string());
+            }
+        }
+    }
+
+    /// Check if there are any pending operations (heartbeat, scans, etc.)
+    fn has_pending_operations(&self) -> bool {
+        self.heartbeat_receiver.is_some()
+            || self.legacy_scan_receiver.is_some()
+            || !self.operations.is_empty()
+    }
+
+    /// Start the insights view with current heartbeat data.
+    ///
+    /// Initializes the view with one-dim insights computed immediately,
+    /// spawns background computation for multi-dim insights.
+    fn start_insights_view(&mut self) {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        // Get current heartbeat result (must have completed at least one)
+        let heartbeat = match &self.heartbeat_result {
+            Some(h) => h.clone(),
+            None => {
+                self.status_message = Some("Heartbeat not yet completed - please wait".to_string());
+                return;
+            }
+        };
+
+        // Initialize insights view
+        let mut view = insights_view::InsightsViewState::new();
+        view.initialize(&db, db_path.to_str().unwrap_or(""), heartbeat);
+
+        self.insights_view = Some(view);
+        self.mode = UiMode::Insights;
     }
 
     fn handle_menu_action(&mut self, action: MenuAction) {
@@ -628,9 +806,9 @@ impl App {
                 self.status_message = Some(msg);
             }
             CommandAction::Quit => {
-                // If operations are running, show confirmation modal
+                // If operations are running, show warning confirmation modal
                 if !self.operations.is_empty() {
-                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
+                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::new(true));
                     self.mode = UiMode::ExitConfirmModal;
                 } else {
                     self.should_quit = true;
@@ -979,7 +1157,7 @@ impl App {
                 }
                 drop_flow::DropMissingAction::Cancel => {
                     self.drop_missing_state = None;
-                    self.mode = UiMode::MainMenu;
+                    self.mode = UiMode::Insights;
                     self.status_message = Some("Drop cancelled".to_string());
                 }
             }
@@ -992,7 +1170,7 @@ impl App {
             Some(state) => state.missing_tracks.clone(),
             None => {
                 self.status_message = Some("No missing tracks to drop".to_string());
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -1021,7 +1199,7 @@ impl App {
         }
 
         self.drop_missing_state = None;
-        self.mode = UiMode::MainMenu;
+        self.mode = UiMode::Insights;
     }
 
     fn transition_to(&mut self, target: TransitionTarget) {
@@ -1055,6 +1233,9 @@ impl App {
             }
             TransitionTarget::AlbumFlow => {
                 self.start_album_flow();
+            }
+            TransitionTarget::Insights => {
+                self.start_insights_view();
             }
         }
     }
@@ -1158,6 +1339,9 @@ impl App {
         self.mode = UiMode::ClusterDialogue;
     }
 
+    // TODO: Uses main_menu::DirBrowserContext - review if this flow is still accessible.
+    // Currently reachable via TransitionTarget::DirBrowser from execute_command.
+    // See main_menu.rs for details.
     fn start_dir_browser(&mut self, context: main_menu::DirBrowserContext) {
         let config = match context {
             main_menu::DirBrowserContext::Sleuthing => dir_browser::DirBrowserConfig::for_sleuthing(),
@@ -1187,7 +1371,7 @@ impl App {
             corpus_browser::CorpusBrowserAction::None => {}
             corpus_browser::CorpusBrowserAction::Cancel => {
                 self.corpus_browser = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
             corpus_browser::CorpusBrowserAction::EditDirectory(path) => {
                 // Start directory tag editor with aggregated view
@@ -1196,6 +1380,16 @@ impl App {
             corpus_browser::CorpusBrowserAction::EditFile(path) => {
                 // Load single track for editing
                 self.start_tag_editor_for_path(&path, false);
+            }
+            corpus_browser::CorpusBrowserAction::CycleNext => {
+                // Corpus Browser → Insights
+                self.corpus_browser = None;
+                self.start_insights_view();
+            }
+            corpus_browser::CorpusBrowserAction::CyclePrev => {
+                // Corpus Browser → Deploy
+                self.corpus_browser = None;
+                self.start_deployment_preview();
             }
         }
     }
@@ -1206,7 +1400,7 @@ impl App {
             Err(e) => {
                 self.status_message = Some(format!("Config error: {}", e));
                 self.corpus_browser = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -1216,7 +1410,7 @@ impl App {
             Err(e) => {
                 self.status_message = Some(format!("Database error: {}", e));
                 self.corpus_browser = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -1233,7 +1427,7 @@ impl App {
                         e
                     ));
                     self.corpus_browser = None;
-                    self.mode = UiMode::MainMenu;
+                    self.mode = UiMode::Insights;
                     return;
                 }
             }
@@ -1247,7 +1441,7 @@ impl App {
                         path.display()
                     ));
                     self.corpus_browser = None;
-                    self.mode = UiMode::MainMenu;
+                    self.mode = UiMode::Insights;
                     return;
                 }
             };
@@ -1262,7 +1456,7 @@ impl App {
                         e
                     ));
                     self.corpus_browser = None;
-                    self.mode = UiMode::MainMenu;
+                    self.mode = UiMode::Insights;
                     return;
                 }
             };
@@ -1300,7 +1494,7 @@ impl App {
                             path.display()
                         ));
                         self.corpus_browser = None;
-                        self.mode = UiMode::MainMenu;
+                        self.mode = UiMode::Insights;
                         return;
                     }
                     Err(e) => {
@@ -1310,7 +1504,7 @@ impl App {
                             e
                         ));
                         self.corpus_browser = None;
-                        self.mode = UiMode::MainMenu;
+                        self.mode = UiMode::Insights;
                         return;
                     }
                 }
@@ -1325,7 +1519,7 @@ impl App {
                 path.display()
             ));
             self.corpus_browser = None;
-            self.mode = UiMode::MainMenu;
+            self.mode = UiMode::Insights;
             return;
         }
 
@@ -1349,7 +1543,7 @@ impl App {
             dir_browser::DirBrowserAction::Cancel => {
                 self.dir_browser = None;
                 self.browser_context = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
             dir_browser::DirBrowserAction::Proceed(paths) => {
                 let context = self.browser_context.take();
@@ -1361,7 +1555,7 @@ impl App {
                     }
                     None => {
                         self.status_message = Some("No browser context set".to_string());
-                        self.mode = UiMode::MainMenu;
+                        self.mode = UiMode::Insights;
                     }
                 }
             }
@@ -1381,7 +1575,7 @@ impl App {
             Err(e) => {
                 let _ = config::log_message(&format!("ERROR: Failed to get db path: {}", e));
                 self.status_message = Some(format!("Config error: {}", e));
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -1392,7 +1586,7 @@ impl App {
             Err(e) => {
                 let _ = config::log_message(&format!("ERROR: Failed to open database: {}", e));
                 self.status_message = Some(format!("Database error: {}", e));
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -1408,7 +1602,7 @@ impl App {
             None => {
                 let _ = config::log_message("ERROR: stash-dir not configured");
                 self.status_message = Some("stash-dir not configured".to_string());
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -1423,7 +1617,7 @@ impl App {
             Err(e) => {
                 let _ = config::log_message(&format!("ERROR: find_duplicates failed: {}", e));
                 self.status_message = Some(format!("Error finding duplicates: {}", e));
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -1431,7 +1625,7 @@ impl App {
         if clusters.is_empty() {
             let _ = config::log_message("No duplicates found - returning to main menu");
             self.status_message = Some("No duplicates found between selected directories".to_string());
-            self.mode = UiMode::MainMenu;
+            self.mode = UiMode::Insights;
             return;
         }
 
@@ -1463,7 +1657,7 @@ impl App {
             tag_editor::TagEditorAction::None => {}
             tag_editor::TagEditorAction::Exit => {
                 self.tag_editor = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
             tag_editor::TagEditorAction::SaveAll => {
                 self.save_tag_editor_changes(false);
@@ -1598,7 +1792,7 @@ impl App {
         if changes.is_empty() && !advance_to_next {
             self.status_message = Some("No changes to save".to_string());
             self.tag_editor = None;
-            self.mode = UiMode::MainMenu;
+            self.mode = UiMode::Insights;
             return;
         }
 
@@ -1814,7 +2008,7 @@ impl App {
                     } else {
                         // No more groups
                         self.tag_editor = None;
-                        self.mode = UiMode::MainMenu;
+                        self.mode = UiMode::Insights;
                         self.status_message = Some(format!(
                             "{}{}{}. All conflicts processed.",
                             base_msg, resolved_msg, stale_msg
@@ -1824,7 +2018,7 @@ impl App {
             }
         } else {
             self.tag_editor = None;
-            self.mode = UiMode::MainMenu;
+            self.mode = UiMode::Insights;
         }
     }
 
@@ -1848,7 +2042,7 @@ impl App {
                             Err(e) => {
                                 self.status_message = Some(format!("Config error: {}", e));
                                 self.dialogue_summary = None;
-                                self.mode = UiMode::MainMenu;
+                                self.mode = UiMode::Insights;
                                 return;
                             }
                         };
@@ -1886,17 +2080,17 @@ impl App {
                     self.status_message = Some("No summary state".to_string());
                 }
                 self.dialogue_summary = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
             dialogue::DialogueResult::Revert => {
                 self.status_message = Some("Changes reverted".to_string());
                 self.dialogue_summary = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
             dialogue::DialogueResult::Cancel => {
                 self.dialogue = None;
                 self.dialogue_summary = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
         }
     }
@@ -1923,7 +2117,7 @@ impl App {
             }
             dedup_flow::ClusterDialogueAction::Cancel => {
                 self.cluster_dialogue = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 self.status_message = Some("Deduplication cancelled".to_string());
             }
             dedup_flow::ClusterDialogueAction::StatusMessage(msg) => {
@@ -1971,7 +2165,7 @@ impl App {
             }
             dedup_flow::BulkPromptAction::Cancel => {
                 self.bulk_prompt = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 self.status_message = Some("Deduplication cancelled".to_string());
             }
         }
@@ -2014,7 +2208,7 @@ impl App {
                             let _ = config::log_message(&format!("ERROR: Failed to get db path: {}", e));
                             self.status_message = Some(format!("Config error: {}", e));
                             self.session_review = None;
-                            self.mode = UiMode::MainMenu;
+                            self.mode = UiMode::Insights;
                             return;
                         }
                     };
@@ -2025,7 +2219,7 @@ impl App {
                             let _ = config::log_message(&format!("ERROR: Failed to open database: {}", e));
                             self.status_message = Some(format!("Database error: {}", e));
                             self.session_review = None;
-                            self.mode = UiMode::MainMenu;
+                            self.mode = UiMode::Insights;
                             return;
                         }
                     };
@@ -2054,7 +2248,7 @@ impl App {
                     }
                 }
                 self.session_review = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
             dedup_flow::SessionReviewAction::Preview => {
                 // Dry run - show what would happen
@@ -2140,7 +2334,7 @@ impl App {
             dedup_flow::SessionReviewAction::Cancel => {
                 let _ = config::log_message("=== SESSION REVIEW: CANCELLED ===");
                 self.session_review = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 self.status_message = Some("Session cancelled, no changes made".to_string());
             }
         }
@@ -2169,7 +2363,7 @@ impl App {
                     if all_changes.is_empty() {
                         self.status_message = Some("No deployment changes needed".to_string());
                         self.deployment_preview = None;
-                        self.mode = UiMode::MainMenu;
+                        self.mode = UiMode::Insights;
                         return;
                     }
 
@@ -2262,13 +2456,23 @@ impl App {
                 }
                 // Return to main menu immediately - deployment runs in background
                 self.deployment_preview = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
             }
             deploy_flow::DeploymentPreviewAction::Cancel => {
                 let _ = config::log_message("Deployment preview cancelled");
                 self.deployment_preview = None;
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 self.status_message = Some("Deployment cancelled".to_string());
+            }
+            deploy_flow::DeploymentPreviewAction::CycleNext => {
+                // Deploy → Corpus Browser
+                self.deployment_preview = None;
+                self.start_corpus_browser();
+            }
+            deploy_flow::DeploymentPreviewAction::CyclePrev => {
+                // Deploy → Insights
+                self.deployment_preview = None;
+                self.start_insights_view();
             }
         }
     }
@@ -2429,6 +2633,13 @@ impl App {
                             }
                         }
 
+                        // Update loading splash progress if in that mode
+                        if self.mode == UiMode::LoadingSplash {
+                            if let Some(ref mut splash) = self.loading_splash_state {
+                                splash.set_progress(progress.completed_items, progress.total_items);
+                            }
+                        }
+
                         // Store progress in a "virtual" tracked operation for rendering
                         self.operations.update_legacy_progress(progress);
                     }
@@ -2511,6 +2722,26 @@ impl App {
             self.throughput_samples.clear();
             // Refresh corpus summary after operation completes
             self.refresh_corpus_summary();
+
+            // Transition from loading splash to target mode (e.g., Insights)
+            if self.mode == UiMode::LoadingSplash {
+                if let Some(ref splash) = self.loading_splash_state {
+                    let target = splash.target_mode;
+                    self.loading_splash_state = None;
+                    self.mode = target;
+
+                    // After scan completes, we need heartbeat data for Insights
+                    // Start a heartbeat if we don't have one
+                    if self.heartbeat_result.is_none() && self.heartbeat_receiver.is_none() {
+                        let rx = spawn_heartbeat(&self.config);
+                        self.heartbeat_receiver = Some(rx);
+                        self.eye.set_heartbeat_pending(true);
+                        // Show new splash for heartbeat
+                        self.loading_splash_state = Some(LoadingSplashState::heartbeat());
+                        self.mode = UiMode::LoadingSplash;
+                    }
+                }
+            }
         }
     }
 
@@ -2553,6 +2784,8 @@ impl App {
     }
 
     /// Refresh the cached corpus summary for the info panel
+    // TODO: This updates main_menu state which is no longer displayed.
+    // Consider removing or repurposing for Insights view. See main_menu.rs.
     fn refresh_corpus_summary(&mut self) {
         let db_path = match config::get_db_path() {
             Ok(p) => p,
@@ -2571,13 +2804,51 @@ impl App {
     fn update_heartbeat(&mut self) {
         if let Some(ref rx) = self.heartbeat_receiver {
             if let Ok(result) = rx.try_recv() {
-                // Heartbeat completed - pass result to main menu for display
+                // TODO: main_menu.set_heartbeat_result updates state no longer displayed.
+                // Consider removing. See main_menu.rs.
                 self.main_menu.set_heartbeat_result(result.clone());
-                self.heartbeat_result = Some(result);
+                self.heartbeat_result = Some(result.clone());
                 self.heartbeat_receiver = None;
                 self.eye.set_heartbeat_pending(false);
+
+                // Transition from loading splash to target mode
+                if self.mode == UiMode::LoadingSplash {
+                    if let Some(ref splash) = self.loading_splash_state {
+                        let target = splash.target_mode;
+                        self.loading_splash_state = None;
+                        self.mode = target;
+                    }
+                    // Initialize insights view with heartbeat data
+                    self.initialize_insights_with_heartbeat(result);
+                } else if self.mode == UiMode::Insights && self.insights_view.is_none() {
+                    // If we're already in Insights mode and view not yet initialized
+                    self.initialize_insights_with_heartbeat(result);
+                }
             }
         }
+    }
+
+    /// Initialize insights view with a completed heartbeat result
+    fn initialize_insights_with_heartbeat(&mut self, heartbeat: HeartbeatResult) {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Config error: {}", e));
+                return;
+            }
+        };
+
+        let db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Database error: {}", e));
+                return;
+            }
+        };
+
+        let mut view = insights_view::InsightsViewState::new();
+        view.initialize(&db, db_path.to_str().unwrap_or(""), heartbeat);
+        self.insights_view = Some(view);
     }
 
     // ========================================================================
@@ -2880,7 +3151,7 @@ impl App {
                 self.status_message = Some(format!("Config error: {}", e));
                 self.deploy_conflict_review = None;
                 self.deploy_conflict_accumulated.clear();
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -2891,7 +3162,7 @@ impl App {
                 self.status_message = Some(format!("Database error: {}", e));
                 self.deploy_conflict_review = None;
                 self.deploy_conflict_accumulated.clear();
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -2906,7 +3177,7 @@ impl App {
             self.status_message = Some("No changes to commit".to_string());
             self.deploy_conflict_review = None;
             self.deploy_conflict_accumulated.clear();
-            self.mode = UiMode::MainMenu;
+            self.mode = UiMode::Insights;
             return;
         }
 
@@ -2917,7 +3188,7 @@ impl App {
                 self.status_message = Some(format!("Execution error: {}", e));
                 self.deploy_conflict_review = None;
                 self.deploy_conflict_accumulated.clear();
-                self.mode = UiMode::MainMenu;
+                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -2951,7 +3222,7 @@ impl App {
         // Clear state
         self.deploy_conflict_review = None;
         self.deploy_conflict_accumulated.clear();
-        self.mode = UiMode::MainMenu;
+        self.mode = UiMode::Insights;
     }
 
     fn discard_deploy_conflict_changes(&mut self) {
@@ -2962,7 +3233,7 @@ impl App {
         ));
         self.deploy_conflict_review = None;
         self.deploy_conflict_accumulated.clear();
-        self.mode = UiMode::MainMenu;
+        self.mode = UiMode::Insights;
     }
 }
 
@@ -3002,7 +3273,9 @@ fn render(f: &mut Frame, app: &mut App) {
         directory_tag_editor: app.directory_tag_editor.as_mut(),
         directory_tag_editor_modal: app.directory_tag_editor_modal.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
+        loading_splash_state: app.loading_splash_state.as_ref(),
         deploy_conflict_review: app.deploy_conflict_review.as_ref(),
+        insights_view: app.insights_view.as_mut(),
         heartbeat_result: app.heartbeat_result.as_ref(),
         heartbeat_pending: app.heartbeat_receiver.is_some(),
         eye: &app.eye,
@@ -3267,6 +3540,13 @@ pub fn run_menu(config: Config) -> Result<()> {
         let rx = spawn_heartbeat(&app.config);
         app.heartbeat_receiver = Some(rx);
         app.eye.set_heartbeat_pending(true);
+        // Show loading splash while waiting for heartbeat
+        app.loading_splash_state = Some(LoadingSplashState::heartbeat());
+        app.mode = UiMode::LoadingSplash;
+    } else if app.first_time_scan_active {
+        // Show loading splash for first-time scan
+        app.loading_splash_state = Some(LoadingSplashState::scan(true));
+        app.mode = UiMode::LoadingSplash;
     }
 
     app.refresh_corpus_summary();

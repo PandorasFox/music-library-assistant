@@ -16,6 +16,7 @@ mod layout;
 mod list;
 mod modal;
 mod status;
+mod titlebar;
 
 // Layout widgets
 pub use layout::{FocusablePane, PaneConfig, PaneStyle, ThreePaneLayout, TwoPaneLayout};
@@ -31,3 +32,6 @@ pub use list::{SelectableItem, SelectableList, SelectableListState, SelectableLi
 
 // Status widgets
 pub use status::{HealthStatus, StatusColor, StatusIndicator};
+
+// Title bar widgets
+pub use titlebar::{LateralView, UnifiedTitleBar};

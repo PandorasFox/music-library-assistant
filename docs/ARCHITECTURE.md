@@ -1,12 +1,351 @@
-# MLA Architecture
+# MLA System Architecture
 
-This document describes the high-level architecture of MLA, including module organization, data flows, and key abstractions.
+This document describes the major subsystems of MLA and how they interact. For the conceptual foundations and design principles, see [PHILOSOPHY.md](PHILOSOPHY.md).
+
+---
+
+## System Overview
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                              FILESYSTEM                        │
+│  ┌───────────────┐    ┌───────────────┐    ┌───────────────┐   │
+│  │    Corpus     │    │   Libraries   │    │     Inbox     │   │
+│  │   (source)    │    │  (hard-links) │    │  (incoming)   │   │
+│  └───────┬───────┘    └───────────────┘    └───────────────┘   │
+└──────────┼─────────────────────────────────────────────────────┘
+           │                                        
+           ▼                                        
+    ┌─────────────┐                                 
+    │  Heartbeat  │                                 
+    │   (poll)    │                                 
+    └──────┬──────┘                                 
+           │ compare                                
+           └────────────────────┐                    
+┌─────────────────────────────────────────────────────────────────┐
+│                              DATABASE                           │
+│  ┌───────────────┐    ┌───────────────┐    ┌───────────────┐    │
+│  │     Index     │    │   Insights    │    │   Audit Log   │    │
+│  │   (tracks,    │    │   (signals)   │    │  (decisions,  │    │
+│  │  scan_state)  │    │               │    │   mutations)  │    │
+│  └───────────────┘    └───────┬───────┘    └───────▲───────┘    │
+└───────────────────────────────┼────────────────────┼────────────┘
+                                │ surface            │ log
+                                ▼                    │
+                    ┌───────────────────────┐        │
+                    │         USER          │        │
+                    │    (main menu UI)     │        │
+                    └───────────┬───────────┘        │
+                                │ select signal      │
+                                ▼                    │
+                    ┌───────────────────────┐        │
+                    │   Operation Flow      │        │
+                    │   (by signal type)    │        │
+                    └───────────┬───────────┘        │
+                                │                    │
+                                ▼                    │
+                    ┌────────────────────────┐       │
+                    │      Decisions         │       │
+                    │ (accumulate; generates │       │
+                    │     mutations)         │       │
+                    └───────────┬────────────┘       │
+                                │                    │
+                                ▼                    │
+                    ┌───────────────────────┐        │
+                    │       Review          │        │
+                    │  (preview mutations)  │        │
+                    └─────┬─────────┬───────┘        │
+                          │         │                │
+                 discard  │         │ confirm        │
+                          ▼         ▼                │
+                        ┌───┐   ┌───────────────┐    │
+                        │ X │   │  Background   │────┘
+                        └───┘   │   Executor    │
+                                └───────┬───────┘
+                                        │
+           ┌────────────────────────────┼────────────────────────────┐
+           │                            │                            │
+           ▼                            ▼                            ▼
+    ┌─────────────┐              ┌─────────────┐              ┌─────────────┐
+    │   Corpus    │              │    Index    │              │  Insights   │
+    │  (files)    │              │ (database)  │              │  (signals)  │
+    └─────────────┘              └─────────────┘              └─────────────┘
+```
+
+---
+
+## The Core Loop
+
+After initial corpus indexing, MLA operates in a continuous cycle:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│   Heartbeat ──► Signals ──► Insights ──► Operations ──► Mutations   │
+│                   ▲                                          │      │
+│                   │                                          │      │
+│                   └──────────────────────────────────────────┘      │
+│      (mutations update corpus state and therefore signals)          │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Heartbeat** polls the corpus directories, comparing against the index
+2. **Signals** are aggregated and surfaced as insights
+3. **Insights** surface signals in bulk fashion to the operator
+4. **Operations** are flows the user launches, with intent to resolve specific signals
+5. **Decisions** are presented to the operator as simple but sweeping choices in flows, and can generate many associated mutations
+6. **Review** presents the batch for confirmation or discard
+7. **Background Executor** applies confirmed mutations to corpus, index, and insights, and provides a single, well-reasoned entrypoint to applying small, easy-to-reason-about changes in bulk scale.
+8. **Audit Log** records decisions and mutations for potential future reversion
+
+---
+
+## Subsystem Details
+
+### 1. Heartbeat (Corpus Survey)
+
+The heartbeat is MLA's background pulse. It polls the corpus directories and compares against the index.
+
+**Trigger**: At startup, and periodically during idle (triggered probabilistically via d20 roll on eye blink animation).
+
+**Responsibilities**:
+- Walk corpus directory trees
+- Compare file state against index (inode, mtime, presence)
+- Detect new files, missing files, relocations, out-of-band changes
+- updates health signals based on changes in filesystem state, if any, as signals are computed as a function of (state of filesystem, state of indices) or (state of indices) largely
+
+**Key Constraint**: The heartbeat *detects* but does not *resolve*. It generates signals.
+
+**Implementation**: `src/corpus/health/heartbeat.rs`
+
+---
+
+### 2. Corpus Index
+
+The central database of all indexed audio files.
+
+**Tables**:
+| Table | Purpose |
+|-------|---------|
+| `tracks` | Audio file metadata, fingerprints, paths |
+| `scan_state` | Inode/mtime tracking for incremental scans |
+| `deployments` | Tracks → library deployment state |
+
+**Key Principle**: The index is the source of truth for what MLA knows about the corpus. Files on disk may diverge (and that divergence becomes a signal as soon as it is detected).
+
+**Implementation**: `src/corpus/db/`
+
+---
+
+### 3. Insights (Health Signals)
+
+Signals are persistent facts about corpus health, stored in the database and surfaced to the user in aggregate as insights. Insights are basically just summaries about different signals, but we do want to thoughtfully combine some different signals at our disposal, such as which fingerprint dupe signals coexist alongside QualityVariant signals - those should be easy to surface in a flow and resolve!
+
+**Signal Types**:
+
+| Signal | Description | Severity |
+|--------|-------------|----------|
+| `FingerprintDuplicate` | Same audio fingerprint across files | Medium |
+| `TagCanonical` | Tag variants needing canonicalization | Low |
+| `MissingTag` | Required tags missing (e.g., album_artist) | Low |
+| `QualityVariant` | Same content at different qualities, concordent with fingerprintduplicate usually | Low |
+| `DeployConflict` | Multiple files would deploy to same path | Medium |
+| `OutOfBandTagChange` | Disk tags differ from indexed tags | Medium |
+| `MissingFromIndex` | Files on disk not in index | Medium |
+| `FileRelocated` | File moved (same inode, new path) | Low |
+| `DuplicateInode` | Multiple index entries share one inode | High |
+| `MissingFromDisk` | Indexed file no longer exists | High |
+| `OutOfBandFileChange` | File replaced externally | High |
+
+**Lifecycle**:
+1. Pushed by heartbeat or mutation side-effects
+2. Surfaced to user via insights menu
+3. Cleared when resolved via operation flows
+
+**Key Principle**: Signals are computed facts, not actions. They describe *what is*, not *what to do*.
+
+**Implementation**: `src/corpus/health/detection.rs`, `src/corpus/db/types.rs`
+
+---
+
+### 4. Operation Flows (Signal Resolution)
+
+Operation flows are the primary way users resolve signals based on Insights. 
+
+**The key design principle**:
+
+> Present as FEW choices as possible, with as LARGE an impact as possible.
+
+**Examples**:
+- Fingerprint quality dedup: "Which of these files are identical, tagged identically, and are outranked by a better bitrate dupe?" -> potentially affects thousands of tracks at once
+- Artist canonicalization: "Which spelling of 'DragonForce' should be canonical?" → affects dozens of tracks
+- Duplicate resolution: "Which of these directories outranks the others?" → resolves hundreds of dupes
+- Deploy conflicts: "Which track should occupy this library slot?" → one or two decisions per conflict, lots of manual tag editing, last flow to do generally
+
+**Flow Structure**:
+```
+Insight into combination of signals
+    │
+    ▼
+Operation Flow (by Insight)
+    │
+    ├─► Decision 1 ──► accumulates mutations
+    ├─► Decision 2 ──► accumulates mutations
+    └─► Decision N ──► accumulates mutations
+            │
+            ▼
+        Review (preview all accumulated mutations)
+            │
+            ├─► Discard ──► [X] terminate
+            │
+            └─► Confirm ──► Background Executor
+                                │
+                                ├─► modify corpus files
+                                ├─► modify inbox files
+                                ├─► update index
+                                ├─► update/clear signals
+                                └─► write audit log
+```
+
+**Key Principle**: Operations produce mutations. They never directly modify files.
+
+**Implementation**: `src/flows/`, `src/ui/*_flow/`
+
+---
+
+### 5. Algebraic Mutations
+
+**ALL CORPUS CHANGES MUST GO THROUGH THE MUTATIONS SYSTEM.**
+
+Mutations are algebraic expressions of change. They are:
+- **Composable**: Mutations can spawn child mutations (DAG structure)
+- **Accumulable**: Many mutations queue up during a flow before execution
+- **Previewable**: Operator sees summary before committing
+- **Attributable**: Tied to high-level Decisions for audit trail
+
+**Mutation Categories**:
+
+| Category | Mutations |
+|----------|-----------|
+| Tag editing | `TagEditDb`, `TagEditFile`, `TagEdit` (composite) |
+| File operations | `MoveFile`, `DeleteFile`, `StashFile` |
+| Index operations | `DropFromIndex`, `UpdateTrack`, `UpdateTrackPath` |
+| Deployment | `Deploy`, `Undeploy`, `RefreshDeployment` |
+| Scan state | `UpdateScanStatePath`, `RemoveScanState` |
+
+**Composition Example** (DAG):
+```
+TagEdit(file, field, value)
+    ├─► TagEditDb(file, field, value)   // Update index
+    └─► TagEditFile(file, field, value) // Flush to disk
+```
+
+This composition allows granular reuse. For example, resolving `OutOfBandTagChange` might use `TagEditDb` alone (to accept disk reality) or `TagEditFile` alone (to restore indexed values).
+
+**Key Constraint**: Mutations execute via the background task system. They can always occur in large numbers and must not block the UI.
+
+**Implementation**: `src/corpus/mutations/`
+
+---
+
+### 6. Audit Log (Future)
+
+The audit log records decisions and their resulting mutations, enabling:
+- Traceability: "Why was this tag changed?"
+- Potential reversion: Undo decisions by reversing their mutations
+- Export: Plain-text dump of decision history for archival
+
+**Status**: Planned. Currently mutations execute but are not audited beyond the session.
+
+---
+
+### 7. Hard-Link Deployments
+
+Deployment is a signal resolution flow that deploys corpus files to library directories via hard links.
+
+This one is pretty simple, honestly.
+
+**Deployment Path**: `{library_root}/{album_artist}/{album}/{track}` (configurable)
+
+**Key Properties**:
+- Hard links only (no duplication of data)
+- Full tag collisions are NOT deployed (keeps library duplicate-free)
+- Deployment conflicts are pre-computed signals
+- Stale files (tags changed after deployment) are tracked
+- Orphan files (shouldn't exist) are stashed during next deploy
+
+**Implementation**: `src/flows/deploy.rs`, `src/corpus/health/library.rs`
+
+---
+
+### 8. Intake Flow (Planned)
+
+The intake flow processes incoming files from a configured inbox directory.
+
+**Design**: The inbox is treated as a special directory processed through the usual file-moving mechanisms (like the stash). Files go through:
+- Unpacking (if archives)
+- Normalization against existing index
+- Deduplication checks
+- Atomic addition to corpus
+
+**Relationship to Heartbeat**: Once intake is operational, heartbeat becomes primarily for detecting missing files, out-of-band changes, and relocations within the corpus itself.
+
+**Status**: Planned, not yet implemented.
+
+---
+
+### 9. Corpus Browser
+
+A standalone interface for browsing the corpus and editing tags.
+
+**Features**:
+- Directory tree navigation with track counts
+- Metadata preview (bitrate, duration, sample rate, tags)
+- Multi-track tag editor
+
+**Integration with Mutations**: Tag edits from the browser generate mutations that flow through the standard accumulate → review → confirm pipeline.
+
+**Key Principle**: The browser is a tool, not a flow. It provides direct access without the guided decision structure of operations.
+
+**Implementation**: `src/ui/corpus_browser/`, `src/ui/tag_editor/`
+
+---
+
+### 10. Hello World (Setup Witch)
+
+Onboarding flow for new users.
+
+**Current**: Auto-detect empty database → start corpus scan
+
+**Planned**:
+- Detect missing config file
+- Interactive wizard (witch) for initial configuration
+- Initial library triage and recommended resolution actions
+
+**Priority**: Very low. Other systems take precedence. Initial insights can be freely offered once Insights are fleshed out.
+
+---
+
+## Key Invariants
+
+1. **Mutations are the only write path**: No system directly modifies corpus files. All changes go through mutations.
+
+2. **Signals are cached facts**: They exist in the database, are pushed by heartbeat/mutations, and describe corpus state without prescribing action.
+
+3. **Operations produce, never apply**: Operation flows generate mutations. The background executor applies them.
+
+4. **Confirm before commit**: Accumulated mutations are always previewed before execution. No silent changes.
+
+5. **Heartbeat detects, doesn't resolve**: The heartbeat pushes signals. Resolution is a separate user-driven process via operation flows.
+
+6. **Background execution for bulk work**: Mutations can always occur in large numbers. The background task system handles execution without blocking the UI.
 
 ---
 
 ## Module Organization
 
-MLA's source code is organized into three primary domains plus configuration:
+MLA's source code is organized into three primary domains:
 
 ```
 src/
@@ -21,16 +360,15 @@ src/
 │   │   └── decisions.rs # Decision flow types
 │   ├── metadata.rs      # Audio file metadata and fingerprint extraction
 │   ├── health/          # Health detection and signals
+│   ├── mutations/       # Algebraic mutation types and executors
 │   ├── deduplication/   # Duplicate detection algorithms
-│   ├── fingerprint/     # Fingerprint quality analysis
 │   └── reports/         # Report generation
 │
-├── ops/             # Operations domain - executing changes
+├── flows/           # Operation flows - UI-driving process logic
 │   ├── scanner.rs   # Directory walking and indexing
 │   ├── progress.rs  # Scan progress tracking types
 │   ├── changes.rs   # Change execution engine
 │   ├── deploy.rs    # Library deployment via hard links
-│   ├── dedup.rs     # Deduplication operations
 │   ├── operation.rs # Background operation management
 │   └── reports.rs   # Report execution
 │
@@ -41,254 +379,23 @@ src/
     ├── main_menu.rs # Category/command navigation
     ├── dialogue.rs  # Conversational decision flows
     ├── helpers.rs   # Shared rendering utilities
-    ├── picker.rs    # Reusable list picker component
+    ├── widgets/     # Reusable UI components
     ├── tag_editor/  # Multi-track metadata editing
     ├── corpus_browser/ # Directory tree browsing
-    ├── dir_browser/    # Generic directory browser
-    ├── canon_flow/     # Artist canonicalization
-    ├── album_flow/     # Album canonicalization
-    ├── album_artist_flow/ # Album artist resolution (3 phases)
-    ├── dedup_flow/     # Fingerprint duplicate resolution
-    ├── deploy_flow/    # Deployment preview
-    └── drop_flow.rs    # Drop missing from index
+    ├── canon_flow/     # Artist canonicalization UI
+    ├── album_flow/     # Album canonicalization UI
+    ├── album_artist_flow/ # Album artist resolution UI
+    ├── dedup_flow/     # Fingerprint duplicate resolution UI
+    └── deploy_flow/    # Deployment preview UI
 ```
 
 ### Domain Responsibilities
 
 | Domain | Purpose |
 |--------|---------|
-| **corpus** | Indexing, analysis, and health tracking. Read-heavy operations that build understanding of the corpus state. |
-| **ops** | Executing mutations. Write operations that modify files, database, or deployments. |
-| **ui** | User interaction. Rendering, input handling, and workflow orchestration. |
-| **config** | Application configuration and path utilities. |
-
----
-
-## Corpus Indexing Process
-
-The corpus indexing process maintains a database representation of audio files.
-
-### Scan Flow
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Scanner   │────▶│   Metadata   │────▶│  Database   │
-│  (walk dir) │     │  (extract)   │     │  (persist)  │
-└─────────────┘     └──────────────┘     └─────────────┘
-       │                   │
-       ▼                   ▼
-  scan_state          tracks table
-  (inode+mtime)       (full metadata)
-```
-
-1. **Directory Walking**: Scanner walks corpus root, collecting audio files
-2. **Incremental Detection**: Files checked against `scan_state` table (inode + mtime)
-3. **Metadata Extraction**: Changed files have metadata extracted (tags, duration, bitrate)
-4. **Fingerprint Generation**: Chromaprint fingerprints computed for duplicate detection
-5. **Database Persistence**: Track records inserted/updated in `tracks` table
-
-### Scan State Optimization
-
-The `scan_state` table enables fast incremental scans:
-
-- Stores `(source, path, inode, mtime)` for each scanned file
-- On rescan, files with matching inode+mtime are skipped
-- Files with changed mtime are re-scanned for updated metadata
-- Files with new inodes are fully processed
-
----
-
-## Health Signals
-
-Health signals are conditions detected in the corpus that may require attention or resolution.
-
-### Signal Types
-
-| Signal | Severity | Description |
-|--------|----------|-------------|
-| `FingerprintDuplicate` | Auto/Manual | Same audio fingerprint across multiple files |
-| `MetadataDuplicate` | Manual | Same artist/album/title, different fingerprints |
-| `TagCanonical` | Informational | Tag values that could be unified (spelling variants) |
-| `MissingTag` | Informational | Required tags missing (e.g., album_artist) |
-| `QualityVariant` | Auto | Same content at different quality levels |
-| `DeployConflict` | Manual | Multiple files would deploy to same path |
-| `OutOfBandTagChange` | Manual | On-disk tags differ from indexed values |
-| `MissingFromIndex` | Informational | Files on disk not yet indexed |
-
-### Health Detection Points
-
-Health issues are detected at several points:
-
-1. **Scan Time**: During indexing, detect duplicates and tag issues
-2. **Heartbeat**: At startup, quick validation of corpus vs index
-3. **Resolution Flows**: User-driven canonicalization discovers tag variants
-4. **Mutation Time**: After tag edits, detect out-of-band changes
-
-### Health State Invariants
-
-The health system maintains these invariants:
-
-1. **Unique Issue Keys**: Each health issue has a unique `(type, key)` pair
-2. **Track Membership**: Issues link to affected tracks via `health_issue_tracks`
-3. **Resolution Tracking**: Resolved issues retain resolution metadata
-4. **Session Association**: Resolutions link to the session that resolved them
-
----
-
-## Operational Resolution Flows
-
-Resolution flows are multi-step user interactions that resolve health issues or perform bulk operations.
-
-### Flow Pattern
-
-All resolution flows follow a common pattern:
-
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Cluster    │────▶│    Review    │────▶│    Commit    │
-│    View      │     │    State     │     │   Handler    │
-└──────────────┘     └──────────────┘     └──────────────┘
-       │                    │                    │
-   Selection           Decisions            Execution
-   + Decision          + Preview            + Persist
-```
-
-1. **Cluster View**: Present grouped items for selection/decision
-2. **Review State**: Collect decisions, show summary before commit
-3. **Commit Handler**: Execute changes, update database, create pending changes
-
-### Available Flows
-
-| Flow | Purpose | Health Signal Resolved |
-|------|---------|----------------------|
-| `canon_flow` | Artist name canonicalization | TagCanonical |
-| `album_flow` | Album name canonicalization | TagCanonical |
-| `album_artist_flow` | Album artist resolution (3 phases) | MissingTag, TagCanonical |
-| `dedup_flow` | Fingerprint duplicate resolution | FingerprintDuplicate |
-| `deploy_flow` | Library deployment preview | DeployConflict |
-
-### Algebraic Change Tracking
-
-All corpus mutations are tracked as composable, reversible operations:
-
-```rust
-PendingChange {
-    change_type: TagEdit | Move | Delete | Deploy | Undeploy,
-    source_path: String,
-    target_path: Option<String>,
-    metadata_changes: Option<JSON>,
-    status: Pending | Staged | Committed | Reverted,
-}
-```
-
-Changes accumulate in `pending_changes`, can be previewed, and committed atomically.
-
----
-
-## Database Architecture
-
-The database is SQLite-based with tables organized by function.
-
-### Core Tables
-
-| Table | Purpose |
-|-------|---------|
-| `tracks` | Audio file metadata and fingerprints |
-| `scan_state` | Incremental scan tracking (inode + mtime) |
-| `pending_changes` | Accumulated mutations awaiting commit |
-| `change_sessions` | Groups of related changes |
-
-### Health Tables
-
-| Table | Purpose |
-|-------|---------|
-| `health_issues` | Detected health problems |
-| `health_issue_tracks` | Track membership in issues |
-| `known_variants` | Accepted duplicates (re-releases, etc.) |
-| `tag_canonicalizations` | Canonical tag value mappings |
-| `tag_mismatches` | DB vs on-disk tag differences |
-
-### Deployment Tables
-
-| Table | Purpose |
-|-------|---------|
-| `deployments` | Track deployments to libraries |
-| `deployment_orphans` | Library files not linked to corpus |
-
-See [DATABASE.md](DATABASE.md) for complete schema documentation.
-
----
-
-## UI State Machine
-
-The UI uses a mode-based state machine for navigation:
-
-```rust
-enum UiMode {
-    MainMenu,           // Category/command navigation
-    TagEditor,          // Multi-track metadata editing
-    Dialogue,           // Conversational decision flow
-    DialogueSummary,    // Summary before commit
-    // Resolution flows
-    CanonClusterView, CanonSessionReview,
-    AlbumClusterView, AlbumReview,
-    // ... etc
-}
-```
-
-### Mode Transitions
-
-- Menu commands trigger transitions via `CommandAction`
-- Flows advance through phases (Cluster → Review → Commit)
-- Escape generally returns to previous mode or main menu
-- Background operations update state via channels
-
----
-
-## Background Operations
-
-Long-running operations execute in background threads:
-
-```rust
-OperationType {
-    Scanning { source, path },
-    Fingerprinting { source },
-    ExecutingChanges { session_id, count },
-}
-```
-
-### Operation Lifecycle
-
-1. **Spawn**: Create thread with progress channel
-2. **Progress**: Send `OperationProgress` updates via channel
-3. **Completion**: Send `OperationResult` with success/failure
-4. **UI Update**: Main loop polls channels, updates display
-
----
-
-## Configuration
-
-Configuration is loaded from `$XDG_CONFIG_HOME/mla/config.kdl`:
-
-```kdl
-corpus-root "/path/to/corpus"
-
-library "main" {
-    path "/path/to/library"
-}
-
-legacy-library {
-    path "/path/to/legacy"
-}
-```
-
-### Path Conventions
-
-| Path | Purpose |
-|------|---------|
-| `$XDG_CONFIG_HOME/mla/` | Configuration files |
-| `$XDG_DATA_HOME/mla/` | Database, reports |
-| `/tmp/mla.log` | Debug logging |
+| **corpus** | Indexing, analysis, health tracking, and mutation definitions. The "model" layer. |
+| **flows** | Process-driving logic for operations. Background execution, scanning, deployment logic. |
+| **ui** | User interaction. Rendering, input handling, and flow state machines. |
 
 ---
 
@@ -296,10 +403,17 @@ legacy-library {
 
 ### Adding a New Health Signal
 
-1. Add variant to `HealthIssueType` enum in `db/types.rs`
+1. Add variant to `HealthIssueType` enum in `corpus/db/types.rs`
 2. Add string mapping in `as_str()` and `from_str()`
 3. Create detection function in `corpus/health/detection.rs`
-4. Call detection at appropriate point (scan, heartbeat, mutation)
+4. Call detection at appropriate point (heartbeat or mutation side-effect)
+
+### Adding a New Mutation
+
+1. Add variant to `Mutation` enum in `corpus/mutations/types.rs`
+2. Implement executor in `corpus/mutations/executor.rs`
+3. If composite, define child mutations and DAG structure
+4. Wire into `MutationDispatcher.execute_sync()`
 
 ### Adding a New Resolution Flow
 
@@ -308,10 +422,10 @@ legacy-library {
 3. Add `UiMode` variant for each flow phase
 4. Add state field to `App` struct
 5. Wire up mode dispatch in `handle_key()` and `render()`
-6. Add menu command to trigger flow
+6. Add menu command to trigger flow from insights
 
 ### Adding a New Report
 
-1. Add report function in `corpus/reports/`
+1. Add report function in `flows/reports.rs`
 2. Add `ReportType` variant in menu
 3. Wire up in `generate_report()` handler

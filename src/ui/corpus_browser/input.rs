@@ -1,6 +1,6 @@
 //! Corpus Browser Input Handling
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::state::CorpusBrowserState;
 use super::types::CorpusBrowserAction;
@@ -54,6 +54,15 @@ impl CorpusBrowserState {
                 }
             }
             KeyCode::Esc => CorpusBrowserAction::Cancel,
+            // Tab/Shift-Tab for lateral view cycling
+            KeyCode::Tab => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    CorpusBrowserAction::CyclePrev
+                } else {
+                    CorpusBrowserAction::CycleNext
+                }
+            }
+            KeyCode::BackTab => CorpusBrowserAction::CyclePrev,
             // Start search on any alphanumeric character
             KeyCode::Char(c) if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' => {
                 self.search_push_char(c);

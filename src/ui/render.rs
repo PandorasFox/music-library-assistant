@@ -20,7 +20,7 @@ use crate::ops::operation::{OperationProgress, OperationType, ProgressContext};
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::{calculate_rolling_throughput, centered_rect, format_bytes_binary, format_eta, truncate_path_display};
 use super::main_menu::MainMenuState;
-use super::{album_artist_flow, album_flow, canon_flow, dedup_flow, deploy_flow, dialogue, dir_browser, tag_editor};
+use super::{album_artist_flow, album_flow, canon_flow, dedup_flow, deploy_flow, dialogue, dir_browser, insights_view, tag_editor};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -55,7 +55,9 @@ pub struct RenderContext<'a> {
     pub directory_tag_editor: Option<&'a mut tag_editor::DirectoryTagEditorState>,
     pub directory_tag_editor_modal: Option<&'a tag_editor::types::DirectoryTagEditorModal>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
+    pub loading_splash_state: Option<&'a super::LoadingSplashState>,
     pub deploy_conflict_review: Option<&'a super::DeployConflictReviewState>,
+    pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
     pub heartbeat_result: Option<&'a HeartbeatResult>,
     pub heartbeat_pending: bool,
     pub eye: &'a EyeAnimation,
@@ -65,18 +67,48 @@ pub struct RenderContext<'a> {
 
 /// Main render entry point - dispatches to sub-renderers based on mode.
 pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(10),    // Content
-            Constraint::Length(18), // Footer with eye
-        ])
-        .split(f.area());
+    // Loading splash takes the whole screen
+    if ctx.mode == super::UiMode::LoadingSplash {
+        render_loading_splash(f, f.area(), ctx);
+        return;
+    }
 
-    render_header(f, chunks[0], ctx);
-    render_content(f, chunks[1], ctx);
-    render_footer(f, chunks[2], ctx);
+    // Lateral views (Corpus Browser, Insights, Deploy) have their own title bar
+    // and get the full header+content area
+    let uses_unified_titlebar = matches!(
+        ctx.mode,
+        super::UiMode::CorpusBrowser
+            | super::UiMode::Insights
+            | super::UiMode::DeploymentPreview
+    );
+
+    if uses_unified_titlebar {
+        // Two-part layout: content (with unified titlebar) + footer
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(10),    // Content with unified titlebar
+                Constraint::Length(18), // Footer with eye
+            ])
+            .split(f.area());
+
+        render_content(f, chunks[0], ctx);
+        render_footer(f, chunks[1], ctx);
+    } else {
+        // Standard three-part layout: header + content + footer
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),  // Header
+                Constraint::Min(10),    // Content
+                Constraint::Length(18), // Footer with eye
+            ])
+            .split(f.area());
+
+        render_header(f, chunks[0], ctx);
+        render_content(f, chunks[1], ctx);
+        render_footer(f, chunks[2], ctx);
+    }
 }
 
 fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
@@ -108,6 +140,8 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::AlbumReview => Some("Album Tag Review"),
         super::UiMode::DirectoryTagEditor => Some("Directory Tag Editor"),
         super::UiMode::DeployConflictReview => Some("Deploy Conflict Review"),
+        super::UiMode::Insights => Some("Corpus Insights"),
+        super::UiMode::LoadingSplash => None, // Never reached - handled separately
     };
 
     let title = match suffix {
@@ -126,6 +160,8 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
 fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderContext) {
     match ctx.mode {
         super::UiMode::MainMenu => {
+            // TODO: Dead code - MainMenu mode is no longer reachable.
+            // Insights is now the main view. See main_menu.rs for details.
             ctx.main_menu.render(f, area, &Some(ctx.config.clone()));
         }
         super::UiMode::TagEditor => {
@@ -297,7 +333,142 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 render_deploy_conflict_review(f, area, review, ctx.status_message);
             }
         }
+        super::UiMode::Insights => {
+            if let Some(ref mut view) = ctx.insights_view {
+                insights_view::render_insights_view(f, area, view);
+            } else {
+                // Show loading state while waiting for heartbeat
+                render_insights_loading(f, area, ctx.heartbeat_pending);
+            }
+        }
+        super::UiMode::LoadingSplash => {
+            // Never reached - handled separately in render() before this function
+        }
     }
+}
+
+/// Render the loading splash screen with centered eye and status message
+fn render_loading_splash(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
+    // Get splash state
+    let splash = match &ctx.loading_splash_state {
+        Some(s) => s,
+        None => return,
+    };
+
+    // Eye closed art is 16 lines tall
+    let eye_height = 16;
+    // Message line + spacing + eye + optional progress bar
+    let progress_height = if splash.progress.is_some() { 3 } else { 0 };
+    let total_height = 2 + eye_height + progress_height; // message + gap + eye + progress
+
+    // Calculate vertical centering
+    let v_margin = area.height.saturating_sub(total_height as u16) / 2;
+
+    // Calculate horizontal centering for the eye (eye is ~60 chars wide)
+    let eye_width = 60u16;
+    let h_margin = area.width.saturating_sub(eye_width) / 2;
+
+    // Layout vertically
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(v_margin),         // Top margin
+            Constraint::Length(1),                // Message
+            Constraint::Length(1),                // Spacing
+            Constraint::Length(eye_height as u16), // Eye
+            Constraint::Length(progress_height as u16), // Progress bar (if any)
+            Constraint::Min(0),                   // Bottom margin
+        ])
+        .split(area);
+
+    // Render message centered
+    let message = Paragraph::new(splash.loading_type.message())
+        .style(Style::default().fg(Color::Cyan))
+        .alignment(Alignment::Center);
+    f.render_widget(message, chunks[1]);
+
+    // Render eye (closed) centered horizontally
+    let eye_area = ratatui::layout::Rect {
+        x: area.x + h_margin,
+        y: chunks[3].y,
+        width: eye_width.min(area.width),
+        height: chunks[3].height,
+    };
+
+    let eye_lines: Vec<Line> = EYE_CLOSED
+        .lines()
+        .map(|line| Line::from(line))
+        .collect();
+
+    let eye_widget = Paragraph::new(eye_lines)
+        .style(Style::default().fg(Color::DarkGray));
+    f.render_widget(eye_widget, eye_area);
+
+    // Render progress bar if present
+    if let Some(progress) = splash.progress {
+        let progress_area = chunks[4];
+
+        // Create progress bar
+        let bar_width = 40u16.min(progress_area.width.saturating_sub(4));
+        let bar_x = (progress_area.width.saturating_sub(bar_width)) / 2 + progress_area.x;
+
+        let filled = (progress * bar_width as f32) as u16;
+        let empty = bar_width.saturating_sub(filled);
+
+        let bar_text = format!(
+            "[{}{}]",
+            "=".repeat(filled as usize),
+            " ".repeat(empty as usize)
+        );
+
+        let detail = splash.progress_detail.as_deref().unwrap_or("");
+        let progress_text = format!("{}\n{}", bar_text, detail);
+
+        let progress_widget = Paragraph::new(progress_text)
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center);
+
+        let centered_progress = ratatui::layout::Rect {
+            x: bar_x,
+            y: progress_area.y,
+            width: bar_width + 4,
+            height: progress_area.height,
+        };
+
+        f.render_widget(progress_widget, centered_progress);
+    }
+}
+
+/// Render loading state for Insights view while waiting for heartbeat
+fn render_insights_loading(f: &mut Frame, area: ratatui::layout::Rect, heartbeat_pending: bool) {
+    use super::widgets::{LateralView, UnifiedTitleBar};
+
+    // Layout: unified titlebar + content
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(UnifiedTitleBar::height()),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    // Render unified titlebar
+    let titlebar = UnifiedTitleBar::new(LateralView::Insights);
+    titlebar.render(f, chunks[0]);
+
+    // Render loading message
+    let message = if heartbeat_pending {
+        "Waiting for corpus heartbeat..."
+    } else {
+        "Initializing insights view..."
+    };
+
+    let loading = Paragraph::new(message)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title("Insights"));
+
+    f.render_widget(loading, chunks[1]);
 }
 
 /// Render the deploy conflict review screen
@@ -396,58 +567,107 @@ fn render_exit_confirm_modal(
     area: ratatui::layout::Rect,
     state: Option<&super::ExitConfirmModalState>,
 ) {
-    let popup_area = centered_rect(50, 35, area);
+    let selected_no = state.map(|s| s.selected_no).unwrap_or(true);
+    let has_operations = state.map(|s| s.has_operations).unwrap_or(false);
+
+    // Use different sizing based on content
+    let popup_area = if has_operations {
+        centered_rect(50, 35, area)
+    } else {
+        centered_rect(35, 20, area)
+    };
 
     // Clear the area first to prevent bleed-through
     f.render_widget(Clear, popup_area);
 
-    let selected_no = state.map(|s| s.selected_no).unwrap_or(true);
-
-    // Button styles
-    let yes_style = if !selected_no {
-        Style::default().fg(Color::Black).bg(Color::Red)
+    // Button styles depend on whether this is a warning modal
+    let (confirm_style, cancel_style) = if has_operations {
+        // Warning modal: Yes is red (dangerous), No is green (safe)
+        let yes_style = if !selected_no {
+            Style::default().fg(Color::Black).bg(Color::Red)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let no_style = if selected_no {
+            Style::default().fg(Color::Black).bg(Color::Green)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        (yes_style, no_style)
     } else {
-        Style::default().fg(Color::White)
-    };
-    let no_style = if selected_no {
-        Style::default().fg(Color::Black).bg(Color::Green)
-    } else {
-        Style::default().fg(Color::White)
+        // Simple exit: Confirm is neutral, Cancel is neutral
+        let confirm_style = if !selected_no {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let cancel_style = if selected_no {
+            Style::default().fg(Color::Black).bg(Color::Gray)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        (confirm_style, cancel_style)
     };
 
-    let lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Operation In Progress",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from("An operation is currently running."),
-        Line::from("Exiting now may leave your library"),
-        Line::from("in an inconsistent state."),
-        Line::from(""),
-        Line::from(Span::styled(
-            "No guarantees about safety or integrity.",
-            Style::default().fg(Color::Red),
-        )),
-        Line::from(""),
-        Line::from(""),
-        Line::from("Exit anyway?"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                if !selected_no { " > " } else { "   " },
-                yes_style,
-            ),
-            Span::styled("[ Yes ]", yes_style),
-            Span::raw("     "),
-            Span::styled(
-                if selected_no { " > " } else { "   " },
-                no_style,
-            ),
-            Span::styled("[ No ]", no_style),
-        ]),
-    ];
+    let (lines, title, border_color) = if has_operations {
+        // Warning modal for operations in progress
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Operation In Progress",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("An operation is currently running."),
+            Line::from("Exiting now may leave your library"),
+            Line::from("in an inconsistent state."),
+            Line::from(""),
+            Line::from(Span::styled(
+                "No guarantees about safety or integrity.",
+                Style::default().fg(Color::Red),
+            )),
+            Line::from(""),
+            Line::from(""),
+            Line::from("Exit anyway?"),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(
+                    if !selected_no { " > " } else { "   " },
+                    confirm_style,
+                ),
+                Span::styled("[ Yes ]", confirm_style),
+                Span::raw("     "),
+                Span::styled(
+                    if selected_no { " > " } else { "   " },
+                    cancel_style,
+                ),
+                Span::styled("[ No ]", cancel_style),
+            ]),
+        ];
+        (lines, " Warning ", Color::Yellow)
+    } else {
+        // Simple exit confirmation
+        let lines = vec![
+            Line::from(""),
+            Line::from("Exit MLA?"),
+            Line::from(""),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(
+                    if !selected_no { " > " } else { "   " },
+                    confirm_style,
+                ),
+                Span::styled("[ Confirm ]", confirm_style),
+                Span::raw("   "),
+                Span::styled(
+                    if selected_no { " > " } else { "   " },
+                    cancel_style,
+                ),
+                Span::styled("[ Cancel ]", cancel_style),
+            ]),
+        ];
+        (lines, " Exit ", Color::White)
+    };
 
     let modal = Paragraph::new(lines)
         .alignment(Alignment::Center)
@@ -455,10 +675,10 @@ fn render_exit_confirm_modal(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
+                .border_style(Style::default().fg(border_color))
                 .style(Style::default().bg(Color::Black))
-                .title(" Warning ")
-                .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                .title(title)
+                .title_style(Style::default().fg(border_color).add_modifier(Modifier::BOLD)),
         );
 
     f.render_widget(modal, popup_area);
@@ -881,13 +1101,13 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::BulkReviewPrompt => "↑↓ Select | Enter Choose | Esc Cancel",
         super::UiMode::SessionReview => "↑↓ Select | Enter Execute | Esc Cancel",
         super::UiMode::DropMissingConfirmation => "↑↓ Scroll | ←→ Select Option | Enter Confirm | Esc Cancel",
-        super::UiMode::DeploymentPreview => "↑↓ Navigate | Tab Focus | Enter Confirm | Esc Cancel",
+        super::UiMode::DeploymentPreview => "↑↓ Navigate | ←→ Focus | Enter Confirm | Tab/Shift+Tab Cycle | Esc Cancel",
         super::UiMode::CanonClusterView => "↑↓ Navigate | Space Toggle | A All | ←→ Panes | Tab Next | Shift+Tab Back | Esc Review",
         super::UiMode::CanonSessionReview => "↑↓ Scroll | Tab Focus | Enter Commit | Esc Cancel",
         super::UiMode::CanonCommitModal => "↑↓ Select | Enter Confirm | Esc Main Menu",
         super::UiMode::ExitConfirmModal => "←→ Select | Enter/Space Confirm | Y Yes | N/Esc No",
         // Placeholder hints for unimplemented modes
-        super::UiMode::CorpusBrowser => "↑↓ Navigate | ←→ Expand | Enter Edit | Esc Exit",
+        super::UiMode::CorpusBrowser => "↑↓ Navigate | ←→ Expand | Enter Edit | Tab/Shift+Tab Cycle | Esc Exit",
         super::UiMode::AlbumArtistPhaseSelector => "Space Toggle | Enter Proceed | Esc Cancel",
         super::UiMode::AlbumArtistClusterView
         | super::UiMode::AlbumClusterView => "↑↓ Navigate | Space Toggle | Tab Next | Esc Review",
@@ -899,6 +1119,8 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         | super::UiMode::AlbumReview => "↑↓ Scroll | Enter Commit | Esc Cancel",
         super::UiMode::DirectoryTagEditor => "Tab/Shift+Tab Directories | ↑↓ Fields | Enter Edit | → Action | Esc Exit",
         super::UiMode::DeployConflictReview => "←/→ Select | Enter Confirm | Esc Cancel",
+        super::UiMode::Insights => "↑↓ Navigate | Enter Launch | Tab/Shift+Tab Cycle | Esc Menu",
+        super::UiMode::LoadingSplash => "", // Not shown - splash has no footer
     };
     lines.push(Line::from(hints));
 

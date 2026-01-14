@@ -65,15 +65,69 @@ content below this point has been authored by claude, and are claude's notes on 
 | `ui/tag_editor/` | Multi-track metadata editing module |
 | `ui/picker.rs` | Reusable list picker component |
 | `ui/helpers.rs` | Shared rendering utilities and formatters |
+| `ui/widgets/` | Reusable UI components (lists, layouts, status, modals) |
+| `ui/insights_view/` | Real-time computed insights view |
+| `corpus/health/insights/` | Insight computation (one-dim and multi-dim) |
 
 ### Key Patterns
 
-- **UiMode enum**: Top-level mode dispatch (MainMenu, TagEditor, Dialogue)
-- **MenuState enum**: State machine for legacy TUI navigation (being phased out)
+- **UiMode enum**: Top-level mode dispatch (MainMenu, TagEditor, Dialogue, Insights, etc.)
 - **ScanProgress/ScanMessage**: Async progress updates via mpsc channels
 - **Track struct**: Universal audio file representation
 - **PendingChange**: Algebraic mutation representation
 - **ConflictSet**: Duplicate grouping for resolution
+
+### Widget-First UI Development
+
+When building new UI components, **always use existing widgets first**. The `ui/widgets/` module provides reusable, composable components:
+
+| Widget | Purpose |
+|--------|---------|
+| `SelectableList` | Navigable lists with selection highlighting |
+| `HealthStatus` | Consistent status coloring (Healthy, Info, Warning, Critical) |
+| `StatusIndicator` | Single-item status display with icon/label |
+| `TwoPaneLayout`, `ThreePaneLayout` | Standard multi-pane layouts |
+| `Modal`, `ConfirmationModal` | Popup dialogs |
+| `ControlsHint` | Context-sensitive keyboard hints |
+
+**Guidelines:**
+1. Check `ui/widgets/` before creating new rendering code
+2. If existing widgets don't fit, add to or extend them rather than creating ad-hoc rendering
+3. Keep UI-agnostic logic (like severity levels) separate from widget styling
+4. Map domain types to widget types at render time (e.g., `InsightSeverity` → `HealthStatus`)
+
+### Three-Layer Health Architecture
+
+```
+Index (Database)
+    ↓
+Signals (Cached health_issues, health_resolutions)
+    ↓
+Insights (Real-time computed views, never stored)
+```
+
+- **Index**: Raw track data in `tracks` table
+- **Signals**: Pre-computed facts stored in `health_issues` table (duplicates, tag conflicts, etc.)
+- **Insights**: On-demand computed recommendations over signals, surfaced to the operator
+
+Insights are categorized as:
+- **One-Dimensional**: Immediate computation from single signal type + heartbeat
+- **Multi-Dimensional**: Background computation correlating multiple signal types
+
+### Vestigial Code
+
+The following UI modules exist but are **not fully wired up** or are under redesign:
+
+| Module | Status | Notes |
+|--------|--------|-------|
+| `ui/dedup_flow/` | Vestigial | Fingerprint deduplication flow - needs redesign |
+| `ui/canon_flow/` | Vestigial | Artist canonicalization - partially functional |
+| `ui/album_artist_flow/` | Vestigial | Album artist resolution - stubbed, needs complete redesign |
+| `ui/album_flow/` | Vestigial | Album tag resolution - partially functional |
+| `ui/dialogue.rs` | Vestigial | Old decision flow system |
+| `corpus/db/decisions.rs` | Vestigial | Decision types - should move to flows module |
+
+**Do not reference or extend these modules** without understanding their current state. Focus new work on the Insights system, which presents data to the user before any flow integration.
 
 ### String Handling
 

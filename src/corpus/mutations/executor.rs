@@ -230,6 +230,11 @@ impl BulkExecutor {
             // DB-only operations need database access
             Mutation::TagEditDb { .. } => true,
             Mutation::CleanupStaleScanState { .. } => true,
+            // Signal resolution operations are DB-only
+            Mutation::UpdateTrackPath { .. } => true,
+            Mutation::UpdateScanStatePath { .. } => true,
+            Mutation::DropFromIndex { .. } => true,
+            Mutation::UpdateTrack { .. } => true,
             // These need both file and DB access
             Mutation::TagEditAndFlush { .. } => true,
             Mutation::IndexTrack { .. } => true,
@@ -256,7 +261,13 @@ impl BulkExecutor {
             Mutation::TagEditDb { .. } | Mutation::TagFlushToDisk { .. } | Mutation::TagEditAndFlush { .. } => {
                 return tag_edit::execute_single(&self.db, mutation, &self.session_id);
             }
-            Mutation::IndexTrack { .. } | Mutation::UpdateScanState { .. } | Mutation::CleanupStaleScanState { .. } => {
+            Mutation::IndexTrack { .. }
+            | Mutation::UpdateScanState { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::UpdateTrack { .. } => {
                 return indexing::execute_single(&self.db, mutation);
             }
             _ => {

@@ -99,6 +99,85 @@ pub fn execute_cleanup_stale(
         .context("Failed to cleanup stale scan state")
 }
 
+// ============================================================================
+// Signal Resolution Executors
+// ============================================================================
+
+/// Execute UpdateTrackPath mutation - update path for relocated file.
+pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path) -> Result<()> {
+    db.update_track_path(track_id, new_path.to_string_lossy().as_ref())
+        .context("Failed to update track path")
+}
+
+/// Execute UpdateScanStatePath mutation - update scan state for relocated file.
+pub fn execute_update_scan_state_path(
+    db: &Database,
+    source: &str,
+    inode: i64,
+    new_path: &Path,
+) -> Result<()> {
+    db.update_scan_state_path(source, inode, new_path.to_string_lossy().as_ref())
+        .context("Failed to update scan state path")
+}
+
+/// Execute DropFromIndex mutation - remove track from index.
+pub fn execute_drop_from_index(
+    db: &Database,
+    track_id: i64,
+    inode: Option<i64>,
+    source: Option<&str>,
+) -> Result<()> {
+    // Delete the track
+    db.delete_track(track_id)
+        .context("Failed to delete track from index")?;
+
+    // Also delete scan_state entry if inode/source provided
+    if let (Some(inode), Some(source)) = (inode, source) {
+        db.delete_scan_state_by_inode(source, inode)
+            .context("Failed to delete scan state entry")?;
+    }
+
+    Ok(())
+}
+
+/// Execute UpdateTrack mutation - full metadata update for out-of-band changes.
+pub fn execute_update_track(
+    db: &Database,
+    track_id: i64,
+    path: &Path,
+    metadata: &ExtractedMetadata,
+) -> Result<()> {
+    // Build Track from ExtractedMetadata (similar to execute_index_track)
+    let track = Track {
+        id: Some(track_id),
+        path: path.to_string_lossy().to_string(),
+        source: "corpus".to_string(), // Will be overwritten by existing
+        inode: metadata.inode,
+        file_size: metadata.file_size,
+        file_type: metadata.file_type.clone(),
+        artist: metadata.get_tag("artist").map(String::from),
+        album: metadata.get_tag("album").map(String::from),
+        album_artist: metadata.get_tag("album_artist").map(String::from),
+        title: metadata.get_tag("title").map(String::from),
+        track_number: metadata
+            .get_tag("track_number")
+            .and_then(|s| s.parse().ok()),
+        genre: metadata.get_tag("genre").map(String::from),
+        duration_ms: metadata.duration_ms,
+        bitrate_kbps: metadata.bitrate_kbps,
+        sample_rate: metadata.sample_rate,
+        fingerprint: metadata.fingerprint.clone(),
+        isrc: metadata.get_tag("isrc").map(String::from),
+    };
+
+    db.update_track_metadata(track_id, &track)
+        .context("Failed to update track metadata")
+}
+
+// ============================================================================
+// Single Mutation Dispatch
+// ============================================================================
+
 /// Execute a single indexing mutation.
 ///
 /// Convenience function for executing individual mutations.
@@ -125,6 +204,32 @@ pub fn execute_single(db: &Database, mutation: &Mutation) -> MutationResult {
             source,
             valid_inodes,
         } => execute_cleanup_stale(db, source, valid_inodes).map(|_| ()),
+
+        // Signal resolution mutations
+        Mutation::UpdateTrackPath {
+            track_id,
+            new_path,
+            ..
+        } => execute_update_track_path(db, *track_id, new_path),
+
+        Mutation::UpdateScanStatePath {
+            source,
+            inode,
+            new_path,
+        } => execute_update_scan_state_path(db, source, *inode, new_path),
+
+        Mutation::DropFromIndex {
+            track_id,
+            inode,
+            source,
+            ..
+        } => execute_drop_from_index(db, *track_id, *inode, source.as_deref()),
+
+        Mutation::UpdateTrack {
+            track_id,
+            path,
+            metadata,
+        } => execute_update_track(db, *track_id, path, metadata),
 
         _ => Err(anyhow::anyhow!("Not an indexing mutation")),
     };

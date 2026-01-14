@@ -515,6 +515,95 @@ impl Database {
     }
 
     // ========================================================================
+    // Signal Resolution Operations
+    // ========================================================================
+
+    /// Update track path (for relocated files).
+    /// Used by FileRelocated signal handler.
+    pub fn update_track_path(&self, track_id: i64, new_path: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE tracks SET path = ?1 WHERE id = ?2",
+                params![new_path, track_id],
+            )
+            .with_context(|| format!("Failed to update path for track {}", track_id))?;
+        Ok(())
+    }
+
+    /// Delete track by ID.
+    /// Cascades to dependent tables (duplicate_group_members, tag_edit_history, health_issue_tracks).
+    /// Used by MissingFromDisk signal handler.
+    pub fn delete_track(&self, track_id: i64) -> Result<bool> {
+        // Delete from dependent tables first (foreign key constraints)
+        self.conn
+            .execute(
+                "DELETE FROM duplicate_group_members WHERE track_id = ?1",
+                params![track_id],
+            )
+            .with_context(|| format!("Failed to delete duplicate group members for track: {}", track_id))?;
+
+        self.conn
+            .execute(
+                "DELETE FROM tag_edit_history WHERE track_id = ?1",
+                params![track_id],
+            )
+            .with_context(|| format!("Failed to delete tag edit history for track: {}", track_id))?;
+
+        self.conn
+            .execute(
+                "DELETE FROM health_issue_tracks WHERE track_id = ?1",
+                params![track_id],
+            )
+            .with_context(|| format!("Failed to delete health issue tracks for track: {}", track_id))?;
+
+        // Now delete the track itself
+        let deleted = self
+            .conn
+            .execute("DELETE FROM tracks WHERE id = ?1", params![track_id])
+            .with_context(|| format!("Failed to delete track: {}", track_id))?;
+
+        Ok(deleted > 0)
+    }
+
+    /// Update track metadata (full replace for out-of-band changes).
+    /// Preserves the track ID but replaces all other fields.
+    /// Used by OutOfBandFileChange signal handler.
+    pub fn update_track_metadata(&self, track_id: i64, track: &Track) -> Result<()> {
+        self.conn
+            .execute(
+                r#"
+                UPDATE tracks SET
+                    path = ?1, source = ?2, inode = ?3, file_size = ?4, file_type = ?5,
+                    artist = ?6, album = ?7, album_artist = ?8, title = ?9, track_number = ?10,
+                    genre = ?11, duration_ms = ?12, bitrate_kbps = ?13, sample_rate = ?14,
+                    fingerprint = ?15, isrc = ?16
+                WHERE id = ?17
+                "#,
+                params![
+                    &track.path,
+                    &track.source,
+                    &track.inode,
+                    &track.file_size,
+                    &track.file_type,
+                    &track.artist,
+                    &track.album,
+                    &track.album_artist,
+                    &track.title,
+                    &track.track_number,
+                    &track.genre,
+                    &track.duration_ms,
+                    &track.bitrate_kbps,
+                    &track.sample_rate,
+                    &track.fingerprint,
+                    &track.isrc,
+                    track_id,
+                ],
+            )
+            .with_context(|| format!("Failed to update metadata for track {}", track_id))?;
+        Ok(())
+    }
+
+    // ========================================================================
     // Row Conversion Helper
     // ========================================================================
 

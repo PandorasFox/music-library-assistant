@@ -235,4 +235,38 @@ impl Database {
 
         Ok(paths)
     }
+
+    // ========================================================================
+    // Signal Resolution Operations
+    // ========================================================================
+
+    /// Update scan state path for a relocated file.
+    /// Used by FileRelocated signal handler.
+    pub fn update_scan_state_path(
+        &self,
+        source: &str,
+        inode: i64,
+        new_path: &str,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE scan_state SET path = ?1 WHERE source = ?2 AND inode = ?3",
+                params![new_path, source, inode],
+            )
+            .with_context(|| format!("Failed to update scan_state path for inode {}", inode))?;
+        Ok(())
+    }
+
+    /// Delete scan state entry by inode.
+    /// Used by MissingFromDisk signal handler.
+    pub fn delete_scan_state_by_inode(&self, source: &str, inode: i64) -> Result<bool> {
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM scan_state WHERE source = ?1 AND inode = ?2",
+                params![source, inode],
+            )
+            .with_context(|| format!("Failed to delete scan_state for inode {}", inode))?;
+        Ok(deleted > 0)
+    }
 }

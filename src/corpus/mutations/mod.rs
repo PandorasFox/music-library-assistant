@@ -76,33 +76,14 @@ impl MutationDispatcher {
     /// Execute mutations synchronously (blocking).
     ///
     /// Returns the execution result once all mutations are complete.
+    /// Uses BulkExecutor for efficient parallel + serial execution.
     pub fn execute_sync(&self, mutations: Vec<Mutation>) -> ExecutionResult {
         if mutations.is_empty() {
             return ExecutionResult::empty();
         }
 
-        // TODO: Phase 7 - implement via BulkExecutor
-        // For now, execute mutations serially as a placeholder
-        let start = std::time::Instant::now();
-        let total = mutations.len();
-        let mut succeeded = 0;
-        let mut results = Vec::new();
-
-        for mutation in mutations {
-            let result = self.execute_single(&mutation);
-            if result.success {
-                succeeded += 1;
-            }
-            results.push(result);
-        }
-
-        ExecutionResult {
-            total,
-            succeeded,
-            failed: total - succeeded,
-            results,
-            duration_ms: start.elapsed().as_millis() as u64,
-        }
+        executor::BulkExecutor::new(Arc::clone(&self.db))
+            .execute(mutations)
     }
 
     /// Execute mutations with progress reporting via callback.

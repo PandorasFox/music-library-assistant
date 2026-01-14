@@ -189,6 +189,39 @@ pub enum Mutation {
         migration_id: u32,
         description: String,
     },
+
+    // ========================================================================
+    // Signal Resolution Operations
+    // ========================================================================
+    /// Update track path in database (for relocated files).
+    UpdateTrackPath {
+        track_id: i64,
+        old_path: PathBuf,
+        new_path: PathBuf,
+    },
+
+    /// Update scan state path (for relocated files).
+    UpdateScanStatePath {
+        source: String,
+        inode: i64,
+        new_path: PathBuf,
+    },
+
+    /// Drop track from index (for missing files).
+    DropFromIndex {
+        track_id: i64,
+        path: PathBuf,
+        /// Also remove scan_state entry for this inode
+        inode: Option<i64>,
+        source: Option<String>,
+    },
+
+    /// Full track metadata update (for out-of-band file changes).
+    UpdateTrack {
+        track_id: i64,
+        path: PathBuf,
+        metadata: ExtractedMetadata,
+    },
 }
 
 /// Category for batching same-type operations.
@@ -213,7 +246,11 @@ impl Mutation {
 
             Mutation::IndexTrack { .. }
             | Mutation::UpdateScanState { .. }
-            | Mutation::CleanupStaleScanState { .. } => MutationCategory::Indexing,
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::UpdateTrack { .. } => MutationCategory::Indexing,
 
             Mutation::Move { .. } | Mutation::MoveToStash { .. } => MutationCategory::FileMove,
 
@@ -243,7 +280,12 @@ impl Mutation {
 
             Mutation::TagEditDb { .. }
             | Mutation::CleanupStaleScanState { .. }
-            | Mutation::DbMigration { .. } => None,
+            | Mutation::DbMigration { .. }
+            | Mutation::UpdateScanStatePath { .. } => None,
+
+            Mutation::UpdateTrackPath { new_path: path, .. }
+            | Mutation::DropFromIndex { path, .. }
+            | Mutation::UpdateTrack { path, .. } => Some(path),
         }
     }
 
@@ -254,6 +296,10 @@ impl Mutation {
             Mutation::TagEditDb { .. }
                 | Mutation::CleanupStaleScanState { .. }
                 | Mutation::DbMigration { .. }
+                | Mutation::UpdateTrackPath { .. }
+                | Mutation::UpdateScanStatePath { .. }
+                | Mutation::DropFromIndex { .. }
+                | Mutation::UpdateTrack { .. }
         )
     }
 

@@ -75,6 +75,10 @@ pub enum HealthIssueType {
     FileRelocated,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
+    /// Indexed file no longer exists on disk
+    MissingFromDisk,
+    /// File's inode/size/duration changed out-of-band (file was replaced externally)
+    OutOfBandFileChange,
 }
 
 impl HealthIssueType {
@@ -90,6 +94,8 @@ impl HealthIssueType {
             Self::MissingFromIndex => "missing_from_index",
             Self::FileRelocated => "file_relocated",
             Self::DuplicateInode => "duplicate_inode",
+            Self::MissingFromDisk => "missing_from_disk",
+            Self::OutOfBandFileChange => "oob_file_change",
         }
     }
 
@@ -108,6 +114,8 @@ impl HealthIssueType {
             "missing_from_index" => Some(Self::MissingFromIndex),
             "file_relocated" => Some(Self::FileRelocated),
             "duplicate_inode" => Some(Self::DuplicateInode),
+            "missing_from_disk" => Some(Self::MissingFromDisk),
+            "oob_file_change" => Some(Self::OutOfBandFileChange),
             _ => None,
         }
     }

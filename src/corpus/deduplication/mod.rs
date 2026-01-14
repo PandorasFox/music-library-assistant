@@ -77,9 +77,9 @@ pub fn find_divergence_root(conflict_sets: &[ConflictSet]) -> String {
         return String::new();
     }
 
-    // Find longest common prefix
+    // Find longest common prefix (in characters, not bytes)
     let first = all_paths[0];
-    let mut common_prefix_len = first.len();
+    let mut common_prefix_len = first.chars().count();
 
     for path in &all_paths[1..] {
         let matching_len = first
@@ -90,8 +90,10 @@ pub fn find_divergence_root(conflict_sets: &[ConflictSet]) -> String {
         common_prefix_len = common_prefix_len.min(matching_len);
     }
 
+    // Build prefix string from character count
+    let prefix: String = first.chars().take(common_prefix_len).collect();
+
     // Trim to last directory separator
-    let prefix = &first[..common_prefix_len];
     if let Some(last_sep) = prefix.rfind('/') {
         prefix[..=last_sep].to_string()
     } else {

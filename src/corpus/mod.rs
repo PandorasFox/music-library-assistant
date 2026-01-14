@@ -23,7 +23,6 @@ pub mod reports;
 pub use health::{
     detect_and_store_canonicalizations,
     detect_fingerprint_issues,
-    detect_metadata_issues,
     spawn_heartbeat,
     HeartbeatResult,
 };

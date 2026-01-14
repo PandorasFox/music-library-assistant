@@ -8,7 +8,7 @@ use lofty::tag::Accessor;
 
 use crate::config::AUDIO_EXTENSIONS;
 
-use super::types::{BrowserEntry, CorpusBrowserConfig, FileMetadata};
+use super::types::{BrowserEntry, CorpusBrowserConfig, FileMetadata, SearchState};
 
 /// State for the corpus browser.
 #[derive(Debug)]
@@ -29,6 +29,12 @@ pub struct CorpusBrowserState {
     cached_metadata: Option<FileMetadata>,
     /// Path of cached metadata
     cached_path: Option<PathBuf>,
+    /// Search state for type-to-jump
+    search: SearchState,
+    /// Whether we're in match selection mode (multiple matches)
+    match_selection_mode: bool,
+    /// Index in matches list when selecting
+    match_selection_idx: usize,
 }
 
 impl CorpusBrowserState {
@@ -43,6 +49,9 @@ impl CorpusBrowserState {
             visible_height: 20,
             cached_metadata: None,
             cached_path: None,
+            search: SearchState::default(),
+            match_selection_mode: false,
+            match_selection_idx: 0,
         };
 
         // Initialize with root expanded
@@ -382,5 +391,241 @@ impl CorpusBrowserState {
     /// Get config.
     pub fn config(&self) -> &CorpusBrowserConfig {
         &self.config
+    }
+
+    /// Get search state reference.
+    pub fn search(&self) -> &SearchState {
+        &self.search
+    }
+
+    /// Check if in match selection mode.
+    pub fn is_match_selection_mode(&self) -> bool {
+        self.match_selection_mode
+    }
+
+    /// Get match selection index.
+    pub fn match_selection_idx(&self) -> usize {
+        self.match_selection_idx
+    }
+
+    // =========================================================================
+    // Search
+    // =========================================================================
+
+    /// Start search mode from the currently hovered directory.
+    pub fn start_search(&mut self) {
+        // Find the directory to search - if on a file, use its parent
+        let search_root = if let Some(entry) = self.current_entry() {
+            if entry.is_directory {
+                Some(entry.path.clone())
+            } else {
+                entry.path.parent().map(|p| p.to_path_buf())
+            }
+        } else {
+            Some(self.root_path.clone())
+        };
+
+        self.search.search_root = search_root;
+        self.search.query.clear();
+        self.search.matches.clear();
+        self.search.suggestion = None;
+        self.search.first_match_idx = None;
+    }
+
+    /// Add a character to the search query and update matches.
+    pub fn search_push_char(&mut self, c: char) {
+        // Start search if not already active
+        if !self.search.is_active() {
+            self.start_search();
+        }
+
+        self.search.query.push(c);
+        self.update_search_matches();
+    }
+
+    /// Remove a character from the search query.
+    pub fn search_pop_char(&mut self) {
+        if self.search.query.pop().is_some() {
+            if self.search.query.is_empty() {
+                // Clear search when query is empty
+                self.search.clear();
+            } else {
+                self.update_search_matches();
+            }
+        }
+    }
+
+    /// Cancel search mode.
+    pub fn cancel_search(&mut self) {
+        self.search.clear();
+        self.match_selection_mode = false;
+        self.match_selection_idx = 0;
+    }
+
+    /// Update search matches based on current query.
+    fn update_search_matches(&mut self) {
+        let query_lower = self.search.query.to_lowercase();
+        if query_lower.is_empty() {
+            self.search.matches.clear();
+            self.search.suggestion = None;
+            self.search.first_match_idx = None;
+            return;
+        }
+
+        let search_root = match &self.search.search_root {
+            Some(root) => root.clone(),
+            None => return,
+        };
+
+        // Find all matching directories recursively
+        let mut matches = Vec::new();
+        self.search_directories_recursive(&search_root, &query_lower, &mut matches);
+
+        // Sort alphabetically by directory name
+        matches.sort_by(|a, b| {
+            let name_a = a.file_name().map(|n| n.to_string_lossy().to_lowercase());
+            let name_b = b.file_name().map(|n| n.to_string_lossy().to_lowercase());
+            name_a.cmp(&name_b)
+        });
+
+        // Set suggestion to first match's name
+        self.search.suggestion = matches.first().and_then(|p| {
+            p.file_name().map(|n| n.to_string_lossy().to_string())
+        });
+
+        // Find index in entries list for first match (if visible/expanded)
+        self.search.first_match_idx = matches.first().and_then(|path| {
+            self.entries.iter().position(|e| &e.path == path)
+        });
+
+        self.search.matches = matches;
+    }
+
+    /// Recursively search for directories matching query.
+    fn search_directories_recursive(
+        &self,
+        dir: &Path,
+        query: &str,
+        matches: &mut Vec<PathBuf>,
+    ) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                // Skip hidden directories
+                if name.starts_with('.') {
+                    continue;
+                }
+
+                // Check if name contains query (case-insensitive)
+                if name.to_lowercase().contains(query) {
+                    matches.push(path.clone());
+                }
+
+                // Recurse into subdirectories
+                self.search_directories_recursive(&path, query, matches);
+            }
+        }
+    }
+
+    /// Apply the current suggestion (Tab key).
+    pub fn apply_suggestion(&mut self) {
+        if let Some(suggestion) = &self.search.suggestion {
+            self.search.query = suggestion.clone();
+            self.update_search_matches();
+        }
+    }
+
+    /// Attempt to jump to match (Enter key).
+    /// Returns true if jumped successfully, false if need to show modal.
+    pub fn jump_to_match(&mut self) -> bool {
+        if self.search.matches.is_empty() {
+            // No matches, do nothing
+            return true;
+        }
+
+        if self.search.matches.len() == 1 {
+            // Single match - jump directly
+            let target_path = self.search.matches[0].clone();
+            self.navigate_to_path(&target_path);
+            self.cancel_search();
+            return true;
+        }
+
+        // Multiple matches - enter selection mode
+        self.match_selection_mode = true;
+        self.match_selection_idx = 0;
+        false
+    }
+
+    /// Move selection up in match list.
+    pub fn match_selection_up(&mut self) {
+        if self.match_selection_idx > 0 {
+            self.match_selection_idx -= 1;
+        }
+    }
+
+    /// Move selection down in match list.
+    pub fn match_selection_down(&mut self) {
+        if self.match_selection_idx + 1 < self.search.matches.len() {
+            self.match_selection_idx += 1;
+        }
+    }
+
+    /// Confirm match selection.
+    pub fn confirm_match_selection(&mut self) {
+        if let Some(path) = self.search.matches.get(self.match_selection_idx).cloned() {
+            self.navigate_to_path(&path);
+        }
+        self.cancel_search();
+    }
+
+    /// Cancel match selection (back to search).
+    pub fn cancel_match_selection(&mut self) {
+        self.match_selection_mode = false;
+        self.match_selection_idx = 0;
+    }
+
+    /// Navigate to a path, expanding parent directories as needed.
+    fn navigate_to_path(&mut self, target: &Path) {
+        // Build path from root to target
+        let mut ancestors: Vec<PathBuf> = Vec::new();
+        let mut current = target.to_path_buf();
+
+        while current != self.root_path && current.parent().is_some() {
+            ancestors.push(current.clone());
+            if let Some(parent) = current.parent() {
+                current = parent.to_path_buf();
+            } else {
+                break;
+            }
+        }
+        ancestors.reverse();
+
+        // Expand each ancestor in order
+        for ancestor in &ancestors {
+            // Find and expand this path if not already expanded
+            if let Some(idx) = self.entries.iter().position(|e| &e.path == ancestor) {
+                if self.entries[idx].is_directory && !self.entries[idx].is_expanded {
+                    self.entries[idx].is_expanded = true;
+                    self.load_children(idx);
+                }
+            }
+        }
+
+        // Now find the target and move cursor to it
+        if let Some(idx) = self.entries.iter().position(|e| &e.path == target) {
+            self.cursor_idx = idx;
+            self.ensure_visible();
+            self.update_cached_metadata();
+        }
     }
 }

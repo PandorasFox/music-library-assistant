@@ -185,6 +185,23 @@ impl Database {
         Ok(inodes)
     }
 
+    /// Get the path for a specific inode from scan_state (used for relocation detection)
+    pub fn get_scan_state_path_for_inode(
+        &self,
+        source: &str,
+        inode: i64,
+    ) -> Result<Option<String>> {
+        let path: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT path FROM scan_state WHERE source = ?1 AND inode = ?2",
+                params![source, inode],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(path)
+    }
+
     /// Get paths for specific inodes from scan_state (used for logging missing files)
     pub fn get_scan_state_paths_for_inodes(
         &self,

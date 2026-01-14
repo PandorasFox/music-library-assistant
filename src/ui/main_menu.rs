@@ -7,12 +7,14 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
+
+use crate::ui::widgets::{PaneConfig, ThreePaneLayout, TwoPaneLayout};
 
 use crate::config::Config;
 use crate::corpus::HeartbeatResult;
@@ -339,30 +341,24 @@ impl MainMenuState {
 
         if is_action_category {
             // Two-pane layout: categories on left, single empty pane on right
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(25), // Categories
-                    Constraint::Percentage(75), // Empty pane
-                ])
-                .split(area);
+            let layout = TwoPaneLayout::horizontal()
+                .left(PaneConfig::new("", 25))
+                .right(PaneConfig::new("", 75))
+                .build(area);
 
-            self.render_categories(f, chunks[0]);
-            self.render_action_category_pane(f, chunks[1]);
+            self.render_categories(f, layout.left.area);
+            self.render_action_category_pane(f, layout.right.area);
         } else {
             // Normal three-pane layout
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(25), // Categories
-                    Constraint::Percentage(35), // Commands
-                    Constraint::Percentage(40), // Info
-                ])
-                .split(area);
+            let layout = ThreePaneLayout::horizontal()
+                .left(PaneConfig::new("", 25))
+                .middle(PaneConfig::new("", 35))
+                .right(PaneConfig::new("", 40))
+                .build(area);
 
-            self.render_categories(f, chunks[0]);
-            self.render_commands(f, chunks[1]);
-            self.render_info(f, chunks[2]);
+            self.render_categories(f, layout.left.area);
+            self.render_commands(f, layout.middle.area);
+            self.render_info(f, layout.right.area);
         }
     }
 
@@ -477,7 +473,7 @@ impl MainMenuState {
                         TransitionTarget::TagEditor => "Opens interactive tag editor",
                         TransitionTarget::DecisionFlow => "Opens decision-making workflow",
                         TransitionTarget::DirBrowser { .. } => "Opens directory browser for path selection",
-                        TransitionTarget::DropMissingConfirm => "Shows list of missing files for review",
+                        TransitionTarget::DropMissingConfirm => "Shows index entries without backing files for removal",
                         TransitionTarget::PendingChangesView => "Shows queued changes",
                         TransitionTarget::CanonFlow => "Opens artist canonicalization workflow",
                         TransitionTarget::GenreCanonFlow => "Opens genre canonicalization workflow",
@@ -508,9 +504,8 @@ impl MainMenuState {
         match report_type {
             ReportType::Health => {
                 lines.push("─── Current Health ───".to_string());
-                lines.push(format!("Duplicate groups: {}", summary.duplicate_groups));
-                lines.push(format!("  Fingerprint: {}", hs.fingerprint_duplicates));
-                lines.push(format!("  Metadata: {}", hs.metadata_duplicates));
+                lines.push(format!("Deploy conflicts: {}", summary.deploy_conflicts));
+                lines.push(format!("  Fingerprint duplicates: {}", hs.fingerprint_duplicates));
                 lines.push(format!("Canonicalization issues: {}", hs.canonicalization_issues));
                 lines.push(format!("Auto-resolvable: {}", hs.auto_resolvable));
                 lines.push(format!("Manual review: {}", hs.manual_review));
@@ -550,49 +545,17 @@ impl MainMenuState {
 // Menu Building
 // ============================================================================
 
-fn build_menu_categories(config: &Config) -> Vec<Category> {
+fn build_menu_categories(_config: &Config) -> Vec<Category> {
+    // Note: Build Indices category removed - scanning is now automatic:
+    // - Corpus: First-time startup auto-scans when DB is empty; heartbeat scans new files
+    // - Legacy: Heartbeat scans legacy library if configured
     vec![
-        build_build_indices_category(config),
         build_insight_category(),
         build_corpus_ops_category(),
         build_deployment_category(),
         build_intake_category(),
         build_quit_category(),
     ]
-}
-
-fn build_build_indices_category(config: &Config) -> Category {
-    let mut commands = vec![
-        Command {
-            label: "Scan Corpus".to_string(),
-            action: CommandAction::Background(BackgroundTask::ScanCorpus),
-            description: "Incrementally scan corpus, skipping unchanged files".to_string(),
-        },
-    ];
-
-    // Add legacy corpus scan if configured
-    if config.legacy_library.is_some() {
-        commands.push(Command {
-            label: "Scan Legacy Corpus".to_string(),
-            action: CommandAction::Background(BackgroundTask::ScanLegacy),
-            description: "Scan the legacy library for matching/migration".to_string(),
-        });
-    }
-
-    // Drop missing files from index (with confirmation)
-    // Note: Missing files are detected automatically by heartbeat at startup
-    // and periodically when the eye blinks and rolls a 13.
-    commands.push(Command {
-        label: "Drop Missing From Index".to_string(),
-        action: CommandAction::Transition(TransitionTarget::DropMissingConfirm),
-        description: "Drop entries for files no longer on disk (with confirmation)".to_string(),
-    });
-
-    Category {
-        name: "Build Indices".to_string(),
-        commands,
-        action: None,
-    }
 }
 
 fn build_insight_category() -> Category {
@@ -695,17 +658,25 @@ fn build_corpus_ops_category() -> Category {
                 action: CommandAction::Transition(TransitionTarget::CorpusBrowser),
                 description: "Browse corpus files and edit tags with metadata preview".to_string(),
             },
+            // -----------------------------------------------------------------
+            // Index Maintenance - drop entries for files no longer on disk
+            // -----------------------------------------------------------------
             Command {
-                label: "Metadata Deduplication (Tag Editor)".to_string(),
-                action: CommandAction::Transition(TransitionTarget::TagEditor),
-                description: "Unify conflicting tags across duplicate tracks".to_string(),
+                label: "Drop Unbacked Files From Corpus Indices".to_string(),
+                action: CommandAction::Transition(TransitionTarget::DropMissingConfirm),
+                description: "Remove index entries for files that no longer exist on disk".to_string(),
             },
             Command {
-                label: "Sleuthing (Fingerprint Deduplication)".to_string(),
+                label: "Deploy Conflict Resolution".to_string(),
+                action: CommandAction::Transition(TransitionTarget::TagEditor),
+                description: "Resolve tracks that would deploy to the same library path".to_string(),
+            },
+            Command {
+                label: "Scoped Fingerprint Deduplication".to_string(),
                 action: CommandAction::Transition(TransitionTarget::DirBrowser {
                     context: DirBrowserContext::Sleuthing,
                 }),
-                description: "Select directories and resolve fingerprint duplicates".to_string(),
+                description: "Select directories and resolve exact audio duplicates".to_string(),
             },
             Command {
                 label: "Artist Name Canonicalization".to_string(),
@@ -730,18 +701,6 @@ fn build_corpus_ops_category() -> Category {
                 label: "Album Tag Resolution".to_string(),
                 action: CommandAction::Transition(TransitionTarget::AlbumFlow),
                 description: "Resolve album tag variants (EP/Deluxe/Remaster suffixes)".to_string(),
-            },
-            // -----------------------------------------------------------------
-            // Metadata Duplicates Resolution - NEEDS REDESIGN
-            // TODO: This flow should be updated to pull from DeployConflicts
-            // (from deploy_flow) as its conflict source set, not from the
-            // current metadata duplicate detection in reports.rs. The
-            // DeployConflict health issue type already tracks path collisions.
-            // -----------------------------------------------------------------
-            Command {
-                label: "Metadata Duplicates Resolution".to_string(),
-                action: CommandAction::Message("Stubbed - needs redesign to use DeployConflicts as source".to_string()),
-                description: "STUB: Resolve tracks that would deploy to same path".to_string(),
             },
             Command {
                 label: "Genre Tag Canonicalization".to_string(),

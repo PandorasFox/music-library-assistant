@@ -420,6 +420,50 @@ impl Database {
     }
 
     // ========================================================================
+    // Inode Analysis Operations
+    // ========================================================================
+
+    /// Find inodes that appear multiple times in corpus tracks.
+    /// Returns a vector of (inode, paths) for each duplicate.
+    /// Used by heartbeat to detect hard links or database inconsistencies.
+    pub fn get_duplicate_inodes_in_corpus(&self) -> Result<Vec<(i64, Vec<String>)>> {
+        // First, find inodes with count > 1
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, COUNT(*) as cnt
+             FROM tracks
+             WHERE source = 'corpus'
+             GROUP BY inode
+             HAVING cnt > 1"
+        )?;
+
+        let duplicate_inodes: Vec<i64> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        if duplicate_inodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Get all paths for each duplicate inode
+        let mut result = Vec::new();
+        for inode in duplicate_inodes {
+            let mut path_stmt = self.conn.prepare(
+                "SELECT path FROM tracks WHERE source = 'corpus' AND inode = ?1 ORDER BY path"
+            )?;
+
+            let paths: Vec<String> = path_stmt
+                .query_map(params![inode], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            if paths.len() > 1 {
+                result.push((inode, paths));
+            }
+        }
+
+        Ok(result)
+    }
+
+    // ========================================================================
     // Tag Edit Operations
     // ========================================================================
 

@@ -300,11 +300,7 @@ impl DeploymentPreviewState {
                 // Show first few conflict paths
                 for (i, conflict) in status.conflicts.iter().take(3).enumerate() {
                     let path_str = conflict.target_path.to_string_lossy();
-                    let truncated = if path_str.len() > 40 {
-                        format!("...{}", &path_str[path_str.len() - 37..])
-                    } else {
-                        path_str.to_string()
-                    };
+                    let truncated = crate::ui::helpers::truncate_left(&path_str, 40);
                     lines.push(Line::from(Span::styled(
                         format!("  {} ({} files)", truncated, conflict.conflicting_tracks.len()),
                         Style::default().fg(Color::DarkGray),

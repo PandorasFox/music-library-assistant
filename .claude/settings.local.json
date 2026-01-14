@@ -20,7 +20,11 @@
       "Bash(du -sh:*)",
       "Bash(find:*)",
       "Bash(tree:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cargo fix:*)",
+      "Bash(cargo clean:*)",
+      "Bash(tokei:*)",
+      "WebSearch"
     ]
   }
 }

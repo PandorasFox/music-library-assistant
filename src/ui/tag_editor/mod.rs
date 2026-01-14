@@ -36,7 +36,7 @@ pub use types::{
 };
 
 // Directory tag editor exports
-pub use directory_state::{DirectoryTagChange, DirectoryTagEditorState};
+pub use directory_state::DirectoryTagEditorState;
 #[allow(unused_imports)]
 pub use types::{
     AggregatedTagField, AggregatedValue, DirectoryTagEditorAction, DirectoryTagEditorFocus,

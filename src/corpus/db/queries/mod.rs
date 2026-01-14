@@ -4,14 +4,12 @@
 //! - `tracks`: Track CRUD and queries by source/path/fingerprint/metadata
 //! - `scan_state`: Incremental scan state tracking
 //! - `deployment`: Deployment logging and library track queries
-//! - `duplicates`: Duplicate group management and resolution
 //! - `changes`: Change sessions and pending changes
 //! - `health`: Health issues, summaries, known variants
 //! - `metadata`: App metadata, tag canonicalization, tag mismatches
 
 mod changes;
 mod deployment;
-mod duplicates;
 mod health;
 mod metadata;
 mod scan_state;
@@ -121,27 +119,8 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_corpus_health_type ON corpus_health_stats(stat_type);
 
-            CREATE TABLE IF NOT EXISTS duplicate_groups (
-                id INTEGER PRIMARY KEY,
-                group_type TEXT NOT NULL,
-                group_key TEXT NOT NULL,
-                resolution_state TEXT DEFAULT 'pending',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                resolved_at DATETIME
-            );
-            CREATE INDEX IF NOT EXISTS idx_duplicate_group_type ON duplicate_groups(group_type);
-            CREATE INDEX IF NOT EXISTS idx_duplicate_resolution ON duplicate_groups(resolution_state);
-
-            CREATE TABLE IF NOT EXISTS duplicate_group_members (
-                id INTEGER PRIMARY KEY,
-                group_id INTEGER NOT NULL,
-                track_id INTEGER NOT NULL,
-                selected_for_keep BOOLEAN DEFAULT 0,
-                FOREIGN KEY(group_id) REFERENCES duplicate_groups(id),
-                FOREIGN KEY(track_id) REFERENCES tracks(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_duplicate_members_group ON duplicate_group_members(group_id);
-            CREATE INDEX IF NOT EXISTS idx_duplicate_members_track ON duplicate_group_members(track_id);
+            -- Legacy tables (duplicate_groups, duplicate_group_members) removed in migration v3->v4
+            -- Replaced by DeployConflict health issues
 
             CREATE TABLE IF NOT EXISTS tag_edit_history (
                 id INTEGER PRIMARY KEY,

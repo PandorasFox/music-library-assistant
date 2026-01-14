@@ -75,6 +75,15 @@ content below this point has been authored by claude, and are claude's notes on 
 - **PendingChange**: Algebraic mutation representation
 - **ConflictSet**: Duplicate grouping for resolution
 
+### String Handling
+
+Prefer isolated helper functions in `ui/helpers.rs` for string operations, especially truncation and display formatting. Rust strings are UTF-8, and byte-based slicing (`&s[..n]`) will panic if `n` falls inside a multi-byte character. Use:
+
+- `truncate_left(s, max_chars)` → `...visible_end` (for paths)
+- `truncate_right(s, max_chars)` → `visible_start...` (for tags/labels)
+
+Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing strings.
+
 ### Data Locations
 
 - **Config**: `$XDG_CONFIG_HOME/mla/config.kdl` (or `~/.config/mla/`)

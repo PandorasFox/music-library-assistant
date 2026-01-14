@@ -14,6 +14,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::widgets::{PaneConfig, ThreePaneLayout, TwoPaneLayout};
+
 use super::session::AlbumCanonSession;
 use super::types::{AlbumClusterAction, AlbumDecision};
 use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
@@ -366,30 +368,24 @@ impl AlbumClusterState {
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let has_quality = self.quality_state.as_ref().map(|q| q.has_options()).unwrap_or(false);
 
-        let chunks = if has_quality {
-            Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(40),
-                    Constraint::Percentage(35),
-                    Constraint::Percentage(25),
-                ])
-                .split(area)
+        if has_quality {
+            let layout = ThreePaneLayout::horizontal()
+                .left(PaneConfig::new("", 40))
+                .middle(PaneConfig::new("", 35))
+                .right(PaneConfig::new("", 25))
+                .build(area);
+
+            self.render_variants_pane(frame, layout.left.area);
+            self.render_action_pane(frame, layout.middle.area);
+            self.render_quality_pane(frame, layout.right.area);
         } else {
-            Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(50),
-                    Constraint::Percentage(50),
-                ])
-                .split(area)
-        };
+            let layout = TwoPaneLayout::horizontal()
+                .left(PaneConfig::new("", 50))
+                .right(PaneConfig::new("", 50))
+                .build(area);
 
-        self.render_variants_pane(frame, chunks[0]);
-        self.render_action_pane(frame, chunks[1]);
-
-        if has_quality && chunks.len() > 2 {
-            self.render_quality_pane(frame, chunks[2]);
+            self.render_variants_pane(frame, layout.left.area);
+            self.render_action_pane(frame, layout.right.area);
         }
     }
 

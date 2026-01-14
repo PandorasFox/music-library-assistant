@@ -252,8 +252,6 @@ pub fn scan_directory_with_progress(
             };
             // Detect fingerprint issues (will create health_issues entries)
             let _ = corpus::detect_fingerprint_issues(&db, &track_with_id);
-            // Detect metadata issues
-            let _ = corpus::detect_metadata_issues(&db, &track_with_id);
         }
     }
 

@@ -1,10 +1,10 @@
 //! Corpus Browser Rendering
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
-    widgets::{Block, Borders, Paragraph},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -24,6 +24,13 @@ impl CorpusBrowserState {
 
         self.render_tree_pane(f, chunks[0]);
         self.render_preview_pane(f, chunks[1]);
+
+        // Render overlays
+        if self.is_match_selection_mode() {
+            self.render_match_modal(f, area);
+        } else if self.search().is_active() {
+            self.render_search_popup(f, area);
+        }
     }
 
     /// Render the directory/file tree pane.
@@ -166,11 +173,7 @@ impl CorpusBrowserState {
                             .style(Style::default().fg(Color::DarkGray)));
 
                         for (key, value) in &meta.tags {
-                            let display_value = if value.len() > 30 {
-                                format!("{}...", &value[..27])
-                            } else {
-                                value.clone()
-                            };
+                            let display_value = crate::ui::helpers::truncate_right(value, 30);
                             lines.push(Line::from(format!("{:12}: {}", key, display_value)));
                         }
                     }
@@ -194,5 +197,174 @@ impl CorpusBrowserState {
                 .title("Preview"),
         );
         f.render_widget(preview_para, area);
+    }
+
+    /// Render the search popup overlay.
+    fn render_search_popup(&self, f: &mut Frame, area: Rect) {
+        // Position popup near top of screen
+        let popup_width = 50.min(area.width.saturating_sub(4));
+        let popup_height = 3;
+        let popup_x = (area.width.saturating_sub(popup_width)) / 2 + area.x;
+        let popup_y = area.y + 2;
+
+        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+        // Clear the background
+        f.render_widget(Clear, popup_area);
+
+        // Build the search line with query and suggestion
+        let query = &self.search().query;
+        let suggestion = self.search().suggestion.as_deref().unwrap_or("");
+
+        // Calculate the suggestion suffix (part after query)
+        // Use char count to avoid slicing in the middle of multi-byte chars
+        let suggestion_suffix = if !suggestion.is_empty()
+            && suggestion.to_lowercase().starts_with(&query.to_lowercase())
+        {
+            let query_chars = query.chars().count();
+            suggestion.chars().skip(query_chars).collect::<String>()
+        } else {
+            String::new()
+        };
+
+        let search_root_name = self
+            .search()
+            .search_root
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "root".to_string());
+
+        let match_count = self.search().matches.len();
+        let match_info = if match_count == 0 {
+            " (no matches)".to_string()
+        } else if match_count == 1 {
+            " (1 match)".to_string()
+        } else {
+            format!(" ({} matches)", match_count)
+        };
+
+        let line = Line::from(vec![
+            Span::styled(query.as_str(), Style::default().fg(Color::White)),
+            Span::styled(
+                suggestion_suffix,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+            Span::styled(
+                match_info,
+                Style::default().fg(if match_count > 0 {
+                    Color::Green
+                } else {
+                    Color::Red
+                }),
+            ),
+        ]);
+
+        let title = format!("Search in: {}", search_root_name);
+        let popup = Paragraph::new(line)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(title),
+            )
+            .alignment(Alignment::Left);
+
+        f.render_widget(popup, popup_area);
+    }
+
+    /// Render the match selection modal.
+    fn render_match_modal(&self, f: &mut Frame, area: Rect) {
+        let matches = &self.search().matches;
+        let selected_idx = self.match_selection_idx();
+
+        // Calculate modal size
+        let max_path_len = matches
+            .iter()
+            .map(|p| p.to_string_lossy().len())
+            .max()
+            .unwrap_or(20);
+
+        let modal_width = (max_path_len as u16 + 6).min(area.width.saturating_sub(4));
+        let modal_height = (matches.len() as u16 + 4).min(area.height.saturating_sub(4));
+
+        let modal_x = (area.width.saturating_sub(modal_width)) / 2 + area.x;
+        let modal_y = (area.height.saturating_sub(modal_height)) / 2 + area.y;
+
+        let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
+
+        // Clear background
+        f.render_widget(Clear, modal_area);
+
+        // Build match list
+        let visible_height = modal_height.saturating_sub(4) as usize;
+        let scroll_offset = if selected_idx >= visible_height {
+            selected_idx - visible_height + 1
+        } else {
+            0
+        };
+
+        let lines: Vec<Line> = matches
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible_height)
+            .map(|(idx, path)| {
+                let is_selected = idx == selected_idx;
+                let prefix = if is_selected { "▶ " } else { "  " };
+
+                // Truncate path if needed
+                let path_str = path.to_string_lossy();
+                let max_len = modal_width.saturating_sub(6) as usize;
+                let display_path = crate::ui::helpers::truncate_left(&path_str, max_len);
+
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                Line::from(format!("{}{}", prefix, display_path)).style(style)
+            })
+            .collect();
+
+        let title = format!(
+            "Select Match ({}/{})",
+            selected_idx + 1,
+            matches.len()
+        );
+
+        let modal = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(title),
+        );
+
+        f.render_widget(modal, modal_area);
+
+        // Render help text at bottom of modal
+        if modal_height > 3 {
+            let help_area = Rect::new(
+                modal_x + 1,
+                modal_y + modal_height - 2,
+                modal_width - 2,
+                1,
+            );
+            let help = Paragraph::new(Line::from(vec![
+                Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+                Span::raw(" navigate  "),
+                Span::styled("Enter", Style::default().fg(Color::Cyan)),
+                Span::raw(" select  "),
+                Span::styled("Esc", Style::default().fg(Color::Cyan)),
+                Span::raw(" cancel"),
+            ]))
+            .alignment(Alignment::Center);
+            f.render_widget(help, help_area);
+        }
     }
 }

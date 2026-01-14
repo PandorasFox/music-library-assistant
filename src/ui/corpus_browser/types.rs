@@ -68,3 +68,34 @@ pub enum CorpusBrowserAction {
     /// User pressed Esc - cancel and return to previous mode
     Cancel,
 }
+
+/// Search mode state for type-to-jump functionality.
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    /// Current search query
+    pub query: String,
+    /// Directory being searched (the one hovered when search started)
+    pub search_root: Option<PathBuf>,
+    /// Matching directory paths found
+    pub matches: Vec<PathBuf>,
+    /// First alphabetically matching directory name (for suggestion)
+    pub suggestion: Option<String>,
+    /// Index in entries list for first match (for single-match jump)
+    pub first_match_idx: Option<usize>,
+}
+
+impl SearchState {
+    /// Clear all search state.
+    pub fn clear(&mut self) {
+        self.query.clear();
+        self.search_root = None;
+        self.matches.clear();
+        self.suggestion = None;
+        self.first_match_idx = None;
+    }
+
+    /// Check if search is currently active.
+    pub fn is_active(&self) -> bool {
+        !self.query.is_empty() || self.search_root.is_some()
+    }
+}

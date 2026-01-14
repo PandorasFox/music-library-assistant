@@ -102,6 +102,23 @@ impl MigrationRegistry {
             },
         });
 
+        // Version 3 -> 4: Drop legacy duplicate tracking tables
+        // The duplicate_groups system has been replaced by DeployConflict health issues
+        registry.register(Migration {
+            from_version: 3,
+            to_version: 4,
+            description: "Remove legacy duplicate_groups tables (replaced by health_issues)",
+            apply: |db| {
+                db.execute_batch(
+                    r#"
+                    DROP TABLE IF EXISTS duplicate_group_members;
+                    DROP TABLE IF EXISTS duplicate_groups;
+                    "#,
+                )?;
+                db.set_schema_version(4)
+            },
+        });
+
         registry
     }
 
@@ -184,16 +201,17 @@ mod tests {
     fn test_migration_registry() {
         let registry = MigrationRegistry::new();
 
-        // Should have at least the track_tags migration
-        assert!(registry.latest_version() >= 3);
+        // Should have migrations up to v4
+        assert!(registry.latest_version() >= 4);
 
-        // Pending from version 2 should include v2->v3
+        // Pending from version 2 should include v2->v3 and v3->v4
         let pending = registry.pending_migrations(2);
         assert!(!pending.is_empty());
         assert!(pending.iter().any(|m| m.to_version == 3));
+        assert!(pending.iter().any(|m| m.to_version == 4));
 
-        // Pending from version 3 should be empty
-        let pending_from_3 = registry.pending_migrations(3);
-        assert!(pending_from_3.is_empty());
+        // Pending from version 4 should be empty
+        let pending_from_4 = registry.pending_migrations(4);
+        assert!(pending_from_4.is_empty());
     }
 }

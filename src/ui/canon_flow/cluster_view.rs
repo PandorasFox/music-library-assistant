@@ -30,6 +30,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::widgets::{PaneConfig, TwoPaneLayout};
+
 use super::session::{CanonDecision, CanonSession};
 use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
 use crate::ui::app::flip_coin;
@@ -644,16 +646,13 @@ impl ClusterViewState {
 
     fn render_panes(&mut self, f: &mut Frame, area: Rect) {
         // Two horizontal panes: 60% variants, 40% action
-        let pane_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(60),
-                Constraint::Percentage(40),
-            ])
-            .split(area);
+        let layout = TwoPaneLayout::horizontal()
+            .left(PaneConfig::new("", 60))
+            .right(PaneConfig::new("", 40))
+            .build(area);
 
-        self.render_variants_pane(f, pane_chunks[0]);
-        self.render_action_pane(f, pane_chunks[1]);
+        self.render_variants_pane(f, layout.left.area);
+        self.render_action_pane(f, layout.right.area);
     }
 
     fn render_variants_pane(&mut self, f: &mut Frame, area: Rect) {

@@ -71,6 +71,10 @@ pub enum HealthIssueType {
     OutOfBandTagChange,
     /// Files exist on disk but are not in the index (need to be scanned)
     MissingFromIndex,
+    /// File moved to different path (same inode detected at new location)
+    FileRelocated,
+    /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
+    DuplicateInode,
 }
 
 impl HealthIssueType {
@@ -84,6 +88,8 @@ impl HealthIssueType {
             Self::DeployConflict => "deploy_conflict",
             Self::OutOfBandTagChange => "oob_tag",
             Self::MissingFromIndex => "missing_from_index",
+            Self::FileRelocated => "file_relocated",
+            Self::DuplicateInode => "duplicate_inode",
         }
     }
 
@@ -100,6 +106,8 @@ impl HealthIssueType {
             "deploy_conflict" => Some(Self::DeployConflict),
             "oob_tag" => Some(Self::OutOfBandTagChange),
             "missing_from_index" => Some(Self::MissingFromIndex),
+            "file_relocated" => Some(Self::FileRelocated),
+            "duplicate_inode" => Some(Self::DuplicateInode),
             _ => None,
         }
     }
@@ -301,7 +309,8 @@ pub struct HealthSummary {
 #[derive(Debug, Clone, Default)]
 pub struct CorpusSummary {
     pub track_count: usize,
-    pub duplicate_groups: usize,
+    /// Number of unresolved deployment conflicts (tracks that would deploy to same path)
+    pub deploy_conflicts: usize,
     pub health_summary: HealthSummary,
     pub deployment_stats: Option<DeploymentStats>,
     pub pending_changes: HashMap<String, usize>,

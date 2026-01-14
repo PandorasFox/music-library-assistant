@@ -2,22 +2,25 @@
 //!
 //! Quick validation of corpus and libraries against index at app launch.
 //! Detects files missing from disk, new files not yet indexed, and library health.
+//! Also handles automatic scanning of new files and detection of moved files.
 //!
 //! ## Health Detection Coverage
 //!
 //! - **missing_from_disk**: Indexed files that no longer exist on disk
-//! - **new_on_disk**: Audio files in corpus not yet indexed
+//! - **new_on_disk**: Audio files in corpus not yet indexed (now auto-scanned)
+//! - **files_relocated**: Files moved to new paths (same inode, different path)
+//! - **duplicate_inodes**: Multiple tracks sharing the same inode
 //! - **library_health**: Per-library deployment status (healthy, pending, stale, orphans)
-//! - **health_issues**: Creates health issue entries for unindexed files
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::config::{self, Config};
-use crate::corpus::db::Database;
+use crate::corpus::db::{Database, HealthIssue, HealthIssueType, HealthIssueSeverity, ScanStateEntry};
+use crate::corpus::metadata;
 
 use super::library::{check_all_libraries_health, LibraryHealthResult};
 
@@ -32,8 +35,14 @@ pub struct HeartbeatResult {
     pub disk_count: usize,
     /// Number of indexed files missing from disk
     pub missing_from_disk: usize,
-    /// Number of files on disk not in index
+    /// Number of files on disk not in index (before scanning)
     pub new_on_disk: usize,
+    /// Number of new files successfully scanned and indexed
+    pub files_scanned: usize,
+    /// Number of files detected as relocated (same inode, different path)
+    pub files_relocated: usize,
+    /// Number of duplicate inode issues found
+    pub duplicate_inodes: usize,
     /// Number of tracks with pending tag flushes (DB differs from disk)
     pub pending_tag_flushes: usize,
     /// Health results for each configured library
@@ -47,7 +56,11 @@ pub struct HeartbeatResult {
 impl HeartbeatResult {
     /// Returns true if the corpus is in sync with the index
     pub fn is_corpus_healthy(&self) -> bool {
-        self.missing_from_disk == 0 && self.new_on_disk == 0
+        // Note: new_on_disk may be > 0 if scanning failed for some files,
+        // but files_scanned tells us how many succeeded
+        self.missing_from_disk == 0
+            && self.files_relocated == 0
+            && self.duplicate_inodes == 0
     }
 
     /// Returns true if all libraries are healthy
@@ -99,10 +112,19 @@ pub fn spawn_heartbeat(config: &Config) -> mpsc::Receiver<HeartbeatResult> {
     rx
 }
 
+/// Results from scanning a single source (corpus or legacy)
+struct SourceScanResult {
+    indexed_count: usize,
+    disk_count: usize,
+    missing_from_disk: usize,
+    new_on_disk: usize,
+    files_scanned: usize,
+    files_relocated: usize,
+}
+
 /// Run the heartbeat check synchronously
 fn run_heartbeat(config: &Config) -> HeartbeatResult {
     let start = Instant::now();
-    let corpus_root = &config.corpus_root;
 
     // Get database path and open connection
     let db_path = match config::get_db_path() {
@@ -113,6 +135,9 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
                 disk_count: 0,
                 missing_from_disk: 0,
                 new_on_disk: 0,
+                files_scanned: 0,
+                files_relocated: 0,
+                duplicate_inodes: 0,
                 pending_tag_flushes: 0,
                 library_health: Vec::new(),
                 deployment_conflicts: 0,
@@ -129,6 +154,9 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
                 disk_count: 0,
                 missing_from_disk: 0,
                 new_on_disk: 0,
+                files_scanned: 0,
+                files_relocated: 0,
+                duplicate_inodes: 0,
                 pending_tag_flushes: 0,
                 library_health: Vec::new(),
                 deployment_conflicts: 0,
@@ -137,37 +165,38 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
         }
     };
 
-    // Get indexed inodes from scan_state for corpus
-    let indexed_inodes = get_indexed_inodes(&db);
+    // Process corpus
+    let corpus_result = process_source(&db, "corpus", &config.corpus_root);
 
-    // Walk corpus directory and collect audio file inodes and paths
-    let (disk_inodes, disk_inode_paths) = walk_corpus_inodes_with_paths(corpus_root);
+    // Process legacy library if configured
+    let legacy_result = config.legacy_library.as_ref().map(|legacy_path| {
+        process_source(&db, "legacy", legacy_path)
+    });
 
-    // Calculate differences
-    let missing_inodes: HashSet<i64> = indexed_inodes.difference(&disk_inodes).cloned().collect();
-    let missing_from_disk = missing_inodes.len();
+    // Combine results
+    let (indexed_count, disk_count, missing_from_disk, new_on_disk, files_scanned, files_relocated) =
+        if let Some(legacy) = legacy_result {
+            (
+                corpus_result.indexed_count + legacy.indexed_count,
+                corpus_result.disk_count + legacy.disk_count,
+                corpus_result.missing_from_disk + legacy.missing_from_disk,
+                corpus_result.new_on_disk + legacy.new_on_disk,
+                corpus_result.files_scanned + legacy.files_scanned,
+                corpus_result.files_relocated + legacy.files_relocated,
+            )
+        } else {
+            (
+                corpus_result.indexed_count,
+                corpus_result.disk_count,
+                corpus_result.missing_from_disk,
+                corpus_result.new_on_disk,
+                corpus_result.files_scanned,
+                corpus_result.files_relocated,
+            )
+        };
 
-    // Find new files (not in index)
-    let new_inodes: HashSet<i64> = disk_inodes.difference(&indexed_inodes).cloned().collect();
-    let new_on_disk = new_inodes.len();
-
-    // Log missing files for debugging
-    if missing_from_disk > 0 {
-        if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes("corpus", &missing_inodes) {
-            let _ = config::log_message(&format!(
-                "Heartbeat: {} files missing from disk:",
-                missing_from_disk
-            ));
-            for path in &missing_paths {
-                let _ = config::log_message(&format!("  - {}", path));
-            }
-        }
-    }
-
-    // Create health issues for unindexed files (grouped by directory)
-    if new_on_disk > 0 {
-        create_missing_from_index_issues(&db, &new_inodes, &disk_inode_paths);
-    }
+    // Detect duplicate inodes in the corpus
+    let duplicate_inodes = detect_duplicate_inodes(&db);
 
     // Check library health
     let library_health = check_all_libraries_health(config, &db);
@@ -182,10 +211,13 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
         .unwrap_or(0);
 
     HeartbeatResult {
-        indexed_count: indexed_inodes.len(),
-        disk_count: disk_inodes.len(),
+        indexed_count,
+        disk_count,
         missing_from_disk,
         new_on_disk,
+        files_scanned,
+        files_relocated,
+        duplicate_inodes,
         pending_tag_flushes,
         library_health,
         deployment_conflicts,
@@ -193,11 +225,89 @@ fn run_heartbeat(config: &Config) -> HeartbeatResult {
     }
 }
 
-/// Get all indexed inodes for corpus from scan_state table
-fn get_indexed_inodes(db: &Database) -> HashSet<i64> {
-    // Query scan_state for all corpus inodes
+/// Process a single source (corpus or legacy) - detect changes, scan new files
+fn process_source(db: &Database, source: &str, root: &Path) -> SourceScanResult {
+    // Get indexed inodes from scan_state for this source
+    let indexed_inodes = get_indexed_inodes(db, source);
+
+    // Walk directory and collect audio file inodes and paths
+    let (disk_inodes, disk_inode_paths) = walk_corpus_inodes_with_paths(root);
+
+    // Calculate differences
+    let missing_inodes: HashSet<i64> = indexed_inodes.difference(&disk_inodes).cloned().collect();
+    let new_inodes: HashSet<i64> = disk_inodes.difference(&indexed_inodes).cloned().collect();
+
+    // Detect file relocations: inodes that are both "missing" and "new" at different paths
+    let (files_relocated, remaining_missing, remaining_new) = detect_file_relocations(
+        db,
+        source,
+        &missing_inodes,
+        &new_inodes,
+        &disk_inode_paths,
+    );
+
+    let missing_from_disk = remaining_missing.len();
+    let new_on_disk = remaining_new.len();
+
+    // Log missing files for debugging
+    if missing_from_disk > 0 {
+        if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes(source, &remaining_missing) {
+            let _ = config::log_message(&format!(
+                "Heartbeat: {} {} files missing from disk:",
+                missing_from_disk, source
+            ));
+            for path in &missing_paths {
+                let _ = config::log_message(&format!("  - {}", path));
+            }
+        }
+    }
+
+    // Scan new files that aren't relocations
+    let files_scanned = if !remaining_new.is_empty() {
+        scan_new_files(db, source, &remaining_new, &disk_inode_paths)
+    } else {
+        0
+    };
+
+    // Create health issues for files that couldn't be scanned
+    let unscanned_count = new_on_disk.saturating_sub(files_scanned);
+    if unscanned_count > 0 {
+        // Filter to only unscanned inodes for health issue creation
+        let scanned_paths: HashSet<String> = remaining_new.iter()
+            .filter_map(|inode| disk_inode_paths.get(inode))
+            .take(files_scanned)
+            .cloned()
+            .collect();
+
+        let unscanned_inodes: HashSet<i64> = remaining_new.iter()
+            .filter(|inode| {
+                disk_inode_paths.get(inode)
+                    .map(|p| !scanned_paths.contains(p))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        if !unscanned_inodes.is_empty() {
+            create_missing_from_index_issues(db, &unscanned_inodes, &disk_inode_paths);
+        }
+    }
+
+    SourceScanResult {
+        indexed_count: indexed_inodes.len(),
+        disk_count: disk_inodes.len(),
+        missing_from_disk,
+        new_on_disk,
+        files_scanned,
+        files_relocated,
+    }
+}
+
+/// Get all indexed inodes for a source from scan_state table
+fn get_indexed_inodes(db: &Database, source: &str) -> HashSet<i64> {
+    // Query scan_state for all inodes of this source
     // This is faster than querying tracks table
-    db.get_all_scan_state_inodes("corpus").unwrap_or_default()
+    db.get_all_scan_state_inodes(source).unwrap_or_default()
 }
 
 /// Walk corpus directory and collect inodes of audio files along with their paths
@@ -305,4 +415,232 @@ fn is_audio_file(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+/// Detect files that have been relocated (same inode at different path).
+/// An inode that appears in both "missing" (indexed but not on disk at expected path)
+/// and "new" (on disk but not indexed) sets indicates a file move.
+///
+/// Returns (relocations_count, remaining_missing_inodes, remaining_new_inodes)
+fn detect_file_relocations(
+    db: &Database,
+    source: &str,
+    missing_inodes: &HashSet<i64>,
+    new_inodes: &HashSet<i64>,
+    disk_inode_paths: &HashMap<i64, String>,
+) -> (usize, HashSet<i64>, HashSet<i64>) {
+    // Find inodes that are in both sets - these are relocations
+    let relocated_inodes: HashSet<i64> = missing_inodes
+        .intersection(new_inodes)
+        .cloned()
+        .collect();
+
+    if relocated_inodes.is_empty() {
+        return (0, missing_inodes.clone(), new_inodes.clone());
+    }
+
+    let mut relocations_created = 0;
+
+    for inode in &relocated_inodes {
+        // Get old path from scan_state
+        let old_path = db
+            .get_scan_state_path_for_inode(source, *inode)
+            .ok()
+            .flatten();
+
+        // Get new path from disk
+        let new_path = disk_inode_paths.get(inode);
+
+        if let (Some(old), Some(new)) = (old_path, new_path) {
+            let issue_key = format!("relocated:{}:{}:{}", source, inode, new);
+
+            // Check if issue already exists
+            if db.get_health_issue_by_key(HealthIssueType::FileRelocated, &issue_key)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                continue;
+            }
+
+            let metadata = serde_json::json!({
+                "source": source,
+                "inode": inode,
+                "old_path": old,
+                "new_path": new,
+            });
+
+            let issue = HealthIssue {
+                id: None,
+                issue_type: HealthIssueType::FileRelocated,
+                issue_key,
+                severity: HealthIssueSeverity::ManualReview,
+                discovered_at: None,
+                resolved_at: None,
+                resolution_type: None,
+                resolution_session: None,
+                metadata_json: Some(metadata.to_string()),
+            };
+
+            if db.insert_health_issue(&issue).is_ok() {
+                relocations_created += 1;
+                let _ = config::log_message(&format!(
+                    "Heartbeat: File relocated: {} -> {}",
+                    old, new
+                ));
+            }
+        }
+    }
+
+    // Remove relocated inodes from both sets
+    let remaining_missing: HashSet<i64> = missing_inodes
+        .difference(&relocated_inodes)
+        .cloned()
+        .collect();
+    let remaining_new: HashSet<i64> = new_inodes
+        .difference(&relocated_inodes)
+        .cloned()
+        .collect();
+
+    (relocations_created, remaining_missing, remaining_new)
+}
+
+/// Scan new files and add them to the index.
+/// Returns the count of files successfully scanned.
+fn scan_new_files(
+    db: &Database,
+    source: &str,
+    new_inodes: &HashSet<i64>,
+    inode_paths: &HashMap<i64, String>,
+) -> usize {
+    let mut scanned_count = 0;
+
+    for inode in new_inodes {
+        let path = match inode_paths.get(inode) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let path_obj = Path::new(path);
+
+        // Extract metadata from the file (returns full Track)
+        let track = match metadata::extract_metadata(path_obj, source) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = config::log_message(&format!(
+                    "Heartbeat: Failed to extract metadata from {}: {}",
+                    path, e
+                ));
+                continue;
+            }
+        };
+
+        // Insert track
+        if db.insert_track(&track).is_err() {
+            continue;
+        }
+
+        // Get file metadata for mtime
+        let file_meta = match std::fs::metadata(path_obj) {
+            Ok(m) => m,
+            Err(_) => {
+                // Track inserted but can't update scan_state - still count it
+                scanned_count += 1;
+                continue;
+            }
+        };
+
+        let mtime = file_meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+            .unwrap_or((0, 0));
+
+        // Create scan_state entry
+        let scan_entry = ScanStateEntry {
+            source: source.to_string(),
+            inode: *inode,
+            path: path.clone(),
+            mtime_secs: mtime.0,
+            mtime_nanos: mtime.1,
+            file_size: track.file_size,
+        };
+
+        if db.upsert_scan_state(&scan_entry).is_ok() {
+            scanned_count += 1;
+        }
+    }
+
+    if scanned_count > 0 {
+        let _ = config::log_message(&format!(
+            "Heartbeat: Scanned and indexed {} new files",
+            scanned_count
+        ));
+    }
+
+    scanned_count
+}
+
+/// Detect duplicate inodes in the corpus (multiple tracks with same inode).
+/// This indicates either hard links or database inconsistency.
+/// Returns the count of duplicate inode issues created.
+///
+/// TODO: Integrate DuplicateInode detection with corpus reorganization tools.
+/// When reorganizing corpus, check for and prevent creating duplicate inodes.
+/// This health signal indicates either hard links or database inconsistency.
+fn detect_duplicate_inodes(db: &Database) -> usize {
+    // Query for inodes that appear multiple times in tracks table
+    let duplicate_groups = match db.get_duplicate_inodes_in_corpus() {
+        Ok(groups) => groups,
+        Err(_) => return 0,
+    };
+
+    let mut issues_created = 0;
+
+    for (inode, paths) in duplicate_groups {
+        if paths.len() < 2 {
+            continue;
+        }
+
+        let issue_key = format!("duplicate_inode:{}", inode);
+
+        // Check if issue already exists
+        if db.get_health_issue_by_key(HealthIssueType::DuplicateInode, &issue_key)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            continue;
+        }
+
+        let metadata = serde_json::json!({
+            "inode": inode,
+            "paths": paths,
+            "note": "Multiple corpus files share the same inode - indicates hard links or database inconsistency"
+        });
+
+        let issue = HealthIssue {
+            id: None,
+            issue_type: HealthIssueType::DuplicateInode,
+            issue_key,
+            severity: HealthIssueSeverity::ManualReview,
+            discovered_at: None,
+            resolved_at: None,
+            resolution_type: None,
+            resolution_session: None,
+            metadata_json: Some(metadata.to_string()),
+        };
+
+        if db.insert_health_issue(&issue).is_ok() {
+            issues_created += 1;
+            let _ = config::log_message(&format!(
+                "Heartbeat: Duplicate inode {} found at {} paths",
+                inode,
+                paths.len()
+            ));
+        }
+    }
+
+    issues_created
 }

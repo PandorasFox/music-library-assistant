@@ -133,78 +133,6 @@ pub fn detect_fingerprint_issues(db: &Database, track: &Track) -> Result<Vec<Hea
     Ok(vec![HealthIssue { id: Some(issue_id), ..issue }])
 }
 
-/// Detect metadata collision issues for a track.
-///
-/// Metadata collisions are tracks with the same artist/album/title but different fingerprints.
-/// These may indicate mistagged files.
-pub fn detect_metadata_issues(db: &Database, track: &Track) -> Result<Vec<HealthIssue>> {
-    // Build metadata key from artist/album/title
-    let artist = track.artist.as_deref().unwrap_or("");
-    let album = track.album.as_deref().unwrap_or("");
-    let title = track.title.as_deref().unwrap_or("");
-
-    // Skip if no meaningful metadata
-    if artist.is_empty() && title.is_empty() {
-        return Ok(vec![]);
-    }
-
-    // Normalize key: lowercase, trimmed
-    let metadata_key = format!(
-        "{}|{}|{}",
-        artist.to_lowercase().trim(),
-        album.to_lowercase().trim(),
-        title.to_lowercase().trim()
-    );
-
-    // Find tracks with same metadata
-    let matching_tracks = db.get_tracks_by_metadata(artist, album, title)?;
-
-    // Need at least 2 tracks for a collision
-    if matching_tracks.len() < 2 {
-        return Ok(vec![]);
-    }
-
-    // Check if fingerprints differ (indicating potential mistag, not just duplicate)
-    let fingerprints: std::collections::HashSet<_> = matching_tracks
-        .iter()
-        .filter_map(|t| t.fingerprint.as_ref())
-        .collect();
-
-    // If all fingerprints are the same, this is a fingerprint dup, not metadata collision
-    if fingerprints.len() <= 1 {
-        return Ok(vec![]);
-    }
-
-    // Check if issue already exists
-    if let Some(existing) = db.get_health_issue_by_key(HealthIssueType::MetadataDuplicate, &metadata_key)? {
-        return Ok(vec![existing]);
-    }
-
-    // Create new health issue
-    let issue = HealthIssue {
-        id: None,
-        issue_type: HealthIssueType::MetadataDuplicate,
-        issue_key: metadata_key,
-        severity: HealthIssueSeverity::ManualReview,
-        discovered_at: None,
-        resolved_at: None,
-        resolution_type: None,
-        resolution_session: None,
-        metadata_json: None,
-    };
-
-    let issue_id = db.insert_health_issue(&issue)?;
-
-    // Add all matching tracks as members
-    for t in &matching_tracks {
-        if let Some(tid) = t.id {
-            db.add_health_issue_track(issue_id, tid, TrackRole::Member)?;
-        }
-    }
-
-    Ok(vec![HealthIssue { id: Some(issue_id), ..issue }])
-}
-
 /// Refresh health issues for a specific track.
 ///
 /// Called after track mutations (tag edits, moves) to update associated health issues.
@@ -218,9 +146,6 @@ pub fn refresh_health_for_track(db: &Database, track_id: i64) -> Result<()> {
 
     // Re-run fingerprint detection
     detect_fingerprint_issues(db, &track)?;
-
-    // Re-run metadata detection
-    detect_metadata_issues(db, &track)?;
 
     Ok(())
 }
@@ -241,6 +166,12 @@ fn determine_duplicate_severity(tracks: &[Track]) -> HealthIssueSeverity {
 // ============================================================================
 // Deployment Conflict Detection
 // ============================================================================
+
+// TODO: Store additional conflict metadata for UI display:
+// - fingerprint_match: bool (whether tracks are acoustically identical)
+// - differing_tags: Vec<String> (non-deploy tags that differ between tracks)
+// This would help users understand whether conflicts are true duplicates or just
+// metadata collisions between different recordings.
 
 /// Detect deployment conflicts for all configured libraries.
 ///

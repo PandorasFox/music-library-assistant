@@ -41,13 +41,9 @@ pub mod normalization;
 pub mod tag_cloud;
 
 pub use canonicalization::detect_and_store_canonicalizations;
-pub use collision::{
-    get_album_artist_collisions, get_album_collisions, get_artist_collisions,
-    get_genre_collisions, TagCollision,
-};
+pub use collision::get_genre_collisions;
 pub use detection::{
-    cleanup_resolved_deployment_conflicts, detect_deployment_conflicts,
-    detect_deployment_conflicts_for_library, detect_fingerprint_issues, detect_metadata_issues,
+    cleanup_resolved_deployment_conflicts, detect_fingerprint_issues,
 };
 #[allow(unused_imports)]
 pub use filter::{

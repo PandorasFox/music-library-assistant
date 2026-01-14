@@ -12,9 +12,8 @@ use rayon::prelude::*;
 
 use crate::corpus::db::Database;
 
-use super::grouping::group_by_file;
 use super::types::{
-    ExecutionProgress, ExecutionResult, Mutation, MutationCategory, MutationResult, WorkUnit,
+    ExecutionProgress, ExecutionResult, Mutation, MutationResult,
 };
 use super::{file_ops, indexing, tag_edit};
 
@@ -321,7 +320,7 @@ fn execute_file_only_static(mutation: &Mutation) -> MutationResult {
         Mutation::Delete { path, .. } => {
             file_ops::execute_delete(None, path, None)
         }
-        Mutation::MoveToStash { path, .. } => {
+        Mutation::MoveToStash { path: _, .. } => {
             // MoveToStash without stash_root - error
             Err(anyhow::anyhow!("MoveToStash requires configuration"))
         }

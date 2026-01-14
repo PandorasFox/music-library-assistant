@@ -12,14 +12,3 @@
 //! - `AutoIgnoreState` - Tracks directories to auto-skip
 
 // Re-export from corpus::deduplication module
-pub use crate::corpus::deduplication::{
-    AutoIgnoreState,
-    ClusterDecision,
-    ConflictSet,
-    DeduplicationSession,
-    DirectorySetCluster,
-    compute_directory_set_clusters,
-    find_duplicates_between_directories,
-    find_fingerprint_duplicates,
-    generate_cluster_changes,
-};

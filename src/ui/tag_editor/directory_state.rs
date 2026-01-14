@@ -2,7 +2,7 @@
 //!
 //! Handles bulk tag editing for all files in a directory with aggregated field display.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};

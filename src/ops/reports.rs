@@ -443,7 +443,7 @@ pub fn generate_quality_report(output_path: &Path) -> Result<String> {
 pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
     let db_path = config::get_db_path()?;
     let db = Database::open(&db_path)?;
-    let cfg = config::load_config()?;
+    let _cfg = config::load_config()?;
 
     // Only analyze corpus source for duplicates
     let all_tracks = db.get_all_tracks(Some("corpus"))?;
@@ -522,13 +522,6 @@ pub fn generate_duplicate_report(output_path: &Path) -> Result<String> {
         .collect();
 
     metadata_duplicates.sort_by_key(|(key, _)| key.as_str());
-
-    // Populate database with metadata duplicates for resolution UI
-    // This allows the "Duplicate Resolution" menu to load and process these groups
-    // TODO: CANDIDATE FOR REMOVAL - This call site populates metadata duplicates from
-    // report-time detection. This approach is being superseded by DeployConflicts.
-    // See populate_metadata_duplicate_groups doc comment for details.
-    populate_metadata_duplicate_groups(&db, &track_groups, &cfg)?;
 
     // === FINGERPRINT-BASED DUPLICATE DETECTION ===
 
@@ -1089,72 +1082,12 @@ pub fn generate_known_variants_report(output_path: &Path) -> Result<String> {
     ))
 }
 
-/// Truncate a string key for display.
-fn truncate_key(key: &str, max_len: usize) -> String {
-    if key.len() <= max_len {
+/// Truncate a string key for display, UTF-8 safe.
+fn truncate_key(key: &str, max_chars: usize) -> String {
+    let char_count = key.chars().count();
+    if char_count <= max_chars {
         key.to_string()
     } else {
-        format!("{}...", &key[..max_len - 3])
+        format!("{}...", key.chars().take(max_chars - 3).collect::<String>())
     }
-}
-
-/// Populate database with metadata duplicate groups
-/// This function takes the metadata duplicates detected during report generation
-/// and inserts them into the duplicate_groups and duplicate_group_members tables
-/// so that the resolution UI can load and process them.
-///
-/// TODO: CANDIDATE FOR REMOVAL - This metadata duplicate detection approach is
-/// being superseded by the DeployConflict health issue system. The "Metadata
-/// Duplicates Resolution" flow should be updated to pull from DeployConflicts
-/// (computed in deploy.rs compute_deployment_status) instead of this separate
-/// detection path. Once that redesign is complete, this function and its call
-/// sites can be removed.
-fn populate_metadata_duplicate_groups(
-    db: &Database,
-    track_groups: &HashMap<String, Vec<&Track>>,
-    config: &config::Config,
-) -> Result<()> {
-    // 1. Clear stale pending metadata groups
-    db.clear_pending_duplicate_groups("metadata")?;
-
-    let mut groups_inserted = 0;
-    let mut tracks_inserted = 0;
-
-    // 2. For each metadata duplicate group
-    for tracks in track_groups.values() {
-        if tracks.len() < 2 {
-            continue; // Skip non-duplicates
-        }
-
-        // 3. Group by deployment path
-        // Only tracks that would deploy to the SAME path are true duplicates
-        let by_deploy_path = group_by_deployment_path(tracks.clone(), config);
-
-        // 4. Only insert groups where 2+ tracks deploy to SAME path
-        for (deploy_path, matching_tracks) in by_deploy_path {
-            if matching_tracks.len() < 2 {
-                continue; // Skip if only 1 track would deploy to this path
-            }
-
-            // Insert the duplicate group
-            let group_id = db.insert_duplicate_group("metadata", &deploy_path)?;
-            groups_inserted += 1;
-
-            // Insert all member tracks
-            for track in matching_tracks {
-                if let Some(track_id) = track.id {
-                    db.insert_duplicate_group_member(group_id, track_id)?;
-                    tracks_inserted += 1;
-                }
-            }
-        }
-    }
-
-    // Log summary
-    config::log_message(&format!(
-        "Populated database: {} metadata duplicate groups with {} total tracks",
-        groups_inserted, tracks_inserted
-    ))?;
-
-    Ok(())
 }

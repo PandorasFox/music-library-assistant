@@ -17,7 +17,14 @@ impl Database {
     /// Get aggregated corpus summary for UI display.
     pub fn get_corpus_summary(&self) -> Result<CorpusSummary> {
         let track_count = self.get_track_count(Some("corpus")).unwrap_or(0);
-        let duplicate_groups = self.get_unresolved_duplicate_groups().map(|g| g.len()).unwrap_or(0);
+
+        // Count unresolved deploy conflicts from health_issues
+        let deploy_conflicts: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'deploy_conflict' AND resolved_at IS NULL",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
         let health_summary = self.get_health_summary().unwrap_or_default();
         let deployment_stats = self.get_deployment_stats().ok().flatten();
         let pending_changes = self.get_pending_change_counts().unwrap_or_default();
@@ -36,7 +43,7 @@ impl Database {
 
         Ok(CorpusSummary {
             track_count,
-            duplicate_groups,
+            deploy_conflicts,
             health_summary,
             deployment_stats,
             pending_changes,

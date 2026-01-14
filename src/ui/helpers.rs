@@ -64,6 +64,28 @@ pub fn format_bytes_binary(bytes: u64) -> String {
     }
 }
 
+/// Format duration from milliseconds as m:ss or h:mm:ss.
+///
+/// Returns "Unknown" if None is passed.
+pub fn format_duration_ms(ms: Option<i64>) -> String {
+    match ms {
+        Some(ms) => {
+            let total_secs = ms / 1000;
+            if total_secs >= 3600 {
+                let hours = total_secs / 3600;
+                let mins = (total_secs % 3600) / 60;
+                let secs = total_secs % 60;
+                format!("{}:{:02}:{:02}", hours, mins, secs)
+            } else {
+                let mins = total_secs / 60;
+                let secs = total_secs % 60;
+                format!("{}:{:02}", mins, secs)
+            }
+        }
+        None => "Unknown".to_string(),
+    }
+}
+
 /// Format ETA as mm:ss or h:mm:ss.
 pub fn format_eta(seconds: u64) -> String {
     if seconds >= 3600 {

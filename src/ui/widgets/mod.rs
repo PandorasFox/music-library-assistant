@@ -12,6 +12,7 @@
 //! - **Focus-aware**: Widgets know when they're focused and style accordingly
 
 mod controls;
+pub mod footer;
 mod layout;
 mod list;
 mod modal;

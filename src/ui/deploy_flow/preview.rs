@@ -13,7 +13,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::ops::deploy::FullDeploymentStatus;
+use crate::flows::deploy::FullDeploymentStatus;
 use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 /// Actions returned from the deployment preview

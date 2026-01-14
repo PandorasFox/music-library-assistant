@@ -11,7 +11,7 @@
 //!
 //! ## Report Types
 //!
-//! Currently available via `crate::ops::reports`:
+//! Currently available via `crate::flows::reports`:
 //! - Legacy library matching report
 //! - Fingerprint duplicates report
 //! - Metadata duplicates report

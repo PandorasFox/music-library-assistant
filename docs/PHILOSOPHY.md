@@ -19,6 +19,25 @@ The Librarian must execute on all of the following processes to properly maintai
 
 These processes all largely mirror traditional, physical book library processes - items are checked out, checked in, and must go through some health checks and validation before being re-entered for circulation.
 
+## Operator-Driven Decisions
+
+**MLA must never make Decisions or Mutations on its own.** All corpus Mutations must be attributable to explicit Operator Decisions. MLA's role is to:
+
+1. **Surface information**: Identify health issues, duplicates, conflicts
+2. **Propose options**: Present resolution choices to the operator
+3. **Accumulate intent**: Gather Decisions during UI flows
+4. **Execute faithfully**: Apply only what the operator explicitly approved
+
+This is a hard constraint, not a preference. MLA may compute, analyze, and recommend - but the final Decision always belongs to the Librarian. Even "obvious" fixes (like removing exact duplicates) require operator confirmation.
+
+**Decisions** are accumulated during operator flows and represent user intent. **Mutations** are the filesystem/database changes that realize those Decisions. The relationship is:
+
+```
+Operator Flow → Decisions (accumulated) → Mutations (executed in batch)
+```
+
+Every Mutation must trace back to a Decision. If we can't attribute a Mutation to an operator Decision, that Mutation should not happen.
+
 ## Algebraic Changes
 
 Changes to the librarian's corpus should not be applied lightly. MLA earns this privilege by modelling all corpus changes as algebraic changes that we can accumulate, preview, adjust, and then commit or discard.
@@ -141,16 +160,18 @@ Atomic operations fail completely rather than partially:
 
 ## Design Principles Summary
 
-1. **Read-only by default**: Observation never mutates
-2. **Explicit confirmation**: No silent changes to corpus
-3. **Reversible operations**: Every change can be undone
-4. **Batch over individual**: Design patterns, apply in bulk
-5. **Conversation over dashboard**: One question at a time
-6. **Hard links over copies**: Single source of truth
-7. **Lost-files over deletion**: Preserve until explicitly discarded
+1. **Operator-driven**: MLA never mutates autonomously; all Mutations trace to operator Decisions
+2. **Read-only by default**: Observation never mutates
+3. **Explicit confirmation**: No silent changes to corpus
+4. **Reversible operations**: Every change can be undone
+5. **Batch over individual**: Design patterns, apply in bulk
+6. **Conversation over dashboard**: One question at a time
+7. **Hard links over copies**: Single source of truth
+8. **Lost-files over deletion**: Preserve until explicitly discarded
 
 ## Anti-Patterns to Avoid
 
+- **Autonomous mutation**: Never mutate corpus without an attributable operator Decision
 - **Immediate execution**: Don't apply changes without preview
 - **Silent failures**: Don't swallow errors, surface them clearly
 - **Modal complexity**: Don't nest modes deeply, keep paths flat

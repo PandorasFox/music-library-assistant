@@ -358,84 +358,74 @@ fn relocate_to_stash(current_path: &Path, target_path: &Path) -> Result<()> {
     })
 }
 
-/// Convert a deployment plan into pending change mutations
+/// Convert a deployment plan into pending decisions
 ///
 /// This allows deployment operations to be tracked, previewed, and committed
 /// like any other corpus mutation. Each Deploy/Undeploy operation becomes
-/// a PendingChange that can be executed through the standard change system.
+/// a PendingDecision that can be executed through the standard decision system.
 ///
 /// A single corpus file can be deployed to multiple libraries by creating
-/// multiple Deploy mutations with different target paths.
-pub fn plan_deployment_as_mutations(
+/// multiple Deploy decisions with different target paths.
+pub fn plan_deployment_as_decisions(
     plan: &DeploymentPlan,
     library_root: &Path,
     stash_root: Option<&Path>,
-    session_id: &str,
-) -> Vec<crate::corpus::db::PendingChange> {
-    use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
+) -> Vec<super::PendingDecision> {
+    use super::{DecisionType, PendingDecision};
 
-    let mut changes = Vec::new();
+    let mut decisions = Vec::new();
 
-    // Files to deploy -> Deploy mutations
+    // Files to deploy -> Deploy decisions
     for action in &plan.files_to_deploy {
         let target_path = library_root.join(&action.target_path);
-        changes.push(PendingChange {
-            id: None,
-            session_id: session_id.to_string(),
-            change_type: ChangeType::Deploy,
+        decisions.push(PendingDecision {
+            decision_type: DecisionType::Deploy,
             source_path: action.corpus_track.path.clone(),
             target_path: Some(target_path.to_string_lossy().to_string()),
-            metadata_changes: Some(serde_json::json!({
+            metadata: Some(serde_json::json!({
                 "library": plan.library_name,
                 "relative_path": action.target_path.to_string_lossy(),
             }).to_string()),
-            created_at: None,
-            status: ChangeStatus::Pending,
         });
     }
 
-    // Lost files -> Undeploy mutations (move to stash)
+    // Lost files -> Undeploy decisions (move to stash)
     if let Some(stash_path) = stash_root {
         for lost in &plan.lost_files {
             let target_path = stash_path.join(&lost.target_path);
-            changes.push(PendingChange {
-                id: None,
-                session_id: session_id.to_string(),
-                change_type: ChangeType::Undeploy,
+            decisions.push(PendingDecision {
+                decision_type: DecisionType::Undeploy,
                 source_path: lost.current_path.to_string_lossy().to_string(),
                 target_path: Some(target_path.to_string_lossy().to_string()),
-                metadata_changes: Some(serde_json::json!({
+                metadata: Some(serde_json::json!({
                     "library": plan.library_name,
                     "reason": "orphan_cleanup",
                     "original_inode": lost.inode,
                 }).to_string()),
-                created_at: None,
-                status: ChangeStatus::Pending,
             });
         }
     }
 
-    changes
+    decisions
 }
 
-/// Convert all deployment plans to mutations
-pub fn plan_all_deployments_as_mutations(
+/// Convert all deployment plans to decisions
+pub fn plan_all_deployments_as_decisions(
     config: &Config,
     db: &Database,
-    session_id: &str,
-) -> Result<Vec<crate::corpus::db::PendingChange>> {
+) -> Result<Vec<super::PendingDecision>> {
     let plans = create_deployment_plan(config, db)?;
-    let mut all_changes = Vec::new();
+    let mut all_decisions = Vec::new();
 
     for plan in plans {
         let library_root = config.libraries_root.join(&plan.library_name);
         let stash_root = config.stash_dir.as_ref().map(|p| p.as_path());
 
-        let changes = plan_deployment_as_mutations(&plan, &library_root, stash_root, session_id);
-        all_changes.extend(changes);
+        let decisions = plan_deployment_as_decisions(&plan, &library_root, stash_root);
+        all_decisions.extend(decisions);
     }
 
-    Ok(all_changes)
+    Ok(all_decisions)
 }
 
 /// Generate dry-run reports for all deployment plans
@@ -617,46 +607,39 @@ pub fn compute_full_deployment_status(
 /// - Undeploy mutations for orphaned library files
 ///
 /// Files with conflicts are skipped (they become health issues instead).
-pub fn deployment_status_to_mutations(
+pub fn deployment_status_to_decisions(
     status: &FullDeploymentStatus,
     library_root: &Path,
     stash_root: Option<&Path>,
-    session_id: &str,
-) -> Vec<crate::corpus::db::PendingChange> {
-    use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
+) -> Vec<super::PendingDecision> {
+    use super::{DecisionType, PendingDecision};
 
-    let mut changes = Vec::new();
+    let mut decisions = Vec::new();
 
-    // New files -> Deploy mutations
+    // New files -> Deploy decisions
     for action in &status.to_deploy {
         let target_path = library_root.join(&action.target_path);
-        changes.push(PendingChange {
-            id: None,
-            session_id: session_id.to_string(),
-            change_type: ChangeType::Deploy,
+        decisions.push(PendingDecision {
+            decision_type: DecisionType::Deploy,
             source_path: action.corpus_track.path.clone(),
             target_path: Some(target_path.to_string_lossy().to_string()),
-            metadata_changes: Some(
+            metadata: Some(
                 serde_json::json!({
                     "library": status.library_name,
                     "relative_path": action.target_path.to_string_lossy(),
                 })
                 .to_string(),
             ),
-            created_at: None,
-            status: ChangeStatus::Pending,
         });
     }
 
-    // Stale files -> Redeploy mutations (relocate to correct path)
+    // Stale files -> Redeploy decisions (relocate to correct path)
     for stale in &status.stale {
-        changes.push(PendingChange {
-            id: None,
-            session_id: session_id.to_string(),
-            change_type: ChangeType::Redeploy,
+        decisions.push(PendingDecision {
+            decision_type: DecisionType::Redeploy,
             source_path: stale.current_library_path.to_string_lossy().to_string(),
             target_path: Some(stale.expected_library_path.to_string_lossy().to_string()),
-            metadata_changes: Some(
+            metadata: Some(
                 serde_json::json!({
                     "library": status.library_name,
                     "corpus_path": stale.corpus_track.path,
@@ -664,22 +647,18 @@ pub fn deployment_status_to_mutations(
                 })
                 .to_string(),
             ),
-            created_at: None,
-            status: ChangeStatus::Pending,
         });
     }
 
-    // Orphans -> Undeploy mutations (move to stash)
+    // Orphans -> Undeploy decisions (move to stash)
     // Orphans are always stashed - no exclusion option
     if stash_root.is_some() {
         for orphan in &status.orphans {
-            changes.push(PendingChange {
-                id: None,
-                session_id: session_id.to_string(),
-                change_type: ChangeType::Undeploy,
+            decisions.push(PendingDecision {
+                decision_type: DecisionType::Undeploy,
                 source_path: orphan.library_path.to_string_lossy().to_string(),
                 target_path: Some(orphan.stash_target.to_string_lossy().to_string()),
-                metadata_changes: Some(
+                metadata: Some(
                     serde_json::json!({
                         "library": status.library_name,
                         "reason": "orphan_cleanup",
@@ -687,34 +666,31 @@ pub fn deployment_status_to_mutations(
                     })
                     .to_string(),
                 ),
-                created_at: None,
-                status: ChangeStatus::Pending,
             });
         }
     }
 
-    // Conflicts are NOT converted to mutations - they become health issues instead
+    // Conflicts are NOT converted to decisions - they become health issues instead
 
-    changes
+    decisions
 }
 
-/// Convert all deployment statuses to mutations
-pub fn all_deployment_statuses_to_mutations(
+/// Convert all deployment statuses to decisions
+pub fn all_deployment_statuses_to_decisions(
     statuses: &[FullDeploymentStatus],
     config: &Config,
-    session_id: &str,
-) -> Vec<crate::corpus::db::PendingChange> {
-    let mut all_changes = Vec::new();
+) -> Vec<super::PendingDecision> {
+    let mut all_decisions = Vec::new();
 
     for status in statuses {
         let library_root = config.libraries_root.join(&status.library_name);
         let stash_root = config.stash_dir.as_ref().map(|p| p.as_path());
 
-        let changes = deployment_status_to_mutations(status, &library_root, stash_root, session_id);
-        all_changes.extend(changes);
+        let decisions = deployment_status_to_decisions(status, &library_root, stash_root);
+        all_decisions.extend(decisions);
     }
 
-    all_changes
+    all_decisions
 }
 
 #[cfg(test)]

@@ -27,7 +27,7 @@ impl Database {
 
         let health_summary = self.get_health_summary().unwrap_or_default();
         let deployment_stats = self.get_deployment_stats().ok().flatten();
-        let pending_changes = self.get_pending_change_counts().unwrap_or_default();
+        let pending_changes = std::collections::HashMap::new(); // Decisions now in-memory only
 
         // Get last scan time from scan_history
         let last_scan: Option<String> = self

@@ -37,6 +37,7 @@ tempfile = "3.8"
 
 # Parallel processing
 rayon = "1.10"
+parallel_worker = "1.0"
 
 # Error handling
 anyhow = "1.0"

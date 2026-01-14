@@ -34,7 +34,7 @@
 mod multi_dim;
 mod one_dim;
 
-pub use multi_dim::{spawn_multi_dim_insight, MultiDimInsightType};
+pub use multi_dim::{spawn_multi_dim_insight, InsightHandle, MultiDimInsightType};
 pub use one_dim::compute_one_dim_insights;
 
 /// Stub - flows don't exist yet.

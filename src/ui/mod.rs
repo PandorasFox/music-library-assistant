@@ -1,35 +1,16 @@
 //! TUI Module
 //!
 //! Modular UI components for the Music Library Assistant.
-//!
-//! # Module Structure
-//!
-//! Flow handlers should NOT be added directly to `impl App` in this file.
-//! Instead, create coordinator modules in flow submodules:
-//! - `ui/canon_flow/coordinator.rs` - Artist/genre canonicalization
-//! - `ui/album_flow/coordinator.rs` - Album tag resolution
-//! - `ui/album_artist_flow/coordinator.rs` - Album artist resolution
-//! - `ui/dedup_flow/coordinator.rs` - Deduplication workflow
-//!
-//! App methods should be thin delegation wrappers to these modules.
-//! This keeps `mod.rs` focused on core App lifecycle and event dispatch.
 
-pub mod album_artist_flow;
-pub mod album_flow;
 pub mod app;
-pub mod canon_flow;
 pub mod corpus_browser;
-pub mod dedup_flow;
 pub mod deploy_flow;
-pub mod dialogue;
 pub mod dir_browser;
 pub mod drop_flow;
 pub mod flows;
 pub mod helpers;
 pub mod insights_view;
-pub mod main_menu;
 pub mod render;
-pub mod shared;
 pub mod tag_editor;
 pub mod widgets;
 
@@ -53,17 +34,9 @@ use std::time::Instant;
 use crate::config::{self, Config};
 use crate::corpus::{spawn_heartbeat, HeartbeatResult};
 use crate::corpus::db::{Database, HealthIssueType};
-use crate::ops::operation::{
-    log_operation_summary, OperationManager, OperationMessage, OperationProgress,
-    OperationResult, OperationType, ProgressReporter,
-};
-use crate::ops::{reports, scanner, ScanMessage};
+use crate::flows::background::{log_task_summary, poll_tasks, BackgroundTask, TaskResult};
 
 use app::{EyeAnimation, HeartbeatRollResult};
-// TODO: main_menu module is deprecated. Insights is now the main view.
-// Review main_menu.rs for code that may still be needed (e.g., CommandAction, TransitionTarget).
-// See main_menu.rs for details on what functionality lived there.
-use main_menu::{BackgroundTask, CommandAction, MainMenuState, MenuAction, ReportType, TransitionTarget};
 
 use crate::corpus::mutations::MigrationRegistry;
 
@@ -122,44 +95,14 @@ pub const HEALTH_DATA_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum UiMode {
-    MainMenu,
     TagEditor,
     DirBrowser,
-    Dialogue,
-    DialogueSummary,
-    ClusterDialogue,
-    BulkReviewPrompt,
-    SessionReview,
     DropMissingConfirmation,
     DeploymentPreview,
-    /// Artist canonicalization - Single-screen three-pane cluster view
-    CanonClusterView,
-    /// Artist canonicalization - Session review before commit
-    CanonSessionReview,
-    /// Artist canonicalization - Commit completion modal
-    CanonCommitModal,
     /// Exit confirmation modal (when operations are in progress)
     ExitConfirmModal,
     /// Corpus browser with directory tree and metadata preview
     CorpusBrowser,
-    /// Album artist resolution - phase selector popup
-    AlbumArtistPhaseSelector,
-    /// Album artist resolution - canonicalization cluster view
-    AlbumArtistClusterView,
-    /// Album artist resolution - collation flow
-    AlbumArtistCollation,
-    /// Album artist resolution - collation review
-    AlbumArtistCollationReview,
-    /// Album artist resolution - population flow
-    AlbumArtistPopulation,
-    /// Album artist resolution - population review
-    AlbumArtistPopulationReview,
-    /// Album artist resolution - session review
-    AlbumArtistReview,
-    /// Album tag resolution - cluster view
-    AlbumClusterView,
-    /// Album tag resolution - session review
-    AlbumReview,
     /// Directory-based bulk tag editor (aggregated view)
     DirectoryTagEditor,
     /// Deploy conflict resolution - review accumulated changes before commit
@@ -265,27 +208,6 @@ impl LoadingSplashState {
     }
 }
 
-/// State for the canon commit modal with two options
-#[derive(Debug, Clone)]
-pub(crate) struct CanonCommitModalState {
-    /// Currently selected option (0 = main menu, 1 = deployment review)
-    pub(crate) selected_option: usize,
-    /// Number of tracks updated in the database
-    pub(crate) tracks_updated: usize,
-    /// Number of deployments that are now stale
-    pub(crate) stale_deployments: usize,
-}
-
-impl Default for CanonCommitModalState {
-    fn default() -> Self {
-        Self {
-            selected_option: 1, // Default to deployment review
-            tracks_updated: 0,
-            stale_deployments: 0,
-        }
-    }
-}
-
 /// Accumulated changes for a single deploy conflict group
 #[derive(Debug, Clone)]
 pub(crate) struct DeployConflictGroupChanges {
@@ -295,8 +217,8 @@ pub(crate) struct DeployConflictGroupChanges {
     pub target_path: String,
     /// Track count in this group
     pub track_count: usize,
-    /// Pending changes for this group
-    pub changes: Vec<crate::corpus::db::PendingChange>,
+    /// Pending decisions for this group
+    pub decisions: Vec<crate::flows::PendingDecision>,
 }
 
 /// State for the deploy conflict review screen
@@ -310,14 +232,6 @@ pub(crate) struct DeployConflictReviewState {
     pub selected_button: usize,
 }
 
-/// Context for what operation launched the directory browser.
-/// The browser returns paths; this tells us what to do with them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BrowserContext {
-    /// Fingerprint-based deduplication
-    Sleuthing,
-}
-
 /// Main application state
 pub(crate) struct App {
     config: Config,
@@ -326,35 +240,12 @@ pub(crate) struct App {
 
     // UI mode and state
     mode: UiMode,
-    main_menu: MainMenuState,
     tag_editor: Option<tag_editor::TagEditorState>,
     tag_editor_modal: Option<tag_editor::TagEditorModal>,
     dir_browser: Option<dir_browser::DirBrowserState>,
-    browser_context: Option<BrowserContext>,
     corpus_browser: Option<corpus_browser::CorpusBrowserState>,
-    dialogue: Option<dialogue::DialogueState>,
-    dialogue_summary: Option<dialogue::DialogueSummaryState>,
-    cluster_dialogue: Option<dedup_flow::ClusterDialogueState>,
-    bulk_prompt: Option<dedup_flow::BulkPromptState>,
-    session_review: Option<dedup_flow::SessionReviewState>,
     drop_missing_state: Option<DropMissingState>,
     deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
-    // Artist canonicalization flow
-    canon_cluster_view: Option<canon_flow::ClusterViewState>,
-    canon_session_review: Option<canon_flow::ReviewState>,
-    canon_commit_modal_state: Option<CanonCommitModalState>,
-    // Album artist resolution flow
-    album_artist_phase_selector: Option<album_artist_flow::PhaseSelectorState>,
-    album_artist_cluster_view: Option<album_artist_flow::AlbumArtistClusterState>,
-    album_artist_collation: Option<album_artist_flow::CollationState>,
-    album_artist_collation_review: Option<album_artist_flow::CollationReviewState>,
-    album_artist_population: Option<album_artist_flow::PopulationState>,
-    album_artist_population_review: Option<album_artist_flow::PopulationReviewState>,
-    album_artist_review: Option<album_artist_flow::AlbumArtistReviewState>,
-    album_artist_selected_phases: Vec<album_artist_flow::AlbumArtistPhase>,
-    // Album canonicalization flow
-    album_cluster_view: Option<album_flow::AlbumClusterState>,
-    album_review: Option<album_flow::AlbumReviewState>,
     // Directory tag editor (bulk editing)
     directory_tag_editor: Option<tag_editor::DirectoryTagEditorState>,
     directory_tag_editor_modal: Option<tag_editor::types::DirectoryTagEditorModal>,
@@ -368,11 +259,11 @@ pub(crate) struct App {
     // Insights view (lateral view ring)
     insights_view: Option<insights_view::InsightsViewState>,
 
-    // Background operations (supports multiple concurrent)
-    operations: OperationManager,
-    // Legacy single-operation receiver for scan (uses ScanMessage)
-    legacy_scan_receiver: Option<mpsc::Receiver<ScanMessage>>,
-    legacy_scan_type: Option<OperationType>,
+    // Background tasks (supports multiple concurrent)
+    pub background_tasks: Vec<BackgroundTask>,
+
+    // Task daemon for mutation execution
+    task_daemon: Option<crate::flows::TaskDaemon>,
 
     // Startup heartbeat
     heartbeat_result: Option<HeartbeatResult>,
@@ -394,14 +285,11 @@ pub(crate) struct App {
     #[allow(dead_code)]
     tag_edit_session_id: String,
 
-    // First-time startup flag (indicates auto-scan was triggered)
-    first_time_scan_active: bool,
 }
 
 impl App {
     fn new(config: Config) -> Self {
         Self {
-            main_menu: MainMenuState::new(&config),
             config,
             should_quit: false,
             status_message: None,
@@ -409,28 +297,9 @@ impl App {
             tag_editor: None,
             tag_editor_modal: None,
             dir_browser: None,
-            browser_context: None,
             corpus_browser: None,
-            dialogue: None,
-            dialogue_summary: None,
-            cluster_dialogue: None,
-            bulk_prompt: None,
-            session_review: None,
             drop_missing_state: None,
             deployment_preview: None,
-            canon_cluster_view: None,
-            canon_session_review: None,
-            canon_commit_modal_state: None,
-            album_artist_phase_selector: None,
-            album_artist_cluster_view: None,
-            album_artist_collation: None,
-            album_artist_collation_review: None,
-            album_artist_population: None,
-            album_artist_population_review: None,
-            album_artist_review: None,
-            album_artist_selected_phases: Vec::new(),
-            album_cluster_view: None,
-            album_review: None,
             directory_tag_editor: None,
             directory_tag_editor_modal: None,
             exit_confirm_modal_state: None,
@@ -438,9 +307,8 @@ impl App {
             deploy_conflict_review: None,
             deploy_conflict_accumulated: Vec::new(),
             insights_view: None,
-            operations: OperationManager::new(),
-            legacy_scan_receiver: None,
-            legacy_scan_type: None,
+            background_tasks: Vec::new(),
+            task_daemon: None,
             heartbeat_result: None,
             heartbeat_receiver: None,
             last_heartbeat_roll: None,
@@ -449,45 +317,11 @@ impl App {
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
             tag_edit_session_id: uuid::Uuid::new_v4().to_string(),
-            first_time_scan_active: false,
-        }
-    }
-
-    /// Check if this is a first-time startup (no corpus tracks indexed).
-    /// If so, automatically start a corpus scan.
-    fn check_first_time_startup(&mut self) {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-
-        let db = match Database::open(&db_path) {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-
-        // Check if there are any corpus tracks
-        let corpus_count = db.get_track_count(Some("corpus")).unwrap_or(0);
-
-        if corpus_count == 0 {
-            // First time startup - auto-start corpus scan
-            // TODO: Implement first-time config-setting flow for new users.
-            // Should prompt for: corpus root, library paths, optional legacy library.
-            // Write generated config.kdl to XDG config location.
-            self.status_message = Some("First-time setup: Scanning corpus...".to_string());
-            self.first_time_scan_active = true;
-            self.start_scan_corpus();
         }
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         match self.mode {
-            UiMode::MainMenu => {
-                // TODO: Dead code - MainMenu mode is no longer reachable.
-                // Insights is now the main view. See main_menu.rs for details.
-                let action = self.main_menu.handle_key(key);
-                self.handle_menu_action(action);
-            }
             UiMode::TagEditor => {
                 // If there's a modal active, handle modal keys first
                 if self.tag_editor_modal.is_some() {
@@ -503,36 +337,6 @@ impl App {
                     self.handle_dir_browser_action(action);
                 }
             }
-            UiMode::Dialogue => {
-                if let Some(ref mut dialogue) = self.dialogue {
-                    let result = dialogue.handle_key(key);
-                    self.handle_dialogue_result(result);
-                }
-            }
-            UiMode::DialogueSummary => {
-                if let Some(ref mut summary) = self.dialogue_summary {
-                    let result = summary.handle_key(key);
-                    self.handle_dialogue_result(result);
-                }
-            }
-            UiMode::ClusterDialogue => {
-                if let Some(ref mut cluster_dlg) = self.cluster_dialogue {
-                    let action = cluster_dlg.handle_key(key);
-                    self.handle_cluster_dialogue_action(action);
-                }
-            }
-            UiMode::BulkReviewPrompt => {
-                if let Some(ref mut bulk_prompt) = self.bulk_prompt {
-                    let action = bulk_prompt.handle_key(key);
-                    self.handle_bulk_prompt_action(action);
-                }
-            }
-            UiMode::SessionReview => {
-                if let Some(ref mut session_review) = self.session_review {
-                    let action = session_review.handle_key(key);
-                    self.handle_session_review_action(action);
-                }
-            }
             UiMode::DropMissingConfirmation => {
                 self.handle_drop_missing_key(key);
             }
@@ -540,51 +344,6 @@ impl App {
                 if let Some(ref mut preview) = self.deployment_preview {
                     let action = preview.handle_key(key);
                     self.handle_deployment_preview_action(action);
-                }
-            }
-            UiMode::CanonClusterView => {
-                if let Some(ref mut cluster_view) = self.canon_cluster_view {
-                    let action = cluster_view.handle_key(key);
-                    self.handle_canon_cluster_action(action);
-                }
-            }
-            UiMode::CanonSessionReview => {
-                if let Some(ref mut review) = self.canon_session_review {
-                    let action = review.handle_key(key);
-                    self.handle_canon_review_action(action);
-                }
-            }
-            UiMode::CanonCommitModal => {
-                if let Some(ref mut state) = self.canon_commit_modal_state {
-                    match key.code {
-                        KeyCode::Up => {
-                            state.selected_option = state.selected_option.saturating_sub(1);
-                        }
-                        KeyCode::Down => {
-                            state.selected_option = (state.selected_option + 1).min(1);
-                        }
-                        KeyCode::Enter => {
-                            match state.selected_option {
-                                0 => {
-                                    // Return to main menu
-                                    self.canon_commit_modal_state = None;
-                                    self.mode = UiMode::Insights;
-                                }
-                                1 => {
-                                    // Proceed to deployment review
-                                    self.canon_commit_modal_state = None;
-                                    self.start_deployment_preview();
-                                }
-                                _ => {}
-                            }
-                        }
-                        KeyCode::Esc => {
-                            // Esc also returns to main menu
-                            self.canon_commit_modal_state = None;
-                            self.mode = UiMode::Insights;
-                        }
-                        _ => {}
-                    }
                 }
             }
             UiMode::ExitConfirmModal => {
@@ -626,60 +385,6 @@ impl App {
                 if let Some(ref mut browser) = self.corpus_browser {
                     let action = browser.handle_key(key);
                     self.handle_corpus_browser_action(action);
-                }
-            }
-            UiMode::AlbumArtistPhaseSelector => {
-                if let Some(ref mut selector) = self.album_artist_phase_selector {
-                    let action = selector.handle_key(key);
-                    self.handle_album_artist_phase_action(action);
-                }
-            }
-            UiMode::AlbumArtistClusterView => {
-                if let Some(ref mut cluster_view) = self.album_artist_cluster_view {
-                    let action = cluster_view.handle_key(key);
-                    self.handle_album_artist_cluster_action(action);
-                }
-            }
-            UiMode::AlbumArtistReview => {
-                if let Some(ref mut review) = self.album_artist_review {
-                    let action = review.handle_key(key);
-                    self.handle_album_artist_review_action(action);
-                }
-            }
-            UiMode::AlbumArtistCollation => {
-                if let Some(ref mut collation) = self.album_artist_collation {
-                    let action = collation.handle_key(key);
-                    self.handle_album_artist_collation_action(action);
-                }
-            }
-            UiMode::AlbumArtistCollationReview => {
-                if let Some(ref mut review) = self.album_artist_collation_review {
-                    let action = review.handle_key(key);
-                    self.handle_album_artist_collation_review_action(action);
-                }
-            }
-            UiMode::AlbumArtistPopulation => {
-                if let Some(ref mut population) = self.album_artist_population {
-                    let action = population.handle_key(key);
-                    self.handle_album_artist_population_action(action);
-                }
-            }
-            UiMode::AlbumArtistPopulationReview => {
-                if let Some(ref mut review) = self.album_artist_population_review {
-                    let action = review.handle_key(key);
-                    self.handle_album_artist_population_review_action(action);
-                }
-            }
-            UiMode::AlbumClusterView => {
-                if let Some(ref mut cluster_view) = self.album_cluster_view {
-                    let action = cluster_view.handle_key(key);
-                    self.handle_album_cluster_action(action);
-                }
-            }
-            UiMode::AlbumReview => {
-                if let Some(ref mut review) = self.album_review {
-                    let action = review.handle_key(key);
-                    self.handle_album_review_action(action);
                 }
             }
             UiMode::DirectoryTagEditor => {
@@ -737,11 +442,9 @@ impl App {
         }
     }
 
-    /// Check if there are any pending operations (heartbeat, scans, etc.)
+    /// Check if there are any pending operations (heartbeat, background tasks, etc.)
     fn has_pending_operations(&self) -> bool {
-        self.heartbeat_receiver.is_some()
-            || self.legacy_scan_receiver.is_some()
-            || !self.operations.is_empty()
+        self.heartbeat_receiver.is_some() || !self.background_tasks.is_empty()
     }
 
     /// Start the insights view with current heartbeat data.
@@ -782,75 +485,6 @@ impl App {
         self.mode = UiMode::Insights;
     }
 
-    fn handle_menu_action(&mut self, action: MenuAction) {
-        match action {
-            MenuAction::None => {}
-            MenuAction::Quit => {
-                self.should_quit = true;
-            }
-            MenuAction::Execute(cmd_action) => {
-                self.execute_command(cmd_action);
-            }
-        }
-    }
-
-    fn execute_command(&mut self, action: CommandAction) {
-        match action {
-            CommandAction::Background(task) => {
-                self.start_background_task(task);
-            }
-            CommandAction::Transition(target) => {
-                self.transition_to(target);
-            }
-            CommandAction::Message(msg) => {
-                self.status_message = Some(msg);
-            }
-            CommandAction::Quit => {
-                // If operations are running, show warning confirmation modal
-                if !self.operations.is_empty() {
-                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::new(true));
-                    self.mode = UiMode::ExitConfirmModal;
-                } else {
-                    self.should_quit = true;
-                }
-            }
-        }
-    }
-
-    fn start_background_task(&mut self, task: BackgroundTask) {
-        match task {
-            BackgroundTask::ScanCorpus => {
-                self.start_scan_corpus();
-            }
-            BackgroundTask::ScanLegacy => {
-                self.start_scan_legacy();
-            }
-            BackgroundTask::GenerateReport { report_type } => {
-                self.generate_report(report_type);
-            }
-            BackgroundTask::Deploy => {
-                self.start_deployment_preview();
-            }
-            BackgroundTask::Stub => {
-                self.status_message = Some("Feature not yet implemented".to_string());
-            }
-        }
-    }
-
-    fn start_scan_corpus(&mut self) {
-        let path = self.config.corpus_root.to_string_lossy().to_string();
-        self.start_scan_source("corpus", &path);
-    }
-
-    fn start_scan_legacy(&mut self) {
-        if let Some(ref legacy_path) = self.config.legacy_library {
-            let path = legacy_path.to_string_lossy().to_string();
-            self.start_scan_source("legacy", &path);
-        } else {
-            self.status_message = Some("No legacy library configured".to_string());
-        }
-    }
-
     fn start_deployment_preview(&mut self) {
         // Compute deployment status synchronously (could be made async for large libraries)
         let db_path = match config::get_db_path() {
@@ -870,7 +504,7 @@ impl App {
         };
 
         let _ = config::log_message("Computing deployment status...");
-        match crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
+        match crate::flows::deploy::compute_full_deployment_status(&self.config, &db) {
             Ok(statuses) => {
                 let session_id = uuid::Uuid::new_v4().to_string();
                 let total_mutations: usize = statuses
@@ -895,240 +529,9 @@ impl App {
         }
     }
 
-    fn start_scan_source(&mut self, name: &str, path: &str) {
-        let (tx, rx) = mpsc::channel();
-        let source_path = path.to_string();
-        let source_name = name.to_string();
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-
-        // Store scan type for progress display
-        let op_type = OperationType::Scanning {
-            source_name: source_name.clone(),
-        };
-        self.legacy_scan_type = Some(op_type.clone());
-        self.legacy_scan_receiver = Some(rx);
-        // Register with operation manager for unified display
-        self.operations.set_legacy_operation(op_type);
-
-        let cancel = cancel_flag.clone();
-        std::thread::spawn(move || {
-            let result = scanner::scan_directory_with_progress(
-                Path::new(&source_path),
-                &source_name,
-                Some(tx.clone()),
-                cancel,
-            );
-            if let Err(e) = result {
-                let _ = tx.send(ScanMessage::Error(e.to_string()));
-            }
-        });
-
-        self.status_message = Some(format!("Scanning: {}", name));
-    }
-
-    fn generate_report(&mut self, report_type: ReportType) {
-        // Get report type name for display
-        let report_name = match report_type {
-            ReportType::GenerateAll => "all",
-            ReportType::Legacy => "legacy",
-            ReportType::Deployment => "deployment",
-            ReportType::Health => "health",
-            ReportType::KnownVariants => "known_variants",
-        };
-
-        // Add operation to manager
-        let (id, tx, cancel_flag) = self.operations.add(OperationType::GeneratingReport {
-            report_type: report_name.to_string(),
-        });
-
-        self.status_message = Some(format!("Generating {} report... [{}]", report_name, id));
-
-        // Spawn background thread
-        std::thread::spawn(move || {
-            use std::time::Instant;
-
-            let start = Instant::now();
-            let mut reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
-
-            // Get reports directory
-            let reports_dir = match config::get_data_dir() {
-                Ok(dir) => dir.join("reports"),
-                Err(e) => {
-                    reporter.error(format!("Failed to get data dir: {}", e));
-                    return;
-                }
-            };
-
-            // Ensure reports directory exists
-            if let Err(e) = std::fs::create_dir_all(&reports_dir) {
-                reporter.error(format!("Failed to create reports dir: {}", e));
-                return;
-            }
-
-            // Determine which reports to generate
-            let report_tasks: Vec<(&str, std::path::PathBuf)> = match report_type {
-                ReportType::GenerateAll => vec![
-                    ("health", reports_dir.join("health.txt")),
-                    ("deployment", reports_dir.join("deployment.txt")),
-                    ("known_variants", reports_dir.join("known_variants.txt")),
-                ],
-                ReportType::Legacy => vec![
-                    ("legacy", reports_dir.join("legacy.txt")),
-                ],
-                ReportType::Deployment => vec![
-                    ("deployment", reports_dir.join("deployment.txt")),
-                ],
-                ReportType::Health => vec![
-                    ("health", reports_dir.join("health.txt")),
-                ],
-                ReportType::KnownVariants => vec![
-                    ("known_variants", reports_dir.join("known_variants.txt")),
-                ],
-            };
-
-            let total = report_tasks.len();
-            let mut progress = OperationProgress::new(total);
-            reporter.force_update(progress.clone());
-
-            let mut succeeded = 0;
-            let mut errors = Vec::new();
-
-            for (name, path) in report_tasks {
-                if reporter.is_cancelled() {
-                    reporter.cancelled();
-                    return;
-                }
-
-                progress.current_item = Some(format!("Generating {} report", name));
-                reporter.update(progress.clone());
-
-                let result = match name {
-                    "deployment" => reports::generate_deployment_report(&path),
-                    "legacy" => reports::generate_legacy_report(&path),
-                    "health" => reports::generate_health_report(&path),
-                    "known_variants" => reports::generate_known_variants_report(&path),
-                    _ => Err(anyhow::anyhow!("Unknown report type")),
-                };
-
-                match result {
-                    Ok(_) => succeeded += 1,
-                    Err(e) => errors.push(format!("{}: {}", name, e)),
-                }
-
-                progress.completed_items += 1;
-                reporter.update(progress.clone());
-            }
-
-            let result = OperationResult {
-                succeeded,
-                skipped: 0,
-                failed: errors.len(),
-                duration: start.elapsed(),
-                bytes_processed: None,
-                errors,
-                data: None,
-            };
-            reporter.complete(result);
-        });
-    }
-
     fn rebuild_health_index(&mut self) {
-        // Add operation to manager
-        let (id, tx, cancel_flag) = self.operations.add(OperationType::RebuildingHealth);
-
-        self.status_message = Some(format!("Rebuilding health index... [{}]", id));
-
-        // Spawn background thread
-        std::thread::spawn(move || {
-            use crate::corpus::detect_fingerprint_issues;
-            use std::time::Instant;
-
-            let start = Instant::now();
-            let mut reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
-
-            // Open database
-            let db_path = match config::get_db_path() {
-                Ok(p) => p,
-                Err(e) => {
-                    reporter.error(format!("Config error: {}", e));
-                    return;
-                }
-            };
-            let db = match Database::open(&db_path) {
-                Ok(db) => db,
-                Err(e) => {
-                    reporter.error(format!("Database error: {}", e));
-                    return;
-                }
-            };
-
-            // Get all tracks with fingerprints
-            let tracks = match db.get_all_tracks(Some("corpus")) {
-                Ok(t) => t,
-                Err(e) => {
-                    reporter.error(format!("Error getting tracks: {}", e));
-                    return;
-                }
-            };
-
-            let with_fingerprints: Vec<_> = tracks
-                .into_iter()
-                .filter(|t| t.fingerprint.is_some())
-                .collect();
-
-            let mut progress = OperationProgress::new(with_fingerprints.len());
-            reporter.force_update(progress.clone());
-
-            // Run health detection on each track
-            let mut _issues_found = 0;
-            for track in &with_fingerprints {
-                if reporter.is_cancelled() {
-                    reporter.cancelled();
-                    return;
-                }
-
-                progress.current_item = track.title.clone().or_else(|| {
-                    std::path::Path::new(&track.path)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                });
-
-                if let Ok(issues) = detect_fingerprint_issues(&db, track) {
-                    _issues_found += issues.len();
-                }
-
-                progress.completed_items += 1;
-                reporter.update(progress.clone());
-            }
-
-            // Detect and store artist canonicalization issues
-            if let Ok(canon_count) = crate::corpus::detect_and_store_canonicalizations(&db) {
-                if canon_count > 0 {
-                    let _ = config::log_message(&format!(
-                        "Health rebuild: detected {} new canonicalization issues",
-                        canon_count
-                    ));
-                }
-            }
-
-            // Update health data version on successful completion
-            if let Err(e) = db.set_health_version(crate::ui::HEALTH_DATA_VERSION) {
-                let _ = config::log_message(&format!(
-                    "WARN: Failed to set health version: {}", e
-                ));
-            }
-
-            let result = OperationResult {
-                succeeded: progress.completed_items,
-                skipped: 0,
-                failed: 0,
-                duration: start.elapsed(),
-                bytes_processed: None,
-                errors: vec![],
-                data: None,
-            };
-            reporter.complete(result);
-        });
+        // TODO: Signals now have stronger guarantees - this is vestigial
+        self.status_message = Some("Health rebuild no longer needed - signals are authoritative".to_string());
     }
 
     fn start_drop_missing_confirmation(&mut self) {
@@ -1202,44 +605,6 @@ impl App {
         self.mode = UiMode::Insights;
     }
 
-    fn transition_to(&mut self, target: TransitionTarget) {
-        match target {
-            TransitionTarget::TagEditor => {
-                self.start_tag_editor();
-            }
-            TransitionTarget::DecisionFlow => {
-                self.start_decision_flow();
-            }
-            TransitionTarget::DirBrowser { context } => {
-                self.start_dir_browser(context);
-            }
-            TransitionTarget::PendingChangesView => {
-                self.status_message = Some("Pending changes view (TODO)".to_string());
-            }
-            TransitionTarget::DropMissingConfirm => {
-                self.start_drop_missing_confirmation();
-            }
-            TransitionTarget::CanonFlow => {
-                self.start_canon_flow();
-            }
-            TransitionTarget::GenreCanonFlow => {
-                self.start_genre_canon_flow();
-            }
-            TransitionTarget::CorpusBrowser => {
-                self.start_corpus_browser();
-            }
-            TransitionTarget::AlbumArtistFlow => {
-                self.start_album_artist_flow();
-            }
-            TransitionTarget::AlbumFlow => {
-                self.start_album_flow();
-            }
-            TransitionTarget::Insights => {
-                self.start_insights_view();
-            }
-        }
-    }
-
     /// Start tag editor for deploy conflict resolution.
     ///
     /// Loads deployment conflicts from health_issues table and presents them
@@ -1278,83 +643,6 @@ impl App {
         let first_tracks = all_groups[0].tracks.clone();
         self.tag_editor = Some(tag_editor::TagEditorState::new(first_tracks, all_groups));
         self.mode = UiMode::TagEditor;
-    }
-
-    fn start_decision_flow(&mut self) {
-        // Use fingerprint-based deduplication with directory set clustering
-        use crate::corpus::deduplication::find_fingerprint_duplicates;
-
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
-
-        let corpus_root = self.config.corpus_root.clone();
-        let stash_root = match &self.config.stash_dir {
-            Some(path) => path.clone(),
-            None => {
-                self.status_message = Some("stash-dir not configured".to_string());
-                return;
-            }
-        };
-
-        // Find all fingerprint duplicates
-        let conflict_sets = match find_fingerprint_duplicates(
-            &db,
-            std::slice::from_ref(&corpus_root),
-            &corpus_root,
-        ) {
-            Ok(sets) => sets,
-            Err(e) => {
-                self.status_message = Some(format!("Error finding duplicates: {}", e));
-                return;
-            }
-        };
-
-        if conflict_sets.is_empty() {
-            self.status_message = Some("No fingerprint duplicates found".to_string());
-            return;
-        }
-
-        // Create session ID
-        let session_id = uuid::Uuid::new_v4().to_string();
-
-        // Create cluster dialogue state
-        self.cluster_dialogue = Some(dedup_flow::ClusterDialogueState::new(
-            conflict_sets,
-            session_id,
-            corpus_root.to_string_lossy().to_string(),
-            stash_root.to_string_lossy().to_string(),
-        ));
-        self.mode = UiMode::ClusterDialogue;
-    }
-
-    // TODO: Uses main_menu::DirBrowserContext - review if this flow is still accessible.
-    // Currently reachable via TransitionTarget::DirBrowser from execute_command.
-    // See main_menu.rs for details.
-    fn start_dir_browser(&mut self, context: main_menu::DirBrowserContext) {
-        let config = match context {
-            main_menu::DirBrowserContext::Sleuthing => dir_browser::DirBrowserConfig::for_sleuthing(),
-        };
-
-        self.dir_browser = Some(dir_browser::DirBrowserState::new(
-            self.config.corpus_root.clone(),
-            config,
-        ));
-        self.browser_context = Some(match context {
-            main_menu::DirBrowserContext::Sleuthing => BrowserContext::Sleuthing,
-        });
-        self.mode = UiMode::DirBrowser;
     }
 
     fn start_corpus_browser(&mut self) {
@@ -1542,114 +830,14 @@ impl App {
             dir_browser::DirBrowserAction::None => {}
             dir_browser::DirBrowserAction::Cancel => {
                 self.dir_browser = None;
-                self.browser_context = None;
                 self.mode = UiMode::Insights;
             }
-            dir_browser::DirBrowserAction::Proceed(paths) => {
-                let context = self.browser_context.take();
+            dir_browser::DirBrowserAction::Proceed(_paths) => {
+                // Directory browser flow is currently unused
                 self.dir_browser = None;
-
-                match context {
-                    Some(BrowserContext::Sleuthing) => {
-                        self.start_sleuthing_with_paths(paths);
-                    }
-                    None => {
-                        self.status_message = Some("No browser context set".to_string());
-                        self.mode = UiMode::Insights;
-                    }
-                }
+                self.mode = UiMode::Insights;
             }
         }
-    }
-
-    fn start_sleuthing_with_paths(&mut self, paths: Vec<std::path::PathBuf>) {
-        use crate::corpus::deduplication::find_duplicates_between_directories;
-
-        let _ = config::log_message("=== start_sleuthing_with_paths called ===");
-        for (i, path) in paths.iter().enumerate() {
-            let _ = config::log_message(&format!("  path[{}]: {}", i, path.display()));
-        }
-
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = config::log_message(&format!("ERROR: Failed to get db path: {}", e));
-                self.status_message = Some(format!("Config error: {}", e));
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
-        let _ = config::log_message(&format!("Database path: {}", db_path.display()));
-
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                let _ = config::log_message(&format!("ERROR: Failed to open database: {}", e));
-                self.status_message = Some(format!("Database error: {}", e));
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
-
-        let corpus_root = self.config.corpus_root.clone();
-        let _ = config::log_message(&format!("Corpus root: {}", corpus_root.display()));
-
-        let stash_root = match &self.config.stash_dir {
-            Some(path) => {
-                let _ = config::log_message(&format!("Stash root: {}", path.display()));
-                path.clone()
-            }
-            None => {
-                let _ = config::log_message("ERROR: stash-dir not configured");
-                self.status_message = Some("stash-dir not configured".to_string());
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
-
-        // Find duplicates BETWEEN selected directories (directory-set based)
-        let _ = config::log_message("Calling find_duplicates_between_directories...");
-        let clusters = match find_duplicates_between_directories(&db, &paths) {
-            Ok(c) => {
-                let _ = config::log_message(&format!("Found {} clusters", c.len()));
-                c
-            }
-            Err(e) => {
-                let _ = config::log_message(&format!("ERROR: find_duplicates failed: {}", e));
-                self.status_message = Some(format!("Error finding duplicates: {}", e));
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
-
-        if clusters.is_empty() {
-            let _ = config::log_message("No duplicates found - returning to main menu");
-            self.status_message = Some("No duplicates found between selected directories".to_string());
-            self.mode = UiMode::Insights;
-            return;
-        }
-
-        // Create session ID
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let _ = config::log_message(&format!("Created session ID: {}", session_id));
-
-        // Create cluster dialogue state with clusters directly
-        let _ = config::log_message(&format!(
-            "Creating ClusterDialogueState with {} clusters, corpus_root={}, stash_root={}",
-            clusters.len(),
-            corpus_root.display(),
-            stash_root.display()
-        ));
-
-        self.cluster_dialogue = Some(dedup_flow::ClusterDialogueState::new_from_clusters(
-            clusters,
-            session_id,
-            corpus_root.to_string_lossy().to_string(),
-            stash_root.to_string_lossy().to_string(),
-        ));
-        self.mode = UiMode::ClusterDialogue;
-
-        let _ = config::log_message("=== start_sleuthing_with_paths complete ===");
     }
 
     fn handle_tag_editor_action(&mut self, action: tag_editor::TagEditorAction) {
@@ -1771,7 +959,7 @@ impl App {
 
     fn save_tag_editor_changes(&mut self, advance_to_next: bool) {
         use std::collections::HashMap;
-        use crate::corpus::db::PendingChange;
+        use crate::flows::PendingDecision;
 
         // Step 1: Compute changes from tag editor
         let Some(ref editor) = self.tag_editor else {
@@ -1805,9 +993,8 @@ impl App {
                 .push((change.field_name.clone(), change.new_value.clone()));
         }
 
-        // Step 3: Create PendingChange records for each track
-        let session_id = self.tag_edit_session_id.clone();
-        let mut pending_changes: Vec<PendingChange> = Vec::new();
+        // Step 3: Create PendingDecision records for each track
+        let mut pending_decisions: Vec<PendingDecision> = Vec::new();
 
         for (track_idx, track_changes) in &changes_by_track {
             if let Some(track) = editor.tracks.get(*track_idx) {
@@ -1824,8 +1011,7 @@ impl App {
                     "track_id": track_id,
                 });
 
-                pending_changes.push(PendingChange::tag_edit(
-                    &session_id,
+                pending_decisions.push(PendingDecision::tag_edit(
                     &track.path,
                     metadata,
                 ));
@@ -1862,7 +1048,7 @@ impl App {
                     group_id,
                     target_path,
                     track_count,
-                    changes: pending_changes,
+                    decisions: pending_decisions,
                 });
             }
 
@@ -1906,92 +1092,44 @@ impl App {
             return;
         }
 
-        // IMMEDIATE MODE: Execute changes now (non-workflow or SaveAll action)
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
+        // IMMEDIATE MODE: Queue changes to daemon for async execution
+        use crate::corpus::mutations::{Mutation, TagEdit};
+        use std::path::PathBuf;
 
-        let db = match Database::open(&db_path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
+        // Convert to Mutations and queue to daemon
+        let mutations: Vec<Mutation> = changes_by_track
+            .iter()
+            .filter_map(|(track_idx, track_changes)| {
+                let track = editor.tracks.get(*track_idx)?;
+                let track_id = track.id.unwrap_or(0);
+                let edits: Vec<TagEdit> = track_changes
+                    .iter()
+                    .map(|(field, value)| TagEdit {
+                        tag_name: field.clone(),
+                        old_value: None, // We don't track old value here
+                        new_value: Some(value.clone()),
+                    })
+                    .collect();
+                Some(Mutation::TagEditAndFlush {
+                    track_id,
+                    path: PathBuf::from(&track.path),
+                    edits,
+                })
+            })
+            .collect();
 
-        let report = match crate::ops::changes::execute_changes(&db, &pending_changes, false) {
-            Ok(r) => r,
-            Err(e) => {
-                self.status_message = Some(format!("Execution error: {}", e));
-                return;
-            }
-        };
+        let mutation_count = mutations.len();
+        self.daemon().queue_all(mutations);
 
-        // Step 5: Check for stale deployments (if any path-affecting tags changed)
-        let path_affecting_fields = ["artist", "album", "album_artist"];
-        let has_path_changes = changes.iter().any(|c|
-            path_affecting_fields.contains(&c.field_name.as_str())
-        );
-
-        let mut stale_count = 0;
-        let mut resolved_conflicts = 0;
-        if has_path_changes {
-            // Cleanup any deployment conflicts that were resolved by these tag edits
-            if let Ok(count) = crate::corpus::health::cleanup_resolved_deployment_conflicts(&self.config, &db) {
-                resolved_conflicts = count;
-            }
-
-            if let Ok(statuses) = crate::ops::deploy::compute_full_deployment_status(&self.config, &db) {
-                stale_count = statuses.iter().map(|s| s.stale.len()).sum();
-            }
-        }
-
-        // Build status message
-        let base_msg = if report.failed > 0 {
-            format!(
-                "Saved {} track(s), {} failed: {}",
-                report.succeeded,
-                report.failed,
-                report.errors.first().unwrap_or(&String::new())
-            )
-        } else {
-            format!("Saved {} track(s)", report.succeeded)
-        };
-
-        let stale_msg = if stale_count > 0 {
-            format!(" ({} deployments now stale)", stale_count)
-        } else {
-            String::new()
-        };
-
-        let resolved_msg = if resolved_conflicts > 0 {
-            format!(" ({} conflict(s) resolved)", resolved_conflicts)
-        } else {
-            String::new()
-        };
-
-        self.status_message = Some(format!("{}{}{}", base_msg, resolved_msg, stale_msg));
+        // Status message - execution is now async
+        self.status_message = Some(format!("Queued {} tag edit(s)", mutation_count));
 
         if advance_to_next {
             // Move to next duplicate group if in duplicate workflow
             if let Some(ref mut editor) = self.tag_editor {
                 if editor.current_group_idx.is_some() {
-                    // If conflicts were resolved, refresh the groups list from DB
-                    if resolved_conflicts > 0 {
-                        if let Ok(fresh_groups) = load_deploy_conflict_groups(&db) {
-                            editor.duplicate_groups = fresh_groups;
-                            // Reset to first group in refreshed list
-                            editor.current_group_idx = Some(0);
-                        }
-                    } else {
-                        // No resolution, just advance the index
-                        let current_idx = editor.current_group_idx.unwrap();
-                        editor.current_group_idx = Some(current_idx + 1);
-                    }
+                    let current_idx = editor.current_group_idx.unwrap();
+                    editor.current_group_idx = Some(current_idx + 1);
 
                     // Load the next group if one exists
                     let next_idx = editor.current_group_idx.unwrap();
@@ -2009,334 +1147,13 @@ impl App {
                         // No more groups
                         self.tag_editor = None;
                         self.mode = UiMode::Insights;
-                        self.status_message = Some(format!(
-                            "{}{}{}. All conflicts processed.",
-                            base_msg, resolved_msg, stale_msg
-                        ));
+                        self.status_message = Some("All conflicts processed.".to_string());
                     }
                 }
             }
         } else {
             self.tag_editor = None;
             self.mode = UiMode::Insights;
-        }
-    }
-
-    fn handle_dialogue_result(&mut self, result: dialogue::DialogueResult) {
-        match result {
-            dialogue::DialogueResult::None => {}
-            dialogue::DialogueResult::Continue => {}
-            dialogue::DialogueResult::Finish(summary) => {
-                self.dialogue = None;
-                self.dialogue_summary = Some(summary);
-                self.mode = UiMode::DialogueSummary;
-            }
-            dialogue::DialogueResult::Commit => {
-                // Execute pending changes from accepted decisions
-                if let Some(ref summary) = self.dialogue_summary {
-                    if summary.pending_changes.is_empty() {
-                        self.status_message = Some("No changes to commit".to_string());
-                    } else {
-                        let db_path = match crate::config::get_db_path() {
-                            Ok(p) => p,
-                            Err(e) => {
-                                self.status_message = Some(format!("Config error: {}", e));
-                                self.dialogue_summary = None;
-                                self.mode = UiMode::Insights;
-                                return;
-                            }
-                        };
-                        match crate::corpus::db::Database::open(&db_path) {
-                            Ok(db) => {
-                                match crate::ops::changes::execute_changes(
-                                    &db,
-                                    &summary.pending_changes,
-                                    false, // dry_run = false
-                                ) {
-                                    Ok(report) => {
-                                        let msg = if report.failed > 0 {
-                                            format!(
-                                                "Committed {} changes ({} failed, {} skipped)",
-                                                report.succeeded, report.failed, report.skipped
-                                            )
-                                        } else {
-                                            format!("Committed {} changes", report.succeeded)
-                                        };
-                                        self.status_message = Some(msg);
-                                        self.invalidate_tag_cloud();
-                                    }
-                                    Err(e) => {
-                                        self.status_message =
-                                            Some(format!("Commit error: {}", e));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                self.status_message = Some(format!("Database error: {}", e));
-                            }
-                        }
-                    }
-                } else {
-                    self.status_message = Some("No summary state".to_string());
-                }
-                self.dialogue_summary = None;
-                self.mode = UiMode::Insights;
-            }
-            dialogue::DialogueResult::Revert => {
-                self.status_message = Some("Changes reverted".to_string());
-                self.dialogue_summary = None;
-                self.mode = UiMode::Insights;
-            }
-            dialogue::DialogueResult::Cancel => {
-                self.dialogue = None;
-                self.dialogue_summary = None;
-                self.mode = UiMode::Insights;
-            }
-        }
-    }
-
-    fn handle_cluster_dialogue_action(&mut self, action: dedup_flow::ClusterDialogueAction) {
-        match action {
-            dedup_flow::ClusterDialogueAction::None => {}
-            dedup_flow::ClusterDialogueAction::Continue => {}
-            dedup_flow::ClusterDialogueAction::ShowBulkPrompt => {
-                // Transition to bulk prompt - take ownership of session
-                if let Some(cluster_dlg) = self.cluster_dialogue.take() {
-                    let session = cluster_dlg.into_session();
-                    self.bulk_prompt = Some(dedup_flow::BulkPromptState::new(session));
-                    self.mode = UiMode::BulkReviewPrompt;
-                }
-            }
-            dedup_flow::ClusterDialogueAction::ShowSessionReview => {
-                // Transition to session review
-                if let Some(cluster_dlg) = self.cluster_dialogue.take() {
-                    let session = cluster_dlg.into_session();
-                    self.session_review = Some(dedup_flow::SessionReviewState::new(session));
-                    self.mode = UiMode::SessionReview;
-                }
-            }
-            dedup_flow::ClusterDialogueAction::Cancel => {
-                self.cluster_dialogue = None;
-                self.mode = UiMode::Insights;
-                self.status_message = Some("Deduplication cancelled".to_string());
-            }
-            dedup_flow::ClusterDialogueAction::StatusMessage(msg) => {
-                self.status_message = Some(msg);
-            }
-        }
-    }
-
-    fn handle_bulk_prompt_action(&mut self, action: dedup_flow::BulkPromptAction) {
-        match action {
-            dedup_flow::BulkPromptAction::None => {}
-            dedup_flow::BulkPromptAction::CommitBulk => {
-                // Transition to session review
-                if let Some(bulk_prompt) = self.bulk_prompt.take() {
-                    let session = bulk_prompt.into_session();
-                    self.session_review = Some(dedup_flow::SessionReviewState::new(session));
-                    self.mode = UiMode::SessionReview;
-                }
-            }
-            dedup_flow::BulkPromptAction::ContinueIndividual => {
-                // Return to cluster dialogue to process remaining 2-file conflicts
-                if let Some(bulk_prompt) = self.bulk_prompt.take() {
-                    let session = bulk_prompt.into_session();
-                    // Recreate cluster dialogue with current session state
-                    // For now, mark bulk phase complete and continue
-                    let corpus_root = self.config.corpus_root.to_string_lossy().to_string();
-                    let stash_root = self.config.stash_dir
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    let mut new_state = dedup_flow::ClusterDialogueState::new(
-                        session.conflict_sets.clone(),
-                        session.session_id.clone(),
-                        corpus_root,
-                        stash_root,
-                    );
-                    // Restore session state
-                    new_state.session = session;
-                    new_state.session.bulk_phase_complete = true;
-
-                    self.cluster_dialogue = Some(new_state);
-                    self.mode = UiMode::ClusterDialogue;
-                }
-            }
-            dedup_flow::BulkPromptAction::Cancel => {
-                self.bulk_prompt = None;
-                self.mode = UiMode::Insights;
-                self.status_message = Some("Deduplication cancelled".to_string());
-            }
-        }
-    }
-
-    fn handle_session_review_action(&mut self, action: dedup_flow::SessionReviewAction) {
-        match action {
-            dedup_flow::SessionReviewAction::None => {}
-            dedup_flow::SessionReviewAction::Commit => {
-                // Execute all pending changes
-                if let Some(ref session_review) = self.session_review {
-                    let _ = config::log_message("=== SESSION REVIEW: COMMIT REQUESTED ===");
-
-                    // Collect all pending changes from decisions
-                    let all_changes: Vec<_> = session_review.session.decisions
-                        .iter()
-                        .flat_map(|d| d.pending_changes.clone())
-                        .collect();
-
-                    let _ = config::log_message(&format!(
-                        "Total pending changes to execute: {}",
-                        all_changes.len()
-                    ));
-
-                    // Log each change before execution
-                    for (i, change) in all_changes.iter().enumerate() {
-                        let _ = config::log_message(&format!(
-                            "  Change {}: {:?} {} -> {}",
-                            i + 1,
-                            change.change_type,
-                            change.source_path,
-                            change.target_path.as_deref().unwrap_or("(none)")
-                        ));
-                    }
-
-                    // Open database for change execution
-                    let db_path = match config::get_db_path() {
-                        Ok(p) => p,
-                        Err(e) => {
-                            let _ = config::log_message(&format!("ERROR: Failed to get db path: {}", e));
-                            self.status_message = Some(format!("Config error: {}", e));
-                            self.session_review = None;
-                            self.mode = UiMode::Insights;
-                            return;
-                        }
-                    };
-
-                    let db = match Database::open(&db_path) {
-                        Ok(db) => db,
-                        Err(e) => {
-                            let _ = config::log_message(&format!("ERROR: Failed to open database: {}", e));
-                            self.status_message = Some(format!("Database error: {}", e));
-                            self.session_review = None;
-                            self.mode = UiMode::Insights;
-                            return;
-                        }
-                    };
-
-                    // Execute changes
-                    let _ = config::log_message("Executing changes...");
-                    match crate::ops::changes::execute_changes(&db, &all_changes, false) {
-                        Ok(report) => {
-                            let _ = config::log_message(&format!(
-                                "Execution complete: {} succeeded, {} failed, {} skipped",
-                                report.succeeded, report.failed, report.skipped
-                            ));
-                            for err in &report.errors {
-                                let _ = config::log_message(&format!("  ERROR: {}", err));
-                            }
-                            self.status_message = Some(format!(
-                                "Committed: {} succeeded, {} failed, {} skipped",
-                                report.succeeded, report.failed, report.skipped
-                            ));
-                            self.invalidate_tag_cloud();
-                        }
-                        Err(e) => {
-                            let _ = config::log_message(&format!("ERROR: Change execution failed: {}", e));
-                            self.status_message = Some(format!("Execution error: {}", e));
-                        }
-                    }
-                }
-                self.session_review = None;
-                self.mode = UiMode::Insights;
-            }
-            dedup_flow::SessionReviewAction::Preview => {
-                // Dry run - show what would happen
-                if let Some(ref session_review) = self.session_review {
-                    let _ = config::log_message("=== SESSION REVIEW: PREVIEW (DRY RUN) ===");
-
-                    let all_changes: Vec<_> = session_review.session.decisions
-                        .iter()
-                        .flat_map(|d| d.pending_changes.clone())
-                        .collect();
-
-                    let _ = config::log_message(&format!(
-                        "Would execute {} changes:",
-                        all_changes.len()
-                    ));
-
-                    for (i, change) in all_changes.iter().enumerate() {
-                        let _ = config::log_message(&format!(
-                            "  [DRY RUN] {}: {:?} {} -> {}",
-                            i + 1,
-                            change.change_type,
-                            change.source_path,
-                            change.target_path.as_deref().unwrap_or("(none)")
-                        ));
-                    }
-
-                    self.status_message = Some(format!(
-                        "Preview: {} files would be stashed (see log)",
-                        all_changes.len()
-                    ));
-                }
-            }
-            dedup_flow::SessionReviewAction::Export => {
-                // Export change list to file
-                if let Some(ref session_review) = self.session_review {
-                    match config::get_data_dir() {
-                        Ok(data_dir) => {
-                            let reports_dir = data_dir.join("reports");
-                            if let Err(e) = std::fs::create_dir_all(&reports_dir) {
-                                self.status_message = Some(format!("Failed to create reports dir: {}", e));
-                                return;
-                            }
-
-                            let filename = format!(
-                                "dedup_export_{}.json",
-                                chrono::Utc::now().format("%Y%m%d_%H%M%S")
-                            );
-                            let path = reports_dir.join(&filename);
-
-                            let export_data = serde_json::json!({
-                                "session_id": &session_review.session.session_id,
-                                "decisions_count": session_review.session.decisions.len(),
-                                "decisions": session_review.session.decisions.iter().map(|d| {
-                                    serde_json::json!({
-                                        "keeper_dir": d.keeper_dir,
-                                        "cluster_directories": &d.cluster.directory_set,
-                                        "cluster_file_count": d.cluster.file_count,
-                                        "pending_changes_count": d.pending_changes.len(),
-                                    })
-                                }).collect::<Vec<_>>(),
-                                "exported_at": chrono::Utc::now().to_rfc3339(),
-                            });
-
-                            match std::fs::write(&path, serde_json::to_string_pretty(&export_data).unwrap_or_default()) {
-                                Ok(_) => {
-                                    self.status_message = Some(format!(
-                                        "Exported {} decisions to {}",
-                                        session_review.session.decisions.len(),
-                                        path.display()
-                                    ));
-                                }
-                                Err(e) => {
-                                    self.status_message = Some(format!("Export failed: {}", e));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            self.status_message = Some(format!("Config error: {}", e));
-                        }
-                    }
-                }
-            }
-            dedup_flow::SessionReviewAction::Cancel => {
-                let _ = config::log_message("=== SESSION REVIEW: CANCELLED ===");
-                self.session_review = None;
-                self.mode = UiMode::Insights;
-                self.status_message = Some("Session cancelled, no changes made".to_string());
-            }
         }
     }
 
@@ -2348,19 +1165,18 @@ impl App {
                 if let Some(ref preview) = self.deployment_preview {
                     let _ = config::log_message("=== DEPLOYMENT PREVIEW: CONFIRM REQUESTED ===");
 
-                    // Generate mutations for all libraries
-                    let all_changes = crate::ops::deploy::all_deployment_statuses_to_mutations(
+                    // Generate decisions for all libraries
+                    let all_decisions = crate::flows::deploy::all_deployment_statuses_to_decisions(
                         &preview.statuses,
                         &self.config,
-                        &preview.session_id,
                     );
 
                     let _ = config::log_message(&format!(
-                        "Generated {} deployment mutations",
-                        all_changes.len()
+                        "Generated {} deployment decisions",
+                        all_decisions.len()
                     ));
 
-                    if all_changes.is_empty() {
+                    if all_decisions.is_empty() {
                         self.status_message = Some("No deployment changes needed".to_string());
                         self.deployment_preview = None;
                         self.mode = UiMode::Insights;
@@ -2378,81 +1194,50 @@ impl App {
                         format!("{} libraries", library_names.len())
                     };
 
-                    let change_count = all_changes.len();
+                    let decision_count = all_decisions.len();
 
-                    // Add operation to manager for background execution
-                    let (id, tx, cancel_flag) = self.operations.add(
-                        OperationType::ExecutingChanges {
-                            session_id: preview.session_id.clone(),
-                            change_count,
-                        }
-                    );
+                    // Convert decisions to mutations and queue to daemon
+                    use crate::corpus::mutations::Mutation;
+                    use crate::flows::DecisionType;
+                    use std::path::PathBuf;
+
+                    let mutations: Vec<Mutation> = all_decisions
+                        .iter()
+                        .filter_map(|d| {
+                            match d.decision_type {
+                                DecisionType::Deploy => {
+                                    let target = d.target_path.as_ref()?;
+                                    Some(Mutation::HardLink {
+                                        source: PathBuf::from(&d.source_path),
+                                        destination: PathBuf::from(target),
+                                    })
+                                }
+                                DecisionType::Undeploy => {
+                                    Some(Mutation::Unlink {
+                                        path: PathBuf::from(&d.source_path),
+                                    })
+                                }
+                                DecisionType::Redeploy => {
+                                    // Redeploy = remove old + create new
+                                    // For now, just create the new link (old will be orphaned)
+                                    let target = d.target_path.as_ref()?;
+                                    Some(Mutation::HardLink {
+                                        source: PathBuf::from(&d.source_path),
+                                        destination: PathBuf::from(target),
+                                    })
+                                }
+                                _ => None, // Other decision types not handled here
+                            }
+                        })
+                        .collect();
+
+                    let mutation_count = mutations.len();
+                    self.daemon().queue_all(mutations);
 
                     self.status_message = Some(format!(
-                        "Deploying {} changes to {}... [{}]",
-                        change_count, library_display, id
+                        "Queued {} deployment operations to {}",
+                        mutation_count, library_display
                     ));
-
-                    // Clone config for the spawned thread
-                    let config_clone = self.config.clone();
-
-                    // Spawn background deployment thread
-                    std::thread::spawn(move || {
-                        use std::time::Instant;
-
-                        let start = Instant::now();
-                        let reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
-
-                        // Open database
-                        let db_path = match config::get_db_path() {
-                            Ok(p) => p,
-                            Err(e) => {
-                                reporter.error(format!("Config error: {}", e));
-                                return;
-                            }
-                        };
-                        let db = match Database::open(&db_path) {
-                            Ok(db) => db,
-                            Err(e) => {
-                                reporter.error(format!("Database error: {}", e));
-                                return;
-                            }
-                        };
-
-                        // Execute deployment changes
-                        let _ = config::log_message("Executing deployment changes...");
-                        match crate::ops::changes::execute_changes(&db, &all_changes, false) {
-                            Ok(report) => {
-                                let _ = config::log_message(&format!(
-                                    "Deployment complete: {} succeeded, {} failed, {} skipped",
-                                    report.succeeded, report.failed, report.skipped
-                                ));
-                                for err in &report.errors {
-                                    let _ = config::log_message(&format!("  ERROR: {}", err));
-                                }
-
-                                let result = OperationResult {
-                                    succeeded: report.succeeded,
-                                    skipped: report.skipped,
-                                    failed: report.failed,
-                                    duration: start.elapsed(),
-                                    bytes_processed: None,
-                                    errors: report.errors,
-                                    data: None,
-                                };
-                                reporter.complete(result);
-
-                                // Trigger heartbeat refresh in background
-                                // Note: This spawns another thread - the heartbeat receiver
-                                // will be checked by the main UI loop
-                                let _ = spawn_heartbeat(&config_clone);
-                            }
-                            Err(e) => {
-                                let _ = config::log_message(&format!("ERROR: Deployment failed: {}", e));
-                                reporter.error(format!("Deployment error: {}", e));
-                            }
-                        }
-                    });
                 }
                 // Return to main menu immediately - deployment runs in background
                 self.deployment_preview = None;
@@ -2477,109 +1262,15 @@ impl App {
         }
     }
 
-    // ========================================================================
-    // Artist Canonicalization Flow Handlers
-    // (Delegates to canon_flow::coordinator)
-    // ========================================================================
-
-    fn start_canon_flow(&mut self) {
-        canon_flow::coordinator::start(self);
-    }
-
-    fn start_genre_canon_flow(&mut self) {
-        canon_flow::coordinator::start_genre(self);
-    }
-
-    fn handle_canon_cluster_action(&mut self, action: canon_flow::ClusterViewAction) {
-        canon_flow::coordinator::handle_cluster_action(self, action);
-    }
-
-    fn handle_canon_review_action(&mut self, action: canon_flow::ReviewAction) {
-        canon_flow::coordinator::handle_review_action(self, action);
-    }
-
-    // ========================================================================
-    // Album Artist Resolution Flow Handlers
-    // STUBBED OUT - Flow needs complete redesign
-    // ========================================================================
-
-    #[allow(dead_code)]
-    fn start_album_artist_flow(&mut self) {
-        // STUB: Flow disabled pending redesign
-        self.status_message = Some("Album Artist Resolution: stubbed for redesign".to_string());
-    }
-
-    #[allow(dead_code)]
-    fn handle_album_artist_phase_action(&mut self, _action: album_artist_flow::PhaseSelectorAction) {
-        // STUB: No-op
-    }
-
-    #[allow(dead_code)]
-    fn handle_album_artist_cluster_action(&mut self, _action: album_artist_flow::AlbumArtistClusterAction) {
-        // STUB: No-op
-    }
-
-    #[allow(dead_code)]
-    fn handle_album_artist_review_action(&mut self, _action: album_artist_flow::AlbumArtistReviewAction) {
-        // STUB: No-op
-    }
-
-    #[allow(dead_code)]
-    fn handle_album_artist_collation_action(&mut self, _action: album_artist_flow::CollationAction) {
-        // STUB: No-op
-    }
-
-    #[allow(dead_code)]
-    fn handle_album_artist_collation_review_action(
-        &mut self,
-        _action: album_artist_flow::CollationReviewAction,
-    ) {
-        // STUB: No-op
-    }
-
-    #[allow(dead_code)]
-    fn handle_album_artist_population_action(&mut self, _action: album_artist_flow::PopulationAction) {
-        // STUB: No-op
-    }
-
-    #[allow(dead_code)]
-    fn handle_album_artist_population_review_action(
-        &mut self,
-        _action: album_artist_flow::PopulationReviewAction,
-    ) {
-        // STUB: No-op
-    }
-
-    // ========================================================================
-    // Album Canonicalization Flow Handlers
-    // (Delegates to album_flow::coordinator)
-    // ========================================================================
-
-    fn handle_album_cluster_action(&mut self, action: album_flow::AlbumClusterAction) {
-        album_flow::coordinator::handle_cluster_action(self, action);
-    }
-
-    fn handle_album_review_action(&mut self, action: album_flow::AlbumReviewAction) {
-        album_flow::coordinator::handle_review_action(self, action);
-    }
-
-    fn start_album_flow(&mut self) {
-        album_flow::coordinator::start(self);
-    }
-
     fn update_operation_progress(&mut self) {
-        // Poll all tracked operations from OperationManager
-        let completed = self.operations.poll_all();
-        for (id, result, op_type) in completed {
-            // Log operation summary
-            log_operation_summary(&result, &op_type);
+        // Poll all tracked background tasks (legacy)
+        let completed = poll_tasks(&mut self.background_tasks);
+        for (id, label, result) in completed {
+            // Log task summary
+            log_task_summary(&label, &result);
 
-            // Handle tag flush completion - clear tag mismatches and invalidate tag cloud
-            if let OperationType::ExecutingChanges { ref session_id, .. } = op_type {
-                if session_id == "canon_tag_flush" {
-                    self.clear_tag_mismatches_for_flushed(&result);
-                }
-                // Invalidate tag cloud after any change execution (tags may have changed)
+            // Handle tag flush completion - invalidate tag cloud
+            if label.contains("tag") || label.contains("Flushing") {
                 self.invalidate_tag_cloud();
             }
 
@@ -2606,207 +1297,39 @@ impl App {
             });
         }
 
-        // Handle legacy scan receiver (for backwards compatibility with existing scan code)
-        let mut legacy_complete = false;
-        let mut legacy_result: Option<(OperationResult, OperationType)> = None;
-
-        if let Some(ref rx) = self.legacy_scan_receiver {
-            while let Ok(message) = rx.try_recv() {
-                // Convert ScanMessage to OperationMessage using the From impl
-                let op_message: OperationMessage = message.into();
-
-                match op_message {
-                    OperationMessage::Progress(progress) => {
-                        // Record throughput sample if bytes are tracked
-                        if let Some(bytes) = progress.bytes_processed {
-                            let now = Instant::now();
-                            self.throughput_samples.push_back((now, bytes));
-
-                            // Keep only samples from last 15 seconds (allows 8s rolling window + buffer)
-                            let cutoff = now - std::time::Duration::from_secs(15);
-                            while let Some((t, _)) = self.throughput_samples.front() {
-                                if *t < cutoff {
-                                    self.throughput_samples.pop_front();
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Update loading splash progress if in that mode
-                        if self.mode == UiMode::LoadingSplash {
-                            if let Some(ref mut splash) = self.loading_splash_state {
-                                splash.set_progress(progress.completed_items, progress.total_items);
-                            }
-                        }
-
-                        // Store progress in a "virtual" tracked operation for rendering
-                        self.operations.update_legacy_progress(progress);
-                    }
-                    OperationMessage::Complete(result) => {
-                        // Format completion message
-                        self.status_message = Some(if result.succeeded == 0 && result.skipped > 0 {
-                            format!(
-                                "Complete! {} skipped (unchanged) in {:.1}s",
-                                result.skipped,
-                                result.duration.as_secs_f64()
-                            )
-                        } else {
-                            let bytes_str = result
-                                .bytes_processed
-                                .map(|b| format!(" ({:.2} GB)", b as f64 / 1_000_000_000.0))
-                                .unwrap_or_default();
-                            format!(
-                                "Complete! {} succeeded{} in {:.1}s",
-                                result.succeeded,
-                                bytes_str,
-                                result.duration.as_secs_f64()
-                            )
-                        });
-
-                        // Store result for logging
-                        if let Some(ref op_type) = self.legacy_scan_type {
-                            legacy_result = Some((result, op_type.clone()));
-                        }
-                        legacy_complete = true;
-                    }
-                    OperationMessage::Error(err) => {
-                        self.status_message = Some(format!("Operation error: {}", err));
-                        legacy_complete = true;
-                    }
-                    OperationMessage::Cancelled => {
-                        self.status_message = Some("Operation cancelled".to_string());
-                        legacy_complete = true;
-                    }
-                }
-            }
-        }
-
-        // Log legacy operation summary after clearing receiver
-        if let Some((ref result, ref op_type)) = legacy_result {
-            log_operation_summary(result, op_type);
-
-            // Run canonicalization detection after corpus scan completes
-            if let OperationType::Scanning { source_name } = op_type {
-                if source_name == "corpus" && result.failed == 0 {
-                    // Run in background to not block UI
-                    std::thread::spawn(|| {
-                        if let Ok(db_path) = config::get_db_path() {
-                            if let Ok(db) = Database::open(&db_path) {
-                                match crate::corpus::detect_and_store_canonicalizations(&db) {
-                                    Ok(count) if count > 0 => {
-                                        let _ = config::log_message(&format!(
-                                            "Post-scan: detected {} new canonicalization issues",
-                                            count
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        let _ = config::log_message(&format!(
-                                            "Post-scan canonicalization error: {}",
-                                            e
-                                        ));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-        }
-
-        if legacy_complete {
-            self.legacy_scan_receiver = None;
-            self.legacy_scan_type = None;
-            self.operations.clear_legacy_progress();
-            self.throughput_samples.clear();
-            // Refresh corpus summary after operation completes
-            self.refresh_corpus_summary();
-
-            // Transition from loading splash to target mode (e.g., Insights)
-            if self.mode == UiMode::LoadingSplash {
-                if let Some(ref splash) = self.loading_splash_state {
-                    let target = splash.target_mode;
-                    self.loading_splash_state = None;
-                    self.mode = target;
-
-                    // After scan completes, we need heartbeat data for Insights
-                    // Start a heartbeat if we don't have one
-                    if self.heartbeat_result.is_none() && self.heartbeat_receiver.is_none() {
-                        let rx = spawn_heartbeat(&self.config);
-                        self.heartbeat_receiver = Some(rx);
-                        self.eye.set_heartbeat_pending(true);
-                        // Show new splash for heartbeat
-                        self.loading_splash_state = Some(LoadingSplashState::heartbeat());
-                        self.mode = UiMode::LoadingSplash;
-                    }
+        // Poll task daemon
+        if let Some(ref mut daemon) = self.task_daemon {
+            let status = daemon.poll();
+            if status.completed > 0 || status.failed > 0 {
+                self.invalidate_tag_cloud();
+                if status.failed > 0 {
+                    self.status_message = Some(format!(
+                        "Tasks: {} done, {} failed",
+                        status.completed, status.failed
+                    ));
                 }
             }
         }
     }
 
-    /// Clear tag mismatches for successfully flushed paths
-    fn clear_tag_mismatches_for_flushed(&self, result: &OperationResult) {
-        use crate::ops::operation::ResultData;
-
-        // Extract flushed paths from result data
-        let flushed_paths = match &result.data {
-            Some(ResultData::TagFlush { flushed_paths }) => flushed_paths.clone(),
-            _ => Vec::new(),
-        };
-
-        if flushed_paths.is_empty() {
-            return;
+    /// Get or create the task daemon.
+    fn daemon(&mut self) -> &mut crate::flows::TaskDaemon {
+        if self.task_daemon.is_none() {
+            self.task_daemon = Some(crate::flows::TaskDaemon::new());
         }
-
-        // Open database and clear mismatches
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        let db = match Database::open(&db_path) {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-
-        let mut cleared = 0;
-        for path in &flushed_paths {
-            if db.clear_tag_mismatches_by_path(path).is_ok() {
-                cleared += 1;
-            }
-        }
-
-        let _ = config::log_message(&format!(
-            "Cleared tag mismatches for {}/{} flushed paths",
-            cleared,
-            flushed_paths.len()
-        ));
+        self.task_daemon.as_mut().unwrap()
     }
 
-    /// Refresh the cached corpus summary for the info panel
-    // TODO: This updates main_menu state which is no longer displayed.
-    // Consider removing or repurposing for Insights view. See main_menu.rs.
-    fn refresh_corpus_summary(&mut self) {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        let db = match Database::open(&db_path) {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-        if let Ok(summary) = db.get_corpus_summary() {
-            self.main_menu.set_corpus_summary(summary);
-        }
+    /// Queue mutations to the task daemon.
+    #[allow(dead_code)]
+    fn queue_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>) {
+        self.daemon().queue_all(mutations);
     }
 
     /// Check for heartbeat completion
     fn update_heartbeat(&mut self) {
         if let Some(ref rx) = self.heartbeat_receiver {
             if let Ok(result) = rx.try_recv() {
-                // TODO: main_menu.set_heartbeat_result updates state no longer displayed.
-                // Consider removing. See main_menu.rs.
-                self.main_menu.set_heartbeat_result(result.clone());
                 self.heartbeat_result = Some(result.clone());
                 self.heartbeat_receiver = None;
                 self.eye.set_heartbeat_pending(false);
@@ -3167,13 +1690,13 @@ impl App {
             }
         };
 
-        // Gather all pending changes from accumulated groups
-        let all_changes: Vec<_> = self.deploy_conflict_accumulated
+        // Gather all pending decisions from accumulated groups
+        let all_decisions: Vec<_> = self.deploy_conflict_accumulated
             .iter()
-            .flat_map(|g| g.changes.clone())
+            .flat_map(|g| g.decisions.clone())
             .collect();
 
-        if all_changes.is_empty() {
+        if all_decisions.is_empty() {
             self.status_message = Some("No changes to commit".to_string());
             self.deploy_conflict_review = None;
             self.deploy_conflict_accumulated.clear();
@@ -3181,8 +1704,8 @@ impl App {
             return;
         }
 
-        // Execute all changes in bulk
-        let report = match crate::ops::changes::execute_changes(&db, &all_changes, false) {
+        // Execute all decisions in bulk
+        let report = match crate::flows::changes::execute_decisions(&db, &all_decisions, false) {
             Ok(r) => r,
             Err(e) => {
                 self.status_message = Some(format!("Execution error: {}", e));
@@ -3246,30 +1769,12 @@ fn render(f: &mut Frame, app: &mut App) {
         mode: app.mode,
         config: &app.config,
         status_message: app.status_message.as_deref(),
-        main_menu: &mut app.main_menu,
         tag_editor: app.tag_editor.as_mut(),
         tag_editor_modal: app.tag_editor_modal.as_ref(),
         dir_browser: app.dir_browser.as_mut(),
         corpus_browser: app.corpus_browser.as_mut(),
-        dialogue: app.dialogue.as_mut(),
-        dialogue_summary: app.dialogue_summary.as_mut(),
-        cluster_dialogue: app.cluster_dialogue.as_mut(),
-        bulk_prompt: app.bulk_prompt.as_mut(),
-        session_review: app.session_review.as_mut(),
         drop_missing_state: app.drop_missing_state.as_ref(),
         deployment_preview: app.deployment_preview.as_mut(),
-        canon_cluster_view: app.canon_cluster_view.as_mut(),
-        canon_session_review: app.canon_session_review.as_mut(),
-        canon_commit_modal_state: app.canon_commit_modal_state.as_ref(),
-        album_artist_phase_selector: app.album_artist_phase_selector.as_ref(),
-        album_artist_cluster_view: app.album_artist_cluster_view.as_mut(),
-        album_artist_collation: app.album_artist_collation.as_mut(),
-        album_artist_collation_review: app.album_artist_collation_review.as_mut(),
-        album_artist_population: app.album_artist_population.as_mut(),
-        album_artist_population_review: app.album_artist_population_review.as_mut(),
-        album_artist_review: app.album_artist_review.as_mut(),
-        album_cluster_view: app.album_cluster_view.as_mut(),
-        album_review: app.album_review.as_mut(),
         directory_tag_editor: app.directory_tag_editor.as_mut(),
         directory_tag_editor_modal: app.directory_tag_editor_modal.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
@@ -3280,7 +1785,17 @@ fn render(f: &mut Frame, app: &mut App) {
         heartbeat_pending: app.heartbeat_receiver.is_some(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,
-        active_operations: app.operations.all_for_display().into_iter().map(|(t, p)| (t.clone(), p.clone())).collect(),
+        background_tasks: &app.background_tasks,
+        daemon_status: app.task_daemon.as_ref().and_then(|d| {
+            if d.has_pending() {
+                Some(crate::flows::DaemonStatus {
+                    pending: 1, // We only know there's work, not how much
+                    ..Default::default()
+                })
+            } else {
+                None
+            }
+        }),
     };
     render::render(f, &mut ctx);
 }
@@ -3532,24 +2047,18 @@ pub fn run_menu(config: Config) -> Result<()> {
     // Check health data version and trigger rebuild if needed
     check_and_maybe_rebuild_health(&mut app);
 
-    // Check for first-time startup (no corpus indexed) and auto-scan
-    app.check_first_time_startup();
-
-    // Spawn heartbeat check if enabled (skip if first-time scan is running)
-    if app.config.opinions.startup.heartbeat_on_startup && !app.first_time_scan_active {
+    // Spawn heartbeat check if enabled
+    // On first-time startup (empty corpus), heartbeat will detect all files as new
+    // and create MissingFromIndex signals for them
+    if app.config.opinions.startup.heartbeat_on_startup {
         let rx = spawn_heartbeat(&app.config);
         app.heartbeat_receiver = Some(rx);
         app.eye.set_heartbeat_pending(true);
         // Show loading splash while waiting for heartbeat
         app.loading_splash_state = Some(LoadingSplashState::heartbeat());
         app.mode = UiMode::LoadingSplash;
-    } else if app.first_time_scan_active {
-        // Show loading splash for first-time scan
-        app.loading_splash_state = Some(LoadingSplashState::scan(true));
-        app.mode = UiMode::LoadingSplash;
     }
 
-    app.refresh_corpus_summary();
     let res = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;

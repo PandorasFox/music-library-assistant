@@ -1,7 +1,7 @@
 //! Multi-Dimensional Insight Computations
 //!
 //! These insights correlate multiple signal types and require background
-//! computation. They're spawned as operations with progress tracking.
+//! computation. They're spawned as tasks with progress tracking.
 //!
 //! ## Quality Duplicates
 //!
@@ -16,9 +16,7 @@ use std::time::Instant;
 
 use crate::corpus::db::types::HealthIssueType;
 use crate::corpus::db::Database;
-use crate::ops::operation::{
-    OperationHandle, OperationMessage, OperationProgress, OperationResult, ProgressReporter,
-};
+use crate::flows::background::{ProgressSender, TaskMessage, TaskProgress, TaskResult};
 
 use super::Insight;
 
@@ -41,9 +39,27 @@ impl MultiDimInsightType {
     }
 }
 
+/// Handle for a spawned multi-dim insight computation.
+pub struct InsightHandle {
+    pub receiver: mpsc::Receiver<TaskMessage>,
+    pub cancel_flag: Arc<AtomicBool>,
+}
+
+impl InsightHandle {
+    /// Request cancellation.
+    pub fn cancel(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Non-blocking poll for the next message.
+    pub fn try_recv(&self) -> Option<TaskMessage> {
+        self.receiver.try_recv().ok()
+    }
+}
+
 /// Spawn a background computation for a multi-dimensional insight.
 ///
-/// Returns an `OperationHandle` for progress tracking and cancellation.
+/// Returns an `InsightHandle` for progress tracking and cancellation.
 ///
 /// # Arguments
 ///
@@ -52,8 +68,8 @@ impl MultiDimInsightType {
 ///
 /// # Returns
 ///
-/// `OperationHandle` with receiver for progress messages.
-pub fn spawn_multi_dim_insight(db_path: &str, insight_type: MultiDimInsightType) -> OperationHandle {
+/// `InsightHandle` with receiver for progress messages.
+pub fn spawn_multi_dim_insight(db_path: &str, insight_type: MultiDimInsightType) -> InsightHandle {
     let db_path = db_path.to_string();
 
     // Create handle components
@@ -70,10 +86,9 @@ pub fn spawn_multi_dim_insight(db_path: &str, insight_type: MultiDimInsightType)
         }
     });
 
-    OperationHandle {
+    InsightHandle {
         receiver: rx,
         cancel_flag,
-        operation_type: crate::ops::operation::OperationType::RebuildingHealth, // Reuse for now
     }
 }
 
@@ -86,11 +101,11 @@ pub fn spawn_multi_dim_insight(db_path: &str, insight_type: MultiDimInsightType)
 /// 4. Counts auto-resolvable (clear winner) vs needs-decision groups
 fn compute_quality_duplicates(
     db_path: &str,
-    tx: mpsc::Sender<OperationMessage>,
+    tx: mpsc::Sender<TaskMessage>,
     cancel_flag: Arc<AtomicBool>,
 ) {
     let start = Instant::now();
-    let mut reporter = ProgressReporter::new(tx.clone(), cancel_flag.clone());
+    let mut reporter = ProgressSender::new(tx.clone(), cancel_flag.clone());
 
     // Open thread-local database connection
     let db = match Database::open(Path::new(&db_path)) {
@@ -114,22 +129,14 @@ fn compute_quality_duplicates(
     let total_groups = fp_dupes.len();
     if total_groups == 0 {
         // No duplicates - complete immediately
-        let _ = tx.send(OperationMessage::Complete(OperationResult {
+        let _ = tx.send(TaskMessage::Complete(TaskResult {
             succeeded: 0,
             skipped: 0,
             failed: 0,
             duration: start.elapsed(),
             bytes_processed: None,
             errors: Vec::new(),
-            data: Some(crate::ops::operation::ResultData::Scan {
-                files_scanned: 0,
-                files_skipped: 0,
-                bytes_scanned: 0,
-            }),
         }));
-
-        // Send the computed insight via a special complete message
-        // For now, we'll encode the result in the success count
         return;
     }
 
@@ -148,7 +155,7 @@ fn compute_quality_duplicates(
     let mut total_tracks = 0;
     let mut errors = Vec::new();
 
-    let mut progress = OperationProgress::new(total_groups);
+    let mut progress = TaskProgress::new(total_groups);
     reporter.force_update(progress.clone());
 
     for (i, dupe) in fp_dupes.iter().enumerate() {
@@ -185,13 +192,13 @@ fn compute_quality_duplicates(
         }
 
         // Update progress periodically
-        progress.completed_items = i + 1;
+        progress.completed = i + 1;
         progress.current_item = Some(format!("Group {}/{}", i + 1, total_groups));
         reporter.update(progress.clone());
     }
 
     // Send final progress
-    progress.completed_items = total_groups;
+    progress.completed = total_groups;
     progress.current_item = None;
     reporter.force_update(progress);
 
@@ -203,14 +210,13 @@ fn compute_quality_duplicates(
     };
 
     // Complete with result
-    let result = OperationResult {
+    let result = TaskResult {
         succeeded: auto_resolvable,
         skipped: needs_decision,
         failed: errors.len(),
         duration: start.elapsed(),
         bytes_processed: None,
         errors,
-        data: None,
     };
 
     reporter.complete(result);
@@ -260,13 +266,13 @@ fn has_clear_quality_winner(tracks: &[(crate::corpus::db::types::Track, crate::c
     false
 }
 
-/// Convert an OperationResult back to an Insight.
+/// Convert a TaskResult back to an Insight.
 ///
 /// This is used by the UI to extract the computed insight from
-/// the operation completion message.
+/// the task completion message.
 pub fn result_to_insight(
     insight_type: MultiDimInsightType,
-    result: &OperationResult,
+    result: &TaskResult,
     total_groups: usize,
 ) -> Insight {
     match insight_type {

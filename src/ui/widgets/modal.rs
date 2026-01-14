@@ -189,6 +189,9 @@ pub struct ModalButton {
     pub key_hint: String,
     pub is_selected: bool,
     pub style_when_selected: Style,
+    pub style_when_unselected: Style,
+    /// Show selection indicator ("> ")
+    pub show_indicator: bool,
 }
 
 impl ModalButton {
@@ -201,6 +204,8 @@ impl ModalButton {
                 .fg(Color::Black)
                 .bg(Color::Green)
                 .add_modifier(Modifier::BOLD),
+            style_when_unselected: Style::default().fg(Color::Gray),
+            show_indicator: false,
         }
     }
 
@@ -212,6 +217,56 @@ impl ModalButton {
     pub fn style_when_selected(mut self, style: Style) -> Self {
         self.style_when_selected = style;
         self
+    }
+
+    pub fn style_when_unselected(mut self, style: Style) -> Self {
+        self.style_when_unselected = style;
+        self
+    }
+
+    /// Configure both selected and unselected styles at once
+    pub fn styles(mut self, selected: Style, unselected: Style) -> Self {
+        self.style_when_selected = selected;
+        self.style_when_unselected = unselected;
+        self
+    }
+
+    /// Enable selection indicator ("> " prefix when selected)
+    pub fn with_indicator(mut self) -> Self {
+        self.show_indicator = true;
+        self
+    }
+
+    /// Get the current style based on selection state
+    pub fn current_style(&self) -> Style {
+        if self.is_selected {
+            self.style_when_selected
+        } else {
+            self.style_when_unselected
+        }
+    }
+
+    /// Render as a span (for inline button rendering)
+    pub fn render_span(&self) -> Span<'static> {
+        let text = if self.key_hint.is_empty() {
+            format!("[ {} ]", self.label)
+        } else {
+            format!("[{}] {}", self.key_hint, self.label)
+        };
+        Span::styled(text, self.current_style())
+    }
+
+    /// Render as a span with indicator prefix
+    pub fn render_with_indicator(&self) -> Vec<Span<'static>> {
+        let indicator = if self.show_indicator {
+            if self.is_selected { " > " } else { "   " }
+        } else {
+            ""
+        };
+        vec![
+            Span::styled(indicator.to_string(), self.current_style()),
+            self.render_span(),
+        ]
     }
 }
 
@@ -310,13 +365,11 @@ impl ConfirmationModal {
                         spans.push(Span::raw("  ")); // Spacing between buttons
                     }
 
-                    let label = format!("[{}] {}", btn.key_hint, btn.label);
-                    let style = if btn.is_selected {
-                        btn.style_when_selected
+                    if btn.show_indicator {
+                        spans.extend(btn.render_with_indicator());
                     } else {
-                        Style::default().fg(Color::Gray)
-                    };
-                    spans.push(Span::styled(label, style));
+                        spans.push(btn.render_span());
+                    }
                     spans
                 })
                 .collect();

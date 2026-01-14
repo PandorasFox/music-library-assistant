@@ -49,7 +49,6 @@ content below this point has been authored by claude, and are claude's notes on 
 | `db/` | Central data layer module |
 | `db/types.rs` | Track, ScanStateEntry, DeploymentStats |
 | `db/changes.rs` | PendingChange, ChangeType, ChangeStatus, ChangeSession |
-| `db/decisions.rs` | Decision flow types for dialogue system |
 | `db/queries.rs` | All SQLite operations and Database methods |
 | `scanner.rs` | Directory walking, metadata extraction coordination |
 | `metadata.rs` | Audio file metadata and fingerprint extraction |
@@ -60,21 +59,19 @@ content below this point has been authored by claude, and are claude's notes on 
 | `ui/mod.rs` | TUI entry point and mode dispatch |
 | `ui/render.rs` | TUI rendering functions |
 | `ui/app.rs` | Application state, eye animation, operation tracking |
-| `ui/main_menu.rs` | Multi-pane category/command navigation |
-| `ui/dialogue.rs` | Conversational decision flow UI |
+| `ui/main_menu.rs` | Command action types (being phased out) |
 | `ui/tag_editor/` | Multi-track metadata editing module |
-| `ui/picker.rs` | Reusable list picker component |
 | `ui/helpers.rs` | Shared rendering utilities and formatters |
 | `ui/widgets/` | Reusable UI components (lists, layouts, status, modals) |
-| `ui/insights_view/` | Real-time computed insights view |
+| `ui/insights_view/` | Real-time computed insights view (main entry point) |
 | `corpus/health/insights/` | Insight computation (one-dim and multi-dim) |
 
 ### Key Patterns
 
-- **UiMode enum**: Top-level mode dispatch (MainMenu, TagEditor, Dialogue, Insights, etc.)
+- **UiMode enum**: Top-level mode dispatch (Insights, TagEditor, CorpusBrowser, etc.)
 - **ScanProgress/ScanMessage**: Async progress updates via mpsc channels
 - **Track struct**: Universal audio file representation
-- **PendingChange**: Algebraic mutation representation
+- **PendingDecision**: Operator-driven decision representation (in `flows/decisions.rs`)
 - **ConflictSet**: Duplicate grouping for resolution
 
 ### Widget-First UI Development
@@ -114,20 +111,23 @@ Insights are categorized as:
 - **One-Dimensional**: Immediate computation from single signal type + heartbeat
 - **Multi-Dimensional**: Background computation correlating multiple signal types
 
-### Vestigial Code
-
-The following UI modules exist but are **not fully wired up** or are under redesign:
+### Active Flow Modules
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `ui/dedup_flow/` | Vestigial | Fingerprint deduplication flow - needs redesign |
-| `ui/canon_flow/` | Vestigial | Artist canonicalization - partially functional |
-| `ui/album_artist_flow/` | Vestigial | Album artist resolution - stubbed, needs complete redesign |
-| `ui/album_flow/` | Vestigial | Album tag resolution - partially functional |
-| `ui/dialogue.rs` | Vestigial | Old decision flow system |
-| `corpus/db/decisions.rs` | Vestigial | Decision types - should move to flows module |
+| `ui/canon_flow/` | Active | Artist/genre canonicalization - functional |
+| `ui/album_flow/` | Active | Album tag resolution - functional |
+| `ui/deploy_flow/` | Active | Deployment preview and execution |
+| `ui/insights_view/` | Active | Main entry point - lateral view ring |
 
-**Do not reference or extend these modules** without understanding their current state. Focus new work on the Insights system, which presents data to the user before any flow integration.
+### Partially Active Modules
+
+| Module | Status | Notes |
+|--------|--------|-------|
+| `ui/main_menu.rs` | Phasing out | Still provides CommandAction, BackgroundTask types; MainMenu mode is dead |
+| `ui/dir_browser/` | Unused | Directory browser exists but has no active flows |
+
+Focus new work on the Insights system, which presents data to the user and provides entry points into resolution flows.
 
 ### String Handling
 
@@ -145,29 +145,35 @@ Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing
 - **Reports**: `$XDG_DATA_HOME/mla/reports/`
 - **Logs**: `/tmp/mla.log`
 
-### Algebraic Change Tracking
+### Operator Decisions
 
-All corpus-mutating operations are tracked as composable functions:
+**Core invariant: MLA never makes Decisions or Mutations autonomously.** All corpus Mutations must be attributable to explicit operator Decisions. See `docs/PHILOSOPHY.md` for full rationale.
+
+The flow is:
+```
+Operator Flow → PendingDecision[] (accumulated) → execute_decisions() → Mutations
+```
+
+Decision types (in `flows/decisions.rs`):
 
 ```rust
-PendingChange {
-    change_type: Move | Delete | TagEdit | Deploy | Undeploy
+PendingDecision {
+    decision_type: Move | Delete | DropIndex | TagEdit | Deploy | Undeploy | Redeploy
     source_path: String
     target_path: Option<String>
-    metadata_changes: Option<JSON>
-    status: Pending | Staged | Committed | Reverted
+    metadata: Option<JSON>
 }
 ```
 
-Changes accumulate in `pending_changes` table, can be previewed, staged to a preview library, then committed or discarded.
+Decisions are accumulated in-memory during UI flows, then executed in batch via `flows::changes::execute_decisions()`. There is no database persistence for pending decisions - they exist only within the lifetime of an operator flow.
 
 ## Database Schema
 
 Key tables:
 - `tracks`: Audio file metadata, fingerprints, ISRC codes
 - `scan_state`: Incremental scan tracking (inode + mtime)
-- `pending_changes`: Accumulated mutations awaiting commit
-- `change_sessions`: Groups of related changes
+- `health_issues`: Detected corpus health problems
+- `tag_canonicalization`: Artist/album/genre canonical mappings
 
 Source names are lowercase: `corpus`, `legacy`, library names.
 

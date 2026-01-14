@@ -251,6 +251,99 @@ pub mod presets {
             .binding(KeyBinding::new("Enter", "Confirm"))
             .binding(KeyBinding::new("Esc", "Cancel"))
     }
+
+    // =========================================================================
+    // Mode-specific presets for render.rs footer
+    // =========================================================================
+
+    /// Tag editor controls
+    pub fn tag_editor() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("Tab", "Tracks"))
+            .binding(KeyBinding::new("↑↓", "Fields"))
+            .binding(KeyBinding::new("Enter", "Edit"))
+            .binding(KeyBinding::new("Esc", "Exit"))
+    }
+
+    /// Directory browser controls
+    pub fn dir_browser() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("↑↓", "Navigate"))
+            .binding(KeyBinding::new("←→", "Expand"))
+            .binding(KeyBinding::new("Space", "Toggle"))
+            .binding(KeyBinding::new("Enter", "Proceed"))
+            .binding(KeyBinding::new("Esc", "Cancel"))
+    }
+
+    /// Drop missing confirmation controls
+    pub fn drop_missing() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("↑↓", "Scroll"))
+            .binding(KeyBinding::new("←→", "Select Option"))
+            .binding(KeyBinding::new("Enter", "Confirm"))
+            .binding(KeyBinding::new("Esc", "Cancel"))
+    }
+
+    /// Deployment preview controls
+    pub fn deployment_preview() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("↑↓", "Navigate"))
+            .binding(KeyBinding::new("←→", "Focus"))
+            .binding(KeyBinding::new("Enter", "Confirm"))
+            .binding(KeyBinding::new("Tab/Shift+Tab", "Cycle"))
+            .binding(KeyBinding::new("Esc", "Cancel"))
+    }
+
+    /// Exit confirmation modal controls
+    pub fn exit_confirm_modal() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("←→", "Select"))
+            .binding(KeyBinding::new("Enter/Space", "Confirm"))
+            .binding(KeyBinding::new("Y", "Yes"))
+            .binding(KeyBinding::new("N/Esc", "No"))
+    }
+
+    /// Corpus browser controls
+    pub fn corpus_browser() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("↑↓", "Navigate"))
+            .binding(KeyBinding::new("←→", "Expand"))
+            .binding(KeyBinding::new("Enter", "Edit"))
+            .binding(KeyBinding::new("Tab/Shift+Tab", "Cycle"))
+            .binding(KeyBinding::new("Esc", "Exit"))
+    }
+
+    /// Directory tag editor controls
+    pub fn directory_tag_editor() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("Tab/Shift+Tab", "Directories"))
+            .binding(KeyBinding::new("↑↓", "Fields"))
+            .binding(KeyBinding::new("Enter", "Edit"))
+            .binding(KeyBinding::new("→", "Action"))
+            .binding(KeyBinding::new("Esc", "Exit"))
+    }
+
+    /// Deploy conflict review controls
+    pub fn deploy_conflict_review() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("←/→", "Select"))
+            .binding(KeyBinding::new("Enter", "Confirm"))
+            .binding(KeyBinding::new("Esc", "Cancel"))
+    }
+
+    /// Insights view controls
+    pub fn insights_view() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("↑↓", "Navigate"))
+            .binding(KeyBinding::new("Enter", "Launch"))
+            .binding(KeyBinding::new("Tab/Shift+Tab", "Cycle"))
+            .binding(KeyBinding::new("Esc", "Menu"))
+    }
+
+    /// Empty/loading controls
+    pub fn empty() -> ControlsHint {
+        ControlsHint::new()
+    }
 }
 
 #[cfg(test)]

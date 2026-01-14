@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 use crate::corpus::db::Database;
-use crate::ops::deploy::compute_deployment_path;
+use crate::flows::deploy::compute_deployment_path;
 
 /// Deployment status for a single file
 #[derive(Debug, Clone)]
@@ -238,14 +238,13 @@ pub fn is_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Generate orphan cleanup mutations
-pub fn generate_orphan_cleanup_mutations(
+/// Generate orphan cleanup decisions
+pub fn generate_orphan_cleanup_decisions(
     orphans: &[OrphanFile],
     library_name: &str,
     stash_root: &Path,
-    session_id: &str,
-) -> Vec<crate::corpus::db::PendingChange> {
-    use crate::corpus::db::{ChangeStatus, ChangeType, PendingChange};
+) -> Vec<crate::flows::PendingDecision> {
+    use crate::flows::{DecisionType, PendingDecision};
 
     orphans
         .iter()
@@ -258,13 +257,11 @@ pub fn generate_orphan_cleanup_mutations(
                 .unwrap_or_else(|| PathBuf::from("unknown"));
             let target_path = stash_root.join(library_name).join(relative);
 
-            PendingChange {
-                id: None,
-                session_id: session_id.to_string(),
-                change_type: ChangeType::Undeploy,
+            PendingDecision {
+                decision_type: DecisionType::Undeploy,
                 source_path: orphan.library_path.to_string_lossy().to_string(),
                 target_path: Some(target_path.to_string_lossy().to_string()),
-                metadata_changes: Some(
+                metadata: Some(
                     serde_json::json!({
                         "library": library_name,
                         "reason": "orphan_cleanup",
@@ -272,8 +269,6 @@ pub fn generate_orphan_cleanup_mutations(
                     })
                     .to_string(),
                 ),
-                created_at: None,
-                status: ChangeStatus::Pending,
             }
         })
         .collect()

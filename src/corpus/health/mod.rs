@@ -53,7 +53,7 @@ pub use filter::{
 pub use heartbeat::{spawn_heartbeat, HeartbeatResult};
 #[allow(unused_imports)]
 pub use library::{
-    check_all_libraries_health, check_library_health, generate_orphan_cleanup_mutations,
+    check_all_libraries_health, check_library_health, generate_orphan_cleanup_decisions,
     LibraryHealthResult, OrphanFile, StaleDeployment,
 };
 pub use tag_cloud::{spawn_tag_cloud_build, TagCloud};

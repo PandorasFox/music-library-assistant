@@ -5,14 +5,12 @@
 //!
 //! ## Submodules
 //!
-//! - `db/` - Database layer (types, queries, changes)
-//! - `deduplication/` - Fingerprint-based duplicate detection and resolution
+//! - `db/` - Database layer (types, queries)
 //! - `health/` - Health issue detection, filtering, and library health
 //! - `mutations/` - Standardized mutation interface for all corpus changes
 //! - `reports/` - Report generation with ReportRenderer pattern
 
 pub mod db;
-pub mod deduplication;
 pub mod health;
 pub mod metadata;
 pub mod mutations;
@@ -30,7 +28,7 @@ pub use health::{
 // Re-export library health items (for future use)
 #[allow(unused_imports)]
 pub use health::library::{
-    check_all_libraries_health, check_library_health, generate_orphan_cleanup_mutations,
+    check_all_libraries_health, check_library_health, generate_orphan_cleanup_decisions,
     LibraryHealthResult, OrphanFile, StaleDeployment,
 };
 

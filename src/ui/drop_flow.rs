@@ -5,9 +5,11 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
+use std::path::Path;
+
 use crate::config;
-use crate::corpus::db::{ChangeStatus, ChangeType, Database, PendingChange, Track};
-use crate::ops::{changes, scanner};
+use crate::corpus::db::{Database, Track};
+use crate::flows::{changes, DecisionType, PendingDecision};
 
 /// State for drop missing confirmation dialog.
 #[derive(Debug, Clone)]
@@ -78,12 +80,23 @@ pub struct DropMissingResult {
     pub errors: Vec<String>,
 }
 
-/// Find missing tracks in the corpus.
+/// Find tracks in the index whose files no longer exist on disk.
 pub fn find_missing_tracks() -> Result<Vec<Track>, String> {
     let db_path = config::get_db_path().map_err(|e| format!("Config error: {}", e))?;
     let db = Database::open(&db_path).map_err(|e| format!("Database error: {}", e))?;
 
-    scanner::find_missing_tracks(&db, "corpus").map_err(|e| format!("Detection error: {}", e))
+    // Get all corpus tracks
+    let tracks = db
+        .get_all_tracks(Some("corpus"))
+        .map_err(|e| format!("Database error: {}", e))?;
+
+    // Filter to those missing from disk
+    let missing: Vec<Track> = tracks
+        .into_iter()
+        .filter(|track| !Path::new(&track.path).exists())
+        .collect();
+
+    Ok(missing)
 }
 
 /// Execute the drop missing operation.
@@ -140,24 +153,19 @@ pub fn execute_drop_missing(missing_tracks: &[Track]) -> Result<DropMissingResul
     let db_path = config::get_db_path().map_err(|e| format!("Config error: {}", e))?;
     let db = Database::open(&db_path).map_err(|e| format!("Database error: {}", e))?;
 
-    // Generate DropIndex changes for each missing track
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let pending_changes: Vec<PendingChange> = missing_tracks
+    // Generate DropIndex decisions for each missing track
+    let pending_decisions: Vec<PendingDecision> = missing_tracks
         .iter()
-        .map(|track| PendingChange {
-            id: None,
-            session_id: session_id.clone(),
-            change_type: ChangeType::DropIndex,
+        .map(|track| PendingDecision {
+            decision_type: DecisionType::DropIndex,
             source_path: track.path.clone(),
             target_path: None,
-            metadata_changes: None,
-            created_at: None,
-            status: ChangeStatus::Pending,
+            metadata: None,
         })
         .collect();
 
-    // Execute the changes
-    let report = changes::execute_changes(&db, &pending_changes, false)
+    // Execute the decisions
+    let report = changes::execute_decisions(&db, &pending_decisions, false)
         .map_err(|e| format!("Drop error: {}", e))?;
 
     // Clean up orphaned scan_state entries

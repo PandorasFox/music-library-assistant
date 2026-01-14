@@ -127,7 +127,6 @@ pub enum TransitionTarget {
     TagEditor,
     DecisionFlow,
     DirBrowser { context: DirBrowserContext },
-    PendingChangesView,
     DropMissingConfirm,
     /// Artist name canonicalization flow
     CanonFlow,
@@ -490,7 +489,6 @@ impl MainMenuState {
                         TransitionTarget::DecisionFlow => "Opens decision-making workflow",
                         TransitionTarget::DirBrowser { .. } => "Opens directory browser for path selection",
                         TransitionTarget::DropMissingConfirm => "Shows index entries without backing files for removal",
-                        TransitionTarget::PendingChangesView => "Shows queued changes",
                         TransitionTarget::CanonFlow => "Opens artist canonicalization workflow",
                         TransitionTarget::GenreCanonFlow => "Opens genre canonicalization workflow",
                         TransitionTarget::CorpusBrowser => "Browse corpus files with metadata preview",
@@ -577,8 +575,8 @@ fn build_menu_categories(_config: &Config) -> Vec<Category> {
 
 fn build_insight_category() -> Category {
     // Get health summary for description
-    let health_description = match crate::ops::reports::get_health_summary() {
-        Ok(summary) => crate::ops::reports::format_health_summary_brief(&summary),
+    let health_description = match crate::flows::reports::get_health_summary() {
+        Ok(summary) => crate::flows::reports::format_health_summary_brief(&summary),
         Err(_) => "Health status unavailable - scan corpus first".to_string(),
     };
 
@@ -662,7 +660,7 @@ fn build_insight_category() -> Category {
 // ## Implementation Notes
 //
 // - May want to share mutation accumulation infrastructure with canon_flow
-// - Virtual corpus state could use a HashMap<track_id, PendingChange> overlay
+// - Virtual corpus state could use a HashMap<track_id, PendingDecision> overlay
 // - Review panes could use similar patterns to CanonSessionReview
 // - Consider "back" navigation between flows (not just within)
 //
@@ -742,11 +740,6 @@ fn build_deployment_category() -> Category {
                 label: "Deploy to Libraries".to_string(),
                 action: CommandAction::Background(BackgroundTask::Deploy),
                 description: "Preview deployment status and create hard links".to_string(),
-            },
-            Command {
-                label: "View Pending Changes".to_string(),
-                action: CommandAction::Transition(TransitionTarget::PendingChangesView),
-                description: "Preview and commit pending corpus changes".to_string(),
             },
         ],
         action: None,

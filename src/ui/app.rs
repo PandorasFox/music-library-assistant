@@ -2,13 +2,7 @@
 //!
 //! Provides the core application structure with mode-based UI dispatch.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-
-use crate::ops::operation::OperationProgress;
-// Re-export OperationType from ops::operation for use by other UI modules
-pub use crate::ops::operation::OperationType;
 
 // ============================================================================
 // UI Mode Enum
@@ -27,36 +21,6 @@ pub enum UiMode {
     DialogueSummary,
     /// Legacy sub-menus (being phased out)
     LegacyMenu,
-}
-
-// ============================================================================
-// Background Operation Tracking
-// ============================================================================
-
-/// State of an in-progress background operation
-#[derive(Debug)]
-pub struct OperationState {
-    pub operation_type: OperationType,
-    pub progress: OperationProgress,
-    pub cancel_flag: Arc<AtomicBool>,
-}
-
-impl OperationState {
-    pub fn new(operation_type: OperationType) -> Self {
-        Self {
-            operation_type,
-            progress: OperationProgress::new(0),
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancel_flag.load(Ordering::SeqCst)
-    }
 }
 
 // ============================================================================

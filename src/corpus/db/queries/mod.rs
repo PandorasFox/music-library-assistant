@@ -4,11 +4,9 @@
 //! - `tracks`: Track CRUD and queries by source/path/fingerprint/metadata
 //! - `scan_state`: Incremental scan state tracking
 //! - `deployment`: Deployment logging and library track queries
-//! - `changes`: Change sessions and pending changes
 //! - `health`: Health issues, summaries, known variants
 //! - `metadata`: App metadata, tag canonicalization, tag mismatches
 
-mod changes;
 mod deployment;
 mod health;
 mod metadata;
@@ -134,31 +132,6 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_tag_history_track ON tag_edit_history(track_id);
             CREATE INDEX IF NOT EXISTS idx_tag_history_session ON tag_edit_history(session_id);
-
-            -- Algebraic change tracking tables
-            CREATE TABLE IF NOT EXISTS pending_changes (
-                id INTEGER PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                change_type TEXT NOT NULL,
-                source_path TEXT NOT NULL,
-                target_path TEXT,
-                metadata_changes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                status TEXT DEFAULT 'pending'
-            );
-            CREATE INDEX IF NOT EXISTS idx_pending_changes_session ON pending_changes(session_id);
-            CREATE INDEX IF NOT EXISTS idx_pending_changes_status ON pending_changes(status);
-            CREATE INDEX IF NOT EXISTS idx_pending_changes_source ON pending_changes(source_path);
-
-            CREATE TABLE IF NOT EXISTS change_sessions (
-                id INTEGER PRIMARY KEY,
-                session_id TEXT NOT NULL UNIQUE,
-                description TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                committed_at DATETIME,
-                status TEXT DEFAULT 'active'
-            );
-            CREATE INDEX IF NOT EXISTS idx_change_sessions_status ON change_sessions(status);
 
             -- =================================================================
             -- Corpus Health Tracking Tables

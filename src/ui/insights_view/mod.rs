@@ -26,10 +26,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::corpus::db::Database;
 use crate::corpus::health::insights::{
-    compute_one_dim_insights, spawn_multi_dim_insight, Insight, MultiDimInsightType,
+    compute_one_dim_insights, spawn_multi_dim_insight, Insight, InsightHandle, MultiDimInsightType,
 };
 use crate::corpus::health::HeartbeatResult;
-use crate::ops::operation::{OperationHandle, OperationMessage};
+use crate::flows::background::{TaskMessage, TaskResult};
 use crate::ui::widgets::SelectableListState;
 
 pub use render::render_insights_view;
@@ -56,7 +56,7 @@ pub struct InsightsViewState {
     /// Selection state for the list
     pub list_state: SelectableListState,
     /// Handle for in-progress multi-dim computation
-    pending_computation: Option<(MultiDimInsightType, OperationHandle)>,
+    pending_computation: Option<(MultiDimInsightType, InsightHandle)>,
     /// Most recent heartbeat result
     heartbeat: Option<HeartbeatResult>,
     /// Whether initial computation is complete
@@ -137,28 +137,28 @@ impl InsightsViewState {
         // Process messages
         for msg in messages {
             match msg {
-                OperationMessage::Progress(progress) => {
+                TaskMessage::Progress(progress) => {
                     // Update the Computing placeholder with progress
-                    let pct = if progress.total_items > 0 {
-                        Some(progress.completed_items as f32 / progress.total_items as f32)
+                    let pct = if progress.total > 0 {
+                        Some(progress.completed as f32 / progress.total as f32)
                     } else {
                         None
                     };
                     self.update_computing_progress(insight_type, pct);
                 }
-                OperationMessage::Complete(result) => {
+                TaskMessage::Complete(result) => {
                     // Replace Computing placeholder with actual insight
                     self.replace_computing_with_result(insight_type, &result);
                     self.pending_computation = None;
                     break;
                 }
-                OperationMessage::Error(_err) => {
+                TaskMessage::Error(_err) => {
                     // Remove Computing placeholder on error
                     self.remove_computing(insight_type);
                     self.pending_computation = None;
                     break;
                 }
-                OperationMessage::Cancelled => {
+                TaskMessage::Cancelled => {
                     self.remove_computing(insight_type);
                     self.pending_computation = None;
                     break;
@@ -244,7 +244,7 @@ impl InsightsViewState {
     fn replace_computing_with_result(
         &mut self,
         insight_type: MultiDimInsightType,
-        result: &crate::ops::operation::OperationResult,
+        result: &TaskResult,
     ) {
         // Find and replace the Computing placeholder
         for insight in &mut self.insights {

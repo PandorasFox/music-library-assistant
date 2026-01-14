@@ -28,7 +28,7 @@ use crate::config::Config;
 use crate::corpus::db::{
     Database, HealthIssue, HealthIssueType, HealthIssueSeverity, Track, TrackRole,
 };
-use crate::ops::deploy::compute_deployment_path;
+use crate::flows::deploy::compute_deployment_path;
 use anyhow::Result;
 
 use super::filter::{durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks};
@@ -151,16 +151,10 @@ pub fn refresh_health_for_track(db: &Database, track_id: i64) -> Result<()> {
 }
 
 /// Determine severity of a duplicate issue based on track characteristics.
-fn determine_duplicate_severity(tracks: &[Track]) -> HealthIssueSeverity {
-    use crate::corpus::deduplication::{compare_track_quality, QualityVerdict};
-
-    // Use the compare_track_quality function which takes a slice and returns a verdict
-    match compare_track_quality(tracks) {
-        QualityVerdict::ClearWinner(_) => HealthIssueSeverity::AutoResolvable,
-        QualityVerdict::Equivalent | QualityVerdict::Indeterminate => {
-            HealthIssueSeverity::ManualReview
-        }
-    }
+/// TODO: Quality comparison logic was in deleted deduplication module.
+/// For now, all duplicates require manual review.
+fn determine_duplicate_severity(_tracks: &[Track]) -> HealthIssueSeverity {
+    HealthIssueSeverity::ManualReview
 }
 
 // ============================================================================

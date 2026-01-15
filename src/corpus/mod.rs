@@ -8,9 +8,13 @@
 //! - `db/` - Database layer (types, queries)
 //! - `health/` - Health issue detection, filtering, and library health
 //! - `mutations/` - Standardized mutation interface for all corpus changes
+//! - `computations/` - Read-only operations that derive facts (tag verification, etc.)
+//! - `eyeballing/` - Corpus state observation driven by the Eye
 //! - `reports/` - Report generation with ReportRenderer pattern
 
+pub mod computations;
 pub mod db;
+pub mod eyeballing;
 pub mod health;
 pub mod metadata;
 pub mod mutations;
@@ -21,9 +25,10 @@ pub mod reports;
 pub use health::{
     detect_and_store_canonicalizations,
     detect_fingerprint_issues,
-    spawn_heartbeat,
-    HeartbeatResult,
 };
+
+// Re-export eyeballing
+pub use eyeballing::queue_eyeballing;
 
 // Re-export library health items (for future use)
 #[allow(unused_imports)]

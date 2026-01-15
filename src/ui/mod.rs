@@ -5,10 +5,12 @@
 pub mod app;
 pub mod deploy_flow;
 pub mod drop_flow;
+pub mod eye;
 pub mod flows;
 pub mod helpers;
 pub mod insights_view;
 pub mod render;
+pub mod splash_screen;
 pub mod tag_editor;
 pub mod tree_browser;
 pub mod widgets;
@@ -31,11 +33,10 @@ use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crate::config::{self, Config};
-use crate::corpus::{spawn_heartbeat, HeartbeatResult};
 use crate::corpus::db::{Database, HealthIssueType};
 use crate::flows::background::{log_task_summary, poll_tasks, BackgroundTask, TaskResult};
 
-use app::{EyeAnimation, HeartbeatRollResult};
+use app::EyeAnimation;
 
 use crate::corpus::mutations::MigrationRegistry;
 
@@ -135,77 +136,7 @@ impl ExitConfirmModalState {
     }
 }
 
-/// Type of loading operation for the splash screen
-#[derive(Debug, Clone)]
-pub(crate) enum LoadingType {
-    /// Initial corpus heartbeat check
-    Heartbeat,
-    /// Corpus scan in progress
-    CorpusScan,
-    /// Legacy library scan
-    LegacyScan,
-    /// General operation with custom message
-    Operation(String),
-}
-
-impl LoadingType {
-    /// Get the display message for this loading type
-    pub fn message(&self) -> &str {
-        match self {
-            LoadingType::Heartbeat => "Checking corpus health...",
-            LoadingType::CorpusScan => "Scanning corpus...",
-            LoadingType::LegacyScan => "Scanning legacy library...",
-            LoadingType::Operation(msg) => msg,
-        }
-    }
-}
-
-/// State for the loading splash screen
-#[derive(Debug, Clone)]
-pub(crate) struct LoadingSplashState {
-    /// Type of loading operation
-    pub loading_type: LoadingType,
-    /// Optional progress (0.0 to 1.0)
-    pub progress: Option<f32>,
-    /// Optional progress detail (e.g., "1234 / 5678 files")
-    pub progress_detail: Option<String>,
-    /// Mode to transition to when loading completes
-    pub target_mode: UiMode,
-}
-
-impl LoadingSplashState {
-    /// Create a new loading splash for heartbeat
-    pub fn heartbeat() -> Self {
-        Self {
-            loading_type: LoadingType::Heartbeat,
-            progress: None,
-            progress_detail: None,
-            target_mode: UiMode::Insights,
-        }
-    }
-
-    /// Create a loading splash for a scan operation
-    pub fn scan(is_corpus: bool) -> Self {
-        Self {
-            loading_type: if is_corpus {
-                LoadingType::CorpusScan
-            } else {
-                LoadingType::LegacyScan
-            },
-            progress: None,
-            progress_detail: None,
-            target_mode: UiMode::Insights,
-        }
-    }
-
-    /// Update progress
-    pub fn set_progress(&mut self, completed: usize, total: usize) {
-        if total > 0 {
-            self.progress = Some(completed as f32 / total as f32);
-            self.progress_detail = Some(format!("{} / {} files", completed, total));
-        }
-    }
-}
+// LoadingType and SplashScreen are now in splash_screen module
 
 /// Accumulated changes for a single deploy conflict group
 #[derive(Debug, Clone)]
@@ -249,8 +180,8 @@ pub(crate) struct App {
     directory_tag_editor_modal: Option<tag_editor::types::DirectoryTagEditorModal>,
     // Exit confirmation modal
     exit_confirm_modal_state: Option<ExitConfirmModalState>,
-    // Loading splash screen
-    loading_splash_state: Option<LoadingSplashState>,
+    // Startup splash screen
+    splash_screen: Option<splash_screen::SplashScreen>,
     // Deploy conflict resolution flow
     deploy_conflict_review: Option<DeployConflictReviewState>,
     deploy_conflict_accumulated: Vec<DeployConflictGroupChanges>,
@@ -262,12 +193,6 @@ pub(crate) struct App {
 
     // Task daemon for mutation execution
     task_daemon: Option<crate::flows::TaskDaemon>,
-
-    // Startup heartbeat
-    heartbeat_result: Option<HeartbeatResult>,
-    heartbeat_receiver: Option<mpsc::Receiver<HeartbeatResult>>,
-    /// Last heartbeat roll result (Normal vs Expensive)
-    last_heartbeat_roll: Option<HeartbeatRollResult>,
 
     // Tag cloud for canonicalization detection (cached, invalidated after mutations)
     tag_cloud: Option<crate::corpus::health::TagCloud>,
@@ -300,15 +225,12 @@ impl App {
             directory_tag_editor: None,
             directory_tag_editor_modal: None,
             exit_confirm_modal_state: None,
-            loading_splash_state: None,
+            splash_screen: None,
             deploy_conflict_review: None,
             deploy_conflict_accumulated: Vec::new(),
             insights_view: None,
             background_tasks: Vec::new(),
             task_daemon: None,
-            heartbeat_result: None,
-            heartbeat_receiver: None,
-            last_heartbeat_roll: None,
             tag_cloud: None,
             tag_cloud_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
@@ -439,12 +361,13 @@ impl App {
         }
     }
 
-    /// Check if there are any pending operations (heartbeat, background tasks, etc.)
+    /// Check if there are any pending operations (daemon work, background tasks, etc.)
     fn has_pending_operations(&self) -> bool {
-        self.heartbeat_receiver.is_some() || !self.background_tasks.is_empty()
+        let daemon_busy = self.task_daemon.as_ref().map(|d| d.has_pending()).unwrap_or(false);
+        daemon_busy || !self.background_tasks.is_empty()
     }
 
-    /// Start the insights view with current heartbeat data.
+    /// Start the insights view.
     ///
     /// Initializes the view with one-dim insights computed immediately,
     /// spawns background computation for multi-dim insights.
@@ -465,18 +388,9 @@ impl App {
             }
         };
 
-        // Get current heartbeat result (must have completed at least one)
-        let heartbeat = match &self.heartbeat_result {
-            Some(h) => h.clone(),
-            None => {
-                self.status_message = Some("Heartbeat not yet completed - please wait".to_string());
-                return;
-            }
-        };
-
-        // Initialize insights view
+        // Initialize insights view (queries health_issues table directly)
         let mut view = insights_view::InsightsViewState::new();
-        view.initialize(&db, db_path.to_str().unwrap_or(""), heartbeat);
+        view.initialize(&db, db_path.to_str().unwrap_or(""));
 
         self.insights_view = Some(view);
         self.mode = UiMode::Insights;
@@ -1121,10 +1035,17 @@ impl App {
             .collect();
 
         let mutation_count = mutations.len();
-        self.daemon().queue_all(mutations);
+
+        // TODO: Reconnect via DecisionWitness when UI integration is complete.
+        // Tag editor saves are user-led decisions and need:
+        //   let witness = crate::daemon::confirm_decision();
+        //   self.daemon().queue_all_with_label(mutations, Some("Tag edits".to_string()), &witness);
+        let _ = mutations;
+        todo!("Reconnect: Tag editor save needs DecisionWitness");
 
         // Status message - execution is now async
-        self.status_message = Some(format!("Queued {} tag edit(s)", mutation_count));
+        #[allow(unreachable_code)]
+        { self.status_message = Some(format!("Queued {} tag edit(s)", mutation_count)); }
 
         if advance_to_next {
             // Move to next duplicate group if in duplicate workflow
@@ -1234,12 +1155,20 @@ impl App {
                         .collect();
 
                     let mutation_count = mutations.len();
-                    self.daemon().queue_all(mutations);
+                    let label = format!("Deploy to {}", library_display);
 
-                    self.status_message = Some(format!(
+                    // TODO: Reconnect via DecisionWitness when UI integration is complete.
+                    // Deployment confirms are user-led decisions and need:
+                    //   let witness = crate::daemon::confirm_decision();
+                    //   self.daemon().queue_all_with_label(mutations, Some(label), &witness);
+                    let _ = (mutations, label);
+                    todo!("Reconnect: Deployment confirm needs DecisionWitness");
+
+                    #[allow(unreachable_code)]
+                    { self.status_message = Some(format!(
                         "Queued {} deployment operations to {}",
                         mutation_count, library_display
-                    ));
+                    )); }
                 }
                 // Return to main menu immediately - deployment runs in background
                 self.deployment_preview = None;
@@ -1299,9 +1228,9 @@ impl App {
             });
         }
 
-        // Poll task daemon
+        // Tick task daemon (advance internal processing)
         if let Some(ref mut daemon) = self.task_daemon {
-            let status = daemon.poll();
+            let status = daemon.tick();
             if status.completed > 0 || status.failed > 0 {
                 self.invalidate_tag_cloud();
                 if status.failed > 0 {
@@ -1323,57 +1252,42 @@ impl App {
     }
 
     /// Queue mutations to the task daemon.
+    ///
+    /// Requires a DecisionWitness - mutations must come from user-led decisions.
     #[allow(dead_code)]
-    fn queue_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>) {
-        self.daemon().queue_all(mutations);
+    fn queue_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, witness: &crate::daemon::DecisionWitness) {
+        self.daemon().queue_all(mutations, witness);
     }
 
-    /// Check for heartbeat completion
-    fn update_heartbeat(&mut self) {
-        if let Some(ref rx) = self.heartbeat_receiver {
-            if let Ok(result) = rx.try_recv() {
-                self.heartbeat_result = Some(result.clone());
-                self.heartbeat_receiver = None;
-                self.eye.set_heartbeat_pending(false);
+    /// Tick the splash screen and check for completion.
+    ///
+    /// Called each frame while splash_screen is Some. When daemon eye state
+    /// becomes Awake (eyeballing complete), transitions to Insights view.
+    fn tick_splash_screen(&mut self) {
+        // Take splash_screen temporarily to avoid borrow conflicts
+        let mut splash = match self.splash_screen.take() {
+            Some(s) => s,
+            None => return,
+        };
 
-                // Transition from loading splash to target mode
-                if self.mode == UiMode::LoadingSplash {
-                    if let Some(ref splash) = self.loading_splash_state {
-                        let target = splash.target_mode;
-                        self.loading_splash_state = None;
-                        self.mode = target;
-                    }
-                    // Initialize insights view with heartbeat data
-                    self.initialize_insights_with_heartbeat(result);
-                } else if self.mode == UiMode::Insights && self.insights_view.is_none() {
-                    // If we're already in Insights mode and view not yet initialized
-                    self.initialize_insights_with_heartbeat(result);
-                }
-            }
+        // Tick splash screen - it checks daemon.eye_state() for completion
+        let completed = splash.tick(self.daemon());
+        if completed {
+            let status = self.daemon().status();
+            let _ = config::log_message(&format!(
+                "Startup eyeballing complete: {} processed",
+                status.total_processed
+            ));
         }
-    }
 
-    /// Initialize insights view with a completed heartbeat result
-    fn initialize_insights_with_heartbeat(&mut self, heartbeat: HeartbeatResult) {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
-
-        let mut view = insights_view::InsightsViewState::new();
-        view.initialize(&db, db_path.to_str().unwrap_or(""), heartbeat);
-        self.insights_view = Some(view);
+        // Put it back or transition
+        if splash.is_complete() {
+            // Don't put it back - transition to Insights
+            self.mode = UiMode::Insights;
+            self.start_insights_view();
+        } else {
+            self.splash_screen = Some(splash);
+        }
     }
 
     // ========================================================================
@@ -1594,31 +1508,17 @@ impl App {
         let mut success_count = 0;
         let mut error_count = 0;
 
-        for file in &editor.files {
-            // Build the new tags for this file
-            let mut new_tags: Vec<(String, String)> = Vec::new();
-
-            for change in &changes {
-                new_tags.push((change.field_name.clone(), change.new_value.clone()));
-            }
-
-            // Write the tags (track_id=0 and empty session skips DB updates)
-            if let Err(e) = metadata::write_tags(&file.path, &new_tags, 0, "") {
-                let _ = crate::config::log_message(&format!(
-                    "Error writing tags to {}: {}",
-                    file.path.display(),
-                    e
-                ));
-                error_count += 1;
-            } else {
-                success_count += 1;
-            }
-        }
-
-        self.status_message = Some(format!(
-            "Updated {} files ({} errors)",
-            success_count, error_count
-        ));
+        // TODO: This bypasses the mutation system. Directory tag editor saves should
+        // queue TagEditAndFlush mutations to TaskDaemon instead of calling write_tags directly.
+        // See docs/MUTATION_CLEANUP.md for the refactor plan.
+        //
+        // The directory tag editor needs to:
+        // 1. Look up track_id for each file from the database
+        // 2. Create TagEditAndFlush mutations for each file
+        // 3. Queue them to TaskDaemon
+        // 4. Show progress/results from daemon status
+        let _ = (success_count, error_count, &editor.files, &changes);
+        todo!("Refactor: Queue TagEditAndFlush mutations to TaskDaemon");
 
         if switch_to_next {
             if let Some(ref editor) = self.directory_tag_editor {
@@ -1779,20 +1679,18 @@ fn render(f: &mut Frame, app: &mut App) {
         directory_tag_editor: app.directory_tag_editor.as_mut(),
         directory_tag_editor_modal: app.directory_tag_editor_modal.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
-        loading_splash_state: app.loading_splash_state.as_ref(),
+        splash_screen: app.splash_screen.as_ref(),
         deploy_conflict_review: app.deploy_conflict_review.as_ref(),
         insights_view: app.insights_view.as_mut(),
-        heartbeat_result: app.heartbeat_result.as_ref(),
-        heartbeat_pending: app.heartbeat_receiver.is_some(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,
         background_tasks: &app.background_tasks,
-        daemon_status: app.task_daemon.as_ref().and_then(|d| {
-            if d.has_pending() {
-                Some(crate::flows::DaemonStatus {
-                    pending: 1, // We only know there's work, not how much
-                    ..Default::default()
-                })
+        daemon_status: app.task_daemon.as_mut().and_then(|d| {
+            // Tick to advance daemon and get current status (including lingering completed sessions)
+            let status = d.tick();
+            // Show if there's pending work OR a lingering completed session
+            if status.pending > 0 || status.completed_session.is_some() {
+                Some(status)
             } else {
                 None
             }
@@ -2048,17 +1946,22 @@ pub fn run_menu(config: Config) -> Result<()> {
     // Check health data version and trigger rebuild if needed
     check_and_maybe_rebuild_health(&mut app);
 
-    // Spawn heartbeat check if enabled
-    // On first-time startup (empty corpus), heartbeat will detect all files as new
-    // and create MissingFromIndex signals for them
-    if app.config.opinions.startup.heartbeat_on_startup {
-        let rx = spawn_heartbeat(&app.config);
-        app.heartbeat_receiver = Some(rx);
-        app.eye.set_heartbeat_pending(true);
-        // Show loading splash while waiting for heartbeat
-        app.loading_splash_state = Some(LoadingSplashState::heartbeat());
-        app.mode = UiMode::LoadingSplash;
+    // Eyeballing ALWAYS runs at startup (only paranoid mode is configurable)
+    // Create splash screen and queue initial eyeballing via daemon
+    let splash = splash_screen::SplashScreen::new();
+    let corpus_root = app.config.corpus_root.clone();
+    let legacy_library = app.config.legacy_library.clone();
+    let paranoid = app.config.opinions.startup.paranoid_tag_verification;
+
+    // Start eyeballing via daemon - this sets observation_state and queues work
+    if paranoid {
+        app.daemon().start_paranoid_eyeball(&corpus_root, legacy_library.as_deref());
+    } else {
+        app.daemon().start_lazy_eyeball(&corpus_root, legacy_library.as_deref());
     }
+
+    app.splash_screen = Some(splash);
+    app.mode = UiMode::LoadingSplash;
 
     let res = run_app(&mut terminal, &mut app);
 
@@ -2082,24 +1985,19 @@ fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
 ) -> io::Result<()> {
     loop {
-        app.eye.update();
+        // Update eye animation - only animate when daemon eye is Awake
+        let can_animate = app.daemon().eye_state() == crate::daemon::EyeState::Awake;
+        app.eye.update(can_animate);
         app.update_operation_progress();
-        app.update_heartbeat();
         app.update_tag_cloud();
         app.update_directory_tag_editor();
 
-        // Check if eye blink triggered a heartbeat (d20 >= 13)
-        if let Some(roll_result) = app.eye.take_heartbeat_trigger() {
-            if app.heartbeat_receiver.is_none() {
-                // Both Normal (14-20) and Expensive (13) trigger heartbeat
-                // Expensive roll result can also run cleanup operations after heartbeat
-                let rx = spawn_heartbeat(&app.config);
-                app.heartbeat_receiver = Some(rx);
-                app.eye.set_heartbeat_pending(true);
+        // Always tick daemon (advances work state, handles eyeballing completion)
+        app.daemon().tick();
 
-                // Store roll result for potential expensive operations after heartbeat
-                app.last_heartbeat_roll = Some(roll_result);
-            }
+        // Tick splash screen if active (startup eyeballing)
+        if app.splash_screen.is_some() {
+            app.tick_splash_screen();
         }
 
         terminal.draw(|f| render(f, app))?;

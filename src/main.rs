@@ -22,6 +22,7 @@ pub const MLA_TITLE: &str = "Music Library Assistant (mla alpha 4)";
 
 mod config;
 mod corpus;
+mod daemon;
 mod flows;
 mod ui;
 

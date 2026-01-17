@@ -13,7 +13,6 @@ use ratatui::{
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::corpus::HeartbeatResult;
 use crate::ui::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use crate::ui::helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
 
@@ -46,8 +45,6 @@ pub struct MtimeStats {
 
 /// Context for rendering the footer
 pub struct FooterContext<'a> {
-    pub heartbeat_result: Option<&'a HeartbeatResult>,
-    pub heartbeat_pending: bool,
     pub operations: Vec<OperationDisplay>,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
     pub eye: &'a EyeAnimation,
@@ -84,68 +81,12 @@ pub fn render_footer(f: &mut Frame, area: Rect, ctx: &FooterContext) {
 }
 
 /// Render corpus health status panel
-fn render_corpus_status(f: &mut Frame, area: Rect, ctx: &FooterContext) {
-    let mut lines = Vec::new();
-
-    // Show heartbeat status
-    if let Some(ref hb) = ctx.heartbeat_result {
-        // Track count from heartbeat
-        if hb.indexed_count > 0 {
-            lines.push(Line::from(format!("Indexed: {} tracks", hb.indexed_count)));
-        }
-
-        if hb.is_corpus_healthy() {
-            lines.push(
-                Line::from(format!("Validated ({:.0}ms)", hb.duration.as_millis()))
-                    .style(Style::default().fg(Color::Green)),
-            );
-        } else {
-            if hb.missing_from_disk > 0 {
-                lines.push(
-                    Line::from(format!("{} missing", hb.missing_from_disk))
-                        .style(Style::default().fg(Color::Yellow)),
-                );
-            }
-            if hb.new_on_disk > 0 {
-                lines.push(
-                    Line::from(format!("{} new files", hb.new_on_disk))
-                        .style(Style::default().fg(Color::Cyan)),
-                );
-            }
-        }
-
-        // Deployment status from library health
-        if !hb.library_health.is_empty() {
-            let total_healthy: usize = hb.library_health.iter().map(|l| l.healthy).sum();
-            let total_not_deployed: usize = hb.library_health.iter().map(|l| l.not_deployed).sum();
-            let total_stale: usize = hb.library_health.iter().map(|l| l.stale).sum();
-            let total_orphans: usize = hb.library_health.iter().map(|l| l.orphans).sum();
-            let total_files = total_healthy + total_not_deployed;
-            let total_issues = total_not_deployed + total_stale + total_orphans;
-
-            if total_files > 0 {
-                let deploy_text = format!("{}/{} deployed", total_healthy, total_files);
-                if total_issues > 0 {
-                    lines.push(
-                        Line::from(format!("{} ({} issues)", deploy_text, total_issues))
-                            .style(Style::default().fg(Color::Yellow)),
-                    );
-                } else {
-                    lines.push(
-                        Line::from(deploy_text)
-                            .style(Style::default().fg(Color::Green)),
-                    );
-                }
-            }
-        }
-    } else if ctx.heartbeat_pending {
-        lines.push(Line::from("Validating...").style(Style::default().fg(Color::DarkGray)));
-    } else {
-        lines.push(
-            Line::from("No scan data")
-                .style(Style::default().fg(Color::Yellow)),
-        );
-    }
+fn render_corpus_status(f: &mut Frame, area: Rect, _ctx: &FooterContext) {
+    // TODO: Corpus status should show health_issues summary from eyeballing
+    let lines = vec![
+        Line::from("No observation data")
+            .style(Style::default().fg(Color::DarkGray)),
+    ];
 
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title("Corpus"));

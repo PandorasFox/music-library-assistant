@@ -1,44 +1,29 @@
 //! Corpus Mutations Module
 //!
 //! Provides a standardized interface for all corpus-mutating operations.
-//! All mutations are resolved to single file/track level work units.
+//! All mutations are resolved to single file/track level.
 //!
 //! ## Architecture
 //!
+//! Mutations are executed through the TaskDaemon:
+//!
 //! ```text
-//! MutationDispatcher (high-level interface)
+//! UI Decision (with DecisionWitness)
 //!     │
-//!     ├── create_tag_edits()      → Vec<Mutation>
-//!     ├── create_bulk_tag_fill()  → Vec<Mutation>
-//!     └── execute_sync() / execute_with_progress()
-//!             │
-//!             ▼
-//!         BulkExecutor
-//!             │
-//!             ├── group_by_file()  → Vec<WorkUnit>
-//!             ├── execute_work_unit() (parallel via rayon)
-//!             │       ├── tag_edit::execute_batch()
-//!             │       ├── indexing::execute_index_track()
-//!             │       └── file_ops::execute_move() / etc.
-//!             └── progress reporting via mpsc
+//!     ▼
+//! TaskDaemon.queue_mutations()
+//!     │
+//!     ▼
+//! Parallel Worker executes:
+//!     ├── tag_edit::execute_single()
+//!     ├── indexing::execute_single()
+//!     └── file_ops::execute_single()
 //! ```
 //!
-//! ## Usage
+//! ## Grouping (future)
 //!
-//! ```rust,ignore
-//! use corpus::mutations::{MutationDispatcher, Mutation};
-//!
-//! let dispatcher = MutationDispatcher::new(db.clone());
-//!
-//! // Create mutations
-//! let mutations = dispatcher.create_bulk_tag_fill(&files, "album_artist", "Various Artists");
-//!
-//! // Execute synchronously
-//! let result = dispatcher.execute_sync(mutations);
-//!
-//! // Or with progress reporting
-//! let (rx, cancel, handle) = dispatcher.execute_with_progress(mutations);
-//! ```
+//! The `grouping` module provides utilities for batching mutations
+//! by file path, which will be used for optimizing execution.
 
 mod types;
 mod grouping;
@@ -46,227 +31,59 @@ mod migration;
 pub mod tag_edit;
 pub mod indexing;
 pub mod file_ops;
-pub mod executor;
 
 pub use types::*;
+pub use grouping::{group_by_file, sort_work_units};
 pub use migration::MigrationRegistry;
 
-use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc;
-use std::sync::Arc;
-
-use crate::corpus::db::Database;
-
-/// High-level interface for dispatching mutations.
+/// Access control for corpus-mutating operations.
 ///
-/// This is the primary API for code that needs to execute mutations.
-/// It provides helper methods for common operations and manages
-/// the bulk executor.
-pub struct MutationDispatcher {
-    db: Arc<Database>,
+/// # Design Pattern: Witness Token
+///
+/// `MutationToken` is a zero-sized proof that code is executing within a mutation
+/// executor. Functions that mutate the corpus (write tags to files, move files, etc.)
+/// require this token as a parameter.
+///
+/// The token can ONLY be constructed within the `mutations` module (via `pub(in ...)`).
+/// External code (ui/, flows/) cannot create a token, so they cannot call protected
+/// functions directly - they MUST go through the mutation system.
+///
+/// This transforms the runtime invariant "only call corpus-mutating functions from
+/// mutation executors" into a compile-time guarantee that is impossible to violate.
+///
+/// ## Benefits
+///
+/// 1. **Impossible to bypass** - External code cannot compile if it tries to call protected functions
+/// 2. **Self-documenting** - The token parameter clearly indicates authorization is required
+/// 3. **Zero runtime cost** - ZST compiles away completely
+/// 4. **Auditable** - Easy to grep for which functions require the token
+pub mod sealed {
+    /// A zero-sized token proving code is executing within a mutation executor.
+    ///
+    /// Cannot be constructed outside the `mutations` module.
+    #[derive(Clone, Copy)]
+    pub struct MutationToken(());
+
+    impl MutationToken {
+        /// Create a new mutation token.
+        ///
+        /// This is only callable from within the `corpus::mutations` module hierarchy.
+        pub(in crate::corpus::mutations) fn new() -> Self {
+            Self(())
+        }
+    }
 }
 
-impl MutationDispatcher {
-    /// Create a new MutationDispatcher with the given database connection.
-    pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
-    }
-
-    /// Execute mutations synchronously (blocking).
-    ///
-    /// Returns the execution result once all mutations are complete.
-    /// Uses BulkExecutor for efficient parallel + serial execution.
-    pub fn execute_sync(&self, mutations: Vec<Mutation>) -> ExecutionResult {
-        if mutations.is_empty() {
-            return ExecutionResult::empty();
-        }
-
-        executor::BulkExecutor::new(Arc::clone(&self.db))
-            .execute(mutations)
-    }
-
-    /// Execute mutations with progress reporting via callback.
-    ///
-    /// This executes synchronously but sends progress updates to the provided channel.
-    /// For true async execution, use the BulkExecutor directly (Phase 7).
-    pub fn execute_with_progress_sync(
-        &self,
-        mutations: Vec<Mutation>,
-        progress_tx: mpsc::Sender<ExecutionProgress>,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> ExecutionResult {
-        let total = mutations.len();
-
-        // Send initial progress
-        let _ = progress_tx.send(ExecutionProgress {
-            completed: 0,
-            total,
-            current_file: None,
-            errors: vec![],
-        });
-
-        let start = std::time::Instant::now();
-        let mut succeeded = 0;
-        let mut results = Vec::new();
-        let mut errors = Vec::new();
-
-        for (i, mutation) in mutations.into_iter().enumerate() {
-            if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
-
-            let current_file = mutation.primary_path().map(|p| p.display().to_string());
-
-            let result = self.execute_single(&mutation);
-            if result.success {
-                succeeded += 1;
-            } else if let Some(ref e) = result.error {
-                errors.push(e.clone());
-            }
-            results.push(result);
-
-            // Send progress update
-            let _ = progress_tx.send(ExecutionProgress {
-                completed: i + 1,
-                total,
-                current_file,
-                errors: errors.clone(),
-            });
-        }
-
-        ExecutionResult {
-            total: results.len(),
-            succeeded,
-            failed: results.len() - succeeded,
-            results,
-            duration_ms: start.elapsed().as_millis() as u64,
-        }
-    }
-
-    /// Execute a single mutation (internal helper).
-    fn execute_single(&self, mutation: &Mutation) -> MutationResult {
-        // Delegate to appropriate executor based on mutation category
-        match mutation.category() {
-            MutationCategory::TagEdit => {
-                // Tag edits require session ID for audit trail
-                let session_id = format!("session_{}", std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis());
-                tag_edit::execute_single(&self.db, mutation, &session_id)
-            }
-            MutationCategory::Indexing => {
-                indexing::execute_single(&self.db, mutation)
-            }
-            MutationCategory::FileMove | MutationCategory::FileCopy |
-            MutationCategory::FileDelete | MutationCategory::Deployment => {
-                file_ops::execute_single(Some(&self.db), mutation)
-            }
-            MutationCategory::Migration => {
-                let start = std::time::Instant::now();
-                let (success, error) = if let Mutation::DbMigration { migration_id, .. } = mutation {
-                    match MigrationRegistry::new().apply_migration(&self.db, *migration_id) {
-                        Ok(()) => (true, None),
-                        Err(e) => (false, Some(e.to_string())),
-                    }
-                } else {
-                    (false, Some("Invalid mutation for Migration category".to_string()))
-                };
-                MutationResult {
-                    mutation: mutation.clone(),
-                    success,
-                    error,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                }
-            }
-        }
-    }
-
-    /// Create tag edit mutations from a list of edits.
-    ///
-    /// Each edit is a tuple of (tag_name, old_value, new_value).
-    pub fn create_tag_edits(
-        &self,
-        track_id: i64,
-        path: &std::path::Path,
-        edits: Vec<(String, Option<String>, Option<String>)>,
-    ) -> Vec<Mutation> {
-        let tag_edits: Vec<TagEdit> = edits
-            .into_iter()
-            .map(|(name, old, new)| TagEdit {
-                tag_name: name,
-                old_value: old,
-                new_value: new,
-            })
-            .collect();
-
-        vec![Mutation::TagEditAndFlush {
-            track_id,
-            path: path.to_path_buf(),
-            edits: tag_edits,
-        }]
-    }
-
-    /// Create bulk tag fill mutations (same value to multiple files).
-    ///
-    /// This is used for operations like filling album_artist across a directory.
-    pub fn create_bulk_tag_fill(
-        &self,
-        files: &[(i64, PathBuf)],
-        tag_name: &str,
-        value: &str,
-    ) -> Vec<Mutation> {
-        files
-            .iter()
-            .map(|(track_id, path)| Mutation::TagEditAndFlush {
-                track_id: *track_id,
-                path: path.clone(),
-                edits: vec![TagEdit {
-                    tag_name: tag_name.to_string(),
-                    old_value: None, // Not tracked for bulk operations
-                    new_value: Some(value.to_string()),
-                }],
-            })
-            .collect()
-    }
-
-    /// Create index track mutations from extracted metadata.
-    pub fn create_index_mutations(
-        &self,
-        source: &str,
-        files: Vec<(PathBuf, ExtractedMetadata, u64, i64, i64)>, // (path, metadata, inode, mtime_secs, mtime_nanos)
-    ) -> Vec<Mutation> {
-        let mut mutations = Vec::new();
-
-        for (path, metadata, inode, mtime_secs, mtime_nanos) in files {
-            mutations.push(Mutation::IndexTrack {
-                path: path.clone(),
-                source: source.to_string(),
-                metadata,
-            });
-
-            mutations.push(Mutation::UpdateScanState {
-                source: source.to_string(),
-                inode,
-                mtime_secs,
-                mtime_nanos,
-                file_size: 0, // TODO: Get from metadata
-                path,
-            });
-        }
-
-        mutations
-    }
-}
+pub use sealed::MutationToken;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_create_bulk_tag_fill() {
-        // This test requires a database, so we just test the mutation creation logic
+        // Test the mutation creation structure
         let files = vec![
             (1i64, PathBuf::from("/test/a.flac")),
             (2i64, PathBuf::from("/test/b.flac")),

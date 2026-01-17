@@ -3,39 +3,58 @@
 //! Insights are real-time computed views that aggregate signals into
 //! actionable recommendations. They are never stored - always fresh.
 //!
-//! ## Architecture
+//! ## One-Dimensional Insights
 //!
-//! ```text
-//! HeartbeatResult + health_issues DB
-//!         │
-//!         ▼
-//! ┌───────────────────────┐
-//! │  InsightComputer      │
-//! │  • compute_one_dim()  │  ← immediate, from cached signals
-//! │  • spawn_multi_dim()  │  ← background, correlates signals
-//! └───────────────────────┘
-//!         │
-//!         ▼
-//!    Vec<Insight>
-//!         │
-//!         ▼
-//!    UI renders list
-//! ```
+//! Single signal type aggregation. Cheap, immediate computation.
+//! Examples: deployment conflicts count, missing tags count
 //!
-//! ## One-Dimensional vs Multi-Dimensional
+//! ## Multi-Dimensional Insights
 //!
-//! - **One-Dim**: Single signal type aggregation. Cheap, immediate.
-//!   Examples: deployment conflicts count, missing tags count
-//!
-//! - **Multi-Dim**: Correlates multiple signal types in Rust.
-//!   Spawned as background operations with progress tracking.
-//!   Examples: quality duplicates (fingerprint dupes × quality variants)
+//! TODO: Multi-dim insights will be reimplemented via TaskDaemon Computations.
+//! Currently stubbed out.
 
-mod multi_dim;
 mod one_dim;
 
-pub use multi_dim::{spawn_multi_dim_insight, InsightHandle, MultiDimInsightType};
 pub use one_dim::compute_one_dim_insights;
+
+// =============================================================================
+// Multi-Dim Stubs (to be reimplemented via TaskDaemon)
+// =============================================================================
+
+/// Types of multi-dimensional insights (stub).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiDimInsightType {
+    /// Fingerprint duplicates with quality comparison
+    QualityDuplicates,
+}
+
+/// Handle for tracking a multi-dim computation (stub).
+pub struct InsightHandle {
+    _private: (),
+}
+
+impl InsightHandle {
+    /// Try to receive a message (always returns None - stub).
+    pub fn try_recv(&self) -> Option<InsightMessage> {
+        None
+    }
+}
+
+/// Messages from multi-dim computation (stub).
+#[derive(Debug, Clone)]
+pub enum InsightMessage {
+    /// Progress update
+    Progress(f32),
+    /// Computation complete
+    Complete(Insight),
+    /// Computation failed
+    Error(String),
+}
+
+/// Spawn a multi-dim insight computation (stub - does nothing).
+pub fn spawn_multi_dim_insight(_db_path: &str, _insight_type: MultiDimInsightType) -> InsightHandle {
+    InsightHandle { _private: () }
+}
 
 /// Stub - flows don't exist yet.
 ///

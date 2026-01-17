@@ -238,41 +238,7 @@ pub fn is_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Generate orphan cleanup decisions
-pub fn generate_orphan_cleanup_decisions(
-    orphans: &[OrphanFile],
-    library_name: &str,
-    stash_root: &Path,
-) -> Vec<crate::flows::PendingDecision> {
-    use crate::flows::{DecisionType, PendingDecision};
-
-    orphans
-        .iter()
-        .map(|orphan| {
-            // Compute stash target path
-            let relative = orphan
-                .library_path
-                .file_name()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("unknown"));
-            let target_path = stash_root.join(library_name).join(relative);
-
-            PendingDecision {
-                decision_type: DecisionType::Undeploy,
-                source_path: orphan.library_path.to_string_lossy().to_string(),
-                target_path: Some(target_path.to_string_lossy().to_string()),
-                metadata: Some(
-                    serde_json::json!({
-                        "library": library_name,
-                        "reason": "orphan_cleanup",
-                        "original_inode": orphan.inode,
-                    })
-                    .to_string(),
-                ),
-            }
-        })
-        .collect()
-}
+// TODO: generate_orphan_cleanup_decisions removed - needs reimplementation with Mutation system
 
 #[cfg(test)]
 mod tests {

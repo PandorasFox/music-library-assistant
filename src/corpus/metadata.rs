@@ -485,13 +485,19 @@ pub fn read_all_tags(path: &Path) -> Result<Vec<(String, String)>> {
     Ok(all_tags)
 }
 
-/// Write tags to an audio file using lofty
-/// Updates: file tags -> tag_edit_history -> database
-pub fn write_tags(
+/// Write tags to an audio file using lofty.
+///
+/// This function ONLY writes to disk. It does NOT update the database.
+/// Database updates are the responsibility of the mutation executor that calls this.
+///
+/// # Authorization
+///
+/// Requires a `MutationToken` to prove the caller is executing within a mutation context.
+/// This prevents external code from bypassing the mutation system.
+pub fn write_tags_to_file(
     path: &Path,
     tags: &[(String, String)],
-    track_id: i64,
-    session_id: &str,
+    _token: &crate::corpus::mutations::MutationToken,
 ) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::{AudioFile, TaggedFileExt};
@@ -573,63 +579,6 @@ pub fn write_tags(
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
 
-    // 2. Write to tag_edit_history table
-    if let Ok(db_path) = crate::config::get_db_path() {
-        if let Ok(db) = crate::corpus::db::Database::open(&db_path) {
-            // Write history entries for each tag change
-            for (field_name, new_value) in tags {
-                let _ = db.log_tag_edit(track_id, field_name, None, Some(new_value), session_id);
-            }
-        }
-    }
-
-    // 3. Update database (last, as it can be rebuilt with scan)
-    if let Ok(db_path) = crate::config::get_db_path() {
-        if let Ok(db) = crate::corpus::db::Database::open(&db_path) {
-            // Update the tracks table with new tag values
-            for (field_name, new_value) in tags {
-                let _ = db.update_track_tag(track_id, field_name, new_value);
-            }
-        }
-    }
-
     Ok(())
 }
 
-/// Write only the artist tag to an audio file
-/// Simplified wrapper for canon flow tag flushing
-pub fn write_artist_tag(path: &str, new_artist: &str) -> Result<()> {
-    use lofty::config::WriteOptions;
-    use lofty::file::{AudioFile, TaggedFileExt};
-    use lofty::probe::Probe;
-    use lofty::tag::{Accessor, Tag};
-
-    let path = Path::new(path);
-
-    let mut tagged_file = Probe::open(path)
-        .with_context(|| format!("Failed to open file for tag writing: {}", path.display()))?
-        .read()
-        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
-
-    let tag_type = tagged_file.primary_tag_type();
-
-    // Get or create primary tag
-    let tag = match tagged_file.primary_tag_mut() {
-        Some(t) => t,
-        None => {
-            let new_tag = Tag::new(tag_type);
-            tagged_file.insert_tag(new_tag);
-            tagged_file.primary_tag_mut().unwrap()
-        }
-    };
-
-    // Update only the artist field, preserving other tags
-    tag.set_artist(new_artist.to_string());
-
-    // Save to file
-    tagged_file
-        .save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("Failed to save artist tag to file: {}", path.display()))?;
-
-    Ok(())
-}

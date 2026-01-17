@@ -11,6 +11,7 @@ use std::path::Path;
 use crate::corpus::db::Database;
 use crate::corpus::metadata;
 
+use super::sealed::MutationToken;
 use super::types::{Mutation, MutationResult, TagEdit, WorkUnit};
 
 /// Execute a batch of tag mutations for a single file (work unit).
@@ -104,13 +105,18 @@ fn execute_disk_only(path: &Path, tags: &[(String, String)]) -> Result<()> {
 }
 
 /// Execute a combined tag edit (database + disk).
+///
+/// This is the proper mutation path: disk write + explicit DB update.
 fn execute_combined(
-    _db: &Database, // Currently unused as write_tags opens its own connection
+    db: &Database,
     track_id: i64,
     path: &Path,
     edits: &[TagEdit],
     session_id: &str,
 ) -> Result<()> {
+    // Create token - only possible within mutations module
+    let token = MutationToken::new();
+
     // 1. Read existing tags from disk
     let existing = metadata::read_all_tags(path).unwrap_or_default();
     let mut tag_map: std::collections::HashMap<String, String> = existing.into_iter().collect();
@@ -125,13 +131,29 @@ fn execute_combined(
         }
     }
 
-    // 3. Write to disk
+    // 3. Write to disk (requires token proof)
     let final_tags: Vec<(String, String)> = tag_map.into_iter().collect();
-    metadata::write_tags(path, &final_tags, track_id, session_id)
+    metadata::write_tags_to_file(path, &final_tags, &token)
         .context("Failed to write tags to file")?;
 
-    // Note: write_tags already updates the database and logs history,
-    // so we don't need to do it again here.
+    // 4. Update database explicitly (now handled here, not in write_tags_to_file)
+    for edit in edits {
+        // Log to history
+        db.log_tag_edit(
+            track_id,
+            &edit.tag_name,
+            edit.old_value.as_deref(),
+            edit.new_value.as_deref(),
+            session_id,
+        )
+        .context("Failed to log tag edit")?;
+
+        // Update tracks table
+        if let Some(ref new_value) = edit.new_value {
+            db.update_track_tag(track_id, &edit.tag_name, new_value)
+                .context("Failed to update track tag in database")?;
+        }
+    }
 
     Ok(())
 }

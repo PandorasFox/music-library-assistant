@@ -15,7 +15,7 @@ use crate::corpus::db::types::TagCanonicalization;
 use crate::corpus::db::Database;
 
 /// Detect and store all canonicalization issues.
-/// Called during heartbeat or post-scan.
+/// Called during eyeballing or post-scan.
 /// Returns the count of new canonicalization entries added.
 pub fn detect_and_store_canonicalizations(db: &Database) -> Result<usize> {
     let cloud = TagCloud::build(db)?;

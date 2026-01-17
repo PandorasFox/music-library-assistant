@@ -1,6 +1,6 @@
 //! Tag Cloud: Cached corpus tag values for collision detection.
 //!
-//! The TagCloud is built once per operational flow (scan, heartbeat, triage)
+//! The TagCloud is built once per operational flow (scan, eyeballing, triage)
 //! and provides efficient collision detection without repeated database queries.
 
 use std::collections::HashMap;

@@ -173,7 +173,7 @@ impl Database {
         Ok(deleted)
     }
 
-    /// Get all indexed inodes for a source (used by heartbeat check)
+    /// Get all indexed inodes for a source (used by eyeballing)
     pub fn get_all_scan_state_inodes(&self, source: &str) -> Result<HashSet<i64>> {
         let mut stmt = self
             .conn

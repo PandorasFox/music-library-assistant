@@ -35,7 +35,6 @@ mod canonicalization;
 pub mod collision;
 mod detection;
 pub mod filter;
-mod heartbeat;
 pub mod insights;
 pub mod library;
 pub mod normalization;
@@ -50,16 +49,15 @@ pub use detection::{
 pub use filter::{
     durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks,
 };
-pub use heartbeat::{spawn_heartbeat, HeartbeatResult};
 #[allow(unused_imports)]
 pub use library::{
-    check_all_libraries_health, check_library_health, generate_orphan_cleanup_decisions,
-    LibraryHealthResult, OrphanFile, StaleDeployment,
+    check_all_libraries_health, check_library_health, LibraryHealthResult, OrphanFile,
+    StaleDeployment,
 };
 pub use tag_cloud::{spawn_tag_cloud_build, TagCloud};
 
 // Insights - computed views over signals
 pub use insights::{
-    compute_one_dim_insights, spawn_multi_dim_insight, FlowType, Insight, InsightSeverity,
-    MultiDimInsightType,
+    compute_one_dim_insights, spawn_multi_dim_insight, FlowType, Insight, InsightHandle,
+    InsightMessage, InsightSeverity, MultiDimInsightType,
 };

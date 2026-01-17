@@ -100,6 +100,26 @@ pub fn format_eta(seconds: u64) -> String {
     }
 }
 
+/// Format a Duration as a human-readable string.
+pub fn format_duration(duration: std::time::Duration) -> String {
+    let total_secs = duration.as_secs();
+    let millis = duration.subsec_millis();
+
+    if total_secs == 0 {
+        format!("{}ms", millis)
+    } else if total_secs < 60 {
+        format!("{}.{}s", total_secs, millis / 100)
+    } else if total_secs < 3600 {
+        let mins = total_secs / 60;
+        let secs = total_secs % 60;
+        format!("{}m {}s", mins, secs)
+    } else {
+        let hours = total_secs / 3600;
+        let mins = (total_secs % 3600) / 60;
+        format!("{}h {}m", hours, mins)
+    }
+}
+
 /// Calculate rolling average throughput in MiB/s from recent samples.
 ///
 /// Uses samples from the last `window_secs` seconds.

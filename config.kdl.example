@@ -36,3 +36,80 @@ deploy "physical/vinyls" {
 	library "music"
 }
 
+// ============================================================================
+// Opinions - Configure MLA's default behaviors
+// ============================================================================
+// All opinions have sensible defaults. Uncomment and modify as needed.
+
+opinions {
+    // -------------------------------------------------------------------------
+    // Startup Behavior
+    // -------------------------------------------------------------------------
+    startup {
+        // Run health check on startup (default: true)
+        // heartbeat-on-startup true
+
+        // Verify in-file tags match database at startup (default: true)
+        // This is "paranoid" mode - catches out-of-band tag edits by external tools
+        // Disable if startup is too slow with large libraries
+        // paranoid-tag-verification true
+    }
+
+    // -------------------------------------------------------------------------
+    // Fingerprint Matching - How to detect duplicate audio
+    // -------------------------------------------------------------------------
+    fingerprint-matching {
+        // Duration difference above this % = different track (default: 10.0)
+        // Higher values = more lenient matching
+        // duration-tolerance-percent 10.0
+
+        // Same directory + different track number = not duplicate (default: true)
+        // Prevents marking "Track 01" and "Track 02" from same album as dupes
+        // require-matching-track-number true
+
+        // Require matching album to be considered duplicate (default: false)
+        // Set to true if you want re-releases to be flagged separately
+        // require-matching-album false
+    }
+
+    // -------------------------------------------------------------------------
+    // Quality Resolution - Auto-resolve duplicate quality variants
+    // -------------------------------------------------------------------------
+    quality-resolution {
+        // FLAC beats MP3 automatically (default: true)
+        // When true, lossless formats auto-win over lossy
+        // auto-resolve-format-tier true
+
+        // Bitrate difference above this % = clear winner (default: 50.0)
+        // e.g., 320kbps vs 128kbps = 150% diff, clear winner
+        // bitrate-threshold-percent 50.0
+    }
+
+    // -------------------------------------------------------------------------
+    // Canonicalization - Tag normalization rules
+    // -------------------------------------------------------------------------
+    canonicalization {
+        // Case-insensitive matching (default: true)
+        // "the beatles" and "The Beatles" are considered the same
+        // case-insensitive true
+
+        // Strip parentheticals like "(Live)" or "(Remastered)" (default: false)
+        // strip-parentheticals false
+
+        // Fuzzy matching threshold 0.0-1.0 (default: 0.85)
+        // Higher = stricter matching, lower = more lenient
+        // fuzzy-threshold 0.85
+    }
+
+    // -------------------------------------------------------------------------
+    // Re-releases - Same audio appearing on different albums
+    // -------------------------------------------------------------------------
+    re-releases {
+        // How to handle same fingerprint on different albums
+        // Options: "mark-variant" (default), "ignore", "flag"
+        //   mark-variant: Track as known variant, don't flag as duplicate
+        //   ignore: Completely ignore, treat as separate tracks
+        //   flag: Flag for manual review
+        // same-fingerprint-different-album "mark-variant"
+    }
+}

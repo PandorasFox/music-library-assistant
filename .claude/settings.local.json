@@ -26,7 +26,9 @@
       "Bash(tokei:*)",
       "WebSearch",
       "WebFetch(domain:crates.io)",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "Bash(git -C /Volumes/cerberus/archive/rituals/mla diff HEAD~5..HEAD --name-status)",
+      "Bash(for dir in /Volumes/cerberus/archive/rituals/mla/src/*/)"
     ]
   }
 }

@@ -174,6 +174,108 @@ pub fn execute_update_track(
         .context("Failed to update track metadata")
 }
 
+/// Execute tag verification - compare in-file tags with database, record mismatches.
+///
+/// This is a read-mostly operation that only writes to the tag_mismatches table.
+/// It's used by both the Mutation system (legacy) and the Computation system.
+///
+/// Note: This function is public because it's called from corpus::computations.
+pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<()> {
+    use crate::corpus::metadata;
+    use std::collections::HashMap;
+
+    // Get track from database
+    let track = db
+        .get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Read tags from file
+    let disk_tags = match metadata::read_all_tags(path) {
+        Ok(tags) => tags,
+        Err(e) => {
+            // File might not exist or be unreadable - log but don't fail
+            let _ = crate::config::log_message(&format!(
+                "VerifyTags: Could not read tags from {}: {}",
+                path.display(),
+                e
+            ));
+            return Ok(());
+        }
+    };
+
+    // Build map of disk tags for easier lookup
+    // Note: disk_tags uses Debug format keys like "Unknown(\"ARTIST\")" or standard keys
+    let disk_map: HashMap<String, String> = disk_tags.into_iter().collect();
+
+    // Helper to get disk tag value, checking various key formats
+    let get_disk_tag = |standard_name: &str| -> Option<&str> {
+        // Try lowercase standard name first
+        if let Some(v) = disk_map.get(standard_name) {
+            return Some(v.as_str());
+        }
+        // lofty often returns tags as Unknown("TAG_NAME") format
+        let upper = standard_name.to_uppercase();
+        for (k, v) in &disk_map {
+            if k.contains(&upper) || k.to_lowercase() == standard_name {
+                return Some(v.as_str());
+            }
+        }
+        None
+    };
+
+    // Fields to compare: artist, album, album_artist, title, genre
+    // track_number is special (stored as Option<i32>)
+    let fields_to_check = [
+        ("artist", track.artist.as_deref()),
+        ("album", track.album.as_deref()),
+        ("album_artist", track.album_artist.as_deref()),
+        ("title", track.title.as_deref()),
+        ("genre", track.genre.as_deref()),
+    ];
+
+    for (field_name, db_value) in fields_to_check {
+        let disk_value = get_disk_tag(field_name);
+
+        // Normalize: treat empty string as None
+        let db_normalized = db_value.filter(|s| !s.is_empty());
+        let disk_normalized = disk_value.filter(|s| !s.is_empty());
+
+        if db_normalized != disk_normalized {
+            // Record mismatch
+            db.record_tag_mismatch(
+                track_id,
+                field_name,
+                db_normalized,
+                disk_normalized,
+            )?;
+        } else {
+            // Clear any existing mismatch for this field (now in sync)
+            db.clear_tag_mismatch(track_id, field_name)?;
+        }
+    }
+
+    // Handle track_number separately (i32 vs string)
+    let disk_track_num = get_disk_tag("track_number")
+        .or_else(|| get_disk_tag("tracknumber"))
+        .and_then(|s| s.split('/').next()) // Handle "1/12" format
+        .and_then(|s| s.parse::<i32>().ok());
+
+    let db_track_num = track.track_number;
+
+    if db_track_num != disk_track_num {
+        db.record_tag_mismatch(
+            track_id,
+            "track_number",
+            db_track_num.map(|n| n.to_string()).as_deref(),
+            disk_track_num.map(|n| n.to_string()).as_deref(),
+        )?;
+    } else {
+        db.clear_tag_mismatch(track_id, "track_number")?;
+    }
+
+    Ok(())
+}
+
 // ============================================================================
 // Single Mutation Dispatch
 // ============================================================================
@@ -230,6 +332,9 @@ pub fn execute_single(db: &Database, mutation: &Mutation) -> MutationResult {
             path,
             metadata,
         } => execute_update_track(db, *track_id, path, metadata),
+
+        // Note: VerifyTags is now a Computation, not a Mutation.
+        // Use corpus::computations::execute_single() instead.
 
         _ => Err(anyhow::anyhow!("Not an indexing mutation")),
     };

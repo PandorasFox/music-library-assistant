@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 // Re-export utilities from mla-utils for backward compatibility
 pub use mla_utils::{
-    get_config_dir, get_data_dir, get_db_path, get_operations_log_path,
-    is_audio_extension, log_message, log_scan_error, AUDIO_EXTENSIONS,
+    get_config_dir, get_data_dir, get_db_path, is_audio_extension, log_message, log_scan_error,
+    AUDIO_EXTENSIONS,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,14 +127,15 @@ impl Default for ReReleaseOpinions {
 /// Opinions for startup behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupOpinions {
-    /// Run heartbeat check at startup (default: true)
-    pub heartbeat_on_startup: bool,
+    /// Verify in-file tags match database at startup (default: true)
+    /// This is "paranoid" mode - catches out-of-band tag edits by external tools
+    pub paranoid_tag_verification: bool,
 }
 
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
-            heartbeat_on_startup: true,
+            paranoid_tag_verification: true,
         }
     }
 }
@@ -496,12 +497,16 @@ fn parse_rerelease_opinions(node: &kdl::KdlNode, opinions: &mut ReReleaseOpinion
 fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            if child.name().value() == "heartbeat-on-startup" {
-                if let Some(entry) = child.entries().first() {
-                    if let Some(val) = entry.value().as_bool() {
-                        opinions.heartbeat_on_startup = val;
+            match child.name().value() {
+                "paranoid-tag-verification" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.paranoid_tag_verification = val;
+                        }
                     }
                 }
+                // Note: eyeballing always runs at startup (not configurable)
+                _ => {}
             }
         }
     }

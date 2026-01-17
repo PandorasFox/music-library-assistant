@@ -1,6 +1,6 @@
 //! Database schema migration system.
 //!
-//! Provides versioned, forward-only migrations that run during startup heartbeat.
+//! Provides versioned, forward-only migrations that run at startup.
 //! Each migration transforms the schema from one version to the next.
 //!
 //! ## Version Tracking

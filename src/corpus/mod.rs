@@ -33,8 +33,8 @@ pub use eyeballing::queue_eyeballing;
 // Re-export library health items (for future use)
 #[allow(unused_imports)]
 pub use health::library::{
-    check_all_libraries_health, check_library_health, generate_orphan_cleanup_decisions,
-    LibraryHealthResult, OrphanFile, StaleDeployment,
+    check_all_libraries_health, check_library_health, LibraryHealthResult, OrphanFile,
+    StaleDeployment,
 };
 
 // Re-export filter functions for fingerprint analysis (for future use)

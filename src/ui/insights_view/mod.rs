@@ -26,10 +26,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::corpus::db::Database;
 use crate::corpus::health::insights::{
-    compute_one_dim_insights, spawn_multi_dim_insight, Insight, InsightHandle, MultiDimInsightType,
+    compute_one_dim_insights, spawn_multi_dim_insight, Insight, InsightHandle, InsightMessage,
+    MultiDimInsightType,
 };
-use crate::corpus::health::HeartbeatResult;
-use crate::flows::background::{TaskMessage, TaskResult};
 use crate::ui::widgets::SelectableListState;
 
 pub use render::render_insights_view;
@@ -57,8 +56,6 @@ pub struct InsightsViewState {
     pub list_state: SelectableListState,
     /// Handle for in-progress multi-dim computation
     pending_computation: Option<(MultiDimInsightType, InsightHandle)>,
-    /// Most recent heartbeat result
-    heartbeat: Option<HeartbeatResult>,
     /// Whether initial computation is complete
     initialized: bool,
 }
@@ -69,7 +66,6 @@ impl Default for InsightsViewState {
             insights: Vec::new(),
             list_state: SelectableListState::new(),
             pending_computation: None,
-            heartbeat: None,
             initialized: false,
         }
     }
@@ -84,14 +80,12 @@ impl InsightsViewState {
     /// Initialize the view with fresh data.
     ///
     /// Called when entering the insights view:
-    /// 1. Computes one-dim insights immediately
+    /// 1. Computes one-dim insights immediately (queries health_issues table)
     /// 2. Spawns background computation for multi-dim insights
     /// 3. Adds "Computing..." placeholder for multi-dim
-    pub fn initialize(&mut self, db: &Database, db_path: &str, heartbeat: HeartbeatResult) {
-        self.heartbeat = Some(heartbeat.clone());
-
-        // Compute one-dim insights immediately
-        let mut insights = compute_one_dim_insights(db, &heartbeat);
+    pub fn initialize(&mut self, db: &Database, db_path: &str) {
+        // Compute one-dim insights immediately (queries health_issues directly)
+        let mut insights = compute_one_dim_insights(db);
 
         // Add placeholder for multi-dim computation
         insights.push(Insight::Computing {
@@ -137,28 +131,18 @@ impl InsightsViewState {
         // Process messages
         for msg in messages {
             match msg {
-                TaskMessage::Progress(progress) => {
+                InsightMessage::Progress(pct) => {
                     // Update the Computing placeholder with progress
-                    let pct = if progress.total > 0 {
-                        Some(progress.completed as f32 / progress.total as f32)
-                    } else {
-                        None
-                    };
-                    self.update_computing_progress(insight_type, pct);
+                    self.update_computing_progress(insight_type, Some(pct));
                 }
-                TaskMessage::Complete(result) => {
+                InsightMessage::Complete(insight) => {
                     // Replace Computing placeholder with actual insight
-                    self.replace_computing_with_result(insight_type, &result);
+                    self.replace_computing_with_insight(insight_type, insight);
                     self.pending_computation = None;
                     break;
                 }
-                TaskMessage::Error(_err) => {
+                InsightMessage::Error(_err) => {
                     // Remove Computing placeholder on error
-                    self.remove_computing(insight_type);
-                    self.pending_computation = None;
-                    break;
-                }
-                TaskMessage::Cancelled => {
                     self.remove_computing(insight_type);
                     self.pending_computation = None;
                     break;
@@ -240,26 +224,17 @@ impl InsightsViewState {
         }
     }
 
-    /// Replace Computing placeholder with actual result
-    fn replace_computing_with_result(
+    /// Replace Computing placeholder with actual insight
+    fn replace_computing_with_insight(
         &mut self,
         insight_type: MultiDimInsightType,
-        result: &TaskResult,
+        new_insight: Insight,
     ) {
         // Find and replace the Computing placeholder
         for insight in &mut self.insights {
             if let Insight::Computing { insight_type: it, .. } = insight {
                 if *it == insight_type {
-                    // Convert result to insight
-                    *insight = match insight_type {
-                        MultiDimInsightType::QualityDuplicates => {
-                            Insight::QualityDuplicates {
-                                dupe_groups: result.succeeded + result.skipped,
-                                total_tracks: 0, // Not tracked in result
-                                auto_resolvable: result.succeeded,
-                            }
-                        }
-                    };
+                    *insight = new_insight;
                     break;
                 }
             }

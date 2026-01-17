@@ -122,7 +122,7 @@ impl Database {
             .with_context(|| format!("Failed to delete track by path: {}", path))?;
 
         // Also clean up scan_state entry for this path
-        // This ensures heartbeat won't report this as "missing" anymore
+        // This ensures eyeballing won't report this as "missing" anymore
         self.conn
             .execute("DELETE FROM scan_state WHERE path = ?1", params![path])
             .with_context(|| format!("Failed to delete scan_state for: {}", path))?;
@@ -425,7 +425,7 @@ impl Database {
 
     /// Find inodes that appear multiple times in corpus tracks.
     /// Returns a vector of (inode, paths) for each duplicate.
-    /// Used by heartbeat to detect hard links or database inconsistencies.
+    /// Used by eyeballing to detect hard links or database inconsistencies.
     pub fn get_duplicate_inodes_in_corpus(&self) -> Result<Vec<(i64, Vec<String>)>> {
         // First, find inodes with count > 1
         let mut stmt = self.conn.prepare(

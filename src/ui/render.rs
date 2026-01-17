@@ -14,11 +14,10 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::config::Config;
-use crate::corpus::HeartbeatResult;
 use crate::flows::background::BackgroundTask;
 
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
-use super::helpers::{calculate_rolling_throughput, format_bytes_binary, format_eta, truncate_path_display};
+use super::helpers::{calculate_rolling_throughput, format_bytes_binary, format_duration, format_eta, truncate_path_display};
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
 use super::{deploy_flow, insights_view, tag_editor, tree_browser};
 
@@ -36,11 +35,9 @@ pub struct RenderContext<'a> {
     pub directory_tag_editor: Option<&'a mut tag_editor::DirectoryTagEditorState>,
     pub directory_tag_editor_modal: Option<&'a tag_editor::types::DirectoryTagEditorModal>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
-    pub loading_splash_state: Option<&'a super::LoadingSplashState>,
+    pub splash_screen: Option<&'a super::splash_screen::SplashScreen>,
     pub deploy_conflict_review: Option<&'a super::DeployConflictReviewState>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
-    pub heartbeat_result: Option<&'a HeartbeatResult>,
-    pub heartbeat_pending: bool,
     pub eye: &'a EyeAnimation,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
     pub background_tasks: &'a [BackgroundTask],
@@ -51,7 +48,9 @@ pub struct RenderContext<'a> {
 pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
     // Loading splash takes the whole screen
     if ctx.mode == super::UiMode::LoadingSplash {
-        render_loading_splash(f, f.area(), ctx);
+        if let Some(splash) = ctx.splash_screen {
+            super::splash_screen::render(f, f.area(), splash);
+        }
         return;
     }
 
@@ -210,8 +209,8 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             if let Some(ref mut view) = ctx.insights_view {
                 insights_view::render_insights_view(f, area, view);
             } else {
-                // Show loading state while waiting for heartbeat
-                render_insights_loading(f, area, ctx.heartbeat_pending);
+                // Show loading state while insights view is initializing
+                render_insights_loading(f, area);
             }
         }
         super::UiMode::LoadingSplash => {
@@ -220,100 +219,10 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
     }
 }
 
-/// Render the loading splash screen with centered eye and status message
-fn render_loading_splash(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    // Get splash state
-    let splash = match &ctx.loading_splash_state {
-        Some(s) => s,
-        None => return,
-    };
+// render_loading_splash has been moved to splash_screen::render()
 
-    // Eye closed art is 16 lines tall
-    let eye_height = 16;
-    // Message line + spacing + eye + optional progress bar
-    let progress_height = if splash.progress.is_some() { 3 } else { 0 };
-    let total_height = 2 + eye_height + progress_height; // message + gap + eye + progress
-
-    // Calculate vertical centering
-    let v_margin = area.height.saturating_sub(total_height as u16) / 2;
-
-    // Calculate horizontal centering for the eye (eye is ~60 chars wide)
-    let eye_width = 60u16;
-    let h_margin = area.width.saturating_sub(eye_width) / 2;
-
-    // Layout vertically
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(v_margin),         // Top margin
-            Constraint::Length(1),                // Message
-            Constraint::Length(1),                // Spacing
-            Constraint::Length(eye_height as u16), // Eye
-            Constraint::Length(progress_height as u16), // Progress bar (if any)
-            Constraint::Min(0),                   // Bottom margin
-        ])
-        .split(area);
-
-    // Render message centered
-    let message = Paragraph::new(splash.loading_type.message())
-        .style(Style::default().fg(Color::Cyan))
-        .alignment(Alignment::Center);
-    f.render_widget(message, chunks[1]);
-
-    // Render eye (closed) centered horizontally
-    let eye_area = ratatui::layout::Rect {
-        x: area.x + h_margin,
-        y: chunks[3].y,
-        width: eye_width.min(area.width),
-        height: chunks[3].height,
-    };
-
-    let eye_lines: Vec<Line> = EYE_CLOSED
-        .lines()
-        .map(|line| Line::from(line))
-        .collect();
-
-    let eye_widget = Paragraph::new(eye_lines)
-        .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(eye_widget, eye_area);
-
-    // Render progress bar if present
-    if let Some(progress) = splash.progress {
-        let progress_area = chunks[4];
-
-        // Create progress bar
-        let bar_width = 40u16.min(progress_area.width.saturating_sub(4));
-        let bar_x = (progress_area.width.saturating_sub(bar_width)) / 2 + progress_area.x;
-
-        let filled = (progress * bar_width as f32) as u16;
-        let empty = bar_width.saturating_sub(filled);
-
-        let bar_text = format!(
-            "[{}{}]",
-            "=".repeat(filled as usize),
-            " ".repeat(empty as usize)
-        );
-
-        let detail = splash.progress_detail.as_deref().unwrap_or("");
-        let progress_text = format!("{}\n{}", bar_text, detail);
-
-        let progress_widget = Paragraph::new(progress_text)
-            .style(Style::default().fg(Color::Yellow))
-            .alignment(Alignment::Center);
-
-        let centered_progress = ratatui::layout::Rect {
-            x: bar_x,
-            y: progress_area.y,
-            width: bar_width + 4,
-            height: progress_area.height,
-        };
-
-        f.render_widget(progress_widget, centered_progress);
-    }
-}
-
-/// Render loading state for Insights view while waiting for heartbeat
-fn render_insights_loading(f: &mut Frame, area: ratatui::layout::Rect, heartbeat_pending: bool) {
+/// Render loading state for Insights view while initializing
+fn render_insights_loading(f: &mut Frame, area: ratatui::layout::Rect) {
     use super::widgets::{LateralView, UnifiedTitleBar};
 
     // Layout: unified titlebar + content
@@ -330,13 +239,7 @@ fn render_insights_loading(f: &mut Frame, area: ratatui::layout::Rect, heartbeat
     titlebar.render(f, chunks[0]);
 
     // Render loading message
-    let message = if heartbeat_pending {
-        "Waiting for corpus heartbeat..."
-    } else {
-        "Initializing insights view..."
-    };
-
-    let loading = Paragraph::new(message)
+    let loading = Paragraph::new("Initializing insights view...")
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL).title("Insights"));
@@ -641,68 +544,12 @@ fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
     render_eye(f, footer_layout[1], ctx);
 }
 
-fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    let mut lines = Vec::new();
-
-    // Show heartbeat status
-    if let Some(ref hb) = ctx.heartbeat_result {
-        // Track count from heartbeat
-        if hb.indexed_count > 0 {
-            lines.push(Line::from(format!("Indexed: {} tracks", hb.indexed_count)));
-        }
-
-        if hb.is_corpus_healthy() {
-            lines.push(
-                Line::from(format!("Validated ({:.0}ms)", hb.duration.as_millis()))
-                    .style(Style::default().fg(Color::Green)),
-            );
-        } else {
-            if hb.missing_from_disk > 0 {
-                lines.push(
-                    Line::from(format!("{} missing", hb.missing_from_disk))
-                        .style(Style::default().fg(Color::Yellow)),
-                );
-            }
-            if hb.new_on_disk > 0 {
-                lines.push(
-                    Line::from(format!("{} new files", hb.new_on_disk))
-                        .style(Style::default().fg(Color::Cyan)),
-                );
-            }
-        }
-
-        // Deployment status from library health
-        if !hb.library_health.is_empty() {
-            let total_healthy: usize = hb.library_health.iter().map(|l| l.healthy).sum();
-            let total_not_deployed: usize = hb.library_health.iter().map(|l| l.not_deployed).sum();
-            let total_stale: usize = hb.library_health.iter().map(|l| l.stale).sum();
-            let total_orphans: usize = hb.library_health.iter().map(|l| l.orphans).sum();
-            let total_files = total_healthy + total_not_deployed;
-            let total_issues = total_not_deployed + total_stale + total_orphans;
-
-            if total_files > 0 {
-                let deploy_text = format!("{}/{} deployed", total_healthy, total_files);
-                if total_issues > 0 {
-                    lines.push(
-                        Line::from(format!("{} ({} issues)", deploy_text, total_issues))
-                            .style(Style::default().fg(Color::Yellow)),
-                    );
-                } else {
-                    lines.push(
-                        Line::from(deploy_text)
-                            .style(Style::default().fg(Color::Green)),
-                    );
-                }
-            }
-        }
-    } else if ctx.heartbeat_pending {
-        lines.push(Line::from("Validating...").style(Style::default().fg(Color::DarkGray)));
-    } else {
-        lines.push(
-            Line::from("No scan data")
-                .style(Style::default().fg(Color::Yellow)),
-        );
-    }
+fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, _ctx: &RenderContext) {
+    // TODO: Corpus status should show health_issues summary from eyeballing
+    let lines = vec![
+        Line::from("No observation data")
+            .style(Style::default().fg(Color::DarkGray)),
+    ];
 
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title("Corpus"));
@@ -714,25 +561,75 @@ fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Ren
 
     let total_tasks = ctx.background_tasks.len();
     let has_daemon_work = ctx.daemon_status.as_ref().map(|s| s.pending > 0).unwrap_or(false);
+    let has_completed_session = ctx.daemon_status.as_ref()
+        .and_then(|s| s.completed_session.as_ref())
+        .is_some();
 
-    if total_tasks == 0 && !has_daemon_work {
+    if total_tasks == 0 && !has_daemon_work && !has_completed_session {
         lines.push(
             Line::from("No operation in progress").style(Style::default().fg(Color::DarkGray)),
         );
     } else if has_daemon_work {
-        // Show daemon status
+        // Show active daemon status
         if let Some(ref status) = ctx.daemon_status {
+            // Build task type summary
+            let task_summary: String = if !status.task_counts.is_empty() {
+                status.task_counts.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                "Processing...".to_string()
+            };
+
             lines.push(Line::from(vec![
-                Span::styled("Task Daemon", Style::default().fg(Color::Cyan)),
+                Span::styled("Task Daemon ", Style::default().fg(Color::Cyan)),
+                Span::styled(task_summary, Style::default().fg(Color::White)),
             ]));
+
+            // Show elapsed time
+            let elapsed_str = status.elapsed.map(|d| format_duration(d)).unwrap_or_default();
             lines.push(Line::from(format!(
-                "Pending: {} | Processed: {}",
-                status.pending, status.total_processed
+                "Pending: {} | Processed: {}{}",
+                status.pending,
+                status.total_processed,
+                if !elapsed_str.is_empty() { format!(" | {}", elapsed_str) } else { String::new() }
             )));
+
             if !status.recent_errors.is_empty() {
                 lines.push(Line::from(
                     status.recent_errors.last().unwrap_or(&String::new()).clone()
                 ).style(Style::default().fg(Color::Red)));
+            }
+        }
+    } else if has_completed_session {
+        // Show lingering completed session summary
+        if let Some(ref status) = ctx.daemon_status {
+            if let Some(ref session) = status.completed_session {
+                // Build task type breakdown
+                let task_breakdown: String = session.task_counts.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let status_color = if session.failed > 0 { Color::Yellow } else { Color::Green };
+                lines.push(Line::from(vec![
+                    Span::styled("Completed ", Style::default().fg(status_color)),
+                    Span::styled(task_breakdown, Style::default().fg(Color::White)),
+                ]));
+
+                let duration_str = format_duration(session.duration);
+                let failed_str = if session.failed > 0 {
+                    format!(" | {} failed", session.failed)
+                } else {
+                    String::new()
+                };
+                lines.push(Line::from(format!(
+                    "{} tasks in {}{}",
+                    session.total_processed,
+                    duration_str,
+                    failed_str
+                )).style(Style::default().fg(Color::DarkGray)));
             }
         }
     } else {

@@ -222,6 +222,8 @@ pub enum Mutation {
         path: PathBuf,
         metadata: ExtractedMetadata,
     },
+    // Note: VerifyTags has been moved to corpus::computations::Computation.
+    // Computations don't alter state - they only emit signals.
 }
 
 /// Category for batching same-type operations.

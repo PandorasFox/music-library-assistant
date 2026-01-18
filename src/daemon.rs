@@ -72,13 +72,34 @@ pub enum CorpusObservationState {
 
 /// A task that can be queued for execution.
 ///
-/// Tasks are either Mutations (require DecisionWitness) or Computations (no witness).
+/// Tasks are either Mutations (require DecisionWitness), Computations (no witness),
+/// or Migrations (require DecisionWitness but bypass accepting_mutations gate).
 #[derive(Debug, Clone)]
 pub enum Task {
     /// A state-altering mutation (requires DecisionWitness to queue).
     Mutation(Mutation),
     /// A read-only computation that emits signals (no witness required).
     Computation(Computation),
+    /// A schema migration (requires DecisionWitness but bypasses accepting_mutations).
+    Migration(Migration),
+}
+
+// ============================================================================
+// Migration Types
+// ============================================================================
+
+/// A database schema migration.
+///
+/// Migrations require DecisionWitness (user approval) but bypass the `accepting_mutations`
+/// gate. They must run before indexing can happen if schema changes are required.
+#[derive(Debug, Clone)]
+pub struct Migration {
+    /// Version number this migration starts from.
+    pub from_version: u32,
+    /// Version number after migration completes.
+    pub to_version: u32,
+    /// Human-readable description of the migration.
+    pub description: String,
 }
 
 // ============================================================================
@@ -112,9 +133,26 @@ pub mod sealed {
             Self(())
         }
     }
+
+    /// A zero-sized token proving code is executing inside TaskDaemon's mutation worker.
+    ///
+    /// All index-mutating database functions require this witness, ensuring they
+    /// can only be called from within the daemon's execution context.
+    ///
+    /// Cannot be constructed outside the daemon's `execute_mutation()` function.
+    #[derive(Clone, Copy)]
+    pub struct MutationExecutionWitness(());
+
+    impl MutationExecutionWitness {
+        /// Internal constructor - only callable from execute_mutation()
+        pub(super) fn new() -> Self {
+            Self(())
+        }
+    }
 }
 
 pub use sealed::DecisionWitness;
+pub use sealed::MutationExecutionWitness;
 
 /// Create a DecisionWitness, certifying that the user has confirmed a decision.
 ///
@@ -172,11 +210,17 @@ impl TaskLabel {
         Self(computation.label().to_string())
     }
 
-    /// Create label from a task (mutation or computation).
+    /// Create label from a migration.
+    pub fn from_migration(migration: &Migration) -> Self {
+        Self(format!("Migration v{} → v{}", migration.from_version, migration.to_version))
+    }
+
+    /// Create label from a task (mutation, computation, or migration).
     pub fn from_task(task: &Task) -> Self {
         match task {
             Task::Mutation(m) => Self::from_mutation(m),
             Task::Computation(c) => Self::from_computation(c),
+            Task::Migration(m) => Self::from_migration(m),
         }
     }
 }
@@ -248,6 +292,114 @@ impl From<DaemonState> for DaemonStateSnapshot {
 }
 
 // ============================================================================
+// Transaction Types
+// ============================================================================
+
+/// A witnessed decision with its associated pending mutations.
+///
+/// Decisions are accumulated in a transaction and committed together.
+#[derive(Debug, Clone)]
+pub struct WitnessedDecision {
+    /// Human-readable label for this decision
+    pub label: String,
+    /// The mutations this decision will produce when committed
+    pub mutations: Vec<Mutation>,
+}
+
+/// An active transaction accumulating decisions.
+///
+/// Transactions are ephemeral in-memory state. They are NOT persisted to disk.
+/// Only one transaction may be active at a time.
+#[derive(Debug)]
+pub struct PendingTransaction {
+    /// Human-readable label for this transaction
+    pub label: String,
+    /// When the transaction was started
+    pub started_at: Instant,
+    /// Accumulated decisions by index (UI-provided, may have gaps)
+    decisions: HashMap<usize, WitnessedDecision>,
+}
+
+impl PendingTransaction {
+    /// Create a new empty transaction.
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            started_at: Instant::now(),
+            decisions: HashMap::new(),
+        }
+    }
+
+    /// Count of stored decisions.
+    pub fn decision_count(&self) -> usize {
+        self.decisions.len()
+    }
+
+    /// Total mutations across all decisions.
+    pub fn mutation_count(&self) -> usize {
+        self.decisions.values().map(|d| d.mutations.len()).sum()
+    }
+
+    /// Get all decision indices (sorted).
+    pub fn indices(&self) -> Vec<usize> {
+        let mut indices: Vec<_> = self.decisions.keys().copied().collect();
+        indices.sort();
+        indices
+    }
+}
+
+/// Errors that can occur during transaction operations.
+#[derive(Debug, Clone)]
+pub enum TransactionError {
+    /// Attempted to start a transaction when one is already active.
+    AlreadyActive,
+    /// Attempted an operation requiring an active transaction.
+    NoActiveTransaction,
+}
+
+impl std::fmt::Display for TransactionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransactionError::AlreadyActive => write!(f, "Transaction already active"),
+            TransactionError::NoActiveTransaction => write!(f, "No active transaction"),
+        }
+    }
+}
+
+impl std::error::Error for TransactionError {}
+
+/// Information about an active transaction for UI display.
+#[derive(Debug, Clone)]
+pub struct TransactionInfo {
+    /// Human-readable label for this transaction
+    pub label: String,
+    /// Number of decisions accumulated
+    pub decision_count: usize,
+    /// Total mutations across all decisions
+    pub mutation_count: usize,
+    /// When the transaction was started
+    pub started_at: Instant,
+}
+
+/// Summary returned when a transaction is committed.
+#[derive(Debug, Clone)]
+pub struct CommitSummary {
+    /// Number of decisions that were committed
+    pub decision_count: usize,
+    /// Total mutations that were queued for execution
+    pub mutation_count: usize,
+}
+
+/// Summary returned when a transaction is discarded.
+#[derive(Debug, Clone)]
+pub struct DiscardSummary {
+    /// Number of decisions that were discarded
+    pub decision_count: usize,
+    /// Total mutations that were discarded
+    pub mutation_count: usize,
+}
+
+// ============================================================================
 // Internal Task Result
 // ============================================================================
 
@@ -302,6 +454,9 @@ pub struct TaskDaemon {
     // Completed session for lingering display
     completed_session: Option<CompletedSession>,
     completed_at: Option<Instant>,
+
+    // Transaction state
+    pending_transaction: Option<PendingTransaction>,
 }
 
 impl TaskDaemon {
@@ -330,6 +485,7 @@ impl TaskDaemon {
             current_label: None,
             completed_session: None,
             completed_at: None,
+            pending_transaction: None,
         }
     }
 
@@ -728,6 +884,233 @@ impl TaskDaemon {
     }
 
     // -------------------------------------------------------------------------
+    // Migration Queueing (requires witness, bypasses accepting_mutations)
+    // -------------------------------------------------------------------------
+
+    /// Queue a single migration for execution.
+    ///
+    /// Migrations require a [`DecisionWitness`] (user approval) but bypass the
+    /// `accepting_mutations` gate. They can run before eyeballing completes.
+    pub fn queue_migration(&mut self, migration: Migration, _witness: &DecisionWitness) {
+        self.queue_migration_internal(migration, None);
+    }
+
+    /// Queue a single migration with an explicit label.
+    pub fn queue_migration_with_label(
+        &mut self,
+        migration: Migration,
+        label: Option<String>,
+        _witness: &DecisionWitness,
+    ) {
+        self.queue_migration_internal(migration, label);
+    }
+
+    /// Queue multiple migrations for execution.
+    pub fn queue_migrations(
+        &mut self,
+        migrations: impl IntoIterator<Item = Migration>,
+        _witness: &DecisionWitness,
+    ) {
+        self.queue_migrations_internal(migrations, None);
+    }
+
+    fn queue_migration_internal(&mut self, migration: Migration, label: Option<String>) {
+        self.transition_to_working();
+
+        let task_label = label
+            .or_else(|| self.current_label.clone())
+            .unwrap_or_else(|| TaskLabel::from_migration(&migration).0);
+
+        self.session_queued += 1;
+        self.in_flight += 1;
+        self.worker.add_task((Task::Migration(migration), task_label));
+    }
+
+    fn queue_migrations_internal(
+        &mut self,
+        migrations: impl IntoIterator<Item = Migration>,
+        label: Option<String>,
+    ) {
+        self.transition_to_working();
+
+        let tasks: Vec<(Task, String)> = migrations
+            .into_iter()
+            .map(|m| {
+                let task_label = label
+                    .clone()
+                    .or_else(|| self.current_label.clone())
+                    .unwrap_or_else(|| TaskLabel::from_migration(&m).0);
+                (Task::Migration(m), task_label)
+            })
+            .collect();
+
+        self.session_queued += tasks.len();
+        self.in_flight += tasks.len();
+        self.worker.add_tasks(tasks);
+    }
+
+    // -------------------------------------------------------------------------
+    // Transaction API
+    // -------------------------------------------------------------------------
+
+    /// Start a new transaction.
+    ///
+    /// Called by modals when the user is about to be presented with Decisions.
+    /// Only one transaction may be active at a time.
+    ///
+    /// Returns Err if a transaction is already active.
+    pub fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {
+        if self.pending_transaction.is_some() {
+            return Err(TransactionError::AlreadyActive);
+        }
+
+        self.pending_transaction = Some(PendingTransaction::new(label));
+        Ok(())
+    }
+
+    /// Check if a transaction is currently active.
+    pub fn has_transaction(&self) -> bool {
+        self.pending_transaction.is_some()
+    }
+
+    /// Get transaction info for UI display.
+    pub fn transaction_info(&self) -> Option<TransactionInfo> {
+        self.pending_transaction.as_ref().map(|txn| TransactionInfo {
+            label: txn.label.clone(),
+            decision_count: txn.decision_count(),
+            mutation_count: txn.mutation_count(),
+            started_at: txn.started_at,
+        })
+    }
+
+    /// Add a witnessed decision to the transaction.
+    ///
+    /// - `idx`: UI-provided index (may have gaps, largely sequential)
+    /// - `witness`: Proof of operator confirmation
+    /// - `label`: Human-readable description
+    /// - `mutations`: The mutations this decision represents
+    ///
+    /// Overwrites any existing decision at the same index.
+    /// Returns Err if no transaction is active.
+    pub fn add_decision(
+        &mut self,
+        idx: usize,
+        _witness: &DecisionWitness,
+        label: impl Into<String>,
+        mutations: Vec<Mutation>,
+    ) -> Result<(), TransactionError> {
+        let txn = self
+            .pending_transaction
+            .as_mut()
+            .ok_or(TransactionError::NoActiveTransaction)?;
+
+        txn.decisions.insert(
+            idx,
+            WitnessedDecision {
+                label: label.into(),
+                mutations,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Discard a single decision by index.
+    ///
+    /// Requires a witness - discarding is also a decision.
+    /// Used primarily for review screen before confirm/discard.
+    ///
+    /// Returns the discarded decision, or None if no decision at that index.
+    pub fn discard_decision(
+        &mut self,
+        idx: usize,
+        _witness: &DecisionWitness,
+    ) -> Result<Option<WitnessedDecision>, TransactionError> {
+        let txn = self
+            .pending_transaction
+            .as_mut()
+            .ok_or(TransactionError::NoActiveTransaction)?;
+
+        Ok(txn.decisions.remove(&idx))
+    }
+
+    /// Fetch a decision by index.
+    ///
+    /// Returns None if no decision stored at that index.
+    pub fn get_decision(&self, idx: usize) -> Option<&WitnessedDecision> {
+        self.pending_transaction
+            .as_ref()
+            .and_then(|txn| txn.decisions.get(&idx))
+    }
+
+    /// List all decision indices in the current transaction.
+    pub fn decision_indices(&self) -> Vec<usize> {
+        self.pending_transaction
+            .as_ref()
+            .map(|txn| txn.indices())
+            .unwrap_or_default()
+    }
+
+    /// Confirm the transaction - queue all mutations for execution.
+    ///
+    /// This is the primary way to add mutations to the execution queue.
+    /// Requires a witness for the commit decision itself.
+    ///
+    /// Returns summary of what was committed.
+    pub fn confirm_transaction(
+        &mut self,
+        _witness: &DecisionWitness,
+    ) -> Result<CommitSummary, TransactionError> {
+        let txn = self
+            .pending_transaction
+            .take()
+            .ok_or(TransactionError::NoActiveTransaction)?;
+
+        let decision_count = txn.decision_count();
+        let mut mutation_count = 0;
+
+        // Collect all mutations from all decisions
+        let all_mutations: Vec<Mutation> = txn
+            .decisions
+            .into_values()
+            .flat_map(|d| {
+                mutation_count += d.mutations.len();
+                d.mutations
+            })
+            .collect();
+
+        // Queue mutations for execution
+        if !all_mutations.is_empty() {
+            self.queue_mutations_internal(all_mutations, Some(txn.label));
+        }
+
+        Ok(CommitSummary {
+            decision_count,
+            mutation_count,
+        })
+    }
+
+    /// Discard the transaction - drop all accumulated decisions.
+    ///
+    /// Requires a witness - discarding is also a decision.
+    ///
+    /// Returns summary of what was discarded.
+    pub fn discard_transaction(
+        &mut self,
+        _witness: &DecisionWitness,
+    ) -> Result<DiscardSummary, TransactionError> {
+        let txn = self
+            .pending_transaction
+            .take()
+            .ok_or(TransactionError::NoActiveTransaction)?;
+
+        Ok(DiscardSummary {
+            decision_count: txn.decision_count(),
+            mutation_count: txn.mutation_count(),
+        })
+    }
+
+    // -------------------------------------------------------------------------
     // Utility Methods
     // -------------------------------------------------------------------------
 
@@ -779,11 +1162,12 @@ impl Default for TaskDaemon {
 // Task Execution
 // ============================================================================
 
-/// Execute a single task (mutation or computation). Opens DB connection as needed.
+/// Execute a single task (mutation, computation, or migration). Opens DB connection as needed.
 fn execute_task(task: Task, label: String) -> TaskResult {
     match task {
         Task::Mutation(mutation) => execute_mutation(mutation, label),
         Task::Computation(computation) => execute_computation(computation, label),
+        Task::Migration(migration) => execute_migration(migration, label),
     }
 }
 
@@ -792,6 +1176,9 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
     use crate::config;
     use crate::corpus::db::Database;
     use crate::corpus::mutations::{file_ops, tag_edit, indexing, MutationCategory};
+
+    // Create execution witness - proves we're inside daemon execution context
+    let witness = MutationExecutionWitness::new();
 
     // Open database
     let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
@@ -808,16 +1195,16 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
 
     let (success, error) = match mutation.category() {
         MutationCategory::TagEdit => {
-            let r = tag_edit::execute_single(&db, &mutation, session_id);
+            let r = tag_edit::execute_single(&db, &mutation, session_id, &witness);
             (r.success, r.error)
         }
         MutationCategory::FileMove | MutationCategory::FileCopy |
         MutationCategory::FileDelete | MutationCategory::Deployment => {
-            let r = file_ops::execute_single(Some(&db), &mutation);
+            let r = file_ops::execute_single(Some(&db), &mutation, &witness);
             (r.success, r.error)
         }
         MutationCategory::Indexing => {
-            let r = indexing::execute_single(&db, &mutation);
+            let r = indexing::execute_single(&db, &mutation, &witness);
             (r.success, r.error)
         }
         MutationCategory::Migration => {
@@ -839,5 +1226,41 @@ fn execute_computation(computation: Computation, label: String) -> TaskResult {
         error: result.error,
         label,
         spawn: result.spawn,
+    }
+}
+
+/// Execute a single migration. Opens DB connection and runs the migration.
+fn execute_migration(migration: Migration, label: String) -> TaskResult {
+    use crate::config;
+    use crate::corpus::db::Database;
+    use crate::corpus::mutations::MigrationRegistry;
+
+    // Open database
+    let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
+        Ok(db) => db,
+        Err(e) => {
+            return TaskResult {
+                success: false,
+                error: Some(format!("DB error: {}", e)),
+                label,
+                spawn: Vec::new(),
+            }
+        }
+    };
+
+    // Apply the specific migration
+    let registry = MigrationRegistry::new();
+    let result = registry.apply_migration(&db, migration.to_version);
+
+    let (success, error) = match result {
+        Ok(()) => (true, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+
+    TaskResult {
+        success,
+        error,
+        label,
+        spawn: Vec::new(),
     }
 }

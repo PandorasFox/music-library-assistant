@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::corpus::db::{Database, ScanStateEntry, Track};
+use crate::daemon::MutationExecutionWitness;
 
 use super::types::{ExtractedMetadata, Mutation, MutationResult};
 
@@ -283,7 +284,12 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
 /// Execute a single indexing mutation.
 ///
 /// Convenience function for executing individual mutations.
-pub fn execute_single(db: &Database, mutation: &Mutation) -> MutationResult {
+/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
+pub fn execute_single(
+    db: &Database,
+    mutation: &Mutation,
+    _witness: &MutationExecutionWitness,
+) -> MutationResult {
     let start = std::time::Instant::now();
 
     let result = match mutation {
@@ -355,8 +361,13 @@ pub fn execute_single(db: &Database, mutation: &Mutation) -> MutationResult {
 /// Execute a batch of indexing mutations.
 ///
 /// Processes multiple indexing operations, typically for bulk scanning.
-pub fn execute_batch(db: &Database, mutations: &[Mutation]) -> Vec<MutationResult> {
-    mutations.iter().map(|m| execute_single(db, m)).collect()
+/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
+pub fn execute_batch(
+    db: &Database,
+    mutations: &[Mutation],
+    witness: &MutationExecutionWitness,
+) -> Vec<MutationResult> {
+    mutations.iter().map(|m| execute_single(db, m, witness)).collect()
 }
 
 #[cfg(test)]

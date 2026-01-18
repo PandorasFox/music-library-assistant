@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::corpus::db::Database;
 use crate::corpus::metadata;
+use crate::daemon::MutationExecutionWitness;
 
 use super::sealed::MutationToken;
 use super::types::{Mutation, MutationResult, TagEdit, WorkUnit};
@@ -223,7 +224,13 @@ pub fn write_tags_to_disk_only(path: &Path, tags: &[(String, String)]) -> Result
 /// Execute a single tag edit mutation.
 ///
 /// Convenience function for executing individual mutations outside of batch context.
-pub fn execute_single(db: &Database, mutation: &Mutation, session_id: &str) -> MutationResult {
+/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
+pub fn execute_single(
+    db: &Database,
+    mutation: &Mutation,
+    session_id: &str,
+    _witness: &MutationExecutionWitness,
+) -> MutationResult {
     let start = std::time::Instant::now();
 
     let result = match mutation {

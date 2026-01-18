@@ -1753,12 +1753,18 @@ fn check_and_maybe_rebuild_health(app: &mut App) {
 ///
 /// This runs before the main app loop starts to ensure the database schema
 /// is up to date. Shows a blocking dialog during migration execution.
+/// Check for pending migrations and run them with user approval.
+///
+/// Displays a dialog showing pending migrations with [Enter] to proceed or [Esc] to exit.
+/// User must explicitly approve migrations (DecisionWitness pattern).
 fn check_and_run_migrations<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
 ) -> Result<()> {
+    use crossterm::event::{self, Event, KeyCode};
     use ratatui::layout::{Alignment, Rect};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+    use crate::daemon::confirm_decision;
 
     // Open database
     let db_path = match config::get_db_path() {
@@ -1781,11 +1787,88 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
     let pending = registry.pending_descriptions(&db);
     let migration_count = pending.len();
 
-    // Render blocking migration dialog
+    // Render approval dialog and wait for user input
+    loop {
+        terminal.draw(|f| {
+            let area = f.area();
+
+            // Center the dialog
+            let dialog_width = 60.min(area.width.saturating_sub(4));
+            let dialog_height = (migration_count as u16 + 12).min(area.height.saturating_sub(4));
+
+            let dialog_area = Rect {
+                x: (area.width.saturating_sub(dialog_width)) / 2,
+                y: (area.height.saturating_sub(dialog_height)) / 2,
+                width: dialog_width,
+                height: dialog_height,
+            };
+
+            // Clear the area behind the dialog
+            f.render_widget(Clear, dialog_area);
+
+            // Build migration list text
+            let mut lines = vec![
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from("MLA needs to upgrade your database.").style(
+                    Style::default().fg(Color::White),
+                ),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from("Pending migrations:").style(
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ),
+            ];
+
+            for desc in &pending {
+                lines.push(ratatui::text::Line::from(format!("  • {}", desc)));
+            }
+
+            lines.push(ratatui::text::Line::from(""));
+            lines.push(
+                ratatui::text::Line::from("⚠ This cannot be interrupted once started.")
+                    .style(Style::default().fg(Color::Yellow)),
+            );
+            lines.push(ratatui::text::Line::from(""));
+            lines.push(
+                ratatui::text::Line::from("[Enter] Proceed    [Esc] Exit")
+                    .style(Style::default().fg(Color::Cyan)),
+            );
+
+            let paragraph = Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .title(" Database Migration Required ")
+                        .title_alignment(Alignment::Center)
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow)),
+                )
+                .alignment(Alignment::Center);
+
+            f.render_widget(paragraph, dialog_area);
+        })?;
+
+        // Wait for user input
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Enter => {
+                    // User approved - create witness and proceed
+                    let _witness = confirm_decision();
+                    break;
+                }
+                KeyCode::Esc => {
+                    // User declined - exit application
+                    return Err(anyhow::anyhow!("Migration cancelled by user"));
+                }
+                _ => {
+                    // Ignore other keys
+                }
+            }
+        }
+    }
+
+    // Show "running migrations" status
     terminal.draw(|f| {
         let area = f.area();
 
-        // Center the dialog
         let dialog_width = 60.min(area.width.saturating_sub(4));
         let dialog_height = (migration_count as u16 + 8).min(area.height.saturating_sub(4));
 
@@ -1796,13 +1879,11 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
             height: dialog_height,
         };
 
-        // Clear the area behind the dialog
         f.render_widget(Clear, dialog_area);
 
-        // Build migration list text
         let mut lines = vec![
             ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Database migrations required:").style(
+            ratatui::text::Line::from("Running migrations:").style(
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             ),
             ratatui::text::Line::from(""),
@@ -1814,7 +1895,7 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
 
         lines.push(ratatui::text::Line::from(""));
         lines.push(
-            ratatui::text::Line::from("Running migrations... please wait.")
+            ratatui::text::Line::from("Please wait...")
                 .style(Style::default().fg(Color::Cyan)),
         );
 
@@ -1826,12 +1907,12 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Yellow)),
             )
-            .alignment(Alignment::Left);
+            .alignment(Alignment::Center);
 
         f.render_widget(paragraph, dialog_area);
     })?;
 
-    // Execute migrations
+    // Execute migrations (with witness created above)
     let result = registry.apply_all_pending(&db);
 
     match result {

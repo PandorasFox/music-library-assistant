@@ -13,6 +13,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::corpus::db::Database;
+use crate::daemon::MutationExecutionWitness;
 
 use super::types::{Mutation, MutationResult};
 
@@ -208,7 +209,12 @@ pub fn execute_unlink(path: &Path) -> Result<()> {
 ///
 /// Note: MoveToStash requires a stash_root parameter not available in the mutation,
 /// so it returns an error. Use execute_move_to_stash directly when stash_root is known.
-pub fn execute_single(db: Option<&Database>, mutation: &Mutation) -> MutationResult {
+/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
+pub fn execute_single(
+    db: Option<&Database>,
+    mutation: &Mutation,
+    _witness: &MutationExecutionWitness,
+) -> MutationResult {
     let start = std::time::Instant::now();
 
     let result = match mutation {
@@ -258,10 +264,15 @@ pub fn execute_single(db: Option<&Database>, mutation: &Mutation) -> MutationRes
 }
 
 /// Execute a batch of file operation mutations.
-pub fn execute_batch(db: Option<&Database>, mutations: &[Mutation]) -> Vec<MutationResult> {
+/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
+pub fn execute_batch(
+    db: Option<&Database>,
+    mutations: &[Mutation],
+    witness: &MutationExecutionWitness,
+) -> Vec<MutationResult> {
     mutations
         .iter()
-        .map(|m| execute_single(db, m))
+        .map(|m| execute_single(db, m, witness))
         .collect()
 }
 

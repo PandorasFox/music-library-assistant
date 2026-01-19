@@ -39,6 +39,9 @@ tempfile = "3.8"
 rayon = "1.10"
 parallel_worker = "1.0"
 
+# Collections
+indexmap = "2.6"
+
 # Error handling
 anyhow = "1.0"
 thiserror = "1.0"

@@ -46,8 +46,25 @@ impl TagCloud {
         let mut genres: HashMap<String, HashMap<String, usize>> = HashMap::new();
 
         for track in &tracks {
+            let track_id = match track.id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            // Load tags for this track from track_tags table
+            let tags = match db.get_track_tags(track_id) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            // Build a quick lookup map
+            let tag_map: HashMap<String, String> = tags
+                .into_iter()
+                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                .collect();
+
             // Artist
-            if let Some(artist) = &track.artist {
+            if let Some(artist) = tag_map.get("artist") {
                 if !artist.is_empty() {
                     let normalized = normalize_artist(artist);
                     artists
@@ -60,7 +77,7 @@ impl TagCloud {
             }
 
             // Album Artist
-            if let Some(album_artist) = &track.album_artist {
+            if let Some(album_artist) = tag_map.get("album_artist") {
                 if !album_artist.is_empty() {
                     let normalized = normalize_album_artist(album_artist);
                     album_artists
@@ -73,13 +90,12 @@ impl TagCloud {
             }
 
             // Album (keyed by artist context)
-            if let Some(album) = &track.album {
+            if let Some(album) = tag_map.get("album") {
                 if !album.is_empty() {
                     // Use album_artist if available, otherwise fall back to artist
-                    let artist_context = track
-                        .album_artist
-                        .as_ref()
-                        .or(track.artist.as_ref())
+                    let artist_context = tag_map
+                        .get("album_artist")
+                        .or_else(|| tag_map.get("artist"))
                         .map(|a| normalize_artist(a))
                         .unwrap_or_default();
 
@@ -96,7 +112,7 @@ impl TagCloud {
             }
 
             // Genre
-            if let Some(genre) = &track.genre {
+            if let Some(genre) = tag_map.get("genre") {
                 if !genre.is_empty() {
                     let normalized = normalize_genre(genre);
                     genres

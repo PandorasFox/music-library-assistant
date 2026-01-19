@@ -158,14 +158,23 @@ pub use sealed::MutationExecutionWitness;
 ///
 /// Call this at the moment of user confirmation (e.g., when user presses Enter
 /// to save tag edits, or confirms deployment). The returned witness can then
-/// be passed to [`TaskDaemon::queue`] or [`TaskDaemon::queue_all`].
+/// be passed to [`TaskDaemon::add_decision`] or [`TaskDaemon::confirm_transaction`].
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// // User presses Enter to confirm tag edits
+/// // Start a transaction when entering a decision flow
+/// daemon.start_transaction("Tag edits")?;
+///
+/// // User confirms edits for first item
 /// let witness = confirm_decision();
-/// daemon.queue_all_with_label(mutations, Some("Tag edits"), &witness);
+/// daemon.add_decision(0, &witness, "Track A", mutations)?;
+///
+/// // ... user edits more items ...
+///
+/// // User commits the transaction
+/// let commit_witness = confirm_decision();
+/// daemon.confirm_transaction(&commit_witness)?;
 /// ```
 pub fn confirm_decision() -> DecisionWitness {
     DecisionWitness::new()
@@ -756,46 +765,17 @@ impl TaskDaemon {
     }
 
     // -------------------------------------------------------------------------
-    // Mutation Queueing (requires witness)
+    // Internal Mutation Queueing (used by transaction API)
     // -------------------------------------------------------------------------
 
-    /// Set a label for the current batch of tasks.
-    /// This provides a human-readable description shown in the UI.
-    pub fn set_label(&mut self, label: impl Into<String>) {
-        self.current_label = Some(label.into());
-    }
-
-    /// Queue a single mutation.
-    ///
-    /// Requires a [`DecisionWitness`] to prove this mutation comes from a user-led
-    /// Decision context. Use [`confirm_decision()`] to obtain a witness.
-    pub fn queue(&mut self, mutation: Mutation, _witness: &DecisionWitness) {
-        self.queue_with_label(mutation, None, _witness);
-    }
-
-    /// Queue a single mutation with an explicit label.
-    ///
-    /// Requires a [`DecisionWitness`] to prove this mutation comes from a user-led
-    /// Decision context. Use [`confirm_decision()`] to obtain a witness.
-    pub fn queue_with_label(&mut self, mutation: Mutation, label: Option<String>, _witness: &DecisionWitness) {
-        self.queue_mutation_internal(mutation, label);
-    }
-
-    /// Queue multiple mutations.
-    ///
-    /// Requires a [`DecisionWitness`] to prove these mutations come from a user-led
-    /// Decision context. Use [`confirm_decision()`] to obtain a witness.
-    pub fn queue_all(&mut self, mutations: impl IntoIterator<Item = Mutation>, _witness: &DecisionWitness) {
-        self.queue_all_with_label(mutations, None, _witness);
-    }
-
-    /// Queue multiple mutations with an explicit label for all.
-    ///
-    /// Requires a [`DecisionWitness`] to prove these mutations come from a user-led
-    /// Decision context. Use [`confirm_decision()`] to obtain a witness.
-    pub fn queue_all_with_label(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>, _witness: &DecisionWitness) {
-        self.queue_mutations_internal(mutations, label);
-    }
+    // NOTE: Direct mutation queueing methods (queue, queue_all, etc.) were removed.
+    // All mutations must go through the transaction API:
+    //   1. start_transaction(label)
+    //   2. add_decision(idx, witness, label, mutations) for each decision
+    //   3. confirm_transaction(witness) to commit, or discard_transaction(witness) to abort
+    //
+    // This ensures proper decision witness semantics where each user action is
+    // explicitly witnessed, and batch review/commit is possible.
 
     fn queue_mutation_internal(&mut self, mutation: Mutation, label: Option<String>) {
         self.transition_to_working();

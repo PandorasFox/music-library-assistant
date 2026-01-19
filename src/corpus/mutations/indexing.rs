@@ -17,6 +17,7 @@ use super::types::{ExtractedMetadata, Mutation, MutationResult};
 /// Execute an IndexTrack mutation.
 ///
 /// Inserts or updates a track in the database from extracted metadata.
+/// Tags are stored in the separate track_tags table.
 /// Returns the track_id of the inserted/updated track.
 pub fn execute_index_track(
     db: &Database,
@@ -24,7 +25,7 @@ pub fn execute_index_track(
     source: &str,
     metadata: &ExtractedMetadata,
 ) -> Result<i64> {
-    // Build Track from ExtractedMetadata
+    // Build Track from ExtractedMetadata (audio/file metadata only)
     let track = Track {
         id: None,
         path: path.to_string_lossy().to_string(),
@@ -32,28 +33,16 @@ pub fn execute_index_track(
         inode: metadata.inode,
         file_size: metadata.file_size,
         file_type: metadata.file_type.clone(),
-        artist: metadata.get_tag("artist").map(String::from),
-        album: metadata.get_tag("album").map(String::from),
-        album_artist: metadata.get_tag("album_artist").map(String::from),
-        title: metadata.get_tag("title").map(String::from),
-        track_number: metadata
-            .get_tag("track_number")
-            .and_then(|s| s.parse().ok()),
-        genre: metadata.get_tag("genre").map(String::from),
         duration_ms: metadata.duration_ms,
         bitrate_kbps: metadata.bitrate_kbps,
         sample_rate: metadata.sample_rate,
         fingerprint: metadata.fingerprint.clone(),
-        isrc: metadata.get_tag("isrc").map(String::from),
     };
 
-    // Insert track into database
+    // Insert track with tags into database
     let track_id = db
-        .insert_track(&track)
+        .insert_track_with_tags(&track, &metadata.tags)
         .context("Failed to insert track into database")?;
-
-    // TODO: Future - also insert into track_tags table for arbitrary tag storage
-    // For now, tags are stored in the legacy columns
 
     Ok(track_id)
 }
@@ -148,7 +137,7 @@ pub fn execute_update_track(
     path: &Path,
     metadata: &ExtractedMetadata,
 ) -> Result<()> {
-    // Build Track from ExtractedMetadata (similar to execute_index_track)
+    // Build Track from ExtractedMetadata (audio/file metadata only)
     let track = Track {
         id: Some(track_id),
         path: path.to_string_lossy().to_string(),
@@ -156,22 +145,13 @@ pub fn execute_update_track(
         inode: metadata.inode,
         file_size: metadata.file_size,
         file_type: metadata.file_type.clone(),
-        artist: metadata.get_tag("artist").map(String::from),
-        album: metadata.get_tag("album").map(String::from),
-        album_artist: metadata.get_tag("album_artist").map(String::from),
-        title: metadata.get_tag("title").map(String::from),
-        track_number: metadata
-            .get_tag("track_number")
-            .and_then(|s| s.parse().ok()),
-        genre: metadata.get_tag("genre").map(String::from),
         duration_ms: metadata.duration_ms,
         bitrate_kbps: metadata.bitrate_kbps,
         sample_rate: metadata.sample_rate,
         fingerprint: metadata.fingerprint.clone(),
-        isrc: metadata.get_tag("isrc").map(String::from),
     };
 
-    db.update_track_metadata(track_id, &track)
+    db.update_track_metadata_with_tags(track_id, &track, &metadata.tags)
         .context("Failed to update track metadata")
 }
 
@@ -185,10 +165,17 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
     use crate::corpus::metadata;
     use std::collections::HashMap;
 
-    // Get track from database
-    let track = db
+    // Verify track exists
+    let _track = db
         .get_track_by_id(track_id)?
         .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Get tags from database
+    let db_tags = db.get_track_tags(track_id)?;
+    let db_map: HashMap<String, String> = db_tags
+        .into_iter()
+        .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+        .collect();
 
     // Read tags from file
     let disk_tags = match metadata::read_all_tags(path) {
@@ -204,38 +191,19 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
         }
     };
 
-    // Build map of disk tags for easier lookup
-    // Note: disk_tags uses Debug format keys like "Unknown(\"ARTIST\")" or standard keys
-    let disk_map: HashMap<String, String> = disk_tags.into_iter().collect();
+    // Build map of disk tags for easier lookup (normalized to lowercase keys)
+    let disk_map: HashMap<String, String> = disk_tags
+        .into_iter()
+        .map(|(k, v)| (k.to_lowercase(), v))
+        .collect();
 
-    // Helper to get disk tag value, checking various key formats
-    let get_disk_tag = |standard_name: &str| -> Option<&str> {
-        // Try lowercase standard name first
-        if let Some(v) = disk_map.get(standard_name) {
-            return Some(v.as_str());
-        }
-        // lofty often returns tags as Unknown("TAG_NAME") format
-        let upper = standard_name.to_uppercase();
-        for (k, v) in &disk_map {
-            if k.contains(&upper) || k.to_lowercase() == standard_name {
-                return Some(v.as_str());
-            }
-        }
-        None
-    };
+    // Collect all unique tag names from both sources
+    let mut all_tags: std::collections::HashSet<String> = db_map.keys().cloned().collect();
+    all_tags.extend(disk_map.keys().cloned());
 
-    // Fields to compare: artist, album, album_artist, title, genre
-    // track_number is special (stored as Option<i32>)
-    let fields_to_check = [
-        ("artist", track.artist.as_deref()),
-        ("album", track.album.as_deref()),
-        ("album_artist", track.album_artist.as_deref()),
-        ("title", track.title.as_deref()),
-        ("genre", track.genre.as_deref()),
-    ];
-
-    for (field_name, db_value) in fields_to_check {
-        let disk_value = get_disk_tag(field_name);
+    for tag_name in all_tags {
+        let db_value = db_map.get(&tag_name).map(|s| s.as_str());
+        let disk_value = disk_map.get(&tag_name).map(|s| s.as_str());
 
         // Normalize: treat empty string as None
         let db_normalized = db_value.filter(|s| !s.is_empty());
@@ -245,33 +213,14 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
             // Record mismatch
             db.record_tag_mismatch(
                 track_id,
-                field_name,
+                &tag_name,
                 db_normalized,
                 disk_normalized,
             )?;
         } else {
             // Clear any existing mismatch for this field (now in sync)
-            db.clear_tag_mismatch(track_id, field_name)?;
+            db.clear_tag_mismatch(track_id, &tag_name)?;
         }
-    }
-
-    // Handle track_number separately (i32 vs string)
-    let disk_track_num = get_disk_tag("track_number")
-        .or_else(|| get_disk_tag("tracknumber"))
-        .and_then(|s| s.split('/').next()) // Handle "1/12" format
-        .and_then(|s| s.parse::<i32>().ok());
-
-    let db_track_num = track.track_number;
-
-    if db_track_num != disk_track_num {
-        db.record_tag_mismatch(
-            track_id,
-            "track_number",
-            db_track_num.map(|n| n.to_string()).as_deref(),
-            disk_track_num.map(|n| n.to_string()).as_deref(),
-        )?;
-    } else {
-        db.clear_tag_mismatch(track_id, "track_number")?;
     }
 
     Ok(())

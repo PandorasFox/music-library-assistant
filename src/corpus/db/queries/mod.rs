@@ -41,6 +41,8 @@ impl Database {
     fn initialize_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
+            -- Tracks table: file and audio waveform metadata ONLY
+            -- Tag metadata is stored in track_tags table
             CREATE TABLE IF NOT EXISTS tracks (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL UNIQUE,
@@ -48,30 +50,29 @@ impl Database {
                 inode INTEGER NOT NULL,
                 file_size INTEGER NOT NULL,
                 file_type TEXT NOT NULL,
-                artist TEXT,
-                album TEXT,
-                album_artist TEXT,
-                title TEXT,
-                track_number INTEGER,
-                genre TEXT,
                 duration_ms INTEGER,
                 bitrate_kbps INTEGER,
                 sample_rate INTEGER,
                 fingerprint TEXT,
-                isrc TEXT,
                 scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE INDEX IF NOT EXISTS idx_source ON tracks(source);
             CREATE INDEX IF NOT EXISTS idx_inode ON tracks(inode);
-            CREATE INDEX IF NOT EXISTS idx_artist ON tracks(artist);
-            CREATE INDEX IF NOT EXISTS idx_album ON tracks(album);
-            CREATE INDEX IF NOT EXISTS idx_album_artist ON tracks(album_artist);
-            CREATE INDEX IF NOT EXISTS idx_title ON tracks(title);
             CREATE INDEX IF NOT EXISTS idx_duration ON tracks(duration_ms);
             CREATE INDEX IF NOT EXISTS idx_fingerprint ON tracks(fingerprint);
-            CREATE INDEX IF NOT EXISTS idx_genre ON tracks(genre);
-            CREATE INDEX IF NOT EXISTS idx_isrc ON tracks(isrc);
+
+            -- Track tags table: all tag metadata
+            -- Supports multi-value tags (same tag_name can have multiple values)
+            CREATE TABLE IF NOT EXISTS track_tags (
+                track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                tag_name TEXT NOT NULL,
+                tag_value TEXT NOT NULL,
+                PRIMARY KEY (track_id, tag_name, tag_value)
+            );
+            CREATE INDEX IF NOT EXISTS idx_track_tags_track ON track_tags(track_id);
+            CREATE INDEX IF NOT EXISTS idx_track_tags_name ON track_tags(tag_name);
+            CREATE INDEX IF NOT EXISTS idx_track_tags_name_value ON track_tags(tag_name, tag_value);
 
             CREATE TABLE IF NOT EXISTS scan_history (
                 id INTEGER PRIMARY KEY,
@@ -211,11 +212,8 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_tag_mismatches_track ON tag_mismatches(track_id);
 
-            -- Performance indexes for canonicalization queries (LOWER() for case-insensitive grouping)
-            CREATE INDEX IF NOT EXISTS idx_tracks_artist_lower ON tracks(LOWER(artist));
-            CREATE INDEX IF NOT EXISTS idx_tracks_album_artist_lower ON tracks(LOWER(album_artist));
-            CREATE INDEX IF NOT EXISTS idx_tracks_album_lower ON tracks(LOWER(album));
-            CREATE INDEX IF NOT EXISTS idx_tracks_genre_lower ON tracks(LOWER(genre));
+            -- Performance indexes for tag queries (case-insensitive grouping)
+            CREATE INDEX IF NOT EXISTS idx_track_tags_name_value_lower ON track_tags(tag_name, LOWER(tag_value));
 
             -- Application metadata (version tracking, etc.)
             CREATE TABLE IF NOT EXISTS app_metadata (

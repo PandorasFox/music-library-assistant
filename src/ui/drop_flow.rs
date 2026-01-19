@@ -134,15 +134,7 @@ pub fn execute_drop_missing(missing_tracks: &[Track]) -> Result<DropMissingResul
         writeln!(log_file, "#")?;
         for track in missing_tracks {
             writeln!(log_file, "Path: {}", track.path)?;
-            if let Some(ref artist) = track.artist {
-                writeln!(log_file, "  Artist: {}", artist)?;
-            }
-            if let Some(ref title) = track.title {
-                writeln!(log_file, "  Title: {}", title)?;
-            }
-            if let Some(ref album) = track.album {
-                writeln!(log_file, "  Album: {}", album)?;
-            }
+            writeln!(log_file, "  ID: {:?}", track.id)?;
             writeln!(log_file)?;
         }
         Ok(())

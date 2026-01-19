@@ -122,7 +122,11 @@ fn sanitize_path_component(s: &str) -> String {
 /// Returns: {album_artist}/{album}/{track}. {title}.{ext}
 /// Or: {album_artist}/{title}.{ext} for singles
 /// Or: [no album artist]/... if missing album_artist
-pub fn compute_deployment_path(track: &Track) -> PathBuf {
+/// Compute deployment path from track and tags.
+///
+/// Tags should be provided as a HashMap with lowercase keys.
+/// Required tags: album_artist (or artist), album (optional), title (optional), track_number (optional)
+pub fn compute_deployment_path_with_tags(track: &Track, tags: &HashMap<String, String>) -> PathBuf {
     // Get extension from original path
     let ext = Path::new(&track.path)
         .extension()
@@ -130,26 +134,30 @@ pub fn compute_deployment_path(track: &Track) -> PathBuf {
         .unwrap_or("unknown");
 
     // Determine album artist (prefer album_artist, fallback to artist)
-    let album_artist = track
-        .album_artist
-        .as_deref()
-        .or(track.artist.as_deref())
+    let album_artist = tags
+        .get("album_artist")
+        .or_else(|| tags.get("artist"))
+        .map(|s| s.as_str())
         .unwrap_or("[no album artist]");
 
-    if let Some(album) = &track.album {
+    if let Some(album) = tags.get("album") {
         // Full path: {album_artist}/{album}/{track}. {title}.{ext}
         let mut path = PathBuf::new();
         path.push(sanitize_path_component(album_artist));
         path.push(sanitize_path_component(album));
 
-        let filename = if let Some(title) = &track.title {
-            if let Some(track_num) = track.track_number {
-                format!(
-                    "{:02}. {}.{}",
-                    track_num,
-                    sanitize_path_component(title),
-                    ext
-                )
+        let filename = if let Some(title) = tags.get("title") {
+            if let Some(track_num_str) = tags.get("track_number") {
+                if let Ok(track_num) = track_num_str.parse::<i32>() {
+                    format!(
+                        "{:02}. {}.{}",
+                        track_num,
+                        sanitize_path_component(title),
+                        ext
+                    )
+                } else {
+                    format!("{}.{}", sanitize_path_component(title), ext)
+                }
             } else {
                 format!("{}.{}", sanitize_path_component(title), ext)
             }
@@ -168,7 +176,7 @@ pub fn compute_deployment_path(track: &Track) -> PathBuf {
         let mut path = PathBuf::new();
         path.push(sanitize_path_component(album_artist));
 
-        let filename = if let Some(title) = &track.title {
+        let filename = if let Some(title) = tags.get("title") {
             format!("{}.{}", sanitize_path_component(title), ext)
         } else {
             Path::new(&track.path)
@@ -180,6 +188,14 @@ pub fn compute_deployment_path(track: &Track) -> PathBuf {
         path.push(filename);
         path
     }
+}
+
+/// Compute deployment path (convenience wrapper that uses empty tags).
+///
+/// Note: This will produce fallback paths. For proper deployment paths,
+/// use compute_deployment_path_with_tags with tags loaded from track_tags table.
+pub fn compute_deployment_path(track: &Track) -> PathBuf {
+    compute_deployment_path_with_tags(track, &HashMap::new())
 }
 
 /// Create deployment plans for all configured deploy mappings
@@ -697,6 +713,21 @@ pub fn all_deployment_statuses_to_decisions(
 mod tests {
     use super::*;
 
+    fn make_track(path: &str) -> Track {
+        Track {
+            id: None,
+            path: path.to_string(),
+            source: "corpus".to_string(),
+            inode: 123,
+            file_size: 1000,
+            file_type: "flac".to_string(),
+            duration_ms: Some(180000),
+            bitrate_kbps: None,
+            sample_rate: None,
+            fingerprint: None,
+        }
+    }
+
     #[test]
     fn test_sanitize_path_component() {
         assert_eq!(sanitize_path_component("Hello/World"), "Hello_World");
@@ -706,27 +737,16 @@ mod tests {
 
     #[test]
     fn test_compute_deployment_path_full() {
-        let track = Track {
-            id: None,
-            path: "/corpus/test.flac".to_string(),
-            source: "corpus".to_string(),
-            inode: 123,
-            file_size: 1000,
-            file_type: "flac".to_string(),
-            artist: Some("Artist Name".to_string()),
-            album: Some("Album Name".to_string()),
-            album_artist: Some("Album Artist".to_string()),
-            title: Some("Track Title".to_string()),
-            track_number: Some(1),
-            genre: None,
-            duration_ms: Some(180000),
-            bitrate_kbps: None,
-            sample_rate: None,
-            fingerprint: None,
-            isrc: None,
-        };
+        let track = make_track("/corpus/test.flac");
+        let tags: HashMap<String, String> = [
+            ("artist".to_string(), "Artist Name".to_string()),
+            ("album".to_string(), "Album Name".to_string()),
+            ("album_artist".to_string(), "Album Artist".to_string()),
+            ("title".to_string(), "Track Title".to_string()),
+            ("track_number".to_string(), "1".to_string()),
+        ].into_iter().collect();
 
-        let path = compute_deployment_path(&track);
+        let path = compute_deployment_path_with_tags(&track, &tags);
         assert_eq!(
             path,
             PathBuf::from("Album Artist/Album Name/01. Track Title.flac")
@@ -735,53 +755,27 @@ mod tests {
 
     #[test]
     fn test_compute_deployment_path_single() {
-        let track = Track {
-            id: None,
-            path: "/corpus/test.mp3".to_string(),
-            source: "corpus".to_string(),
-            inode: 123,
-            file_size: 1000,
-            file_type: "mp3".to_string(),
-            artist: Some("Artist Name".to_string()),
-            album: None,
-            album_artist: None,
-            title: Some("Single Track".to_string()),
-            track_number: None,
-            genre: None,
-            duration_ms: Some(180000),
-            bitrate_kbps: None,
-            sample_rate: None,
-            fingerprint: None,
-            isrc: None,
-        };
+        let mut track = make_track("/corpus/test.mp3");
+        track.file_type = "mp3".to_string();
+        let tags: HashMap<String, String> = [
+            ("artist".to_string(), "Artist Name".to_string()),
+            ("title".to_string(), "Single Track".to_string()),
+        ].into_iter().collect();
 
-        let path = compute_deployment_path(&track);
+        let path = compute_deployment_path_with_tags(&track, &tags);
         assert_eq!(path, PathBuf::from("Artist Name/Single Track.mp3"));
     }
 
     #[test]
     fn test_compute_deployment_path_no_album_artist() {
-        let track = Track {
-            id: None,
-            path: "/corpus/test.flac".to_string(),
-            source: "corpus".to_string(),
-            inode: 123,
-            file_size: 1000,
-            file_type: "flac".to_string(),
-            artist: None,
-            album: Some("Album".to_string()),
-            album_artist: None,
-            title: Some("Title".to_string()),
-            track_number: Some(5),
-            genre: None,
-            duration_ms: Some(180000),
-            bitrate_kbps: None,
-            sample_rate: None,
-            fingerprint: None,
-            isrc: None,
-        };
+        let track = make_track("/corpus/test.flac");
+        let tags: HashMap<String, String> = [
+            ("album".to_string(), "Album".to_string()),
+            ("title".to_string(), "Title".to_string()),
+            ("track_number".to_string(), "5".to_string()),
+        ].into_iter().collect();
 
-        let path = compute_deployment_path(&track);
+        let path = compute_deployment_path_with_tags(&track, &tags);
         assert_eq!(
             path,
             PathBuf::from("[no album artist]/Album/05. Title.flac")

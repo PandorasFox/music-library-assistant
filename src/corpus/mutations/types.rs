@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// Extracted metadata from an audio file, ready for indexing.
 /// This is a Clone + Serialize version of the data from metadata::extract_metadata().
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtractedMetadata {
     pub inode: i64,
     pub file_size: i64,
@@ -26,32 +26,10 @@ pub struct ExtractedMetadata {
 }
 
 impl ExtractedMetadata {
-    /// Create ExtractedMetadata from a Track (for compatibility with existing code).
-    pub fn from_track(track: &crate::corpus::db::Track) -> Self {
-        let mut tags = Vec::new();
-
-        if let Some(ref v) = track.artist {
-            tags.push(("artist".to_string(), v.clone()));
-        }
-        if let Some(ref v) = track.album {
-            tags.push(("album".to_string(), v.clone()));
-        }
-        if let Some(ref v) = track.album_artist {
-            tags.push(("album_artist".to_string(), v.clone()));
-        }
-        if let Some(ref v) = track.title {
-            tags.push(("title".to_string(), v.clone()));
-        }
-        if let Some(v) = track.track_number {
-            tags.push(("track_number".to_string(), v.to_string()));
-        }
-        if let Some(ref v) = track.genre {
-            tags.push(("genre".to_string(), v.clone()));
-        }
-        if let Some(ref v) = track.isrc {
-            tags.push(("isrc".to_string(), v.clone()));
-        }
-
+    /// Create ExtractedMetadata from a Track and tags.
+    ///
+    /// Tags must be provided separately since they're stored in track_tags table.
+    pub fn from_track_with_tags(track: &crate::corpus::db::Track, tags: Vec<(String, String)>) -> Self {
         Self {
             inode: track.inode,
             file_size: track.file_size,
@@ -64,6 +42,11 @@ impl ExtractedMetadata {
         }
     }
 
+    /// Create ExtractedMetadata from a Track (without tags).
+    pub fn from_track(track: &crate::corpus::db::Track) -> Self {
+        Self::from_track_with_tags(track, Vec::new())
+    }
+
     /// Get a tag value by name.
     pub fn get_tag(&self, name: &str) -> Option<&str> {
         self.tags
@@ -74,7 +57,7 @@ impl ExtractedMetadata {
 }
 
 /// A single tag edit operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TagEdit {
     pub tag_name: String,
     pub old_value: Option<String>,
@@ -87,7 +70,7 @@ pub struct TagEdit {
 /// - Serializable for persistence/logging
 /// - Grouped by file path for efficient execution
 /// - Categorized for batching same-type operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mutation {
     // ========================================================================
     // Tag Operations

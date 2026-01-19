@@ -32,8 +32,7 @@ pub struct RenderContext<'a> {
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub drop_missing_state: Option<&'a super::DropMissingState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
-    pub directory_tag_editor: Option<&'a mut tag_editor::DirectoryTagEditorState>,
-    pub directory_tag_editor_modal: Option<&'a tag_editor::types::DirectoryTagEditorModal>,
+    pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub splash_screen: Option<&'a super::splash_screen::SplashScreen>,
     pub deploy_conflict_review: Option<&'a super::DeployConflictReviewState>,
@@ -101,10 +100,10 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::DeploymentPreview => Some("Deployment Preview"),
         super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
         super::UiMode::CorpusBrowser => Some("Corpus Browser"),
-        super::UiMode::DirectoryTagEditor => Some("Directory Tag Editor"),
         super::UiMode::DeployConflictReview => Some("Deploy Conflict Review"),
         super::UiMode::Insights => Some("Corpus Insights"),
         super::UiMode::LoadingSplash => None, // Never reached - handled separately
+        super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
     };
 
     let title = match suffix {
@@ -170,36 +169,6 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 browser.render(f, area);
             }
         }
-        super::UiMode::DirectoryTagEditor => {
-            if let Some(ref mut editor) = ctx.directory_tag_editor {
-                editor.render(f, area, ctx.status_message);
-            }
-            // Render modal on top if present
-            if let Some(ref modal) = ctx.directory_tag_editor_modal {
-                use tag_editor::types::DirectoryTagEditorModal;
-                match modal {
-                    DirectoryTagEditorModal::ChangePreview { scroll_offset, .. } => {
-                        if let Some(ref editor) = ctx.directory_tag_editor {
-                            let changes = editor.compute_changes();
-                            tag_editor::directory_render::render_directory_change_preview_modal(
-                                f,
-                                area,
-                                &changes,
-                                editor.files.len(),
-                                *scroll_offset,
-                            );
-                        }
-                    }
-                    DirectoryTagEditorModal::UnsavedChanges { going_next } => {
-                        tag_editor::directory_render::render_unsaved_changes_modal(
-                            f,
-                            area,
-                            *going_next,
-                        );
-                    }
-                }
-            }
-        }
         super::UiMode::DeployConflictReview => {
             if let Some(ref review) = ctx.deploy_conflict_review {
                 render_deploy_conflict_review(f, area, review, ctx.status_message);
@@ -215,6 +184,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         }
         super::UiMode::LoadingSplash => {
             // Never reached - handled separately in render() before this function
+        }
+        super::UiMode::UnifiedTagEditor => {
+            if let Some(ref mut editor) = ctx.unified_tag_editor {
+                editor.render(f, area, ctx.status_message);
+            }
         }
     }
 }
@@ -738,10 +712,10 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::DeploymentPreview => control_presets::deployment_preview(),
         super::UiMode::ExitConfirmModal => control_presets::exit_confirm_modal(),
         super::UiMode::CorpusBrowser => control_presets::corpus_browser(),
-        super::UiMode::DirectoryTagEditor => control_presets::directory_tag_editor(),
         super::UiMode::DeployConflictReview => control_presets::deploy_conflict_review(),
         super::UiMode::Insights => control_presets::insights_view(),
         super::UiMode::LoadingSplash => control_presets::empty(),
+        super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
     };
     lines.push(controls.render_line());
 

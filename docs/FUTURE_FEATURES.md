@@ -71,9 +71,13 @@ Remaining:
 Implemented:
 - Edit indicator (pencil icon) for modified fields
 - Action pane with Proceed button (replaced search pane)
+- Multi-value tag support with `[N values]` display and popup editor
+- Name/value focus indicator (separate highlighting)
+- Delete/strikethrough for tag deletion
+- Tag rename detection
 
 Remaining:
-- Better multi-value tag handling (multiple album_artist entries)
+- Centralized controls panel: Design a ControlsContext trait or similar that each UiMode/modal can implement to provide context-sensitive controls to the ever-present bottom panel (`src/ui/tag_editor/state.rs:979`)
 
 ---
 

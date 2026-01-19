@@ -118,9 +118,12 @@ impl TagEditorState {
                 } else {
                     "   "
                 };
-                let artist = track.artist.as_deref().unwrap_or("Unknown");
-                let title = track.title.as_deref().unwrap_or("Unknown");
-                ListItem::new(Line::from(format!("{}{} - {}", prefix, artist, title))).style(
+                // Use filename since tags are stored separately
+                let filename = std::path::Path::new(&track.path)
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("Unknown");
+                ListItem::new(Line::from(format!("{}{}", prefix, filename))).style(
                     if idx == self.current_track_idx {
                         Style::default().bg(Color::DarkGray)
                     } else {

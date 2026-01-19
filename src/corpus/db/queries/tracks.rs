@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension};
 use std::path::PathBuf;
 
 use super::Database;
-use crate::corpus::db::types::Track;
+use crate::corpus::db::types::{Track, TrackTag};
 
 impl Database {
     // ========================================================================
@@ -17,9 +17,8 @@ impl Database {
             .execute(
                 r#"
             INSERT OR REPLACE INTO tracks
-            (path, source, inode, file_size, file_type, artist, album, album_artist,
-             title, track_number, genre, duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            (path, source, inode, file_size, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
                 params![
                     &track.path,
@@ -27,22 +26,23 @@ impl Database {
                     &track.inode,
                     &track.file_size,
                     &track.file_type,
-                    &track.artist,
-                    &track.album,
-                    &track.album_artist,
-                    &track.title,
-                    &track.track_number,
-                    &track.genre,
                     &track.duration_ms,
                     &track.bitrate_kbps,
                     &track.sample_rate,
                     &track.fingerprint,
-                    &track.isrc,
                 ],
             )
             .context("Failed to insert track")?;
 
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Insert a track and its tags together.
+    /// Returns the track ID.
+    pub fn insert_track_with_tags(&self, track: &Track, tags: &[(String, String)]) -> Result<i64> {
+        let track_id = self.insert_track(track)?;
+        self.set_track_tags(track_id, tags)?;
+        Ok(track_id)
     }
 
     /// Clear all tracks for a source, cascading to dependent tables.
@@ -144,8 +144,8 @@ impl Database {
     /// Get all tracks for a specific source.
     pub fn get_all_tracks_for_source(&self, source: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, source, inode, file_size, file_type, artist, album, album_artist,
-                    title, track_number, genre, duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks WHERE source = ?1 ORDER BY path",
         )?;
 
@@ -196,12 +196,12 @@ impl Database {
 
     pub fn get_all_tracks(&self, source: Option<&str>) -> Result<Vec<Track>> {
         let query = if source.is_some() {
-            "SELECT id, path, source, inode, file_size, file_type, artist, album, album_artist,
-                    title, track_number, genre, duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks WHERE source = ?1 ORDER BY path"
         } else {
-            "SELECT id, path, source, inode, file_size, file_type, artist, album, album_artist,
-                    title, track_number, genre, duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks ORDER BY path"
         };
 
@@ -217,12 +217,9 @@ impl Database {
 
     /// Get a track by its ID.
     pub fn get_track_by_id(&self, track_id: i64) -> Result<Option<Track>> {
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
         let result = self.conn.query_row(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number, genre,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks WHERE id = ?1",
             params![track_id],
             Self::row_to_track,
@@ -237,12 +234,9 @@ impl Database {
 
     /// Get a track by its exact path.
     pub fn get_track_by_path(&self, path: &str) -> Result<Option<Track>> {
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
         let result = self.conn.query_row(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number, genre,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks WHERE path = ?1",
             params![path],
             Self::row_to_track,
@@ -257,12 +251,9 @@ impl Database {
 
     /// Get all tracks with a specific fingerprint.
     pub fn get_tracks_by_fingerprint(&self, fingerprint: &str) -> Result<Vec<Track>> {
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number, genre,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
              WHERE fingerprint = ?1
              ORDER BY path",
@@ -277,23 +268,24 @@ impl Database {
 
     /// Get tracks by metadata (artist, album, title).
     /// Used for detecting metadata collisions.
+    /// Joins with track_tags to match on tag values.
     pub fn get_tracks_by_metadata(
         &self,
         artist: &str,
         album: &str,
         title: &str,
     ) -> Result<Vec<Track>> {
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number, genre,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
-             FROM tracks
-             WHERE LOWER(COALESCE(artist, '')) = LOWER(?1)
-               AND LOWER(COALESCE(album, '')) = LOWER(?2)
-               AND LOWER(COALESCE(title, '')) = LOWER(?3)
-             ORDER BY path",
+            "SELECT DISTINCT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
+                    t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint
+             FROM tracks t
+             LEFT JOIN track_tags ta ON t.id = ta.track_id AND ta.tag_name = 'artist'
+             LEFT JOIN track_tags tb ON t.id = tb.track_id AND tb.tag_name = 'album'
+             LEFT JOIN track_tags tt ON t.id = tt.track_id AND tt.tag_name = 'title'
+             WHERE LOWER(COALESCE(ta.tag_value, '')) = LOWER(?1)
+               AND LOWER(COALESCE(tb.tag_value, '')) = LOWER(?2)
+               AND LOWER(COALESCE(tt.tag_value, '')) = LOWER(?3)
+             ORDER BY t.path",
         )?;
 
         let tracks = stmt
@@ -305,8 +297,8 @@ impl Database {
 
     pub fn get_tracks_by_corpus_path_prefix(&self, path_prefix: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, source, inode, file_size, file_type, artist, album, album_artist,
-                    title, track_number, genre, duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
              WHERE source = 'corpus' AND path LIKE ?1 || '%'
              ORDER BY path",
@@ -329,8 +321,6 @@ impl Database {
             return Ok(Vec::new());
         }
 
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
         let conditions: Vec<String> = path_prefixes
             .iter()
             .enumerate()
@@ -340,8 +330,7 @@ impl Database {
 
         let query = format!(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number, genre,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
              WHERE source = ?1 AND fingerprint IS NOT NULL AND ({})
              ORDER BY path",
@@ -371,12 +360,9 @@ impl Database {
     pub fn get_tracks_in_directory(&self, dir_path: &std::path::Path) -> Result<Vec<Track>> {
         let path_prefix = format!("{}%", dir_path.to_string_lossy());
 
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number, genre,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
              WHERE source = 'corpus' AND fingerprint IS NOT NULL AND path LIKE ?1
              ORDER BY path",
@@ -401,12 +387,9 @@ impl Database {
             format!("{}{}%", dir_str, std::path::MAIN_SEPARATOR)
         };
 
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    artist, album, album_artist, title, track_number, genre,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
              WHERE path LIKE ?1
              ORDER BY path",
@@ -483,35 +466,86 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_track_tag(&self, track_id: i64, field_name: &str, value: &str) -> Result<()> {
-        let query = match field_name {
-            "artist" => "UPDATE tracks SET artist = ?1 WHERE id = ?2",
-            "album" => "UPDATE tracks SET album = ?1 WHERE id = ?2",
-            "album_artist" => "UPDATE tracks SET album_artist = ?1 WHERE id = ?2",
-            "title" => "UPDATE tracks SET title = ?1 WHERE id = ?2",
-            "track_number" => {
-                if let Ok(num) = value.parse::<i32>() {
-                    self.conn
-                        .execute(
-                            "UPDATE tracks SET track_number = ?1 WHERE id = ?2",
-                            params![num, track_id],
-                        )
-                        .context("Failed to update track_number")?;
-                    return Ok(());
-                } else {
-                    return Ok(());
-                }
+    // ========================================================================
+    // Track Tags Operations
+    // ========================================================================
+
+    /// Get all tags for a track.
+    pub fn get_track_tags(&self, track_id: i64) -> Result<Vec<TrackTag>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT track_id, tag_name, tag_value FROM track_tags WHERE track_id = ?1 ORDER BY tag_name, tag_value"
+        )?;
+        let tags = stmt
+            .query_map(params![track_id], |row| {
+                Ok(TrackTag {
+                    track_id: row.get(0)?,
+                    tag_name: row.get(1)?,
+                    tag_value: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(tags)
+    }
+
+    /// Set all tags for a track (replaces existing tags).
+    pub fn set_track_tags(&self, track_id: i64, tags: &[(String, String)]) -> Result<()> {
+        // Delete existing tags
+        self.conn.execute(
+            "DELETE FROM track_tags WHERE track_id = ?1",
+            params![track_id],
+        )?;
+
+        // Insert new tags
+        for (name, value) in tags {
+            if !value.is_empty() {
+                self.conn.execute(
+                    "INSERT INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                    params![track_id, name, value],
+                )?;
             }
-            "genre" => "UPDATE tracks SET genre = ?1 WHERE id = ?2",
-            "isrc" => "UPDATE tracks SET isrc = ?1 WHERE id = ?2",
-            _ => return Ok(()),
-        };
-
-        self.conn
-            .execute(query, params![value, track_id])
-            .with_context(|| format!("Failed to update {} for track {}", field_name, track_id))?;
-
+        }
         Ok(())
+    }
+
+    /// Update a single tag for a track (upsert semantics).
+    pub fn update_track_tag(&self, track_id: i64, tag_name: &str, value: &str) -> Result<()> {
+        // Delete existing value for this tag name
+        self.conn.execute(
+            "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2",
+            params![track_id, tag_name],
+        )?;
+
+        // Insert new value if non-empty
+        if !value.is_empty() {
+            self.conn.execute(
+                "INSERT INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                params![track_id, tag_name, value],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Delete a tag from a track.
+    pub fn delete_track_tag(&self, track_id: i64, tag_name: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2",
+            params![track_id, tag_name],
+        )?;
+        Ok(())
+    }
+
+    /// Get a specific tag value for a track (first value if multi-value).
+    pub fn get_track_tag_value(&self, track_id: i64, tag_name: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT tag_value FROM track_tags WHERE track_id = ?1 AND tag_name = ?2 LIMIT 1",
+            params![track_id, tag_name],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     // ========================================================================
@@ -568,16 +602,15 @@ impl Database {
     /// Update track metadata (full replace for out-of-band changes).
     /// Preserves the track ID but replaces all other fields.
     /// Used by OutOfBandFileChange signal handler.
+    /// Note: This only updates the tracks table, not track_tags.
     pub fn update_track_metadata(&self, track_id: i64, track: &Track) -> Result<()> {
         self.conn
             .execute(
                 r#"
                 UPDATE tracks SET
                     path = ?1, source = ?2, inode = ?3, file_size = ?4, file_type = ?5,
-                    artist = ?6, album = ?7, album_artist = ?8, title = ?9, track_number = ?10,
-                    genre = ?11, duration_ms = ?12, bitrate_kbps = ?13, sample_rate = ?14,
-                    fingerprint = ?15, isrc = ?16
-                WHERE id = ?17
+                    duration_ms = ?6, bitrate_kbps = ?7, sample_rate = ?8, fingerprint = ?9
+                WHERE id = ?10
                 "#,
                 params![
                     &track.path,
@@ -585,17 +618,10 @@ impl Database {
                     &track.inode,
                     &track.file_size,
                     &track.file_type,
-                    &track.artist,
-                    &track.album,
-                    &track.album_artist,
-                    &track.title,
-                    &track.track_number,
-                    &track.genre,
                     &track.duration_ms,
                     &track.bitrate_kbps,
                     &track.sample_rate,
                     &track.fingerprint,
-                    &track.isrc,
                     track_id,
                 ],
             )
@@ -603,10 +629,25 @@ impl Database {
         Ok(())
     }
 
+    /// Update track metadata and tags together.
+    pub fn update_track_metadata_with_tags(
+        &self,
+        track_id: i64,
+        track: &Track,
+        tags: &[(String, String)],
+    ) -> Result<()> {
+        self.update_track_metadata(track_id, track)?;
+        self.set_track_tags(track_id, tags)?;
+        Ok(())
+    }
+
     // ========================================================================
     // Row Conversion Helper
     // ========================================================================
 
+    /// Convert a database row to a Track struct.
+    /// Expected column order: id, path, source, inode, file_size, file_type,
+    ///                        duration_ms, bitrate_kbps, sample_rate, fingerprint
     pub(super) fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
         Ok(Track {
             id: Some(row.get(0)?),
@@ -615,17 +656,10 @@ impl Database {
             inode: row.get(3)?,
             file_size: row.get(4)?,
             file_type: row.get(5)?,
-            artist: row.get(6)?,
-            album: row.get(7)?,
-            album_artist: row.get(8)?,
-            title: row.get(9)?,
-            track_number: row.get(10)?,
-            genre: row.get(11)?,
-            duration_ms: row.get(12)?,
-            bitrate_kbps: row.get(13)?,
-            sample_rate: row.get(14)?,
-            fingerprint: row.get(15)?,
-            isrc: row.get(16)?,
+            duration_ms: row.get(6)?,
+            bitrate_kbps: row.get(7)?,
+            sample_rate: row.get(8)?,
+            fingerprint: row.get(9)?,
         })
     }
 }

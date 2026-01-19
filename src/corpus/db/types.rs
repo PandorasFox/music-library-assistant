@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 /// Universal audio file representation.
 /// Stored in the `tracks` table.
+///
+/// Contains ONLY file and audio waveform metadata.
+/// Tag metadata (artist, title, album, etc.) is stored in `track_tags` table.
 #[derive(Debug, Clone)]
 pub struct Track {
     pub id: Option<i64>,
@@ -12,18 +15,20 @@ pub struct Track {
     pub source: String, // corpus/library name/legacy
     pub inode: i64,
     pub file_size: i64,
-    pub file_type: String, // flac, mp3, ogg, etc.
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    pub title: Option<String>,
-    pub track_number: Option<i32>,
-    pub genre: Option<String>,
+    pub file_type: String,             // flac, mp3, ogg, etc.
     pub duration_ms: Option<i64>,
     pub bitrate_kbps: Option<i32>,
     pub sample_rate: Option<i32>,
-    pub fingerprint: Option<String>, // chromaprint acoustic fingerprint
-    pub isrc: Option<String>,        // International Standard Recording Code
+    pub fingerprint: Option<String>,   // chromaprint acoustic fingerprint
+}
+
+/// A single tag associated with a track.
+/// Stored in the `track_tags` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackTag {
+    pub track_id: i64,
+    pub tag_name: String,
+    pub tag_value: String,
 }
 
 /// Entry in the scan_state table for incremental scanning.

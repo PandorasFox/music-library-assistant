@@ -63,6 +63,8 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
         }
     };
 
+    // Note: Tag fields (artist, album, title, etc.) are stored separately in track_tags table.
+    // Use read_all_tags() to get tags from the file if needed.
     Ok(Track {
         id: None,
         path: path.to_string_lossy().to_string(),
@@ -70,17 +72,10 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
         inode,
         file_size,
         file_type,
-        artist: audio_meta.artist,
-        album: audio_meta.album,
-        album_artist: audio_meta.album_artist,
-        title: audio_meta.title,
-        track_number: audio_meta.track_number,
-        genre: audio_meta.genre,
         duration_ms: audio_meta.duration_ms,
         bitrate_kbps: audio_meta.bitrate_kbps,
         sample_rate: audio_meta.sample_rate,
         fingerprint,
-        isrc: audio_meta.isrc,
     })
 }
 
@@ -385,12 +380,65 @@ fn convert_audio_buffer_to_i16(decoded: AudioBufferRef) -> Result<Vec<i16>> {
     }
 }
 
-/// Read all tags from an audio file using lofty
-/// Returns a vector of (tag_name, tag_value) tuples
+/// Convert a lofty ItemKey to a clean tag name string.
+/// Handles Unknown("NAME") variants properly instead of using Debug format.
+fn item_key_to_string(key: &lofty::tag::ItemKey) -> String {
+    use lofty::tag::ItemKey;
+    match key {
+        ItemKey::Unknown(s) => s.clone(),
+        ItemKey::TrackArtist => "artist".to_string(),
+        ItemKey::AlbumArtist => "album_artist".to_string(),
+        ItemKey::TrackTitle => "title".to_string(),
+        ItemKey::AlbumTitle => "album".to_string(),
+        ItemKey::TrackNumber => "track_number".to_string(),
+        ItemKey::DiscNumber => "disc_number".to_string(),
+        ItemKey::Genre => "genre".to_string(),
+        ItemKey::Year => "year".to_string(),
+        ItemKey::RecordingDate => "date".to_string(),
+        ItemKey::Comment => "comment".to_string(),
+        ItemKey::Composer => "composer".to_string(),
+        ItemKey::Conductor => "conductor".to_string(),
+        ItemKey::Label => "label".to_string(),
+        ItemKey::Remixer => "remixer".to_string(),
+        ItemKey::Lyricist => "lyricist".to_string(),
+        ItemKey::Writer => "writer".to_string(),
+        ItemKey::Bpm => "bpm".to_string(),
+        ItemKey::CatalogNumber => "catalog_number".to_string(),
+        ItemKey::Barcode => "barcode".to_string(),
+        ItemKey::Isrc => "isrc".to_string(),
+        ItemKey::MusicBrainzTrackId => "musicbrainz_trackid".to_string(),
+        ItemKey::MusicBrainzRecordingId => "musicbrainz_recordingid".to_string(),
+        ItemKey::MusicBrainzReleaseId => "musicbrainz_releaseid".to_string(),
+        ItemKey::MusicBrainzArtistId => "musicbrainz_artistid".to_string(),
+        ItemKey::MusicBrainzReleaseArtistId => "musicbrainz_releaseartistid".to_string(),
+        ItemKey::MusicBrainzReleaseGroupId => "musicbrainz_releasegroupid".to_string(),
+        ItemKey::MusicBrainzWorkId => "musicbrainz_workid".to_string(),
+        // For any other variants, use Debug format but strip the enum name
+        other => {
+            let debug = format!("{:?}", other);
+            // If debug looks like "SomeVariant", just lowercase it
+            // If it looks like "Unknown(\"..\")", extract the content
+            if debug.starts_with("Unknown(") {
+                debug
+                    .strip_prefix("Unknown(\"")
+                    .and_then(|s| s.strip_suffix("\")"))
+                    .map(|s| s.to_string())
+                    .unwrap_or(debug)
+            } else {
+                debug.to_lowercase()
+            }
+        }
+    }
+}
+
+/// Read all tags from an audio file using lofty.
+/// Returns a vector of (tag_name, tag_value) tuples, deduplicated.
+/// Tag names are normalized (lowercase, clean format - not Debug format).
 pub fn read_all_tags(path: &Path) -> Result<Vec<(String, String)>> {
     use lofty::file::TaggedFileExt;
     use lofty::probe::Probe;
     use lofty::tag::Accessor;
+    use std::collections::HashSet;
 
     let tagged_file = Probe::open(path)
         .with_context(|| format!("Failed to open file for tag reading: {}", path.display()))?
@@ -398,89 +446,72 @@ pub fn read_all_tags(path: &Path) -> Result<Vec<(String, String)>> {
         .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
 
     // Binary/embedded tags to skip (album art, lyrics, etc.)
-    const BINARY_TAG_TYPES: &[&str] = &[
-        "APIC",                   // Album art (ID3v2)
-        "PIC",                    // Picture (ID3v1)
-        "USLT",                   // Unsynchronized lyrics
-        "SYLT",                   // Synchronized lyrics
-        "GEOB",                   // General encapsulated object
-        "METADATA_BLOCK_PICTURE", // FLAC/Vorbis album art
-        "Picture",                // Generic picture tag
-        "Popularimeter",          // Rating/playcount data (often large)
+    const BINARY_TAG_PATTERNS: &[&str] = &[
+        "apic", "pic", "uslt", "sylt", "geob",
+        "metadata_block_picture", "picture", "popularimeter",
+        "cover", "artwork", "lyrics",
     ];
 
     let mut all_tags = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Helper to add tag if not already seen
+    let mut add_tag = |name: String, value: String| {
+        let normalized = name.to_lowercase();
+        // Skip binary patterns
+        if BINARY_TAG_PATTERNS.iter().any(|&p| normalized.contains(p)) {
+            return;
+        }
+        // Skip if empty value
+        if value.is_empty() {
+            return;
+        }
+        // Only add if not seen (dedup)
+        if !seen.contains(&normalized) {
+            seen.insert(normalized);
+            all_tags.push((name, value));
+        }
+    };
 
     // Get the primary tag (first available)
     if let Some(tag) = tagged_file.primary_tag() {
-        // Standard tags via Accessor trait
+        // Standard tags via Accessor trait (these take priority)
         if let Some(artist) = tag.artist() {
-            all_tags.push(("artist".to_string(), artist.as_ref().to_string()));
+            add_tag("artist".to_string(), artist.as_ref().to_string());
         }
         if let Some(album) = tag.album() {
-            all_tags.push(("album".to_string(), album.as_ref().to_string()));
+            add_tag("album".to_string(), album.as_ref().to_string());
         }
         if let Some(title) = tag.title() {
-            all_tags.push(("title".to_string(), title.as_ref().to_string()));
+            add_tag("title".to_string(), title.as_ref().to_string());
         }
         if let Some(track) = tag.track() {
-            all_tags.push(("track_number".to_string(), track.to_string()));
+            add_tag("track_number".to_string(), track.to_string());
         }
         if let Some(year) = tag.year() {
-            all_tags.push(("year".to_string(), year.to_string()));
+            add_tag("year".to_string(), year.to_string());
         }
         if let Some(genre) = tag.genre() {
-            all_tags.push(("genre".to_string(), genre.as_ref().to_string()));
+            add_tag("genre".to_string(), genre.as_ref().to_string());
         }
 
-        // Additional fields from items (allow duplicates)
+        // Additional fields from items (extended tags)
         for item in tag.items() {
-            let key = format!("{:?}", item.key());
+            let key = item_key_to_string(item.key());
 
-            // Skip binary/embedded tags (album art, lyrics, etc.)
-            if BINARY_TAG_TYPES
-                .iter()
-                .any(|&binary_type| key.contains(binary_type))
-            {
-                continue;
-            }
-
-            // Extract actual string value from ItemValue (not debug format)
+            // Extract actual string value from ItemValue
             let value = match item.value() {
                 lofty::tag::ItemValue::Text(s) => s.clone(),
                 lofty::tag::ItemValue::Locator(s) => s.clone(),
                 lofty::tag::ItemValue::Binary(_) => continue, // Skip binary data
             };
 
-            // Always add, allow duplicates (needed for multiple album_artist tags)
-            all_tags.push((key, value));
+            add_tag(key, value);
         }
     }
 
-    // Also check other tags if present (allow duplicates)
-    for tag in tagged_file.tags() {
-        for item in tag.items() {
-            let key = format!("{:?}", item.key());
-
-            // Skip binary/embedded tags (album art, lyrics, etc.)
-            if BINARY_TAG_TYPES
-                .iter()
-                .any(|&binary_type| key.contains(binary_type))
-            {
-                continue;
-            }
-
-            // Extract actual string value from ItemValue (not debug format)
-            let value = match item.value() {
-                lofty::tag::ItemValue::Text(s) => s.clone(),
-                lofty::tag::ItemValue::Locator(s) => s.clone(),
-                lofty::tag::ItemValue::Binary(_) => continue, // Skip binary data
-            };
-
-            // Always add, allow duplicates (needed for multiple album_artist tags)
-            all_tags.push((key, value));
-        }
-    }
+    // Sort alphabetically by tag name
+    all_tags.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
 
     Ok(all_tags)
 }

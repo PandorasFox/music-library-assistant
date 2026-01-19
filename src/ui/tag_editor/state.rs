@@ -1,16 +1,2139 @@
 //! Tag Editor State Management
 //!
 //! Core state structure and conversion functions.
+//!
+//! This module contains both:
+//! - Legacy `TagEditorState` (to be removed after refactoring)
+//! - New unified `UnifiedTagEditorState` for transaction-based editing
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::corpus::db::Track;
+use crate::corpus::db::{HealthIssue, Track};
 use crate::corpus::metadata;
+use crate::corpus::mutations::Mutation;
 
 use super::types::{
+    // Legacy types (kept for backwards compatibility during transition)
     DuplicateGroupInfo, FieldEditState, GroupedChange, TagChange, TagEditorFocus, TagField,
+    // Unified types
+    AggregatedTagField, AggregatedValue, FileEntry, GatheringState, GroupContext, TagEditContext,
+    TagEditorButton, TagEditorMode, TagEditorSource, UnifiedTagEditorAction, UnifiedTagEditorFocus,
+    UnifiedTagEditorModal, VariousConfirmState,
 };
+
+// ============================================================================
+// Unified Tag Editor State (New)
+// ============================================================================
+
+/// Unified tag editor state that handles both single-file and bulk edit contexts.
+///
+/// This replaces the dual `TagEditorState` / `DirectoryTagEditorState` pattern
+/// with a single state machine that branches on `TagEditContext`.
+pub struct UnifiedTagEditorState {
+    // ========================================================================
+    // Context & Mode
+    // ========================================================================
+
+    /// The context (SingleFile or BulkEdit) determines behavior
+    pub context: TagEditContext,
+
+    /// Editing mode: Individual (one track at a time) or Aggregated (unified view)
+    pub mode: TagEditorMode,
+
+    // ========================================================================
+    // Item Navigation (within current transaction)
+    // ========================================================================
+
+    /// Current item index (track in SingleFile, file in BulkEdit)
+    pub current_item_idx: usize,
+
+    /// Total items count
+    pub total_items: usize,
+
+    // ========================================================================
+    // Field Navigation & Editing
+    // ========================================================================
+
+    /// Current field index
+    pub current_field_idx: usize,
+
+    /// Field scroll offset (for long tag lists)
+    pub field_scroll_offset: usize,
+
+    /// Visible height for tag field area
+    pub field_visible_height: usize,
+
+    /// Current edit mode
+    pub field_edit_state: FieldEditState,
+
+    /// Buffer for editing tag name (SingleFile only)
+    pub name_buffer: String,
+
+    /// Buffer for editing tag value
+    pub value_buffer: String,
+
+    /// Various value confirmation state (BulkEdit only)
+    pub various_confirm_state: Option<VariousConfirmState>,
+
+    /// Whether focus is on value (true) or name (false) in SingleFile mode
+    pub focus_on_value: bool,
+
+    // ========================================================================
+    // Tag Data
+    // ========================================================================
+
+    /// SingleFile: tag fields per track; BulkEdit: aggregated fields (single Vec)
+    ///
+    /// For SingleFile: outer Vec is tracks, inner Vec is fields per track
+    /// For BulkEdit: single inner Vec of aggregated fields, wrapped in outer Vec
+    pub tag_fields: Vec<Vec<TagField>>,
+
+    /// Original state for change detection
+    pub original_tag_fields: Vec<Vec<TagField>>,
+
+    /// BulkEdit: aggregated fields (alternative representation)
+    pub aggregated_fields: Option<Vec<AggregatedTagField>>,
+
+    /// BulkEdit: original aggregated fields
+    pub original_aggregated_fields: Option<Vec<AggregatedTagField>>,
+
+    /// BulkEdit: file entries (for writing changes)
+    pub files: Vec<FileEntry>,
+
+    // ========================================================================
+    // UI State
+    // ========================================================================
+
+    /// Which pane currently has focus
+    pub focus: UnifiedTagEditorFocus,
+
+    /// Currently selected action button
+    pub selected_button: TagEditorButton,
+
+    /// Currently active modal dialog (if any)
+    pub modal: Option<UnifiedTagEditorModal>,
+
+    // ========================================================================
+    // Signals (SingleFile context)
+    // ========================================================================
+
+    /// Health signals for the current track
+    pub signals: Vec<HealthIssue>,
+
+    /// Whether OOB (out-of-band) tag change signal is present
+    pub has_oob_signal: bool,
+
+    // ========================================================================
+    // Async Gathering (BulkEdit from directory)
+    // ========================================================================
+
+    /// Gathering state for async metadata loading
+    pub gathering_state: Option<GatheringState>,
+
+    // ========================================================================
+    // Sibling Directory Navigation (DirectoryEdit mode)
+    // ========================================================================
+
+    /// Sibling directories for DirectoryEdit mode (shown in context list)
+    pub sibling_directories: Vec<std::path::PathBuf>,
+
+    /// Currently selected sibling directory index
+    pub current_sibling_idx: usize,
+
+    /// Current directory being edited
+    pub current_directory: Option<std::path::PathBuf>,
+
+    // ========================================================================
+    // Staged Mutations Tracking (for skipping redundant confirmations)
+    // ========================================================================
+
+    /// Staged mutations for current item (set after StageDecision, cleared on item change)
+    /// Used to skip confirmation dialog when changes match what's already staged.
+    pub staged_mutations_for_current: Option<Vec<Mutation>>,
+}
+
+impl UnifiedTagEditorState {
+    // ========================================================================
+    // Constructors
+    // ========================================================================
+
+    /// Create a new unified tag editor state.
+    ///
+    /// This is the primary constructor that handles both Individual and Aggregated modes.
+    ///
+    /// - **Individual mode**: Edit tracks one at a time (Tab navigates between tracks)
+    /// - **Aggregated mode**: Edit unified view (changes apply to all tracks)
+    pub fn new(
+        mode: TagEditorMode,
+        tracks: Vec<Track>,
+        source: TagEditorSource,
+        group_context: Option<GroupContext>,
+    ) -> Self {
+        let total_items = tracks.len();
+
+        // Load per-track tag fields from disk
+        let tag_fields: Vec<Vec<TagField>> = tracks.iter().map(track_to_tag_fields).collect();
+        let original_tag_fields = tag_fields.clone();
+
+        // For Aggregated mode, also build aggregated view
+        let (aggregated_fields, original_aggregated_fields) = if mode == TagEditorMode::Aggregated {
+            let agg = aggregate_tags_across_tracks(&tracks);
+            (Some(agg.clone()), Some(agg))
+        } else {
+            (None, None)
+        };
+
+        // Build context based on track count
+        let context = if tracks.len() == 1 {
+            let track = tracks.into_iter().next().unwrap();
+            TagEditContext::SingleFile {
+                track,
+                source,
+                group_context,
+            }
+        } else {
+            TagEditContext::BulkEdit {
+                tracks,
+                source,
+                group_context,
+            }
+        };
+
+        Self {
+            context,
+            mode,
+            current_item_idx: 0,
+            total_items,
+            current_field_idx: 0,
+            field_scroll_offset: 0,
+            field_visible_height: 10,
+            field_edit_state: FieldEditState::NonEditable,
+            name_buffer: String::new(),
+            value_buffer: String::new(),
+            various_confirm_state: None,
+            focus_on_value: true,
+            tag_fields,
+            original_tag_fields,
+            aggregated_fields,
+            original_aggregated_fields,
+            files: Vec::new(),
+            focus: UnifiedTagEditorFocus::TagFields,
+            selected_button: TagEditorButton::Confirm,
+            modal: None,
+            signals: Vec::new(),
+            has_oob_signal: false,
+            gathering_state: None,
+            sibling_directories: Vec::new(),
+            current_sibling_idx: 0,
+            current_directory: None,
+            staged_mutations_for_current: None,
+        }
+    }
+
+    /// Create a new unified state for single-file editing (convenience wrapper).
+    pub fn single_file(track: Track, source: TagEditorSource, group_context: Option<GroupContext>) -> Self {
+        Self::new(TagEditorMode::Individual, vec![track], source, group_context)
+    }
+
+    /// Create a new unified state for bulk editing from pre-loaded tracks (convenience wrapper).
+    ///
+    /// Uses Individual mode - each track is edited separately, Tab navigates between them.
+    pub fn bulk_from_tracks(
+        tracks: Vec<Track>,
+        source: TagEditorSource,
+        group_context: Option<GroupContext>,
+    ) -> Self {
+        Self::new(TagEditorMode::Individual, tracks, source, group_context)
+    }
+
+    /// Create a new unified state for directory editing with aggregated tags (convenience wrapper).
+    ///
+    /// Uses Aggregated mode - shows unified view, changes apply to all tracks.
+    pub fn directory_aggregated(
+        tracks: Vec<Track>,
+        group_context: Option<GroupContext>,
+    ) -> Self {
+        Self::new(TagEditorMode::Aggregated, tracks, TagEditorSource::DirectoryEdit, group_context)
+    }
+
+    /// Set sibling directories for DirectoryEdit mode navigation
+    pub fn set_sibling_directories(&mut self, current_dir: std::path::PathBuf, siblings: Vec<std::path::PathBuf>) {
+        self.current_directory = Some(current_dir.clone());
+        // Find current directory in siblings list
+        self.current_sibling_idx = siblings.iter()
+            .position(|p| p == &current_dir)
+            .unwrap_or(0);
+        self.sibling_directories = siblings;
+    }
+
+    /// Check if this is a DirectoryEdit mode
+    pub fn is_directory_edit(&self) -> bool {
+        match &self.context {
+            TagEditContext::SingleFile { source, .. } => matches!(source, TagEditorSource::DirectoryEdit),
+            TagEditContext::BulkEdit { source, .. } => matches!(source, TagEditorSource::DirectoryEdit),
+        }
+    }
+
+    /// Check if using Aggregated mode (unified view across all tracks)
+    pub fn is_aggregated_mode(&self) -> bool {
+        self.mode == TagEditorMode::Aggregated
+    }
+
+    /// Check if using Individual mode (one track at a time)
+    pub fn is_individual_mode(&self) -> bool {
+        self.mode == TagEditorMode::Individual
+    }
+
+    // TODO: bulk_from_directory() - starts async gathering
+
+    // ========================================================================
+    // Query Methods
+    // ========================================================================
+
+    /// Get a label for the current item (for transaction decision labels)
+    pub fn current_item_label(&self) -> String {
+        match &self.context {
+            TagEditContext::SingleFile { track, .. } => {
+                Path::new(&track.path)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Unknown".to_string())
+            }
+            TagEditContext::BulkEdit { tracks, .. } => {
+                if let Some(track) = tracks.get(self.current_item_idx) {
+                    Path::new(&track.path)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Unknown".to_string())
+                } else {
+                    "Unknown".to_string()
+                }
+            }
+        }
+    }
+
+    /// Check if there are any unsaved changes
+    pub fn has_changes(&self) -> bool {
+        !compute_changes(&self.original_tag_fields, &self.tag_fields).is_empty()
+    }
+
+    /// Get changes for preview
+    pub fn get_changes_for_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
+        let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+        group_common_changes(&changes)
+    }
+
+    /// Generate mutations from current changes
+    pub fn generate_mutations(&self) -> Vec<Mutation> {
+        let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+        let tracks = match &self.context {
+            TagEditContext::SingleFile { track, .. } => vec![track.clone()],
+            TagEditContext::BulkEdit { tracks, .. } => tracks.clone(),
+        };
+
+        changes_to_mutations(&changes, &tracks)
+    }
+
+    /// Revert to original state
+    pub fn drop_changes(&mut self) {
+        self.tag_fields = self.original_tag_fields.clone();
+        if let Some(ref orig) = self.original_aggregated_fields {
+            self.aggregated_fields = Some(orig.clone());
+        }
+        self.field_edit_state = FieldEditState::NonEditable;
+    }
+
+    /// Check if current changes match what's already staged in the transaction.
+    /// Used to skip confirmation dialogs when the user hasn't made new changes.
+    pub fn changes_match_staged(&self) -> bool {
+        match &self.staged_mutations_for_current {
+            None => false, // Nothing staged yet, so can't match
+            Some(staged) => {
+                let current = self.generate_mutations();
+                // Compare mutation sets - simple equality check
+                // (mutations should be generated in same order)
+                current == *staged
+            }
+        }
+    }
+
+    /// Set the staged mutations for the current item (called after staging a decision)
+    pub fn set_staged_mutations(&mut self, mutations: Vec<Mutation>) {
+        self.staged_mutations_for_current = Some(mutations);
+    }
+
+    /// Clear staged mutations (called when switching to a different item)
+    pub fn clear_staged_mutations(&mut self) {
+        self.staged_mutations_for_current = None;
+    }
+
+    // ========================================================================
+    // Signals
+    // ========================================================================
+
+    /// Load health signals for the current track(s)
+    pub fn load_signals(&mut self, _db: &crate::corpus::db::Database) {
+        // TODO: Query health_issues table for current track(s)
+        // Set has_oob_signal based on presence of OutOfBandTagChange signal
+        self.signals.clear();
+        self.has_oob_signal = false;
+    }
+
+    /// Get available action buttons based on context and signals
+    pub fn available_buttons(&self) -> Vec<TagEditorButton> {
+        let mut buttons = vec![TagEditorButton::Confirm, TagEditorButton::DropChanges];
+
+        // Add Fill from Disk / Fill from DB only when OOB signal present
+        if self.has_oob_signal {
+            buttons.push(TagEditorButton::FillFromDisk);
+            buttons.push(TagEditorButton::FillFromDb);
+        }
+
+        buttons
+    }
+
+    /// Get the current track being edited
+    pub fn get_current_track(&self) -> Option<&Track> {
+        match &self.context {
+            TagEditContext::SingleFile { track, .. } => Some(track),
+            TagEditContext::BulkEdit { tracks, .. } => tracks.get(self.current_item_idx),
+        }
+    }
+
+    /// Re-read tags from disk for the current track
+    pub fn fill_from_disk(&mut self) {
+        let track = match &self.context {
+            TagEditContext::SingleFile { track, .. } => track.clone(),
+            TagEditContext::BulkEdit { tracks, .. } => {
+                match tracks.get(self.current_item_idx) {
+                    Some(t) => t.clone(),
+                    None => return,
+                }
+            }
+        };
+
+        // Re-read tags from disk
+        let new_fields = track_to_tag_fields(&track);
+
+        // Update current item's tag fields
+        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+            *fields = new_fields.clone();
+        }
+
+        // Also update original to reflect new baseline
+        if let Some(orig_fields) = self.original_tag_fields.get_mut(self.current_item_idx) {
+            *orig_fields = new_fields;
+        }
+
+        // Reset field position
+        self.current_field_idx = 0;
+        self.field_scroll_offset = 0;
+        self.field_edit_state = FieldEditState::NonEditable;
+
+        // Clear OOB signal since we've resolved it
+        self.has_oob_signal = false;
+    }
+
+    /// Update tags from database result (called by UI layer after DB query)
+    pub fn fill_from_db_result(&mut self, tags: Vec<(String, String)>) {
+        // Convert database tags to TagField format
+        let mut new_fields: Vec<TagField> = tags
+            .into_iter()
+            .map(|(name, value)| TagField {
+                name,
+                value,
+                editable: true,
+                is_unique_per_track: false,
+                deleted: false,
+            })
+            .collect();
+
+        // Sort alphabetically by name
+        new_fields.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        // Add "New Tag" placeholder at the end
+        new_fields.push(TagField {
+            name: "New Tag".to_string(),
+            value: String::new(),
+            editable: false,
+            is_unique_per_track: false,
+            deleted: false,
+        });
+
+        // Update current item's tag fields
+        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+            *fields = new_fields.clone();
+        }
+
+        // Also update original to reflect new baseline
+        if let Some(orig_fields) = self.original_tag_fields.get_mut(self.current_item_idx) {
+            *orig_fields = new_fields;
+        }
+
+        // Reset field position
+        self.current_field_idx = 0;
+        self.field_scroll_offset = 0;
+        self.field_edit_state = FieldEditState::NonEditable;
+
+        // Clear OOB signal since we've resolved it
+        self.has_oob_signal = false;
+    }
+}
+
+// ============================================================================
+// Unified Tag Editor Input Handling
+// ============================================================================
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+impl UnifiedTagEditorState {
+    /// Handle a key event
+    pub fn handle_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+        // Handle modal first if active
+        if self.modal.is_some() {
+            return self.handle_modal_key(key);
+        }
+
+        match self.focus {
+            UnifiedTagEditorFocus::TagFields => self.handle_tag_fields_key(key),
+            UnifiedTagEditorFocus::Actions => self.handle_actions_key(key),
+        }
+    }
+
+    fn handle_modal_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+        match &mut self.modal {
+            Some(UnifiedTagEditorModal::ChangePreview { scroll, .. }) => {
+                match key.code {
+                    KeyCode::Enter => {
+                        // Confirm changes -> stage decision AND continue to next item
+                        let mutations = self.generate_mutations();
+                        self.modal = None;
+                        UnifiedTagEditorAction::StageDecisionAndNext {
+                            index: self.current_item_idx,
+                            mutations,
+                        }
+                    }
+                    KeyCode::Esc => {
+                        self.modal = None;
+                        UnifiedTagEditorAction::CloseModal
+                    }
+                    KeyCode::Up => {
+                        *scroll = scroll.saturating_sub(1);
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Down => {
+                        *scroll += 1;
+                        UnifiedTagEditorAction::None
+                    }
+                    _ => UnifiedTagEditorAction::None,
+                }
+            }
+            Some(UnifiedTagEditorModal::UnsavedChanges { destination }) => {
+                match key.code {
+                    KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        // Discard changes and proceed
+                        let dest = *destination;
+                        self.drop_changes();
+                        self.modal = None;
+                        match dest {
+                            super::types::UnsavedChangesDestination::Exit => {
+                                UnifiedTagEditorAction::DiscardTransaction
+                            }
+                            super::types::UnsavedChangesDestination::NextItem => {
+                                UnifiedTagEditorAction::NextItem
+                            }
+                            super::types::UnsavedChangesDestination::PrevItem => {
+                                UnifiedTagEditorAction::PrevItem
+                            }
+                            super::types::UnsavedChangesDestination::NextSibling => {
+                                UnifiedTagEditorAction::NextSibling
+                            }
+                            super::types::UnsavedChangesDestination::PrevSibling => {
+                                UnifiedTagEditorAction::PrevSibling
+                            }
+                        }
+                    }
+                    KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                        self.modal = None;
+                        UnifiedTagEditorAction::CloseModal
+                    }
+                    _ => UnifiedTagEditorAction::None,
+                }
+            }
+            Some(UnifiedTagEditorModal::TransactionReview { scroll, selected_button, .. }) => {
+                match key.code {
+                    KeyCode::Enter => {
+                        match selected_button {
+                            super::types::TransactionReviewButton::CommitAll => {
+                                self.modal = None;
+                                UnifiedTagEditorAction::CommitTransaction
+                            }
+                            super::types::TransactionReviewButton::DiscardAll => {
+                                self.modal = None;
+                                UnifiedTagEditorAction::DiscardTransaction
+                            }
+                            super::types::TransactionReviewButton::BackToEditing => {
+                                self.modal = None;
+                                UnifiedTagEditorAction::CloseModal
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        self.modal = None;
+                        UnifiedTagEditorAction::CloseModal
+                    }
+                    KeyCode::Left => {
+                        *selected_button = match selected_button {
+                            super::types::TransactionReviewButton::CommitAll => super::types::TransactionReviewButton::BackToEditing,
+                            super::types::TransactionReviewButton::DiscardAll => super::types::TransactionReviewButton::CommitAll,
+                            super::types::TransactionReviewButton::BackToEditing => super::types::TransactionReviewButton::DiscardAll,
+                        };
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Right => {
+                        *selected_button = match selected_button {
+                            super::types::TransactionReviewButton::CommitAll => super::types::TransactionReviewButton::DiscardAll,
+                            super::types::TransactionReviewButton::DiscardAll => super::types::TransactionReviewButton::BackToEditing,
+                            super::types::TransactionReviewButton::BackToEditing => super::types::TransactionReviewButton::CommitAll,
+                        };
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Up => {
+                        *scroll = scroll.saturating_sub(1);
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Down => {
+                        *scroll += 1;
+                        UnifiedTagEditorAction::None
+                    }
+                    _ => UnifiedTagEditorAction::None,
+                }
+            }
+            Some(UnifiedTagEditorModal::MultiValueEditor {
+                field_idx,
+                values,
+                current_value_idx,
+                editing,
+                edit_buffer,
+            }) => {
+                let num_values = values.len();
+                let add_entry_idx = num_values; // "+ Add value" is at end
+
+                match key.code {
+                    KeyCode::Esc => {
+                        if *editing {
+                            // Cancel edit, revert buffer
+                            *editing = false;
+                            edit_buffer.clear();
+                        } else {
+                            // Close modal, apply changes back to tag_fields
+                            let field_idx_copy = *field_idx;
+                            let values_copy = values.clone();
+                            self.apply_multi_value_changes(field_idx_copy, values_copy);
+                            self.modal = None;
+                        }
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Enter => {
+                        if *editing {
+                            // Commit edit
+                            if *current_value_idx < num_values {
+                                values[*current_value_idx] = edit_buffer.clone();
+                            } else if *current_value_idx == add_entry_idx && !edit_buffer.is_empty() {
+                                // Adding new value
+                                values.push(edit_buffer.clone());
+                            }
+                            *editing = false;
+                            edit_buffer.clear();
+                        } else if *current_value_idx < num_values {
+                            // Start editing existing value
+                            *editing = true;
+                            *edit_buffer = values[*current_value_idx].clone();
+                        } else if *current_value_idx == add_entry_idx {
+                            // Start adding new value
+                            *editing = true;
+                            edit_buffer.clear();
+                        }
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Up => {
+                        if !*editing && *current_value_idx > 0 {
+                            *current_value_idx -= 1;
+                        }
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Down => {
+                        if !*editing && *current_value_idx < add_entry_idx {
+                            *current_value_idx += 1;
+                        }
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Delete | KeyCode::Backspace if !*editing => {
+                        // Delete current value (not the add entry)
+                        if *current_value_idx < num_values && num_values > 0 {
+                            values.remove(*current_value_idx);
+                            if *current_value_idx >= values.len() && !values.is_empty() {
+                                *current_value_idx = values.len() - 1;
+                            }
+                        }
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Backspace if *editing => {
+                        edit_buffer.pop();
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Char(c) if *editing => {
+                        edit_buffer.push(c);
+                        UnifiedTagEditorAction::None
+                    }
+                    _ => UnifiedTagEditorAction::None,
+                }
+            }
+            None => UnifiedTagEditorAction::None,
+        }
+    }
+
+    fn handle_tag_fields_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+        match key.code {
+            KeyCode::Esc => {
+                if self.field_edit_state != FieldEditState::NonEditable {
+                    self.field_edit_state = FieldEditState::NonEditable;
+                    UnifiedTagEditorAction::None
+                } else if self.has_changes() {
+                    self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
+                        destination: super::types::UnsavedChangesDestination::Exit,
+                    });
+                    UnifiedTagEditorAction::None
+                } else {
+                    UnifiedTagEditorAction::DiscardTransaction
+                }
+            }
+            KeyCode::Up => {
+                if self.field_edit_state != FieldEditState::NonEditable {
+                    self.commit_field_buffer();
+                }
+                if self.current_field_idx > 0 {
+                    self.current_field_idx -= 1;
+                    if self.current_field_idx < self.field_scroll_offset {
+                        self.field_scroll_offset = self.current_field_idx;
+                    }
+                }
+                self.load_field_buffer();
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Down => {
+                if self.field_edit_state != FieldEditState::NonEditable {
+                    self.commit_field_buffer();
+                }
+                let max_fields = self.tag_fields.get(self.current_item_idx).map(|f| f.len()).unwrap_or(0);
+                if self.current_field_idx < max_fields.saturating_sub(1) {
+                    self.current_field_idx += 1;
+                    let visible_end = self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
+                    if self.current_field_idx >= visible_end {
+                        self.field_scroll_offset = self.current_field_idx.saturating_sub(self.field_visible_height.saturating_sub(2));
+                    }
+                }
+                self.load_field_buffer();
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Left => {
+                // Left arrow: move focus from value to name (ContextList is not focusable)
+                if self.field_edit_state == FieldEditState::NonEditable && self.focus_on_value {
+                    self.focus_on_value = false;
+                }
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Right => {
+                if self.field_edit_state == FieldEditState::NonEditable {
+                    if self.focus_on_value {
+                        self.focus = UnifiedTagEditorFocus::Actions;
+                    } else {
+                        self.focus_on_value = true;
+                    }
+                }
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Tab => {
+                // Tab: advance to next sibling (show change preview if changes exist)
+                // Skip confirmation if changes match what's already staged
+                if self.has_changes() && !self.changes_match_staged() {
+                    let (grouped, single) = self.get_changes_for_preview();
+                    self.modal = Some(UnifiedTagEditorModal::ChangePreview {
+                        changes: grouped,
+                        single_changes: single,
+                        scroll: 0,
+                    });
+                    UnifiedTagEditorAction::None
+                } else {
+                    UnifiedTagEditorAction::NextSibling
+                }
+            }
+            KeyCode::BackTab => {
+                // Shift-Tab: go to previous sibling
+                // Skip confirmation if changes match what's already staged
+                if self.has_changes() && !self.changes_match_staged() {
+                    self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
+                        destination: super::types::UnsavedChangesDestination::PrevSibling,
+                    });
+                    UnifiedTagEditorAction::None
+                } else {
+                    UnifiedTagEditorAction::PrevSibling
+                }
+            }
+            KeyCode::Enter => {
+                self.handle_field_enter();
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+R: Show transaction review
+                // Note: The actual decisions list will be populated by the UI layer
+                self.modal = Some(UnifiedTagEditorModal::TransactionReview {
+                    decisions: Vec::new(), // UI layer will fill this from daemon
+                    scroll: 0,
+                    selected_button: super::types::TransactionReviewButton::CommitAll,
+                });
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.clear_current_field();
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Char(c) => {
+                if self.field_edit_state != FieldEditState::NonEditable {
+                    self.insert_char(c);
+                }
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Backspace => {
+                if self.field_edit_state != FieldEditState::NonEditable {
+                    self.delete_char();
+                } else {
+                    // In navigation mode, toggle deletion mark on current field
+                    self.toggle_current_field_deleted();
+                }
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Delete => {
+                if self.field_edit_state == FieldEditState::NonEditable {
+                    // In navigation mode, toggle deletion mark on current field
+                    self.toggle_current_field_deleted();
+                }
+                UnifiedTagEditorAction::None
+            }
+            _ => UnifiedTagEditorAction::None,
+        }
+    }
+
+    fn handle_actions_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+        let buttons = self.available_buttons();
+        let current_idx = buttons.iter().position(|b| *b == self.selected_button).unwrap_or(0);
+
+        match key.code {
+            KeyCode::Left | KeyCode::Esc => {
+                self.focus = UnifiedTagEditorFocus::TagFields;
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Up => {
+                if current_idx > 0 {
+                    self.selected_button = buttons[current_idx - 1];
+                }
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Down => {
+                if current_idx < buttons.len().saturating_sub(1) {
+                    self.selected_button = buttons[current_idx + 1];
+                }
+                UnifiedTagEditorAction::None
+            }
+            KeyCode::Enter => {
+                match self.selected_button {
+                    TagEditorButton::Confirm => {
+                        let (grouped, single) = self.get_changes_for_preview();
+                        if grouped.is_empty() && single.is_empty() {
+                            UnifiedTagEditorAction::StatusMessage("No changes to save".to_string())
+                        } else {
+                            self.modal = Some(UnifiedTagEditorModal::ChangePreview {
+                                changes: grouped,
+                                single_changes: single,
+                                scroll: 0,
+                            });
+                            UnifiedTagEditorAction::None
+                        }
+                    }
+                    TagEditorButton::DropChanges => {
+                        self.drop_changes();
+                        UnifiedTagEditorAction::StatusMessage("Changes dropped".to_string())
+                    }
+                    TagEditorButton::FillFromDisk => {
+                        self.fill_from_disk();
+                        UnifiedTagEditorAction::StatusMessage("Tags refreshed from disk".to_string())
+                    }
+                    TagEditorButton::FillFromDb => {
+                        // Return action for UI layer to handle (requires DB access)
+                        let track_id = self.get_current_track().and_then(|t| t.id);
+                        UnifiedTagEditorAction::RequestFillFromDb { track_id }
+                    }
+                }
+            }
+            _ => UnifiedTagEditorAction::None,
+        }
+    }
+
+    // ========================================================================
+    // Field Editing Helpers
+    // ========================================================================
+
+    fn load_field_buffer(&mut self) {
+        if let Some(fields) = self.tag_fields.get(self.current_item_idx) {
+            if let Some(field) = fields.get(self.current_field_idx) {
+                self.name_buffer = field.name.clone();
+                self.value_buffer = field.value.clone();
+            }
+        }
+    }
+
+    fn commit_field_buffer(&mut self) {
+        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+            if let Some(field) = fields.get_mut(self.current_field_idx) {
+                match self.field_edit_state {
+                    FieldEditState::EditingName => {
+                        field.name = self.name_buffer.clone();
+                    }
+                    FieldEditState::EditingValue => {
+                        field.value = self.value_buffer.clone();
+                    }
+                    FieldEditState::NonEditable => {}
+                }
+            }
+        }
+    }
+
+    fn handle_field_enter(&mut self) {
+        let fields = match self.tag_fields.get(self.current_item_idx) {
+            Some(f) => f,
+            None => return,
+        };
+        let field = match fields.get(self.current_field_idx) {
+            Some(f) => f,
+            None => return,
+        };
+
+        if field.name == "New Tag" {
+            self.create_new_tag();
+        } else if self.field_edit_state == FieldEditState::NonEditable {
+            // Check if this field has multiple values (multi-value tag)
+            if self.is_multi_value_field().is_some() {
+                // Open multi-value editor modal
+                self.open_multi_value_editor();
+            } else {
+                // Single value - enter normal edit mode
+                self.field_edit_state = if self.focus_on_value {
+                    FieldEditState::EditingValue
+                } else {
+                    FieldEditState::EditingName
+                };
+                self.load_field_buffer();
+            }
+        } else {
+            self.commit_field_buffer();
+            self.field_edit_state = FieldEditState::NonEditable;
+        }
+    }
+
+    fn create_new_tag(&mut self) {
+        let new_field = TagField {
+            name: "new_tag".to_string(),
+            value: String::new(),
+            editable: true,
+            is_unique_per_track: false,
+            deleted: false,
+        };
+
+        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+            let insert_pos = fields.len().saturating_sub(1);
+            fields.insert(insert_pos, new_field);
+            self.current_field_idx = insert_pos;
+        }
+
+        self.field_edit_state = FieldEditState::EditingName;
+        self.name_buffer = "new_tag".to_string();
+        self.value_buffer.clear();
+        self.focus_on_value = false;
+    }
+
+    fn insert_char(&mut self, c: char) {
+        match self.field_edit_state {
+            FieldEditState::EditingName => {
+                self.name_buffer.push(c);
+            }
+            FieldEditState::EditingValue => {
+                self.value_buffer.push(c);
+            }
+            FieldEditState::NonEditable => {}
+        }
+    }
+
+    fn delete_char(&mut self) {
+        match self.field_edit_state {
+            FieldEditState::EditingName => {
+                self.name_buffer.pop();
+            }
+            FieldEditState::EditingValue => {
+                self.value_buffer.pop();
+            }
+            FieldEditState::NonEditable => {}
+        }
+    }
+
+    fn clear_current_field(&mut self) {
+        match self.field_edit_state {
+            FieldEditState::EditingName => {
+                self.name_buffer.clear();
+            }
+            FieldEditState::EditingValue => {
+                self.value_buffer.clear();
+            }
+            FieldEditState::NonEditable => {
+                if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+                    if let Some(field) = fields.get_mut(self.current_field_idx) {
+                        field.value.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    fn toggle_current_field_deleted(&mut self) {
+        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+            if let Some(field) = fields.get_mut(self.current_field_idx) {
+                // Only allow deletion toggle on editable fields that aren't the "New Tag" placeholder
+                if field.editable && field.name != "New Tag" {
+                    field.deleted = !field.deleted;
+                }
+            }
+        }
+    }
+
+    /// Get all values for a tag name (case-insensitive) in the current item
+    fn get_values_for_tag(&self, normalized_name: &str) -> Vec<String> {
+        self.tag_fields
+            .get(self.current_item_idx)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter(|f| f.name.to_lowercase() == normalized_name)
+                    .map(|f| f.value.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Check if current field is part of a multi-value group and get the count
+    fn is_multi_value_field(&self) -> Option<usize> {
+        let fields = self.tag_fields.get(self.current_item_idx)?;
+        let current_field = fields.get(self.current_field_idx)?;
+        let normalized_name = current_field.name.to_lowercase();
+
+        // Count fields with same normalized name
+        let count = fields
+            .iter()
+            .filter(|f| f.name.to_lowercase() == normalized_name && f.name != "New Tag")
+            .count();
+
+        if count > 1 {
+            Some(count)
+        } else {
+            None
+        }
+    }
+
+    /// Check if a field at given index is the first occurrence of its name
+    fn is_first_occurrence(&self, field_idx: usize) -> bool {
+        let fields = match self.tag_fields.get(self.current_item_idx) {
+            Some(f) => f,
+            None => return true,
+        };
+        let field = match fields.get(field_idx) {
+            Some(f) => f,
+            None => return true,
+        };
+        let normalized_name = field.name.to_lowercase();
+
+        // Find first occurrence index
+        fields
+            .iter()
+            .position(|f| f.name.to_lowercase() == normalized_name)
+            .map(|idx| idx == field_idx)
+            .unwrap_or(true)
+    }
+
+    /// Open multi-value editor modal for current field
+    fn open_multi_value_editor(&mut self) {
+        let fields = match self.tag_fields.get(self.current_item_idx) {
+            Some(f) => f,
+            None => return,
+        };
+        let current_field = match fields.get(self.current_field_idx) {
+            Some(f) => f,
+            None => return,
+        };
+
+        let normalized_name = current_field.name.to_lowercase();
+        let values: Vec<String> = fields
+            .iter()
+            .filter(|f| f.name.to_lowercase() == normalized_name)
+            .map(|f| f.value.clone())
+            .collect();
+
+        self.modal = Some(UnifiedTagEditorModal::MultiValueEditor {
+            field_idx: self.current_field_idx,
+            values,
+            current_value_idx: 0,
+            editing: false,
+            edit_buffer: String::new(),
+        });
+    }
+}
+
+// ============================================================================
+// Unified Tag Editor Rendering
+// ============================================================================
+
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph},
+    Frame,
+};
+
+use crate::ui::widgets::{PaneConfig, ThreePaneLayout};
+
+impl UnifiedTagEditorState {
+    /// Check if a modal is currently active
+    pub fn has_modal(&self) -> bool {
+        self.modal.is_some()
+    }
+
+    /// Render the unified tag editor
+    pub fn render(&mut self, f: &mut Frame, area: Rect, status_message: Option<&str>) {
+        // Layout: info pane | 3-column | status box
+        let editor_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),  // Info pane
+                Constraint::Min(15),    // 3-column area
+            ])
+            .split(area);
+
+        self.render_info_pane(f, editor_layout[0]);
+        self.render_three_column(f, editor_layout[1]);
+        // TODO: Controls hints should be displayed in the centralized bottom panel
+        // based on active UiMode/modal. Design a ControlsContext trait or similar
+        // that each mode can implement to provide context-sensitive controls.
+        let _ = status_message; // Status messages also need centralized handling
+
+        // Render modal overlay if active
+        if let Some(modal) = &self.modal {
+            self.render_modal(f, area, modal);
+        }
+    }
+
+    fn render_info_pane(&self, f: &mut Frame, area: Rect) {
+        let (path, file_type, file_size, duration_ms, bitrate, sample_rate, source) = match &self.context {
+            TagEditContext::SingleFile { track, .. } => (
+                track.path.clone(),
+                track.file_type.clone(),
+                track.file_size,
+                track.duration_ms,
+                track.bitrate_kbps,
+                track.sample_rate,
+                track.source.clone(),
+            ),
+            TagEditContext::BulkEdit { tracks, .. } => {
+                if let Some(track) = tracks.get(self.current_item_idx) {
+                    (
+                        track.path.clone(),
+                        track.file_type.clone(),
+                        track.file_size,
+                        track.duration_ms,
+                        track.bitrate_kbps,
+                        track.sample_rate,
+                        track.source.clone(),
+                    )
+                } else {
+                    return;
+                }
+            }
+        };
+
+        let duration_str = duration_ms
+            .map(|ms| {
+                let total_seconds = ms / 1000;
+                format!("{}:{:02}", total_seconds / 60, total_seconds % 60)
+            })
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let size_str = if file_size < 1024 {
+            format!("{} B", file_size)
+        } else if file_size < 1024 * 1024 {
+            format!("{:.1} KB", file_size as f64 / 1024.0)
+        } else {
+            format!("{:.2} MB", file_size as f64 / (1024.0 * 1024.0))
+        };
+
+        let bitrate_str = bitrate
+            .map(|b| format!("{} kbps", b))
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let sample_rate_str = sample_rate
+            .map(|sr| format!("{} Hz", sr))
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let info_lines = vec![
+            Line::from(format!("Path: {}", path)),
+            Line::from(format!(
+                "Format: {} | Size: {} | Duration: {} | Bitrate: {} | Sample Rate: {}",
+                file_type.to_uppercase(),
+                size_str,
+                duration_str,
+                bitrate_str,
+                sample_rate_str
+            )),
+            Line::from(format!("Source: {}", source)),
+        ];
+
+        let title = format!(
+            "File Info [{}/{}]",
+            self.current_item_idx + 1,
+            self.total_items
+        );
+
+        let info_para = Paragraph::new(info_lines)
+            .block(Block::default().borders(Borders::ALL).title(title));
+        f.render_widget(info_para, area);
+    }
+
+    fn render_three_column(&mut self, f: &mut Frame, area: Rect) {
+        let layout = ThreePaneLayout::horizontal()
+            .left(PaneConfig::new("", 30))
+            .middle(PaneConfig::new("", 55))
+            .right(PaneConfig::new("", 15))
+            .build(area);
+
+        self.render_context_list(f, layout.left.area);
+        self.render_tag_fields_pane(f, layout.middle.area);
+        self.render_action_panel(f, layout.right.area);
+    }
+
+    fn render_context_list(&self, f: &mut Frame, area: Rect) {
+        // ContextList is display-only (not focusable), so border is never highlighted
+
+        // For DirectoryEdit mode with sibling directories, show directories instead of tracks
+        let (items, title): (Vec<Line>, &str) = if self.is_directory_edit() && !self.sibling_directories.is_empty() {
+            // DirectoryEdit mode - show sibling directories
+            let lines: Vec<Line> = self.sibling_directories
+                .iter()
+                .enumerate()
+                .map(|(idx, dir)| {
+                    let prefix = if idx == self.current_sibling_idx { ">> " } else { "   " };
+                    let dir_name = dir.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?");
+                    let line = format!("{}{}", prefix, dir_name);
+
+                    let style = if idx == self.current_sibling_idx {
+                        Style::default().bg(Color::DarkGray)
+                    } else {
+                        Style::default()
+                    };
+                    Line::from(line).style(style)
+                })
+                .collect();
+            (lines, "Directories")
+        } else {
+            // Standard track-based rendering
+            // Note: Track no longer has artist/title - use filename from path
+            let items: Vec<Line> = match &self.context {
+                TagEditContext::SingleFile { track, group_context, .. } => {
+                    // Single file mode - show the track filename
+                    let filename = std::path::Path::new(&track.path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("Unknown");
+                    let line = format!(">> {}", filename);
+
+                    let mut lines = vec![Line::from(line).style(Style::default().bg(Color::DarkGray))];
+
+                    // Show group context if present
+                    if let Some(gc) = group_context {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(format!(
+                            "Group {}/{}",
+                            gc.group_index + 1,
+                            gc.total_groups
+                        )).style(Style::default().fg(Color::DarkGray)));
+                    }
+
+                    lines
+                }
+                TagEditContext::BulkEdit { tracks, .. } => {
+                    // Bulk mode - show all tracks by filename
+                    tracks
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, track)| {
+                            let prefix = if idx == self.current_item_idx { ">> " } else { "   " };
+                            let filename = std::path::Path::new(&track.path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("Unknown");
+                            let line = format!("{}{}", prefix, filename);
+
+                            let style = if idx == self.current_item_idx {
+                                Style::default().bg(Color::DarkGray)
+                            } else {
+                                Style::default()
+                            };
+                            Line::from(line).style(style)
+                        })
+                        .collect()
+                }
+            };
+
+            let title = match &self.context {
+                TagEditContext::SingleFile { source, .. } => match source {
+                    TagEditorSource::CorpusBrowser => "Track",
+                    TagEditorSource::DuplicateResolution => "Duplicate Group",
+                    TagEditorSource::DeployConflict => "Deploy Conflict",
+                    TagEditorSource::DirectoryEdit => "File",
+                },
+                TagEditContext::BulkEdit { source, .. } => match source {
+                    TagEditorSource::DirectoryEdit => "Directory",
+                    _ => "Files",
+                },
+            };
+            (items, title)
+        };
+
+        let list_para = Paragraph::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title),
+        );
+        f.render_widget(list_para, area);
+    }
+
+    fn render_tag_fields_pane(&mut self, f: &mut Frame, area: Rect) {
+        let is_focused = matches!(self.focus, UnifiedTagEditorFocus::TagFields);
+
+        // Check if we should render aggregated fields (directory edit mode)
+        if let Some(ref agg_fields) = self.aggregated_fields {
+            self.render_aggregated_fields_pane(f, area, is_focused, agg_fields.clone());
+            return;
+        }
+
+        let fields = match self.tag_fields.get(self.current_item_idx) {
+            Some(f) => f,
+            None => return,
+        };
+
+        let original_fields = self.original_tag_fields.get(self.current_item_idx);
+
+        // Calculate visible height
+        let visible_height = area.height.saturating_sub(2) as usize;
+        self.field_visible_height = visible_height;
+
+        // Build field lines
+        let field_lines: Vec<Line> = fields
+            .iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                let is_current = idx == self.current_field_idx;
+
+                // Check if modified
+                let is_modified = original_fields
+                    .and_then(|orig| orig.iter().find(|o| o.name == field.name))
+                    .map(|orig| orig.value != field.value || orig.name != field.name)
+                    .unwrap_or(true);
+
+                let name_display = if is_current && matches!(self.field_edit_state, FieldEditState::EditingName) {
+                    format!("{}▌", self.name_buffer)
+                } else {
+                    field.name.clone()
+                };
+
+                // Show indicator: deleted (✗), modified (✎), or none
+                let name_with_indicator = if field.deleted {
+                    format!("✗ {}", name_display)
+                } else if is_modified {
+                    format!("✎ {}", name_display)
+                } else {
+                    format!("  {}", name_display)
+                };
+
+                // Check if this field is part of a multi-value group
+                let normalized_name = field.name.to_lowercase();
+                let value_count = fields
+                    .iter()
+                    .filter(|f| f.name.to_lowercase() == normalized_name && f.name != "New Tag")
+                    .count();
+                let is_first_of_group = fields
+                    .iter()
+                    .position(|f| f.name.to_lowercase() == normalized_name)
+                    .map(|pos| pos == idx)
+                    .unwrap_or(true);
+
+                let value_display = if is_current && matches!(self.field_edit_state, FieldEditState::EditingValue) {
+                    format!("{}▌", self.value_buffer)
+                } else if value_count > 1 && is_first_of_group {
+                    // First occurrence of a multi-value tag - show count
+                    format!("[{} values]", value_count)
+                } else if value_count > 1 {
+                    // Subsequent occurrence - show value with indent
+                    format!("  └ {}", field.value)
+                } else {
+                    field.value.clone()
+                };
+
+                // Pad name to fixed width for alignment
+                let name_padded = format!("{:18}", name_with_indicator);
+
+                // Determine styles for name and value separately
+                let (mut name_style, mut value_style) = if is_current {
+                    // When current row, highlight the focused part (name or value)
+                    let base = Style::default().add_modifier(Modifier::BOLD);
+                    if self.focus_on_value {
+                        // Value is focused - highlight value, dim name
+                        (
+                            base.bg(Color::DarkGray),
+                            base.bg(Color::Cyan).fg(Color::Black),
+                        )
+                    } else {
+                        // Name is focused - highlight name, dim value
+                        (
+                            base.bg(Color::Cyan).fg(Color::Black),
+                            base.bg(Color::DarkGray),
+                        )
+                    }
+                } else if field.deleted {
+                    // Deleted fields shown in red
+                    let del_style = Style::default().fg(Color::Red);
+                    (del_style, del_style)
+                } else if is_modified {
+                    let mod_style = Style::default().fg(Color::Yellow);
+                    (mod_style, mod_style)
+                } else {
+                    (Style::default(), Style::default())
+                };
+
+                // Apply strikethrough for deleted fields
+                if field.deleted {
+                    name_style = name_style.add_modifier(Modifier::CROSSED_OUT);
+                    value_style = value_style.add_modifier(Modifier::CROSSED_OUT);
+                }
+
+                Line::from(vec![
+                    Span::styled(name_padded, name_style),
+                    Span::raw(" : "),
+                    Span::styled(value_display, value_style),
+                ])
+            })
+            .collect();
+
+        // Scroll indicator
+        let total_fields = field_lines.len();
+        let scroll_indicator = if total_fields > visible_height {
+            let pos = self.field_scroll_offset + 1;
+            let max = total_fields.saturating_sub(visible_height) + 1;
+            format!(" [{}/{}]", pos, max)
+        } else {
+            String::new()
+        };
+
+        // Apply scroll
+        let visible_lines: Vec<Line> = field_lines
+            .into_iter()
+            .skip(self.field_scroll_offset)
+            .take(visible_height)
+            .collect();
+
+        let border_style = if is_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+
+        let tag_para = Paragraph::new(visible_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Tag Fields{}", scroll_indicator))
+                .border_style(border_style),
+        );
+        f.render_widget(tag_para, area);
+    }
+
+    /// Render aggregated fields for directory-level editing.
+    /// Shows whether each tag is consistent across all files or varies.
+    fn render_aggregated_fields_pane(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        is_focused: bool,
+        agg_fields: Vec<AggregatedTagField>,
+    ) {
+        let visible_height = area.height.saturating_sub(2) as usize;
+        self.field_visible_height = visible_height;
+
+        let field_lines: Vec<Line> = agg_fields
+            .iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                let is_current = idx == self.current_field_idx;
+
+                // Check if modified
+                let is_modified = field.value != field.original_value;
+
+                let name_display = if is_current
+                    && matches!(self.field_edit_state, FieldEditState::EditingName)
+                {
+                    format!("{}▌", self.name_buffer)
+                } else {
+                    field.name.clone()
+                };
+
+                // Show indicator: modified (✎) or none
+                let name_with_indicator = if is_modified {
+                    format!("✎ {}", name_display)
+                } else {
+                    format!("  {}", name_display)
+                };
+
+                // Value display depends on AggregatedValue state
+                let value_display = if is_current
+                    && matches!(self.field_edit_state, FieldEditState::EditingValue)
+                {
+                    format!("{}▌", self.value_buffer)
+                } else {
+                    match &field.value {
+                        AggregatedValue::Consistent(v) => {
+                            if v.is_empty() {
+                                "(empty)".to_string()
+                            } else {
+                                v.clone()
+                            }
+                        }
+                        AggregatedValue::Various => "(various values)".to_string(),
+                        AggregatedValue::VariousConfirming => "(press Enter to edit all)".to_string(),
+                        AggregatedValue::Edited(v) => format!("→ {}", v),
+                    }
+                };
+
+                // Pad name to fixed width for alignment
+                let name_padded = format!("{:18}", name_with_indicator);
+
+                // Determine styles
+                let (name_style, value_style) = if is_current {
+                    let base = Style::default().add_modifier(Modifier::BOLD);
+                    if self.focus_on_value {
+                        (
+                            base.bg(Color::DarkGray),
+                            base.bg(Color::Cyan).fg(Color::Black),
+                        )
+                    } else {
+                        (
+                            base.bg(Color::Cyan).fg(Color::Black),
+                            base.bg(Color::DarkGray),
+                        )
+                    }
+                } else if is_modified {
+                    let mod_style = Style::default().fg(Color::Yellow);
+                    (mod_style, mod_style)
+                } else if matches!(field.value, AggregatedValue::Various) {
+                    // Various values shown in magenta to draw attention
+                    let var_style = Style::default().fg(Color::Magenta);
+                    (Style::default(), var_style)
+                } else {
+                    (Style::default(), Style::default())
+                };
+
+                Line::from(vec![
+                    Span::styled(name_padded, name_style),
+                    Span::raw(" : "),
+                    Span::styled(value_display, value_style),
+                ])
+            })
+            .collect();
+
+        // Scroll indicator
+        let total_fields = field_lines.len();
+        let scroll_indicator = if total_fields > visible_height {
+            let pos = self.field_scroll_offset + 1;
+            let max = total_fields.saturating_sub(visible_height) + 1;
+            format!(" [{}/{}]", pos, max)
+        } else {
+            String::new()
+        };
+
+        let visible_lines: Vec<Line> = field_lines
+            .into_iter()
+            .skip(self.field_scroll_offset)
+            .take(visible_height)
+            .collect();
+
+        let border_style = if is_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+
+        // Show track count in title for directory view
+        let title = format!("Directory Tags ({} files){}", self.total_items, scroll_indicator);
+
+        let tag_para = Paragraph::new(visible_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(border_style),
+        );
+        f.render_widget(tag_para, area);
+    }
+
+    fn render_action_panel(&self, f: &mut Frame, area: Rect) {
+        let is_focused = matches!(self.focus, UnifiedTagEditorFocus::Actions);
+        let buttons = self.available_buttons();
+
+        let mut lines = vec![Line::from("")];
+
+        for button in &buttons {
+            let is_selected = *button == self.selected_button;
+            let label = match button {
+                TagEditorButton::Confirm => "Confirm",
+                TagEditorButton::DropChanges => "Drop Changes",
+                TagEditorButton::FillFromDisk => "Fill from Disk",
+                TagEditorButton::FillFromDb => "Fill from DB",
+            };
+
+            let style = if is_focused && is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            let text = if is_selected {
+                format!("[ {} ]", label)
+            } else {
+                format!("  {}  ", label)
+            };
+
+            lines.push(Line::from(text).style(style));
+        }
+
+        // Change count
+        let change_count = compute_changes(&self.original_tag_fields, &self.tag_fields).len();
+        lines.push(Line::from(""));
+        lines.push(
+            Line::from(format!("{} changes", change_count))
+                .style(Style::default().fg(Color::DarkGray)),
+        );
+
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let action_para = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Actions")
+                    .border_style(border_style),
+            )
+            .alignment(Alignment::Center);
+        f.render_widget(action_para, area);
+    }
+
+    fn render_modal(&self, f: &mut Frame, area: Rect, modal: &UnifiedTagEditorModal) {
+        match modal {
+            UnifiedTagEditorModal::ChangePreview { changes, single_changes, scroll } => {
+                self.render_change_preview_modal(f, area, changes, single_changes, *scroll);
+            }
+            UnifiedTagEditorModal::UnsavedChanges { destination } => {
+                self.render_unsaved_changes_modal(f, area, *destination);
+            }
+            UnifiedTagEditorModal::TransactionReview { decisions, scroll, selected_button } => {
+                self.render_transaction_review_modal(f, area, decisions, *scroll, *selected_button);
+            }
+            UnifiedTagEditorModal::MultiValueEditor {
+                field_idx,
+                values,
+                current_value_idx,
+                editing,
+                edit_buffer,
+            } => {
+                self.render_multi_value_editor_modal(
+                    f, area, *field_idx, values, *current_value_idx, *editing, edit_buffer,
+                );
+            }
+        }
+    }
+
+    fn render_change_preview_modal(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        grouped_changes: &[GroupedChange],
+        single_changes: &[TagChange],
+        scroll_offset: usize,
+    ) {
+        let modal_area = crate::ui::helpers::centered_rect(80, 80, area);
+        f.render_widget(Clear, modal_area);
+
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Review Changes")
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+
+        let inner = modal_block.inner(modal_area);
+        f.render_widget(modal_block, modal_area);
+
+        let mut lines = Vec::new();
+
+        let total_changes = grouped_changes
+            .iter()
+            .map(|g| g.track_indices.len())
+            .sum::<usize>()
+            + single_changes.len();
+
+        lines.push(
+            Line::from(format!("Total changes: {}", total_changes))
+                .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
+        );
+        lines.push(Line::from(""));
+
+        if !grouped_changes.is_empty() {
+            lines.push(
+                Line::from("Common Changes:")
+                    .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Green)),
+            );
+            for group in grouped_changes {
+                let track_list = if group.track_indices.len() <= 5 {
+                    group.track_indices.iter().map(|i| (i + 1).to_string()).collect::<Vec<_>>().join(", ")
+                } else {
+                    format!("{} tracks", group.track_indices.len())
+                };
+                lines.push(Line::from(format!(
+                    "  [{}] {}: '{}' -> '{}'",
+                    track_list,
+                    group.field_name,
+                    if group.old_value.is_empty() { "(empty)" } else { &group.old_value },
+                    if group.new_value.is_empty() { "(empty)" } else { &group.new_value }
+                )).style(Style::default().fg(Color::Cyan)));
+            }
+            lines.push(Line::from(""));
+        }
+
+        if !single_changes.is_empty() {
+            lines.push(
+                Line::from("Individual Changes:")
+                    .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow)),
+            );
+            for change in single_changes {
+                lines.push(Line::from(format!(
+                    "  Track {}: {}: '{}' -> '{}'",
+                    change.track_idx + 1,
+                    change.field_name,
+                    if change.old_value.is_empty() { "(empty)" } else { &change.old_value },
+                    if change.new_value.is_empty() { "(empty)" } else { &change.new_value }
+                )).style(Style::default().fg(Color::White)));
+            }
+            lines.push(Line::from(""));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(
+            Line::from("Enter = Stage to transaction | Esc = Cancel")
+                .style(Style::default().fg(Color::DarkGray)),
+        );
+
+        let max_scroll = lines.len().saturating_sub(inner.height as usize);
+        let clamped_offset = scroll_offset.min(max_scroll);
+        let visible_lines: Vec<Line> = lines
+            .into_iter()
+            .skip(clamped_offset)
+            .take(inner.height as usize)
+            .collect();
+
+        let paragraph = Paragraph::new(visible_lines).style(Style::default().bg(Color::Black));
+        f.render_widget(paragraph, inner);
+    }
+
+    fn render_unsaved_changes_modal(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        destination: super::types::UnsavedChangesDestination,
+    ) {
+        let modal_area = crate::ui::helpers::centered_rect(60, 30, area);
+        f.render_widget(Clear, modal_area);
+
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Unsaved Changes")
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+
+        let inner = modal_block.inner(modal_area);
+        f.render_widget(modal_block, modal_area);
+
+        let dest_text = match destination {
+            super::types::UnsavedChangesDestination::Exit => "exit the editor",
+            super::types::UnsavedChangesDestination::NextItem => "go to the next item",
+            super::types::UnsavedChangesDestination::PrevItem => "go to the previous item",
+            super::types::UnsavedChangesDestination::NextSibling => "go to the next sibling",
+            super::types::UnsavedChangesDestination::PrevSibling => "go to the previous sibling",
+        };
+
+        let lines = vec![
+            Line::from(""),
+            Line::from("You have unsaved changes."),
+            Line::from(format!("Discard changes and {}?", dest_text)),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("[ Y/Enter = Discard ]", Style::default().fg(Color::Red)),
+                Span::raw("  "),
+                Span::styled("[ N/Esc = Cancel ]", Style::default().fg(Color::Green)),
+            ]),
+        ];
+
+        let paragraph = Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(paragraph, inner);
+    }
+
+    fn render_transaction_review_modal(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        decisions: &[(usize, String, usize)],
+        scroll_offset: usize,
+        selected_button: super::types::TransactionReviewButton,
+    ) {
+        let modal_area = crate::ui::helpers::centered_rect(80, 80, area);
+        f.render_widget(Clear, modal_area);
+
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Transaction Review")
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Black));
+
+        let inner = modal_block.inner(modal_area);
+        f.render_widget(modal_block, modal_area);
+
+        let mut lines = Vec::new();
+
+        let total_mutations: usize = decisions.iter().map(|(_, _, count)| count).sum();
+        lines.push(
+            Line::from(format!(
+                "Staged: {} decisions, {} mutations",
+                decisions.len(),
+                total_mutations
+            ))
+            .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
+        );
+        lines.push(Line::from(""));
+
+        if decisions.is_empty() {
+            lines.push(Line::from("No decisions staged yet.").style(Style::default().fg(Color::DarkGray)));
+        } else {
+            for (idx, label, mutation_count) in decisions {
+                lines.push(Line::from(format!(
+                    "  {}. {} ({} mutations)",
+                    idx + 1,
+                    label,
+                    mutation_count
+                )).style(Style::default().fg(Color::White)));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(""));
+
+        // Buttons
+        let buttons = [
+            ("Commit All", super::types::TransactionReviewButton::CommitAll),
+            ("Discard All", super::types::TransactionReviewButton::DiscardAll),
+            ("Back", super::types::TransactionReviewButton::BackToEditing),
+        ];
+
+        let mut button_spans = Vec::new();
+        for (i, (label, btn)) in buttons.iter().enumerate() {
+            let style = if *btn == selected_button {
+                Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            button_spans.push(Span::styled(format!("[ {} ]", label), style));
+            if i < buttons.len() - 1 {
+                button_spans.push(Span::raw("  "));
+            }
+        }
+        lines.push(Line::from(button_spans));
+
+        lines.push(Line::from(""));
+        lines.push(
+            Line::from("←→ Select | Enter Confirm | Esc Cancel")
+                .style(Style::default().fg(Color::DarkGray)),
+        );
+
+        let max_scroll = lines.len().saturating_sub(inner.height as usize);
+        let clamped_offset = scroll_offset.min(max_scroll);
+        let visible_lines: Vec<Line> = lines
+            .into_iter()
+            .skip(clamped_offset)
+            .take(inner.height as usize)
+            .collect();
+
+        let paragraph = Paragraph::new(visible_lines)
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(paragraph, inner);
+    }
+
+    fn render_multi_value_editor_modal(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        field_idx: usize,
+        values: &[String],
+        current_value_idx: usize,
+        editing: bool,
+        edit_buffer: &str,
+    ) {
+        // Get the field name for the title
+        let field_name = self
+            .tag_fields
+            .get(self.current_item_idx)
+            .and_then(|fields| fields.get(field_idx))
+            .map(|f| f.name.as_str())
+            .unwrap_or("Tag");
+
+        // Size modal based on content
+        let height = (values.len() + 5).min(15) as u16; // values + add entry + padding + controls
+        let width = 50u16;
+        let modal_area = crate::ui::helpers::centered_rect_fixed(width, height, area);
+        f.render_widget(Clear, modal_area);
+
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!("Edit: {}", field_name))
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Black));
+
+        let inner = modal_block.inner(modal_area);
+        f.render_widget(modal_block, modal_area);
+
+        let mut lines = Vec::new();
+
+        // Render each value
+        for (i, value) in values.iter().enumerate() {
+            let is_current = i == current_value_idx;
+            let display = if is_current && editing {
+                format!("  > {}▌", edit_buffer)
+            } else if is_current {
+                format!("  > {}", value)
+            } else {
+                format!("    {}", value)
+            };
+
+            let style = if is_current {
+                Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(display).style(style));
+        }
+
+        // "+ Add value" entry
+        let add_idx = values.len();
+        let is_add_current = current_value_idx == add_idx;
+        let add_display = if is_add_current && editing {
+            format!("  > + {}▌", edit_buffer)
+        } else if is_add_current {
+            "  > + Add value".to_string()
+        } else {
+            "    + Add value".to_string()
+        };
+        let add_style = if is_add_current {
+            Style::default().fg(Color::Green).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        lines.push(Line::from(add_display).style(add_style));
+
+        // Controls hint
+        lines.push(Line::from(""));
+        lines.push(
+            Line::from("↑↓ Navigate | Enter Edit | Del Remove | Esc Close")
+                .style(Style::default().fg(Color::DarkGray)),
+        );
+
+        let paragraph = Paragraph::new(lines).style(Style::default().bg(Color::Black));
+        f.render_widget(paragraph, inner);
+    }
+
+    /// Apply multi-value changes back to the underlying tag_fields
+    fn apply_multi_value_changes(&mut self, field_idx: usize, new_values: Vec<String>) {
+        // Get the field name and determine which fields need updating
+        let field_name = match self
+            .tag_fields
+            .get(self.current_item_idx)
+            .and_then(|fields| fields.get(field_idx))
+        {
+            Some(f) => f.name.clone(),
+            None => return,
+        };
+
+        let fields = match self.tag_fields.get_mut(self.current_item_idx) {
+            Some(f) => f,
+            None => return,
+        };
+
+        // Find all fields with the same normalized name
+        let normalized_name = field_name.to_lowercase();
+        let matching_indices: Vec<usize> = fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.name.to_lowercase() == normalized_name)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Remove existing fields with this name (in reverse order to preserve indices)
+        for idx in matching_indices.into_iter().rev() {
+            fields.remove(idx);
+        }
+
+        // Insert new values at the original position
+        let insert_pos = field_idx.min(fields.len());
+        for (i, value) in new_values.into_iter().enumerate() {
+            fields.insert(
+                insert_pos + i,
+                TagField {
+                    name: field_name.clone(),
+                    value,
+                    editable: true,
+                    is_unique_per_track: false,
+                    deleted: false,
+                },
+            );
+        }
+    }
+}
+
+// Manual Debug implementation because GatheringState doesn't implement Debug
+impl std::fmt::Debug for UnifiedTagEditorState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnifiedTagEditorState")
+            .field("context", &self.context)
+            .field("current_item_idx", &self.current_item_idx)
+            .field("total_items", &self.total_items)
+            .field("current_field_idx", &self.current_field_idx)
+            .field("field_edit_state", &self.field_edit_state)
+            .field("focus", &self.focus)
+            .field("selected_button", &self.selected_button)
+            .field("tag_fields_len", &self.tag_fields.len())
+            .field("gathering_state", &self.gathering_state.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Convert changes to mutations for the daemon
+fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation> {
+    use std::path::PathBuf;
+    use crate::corpus::mutations::TagEdit;
+
+    // Group changes by track
+    let mut track_changes: HashMap<usize, Vec<TagChange>> = HashMap::new();
+    for change in changes {
+        track_changes
+            .entry(change.track_idx)
+            .or_default()
+            .push(change.clone());
+    }
+
+    // Create a TagEditAndFlush mutation for each track with changes
+    let mut mutations = Vec::new();
+    for (track_idx, changes) in track_changes {
+        if let Some(track) = tracks.get(track_idx) {
+            // Skip tracks without ID (not yet indexed)
+            let track_id = match track.id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let edits: Vec<TagEdit> = changes
+                .into_iter()
+                .flat_map(|c| {
+                    if c.deleted {
+                        // Tag marked for deletion - remove it entirely
+                        vec![TagEdit {
+                            tag_name: c.field_name,
+                            old_value: if c.old_value.is_empty() { None } else { Some(c.old_value) },
+                            new_value: None,  // Delete tag
+                        }]
+                    } else if let Some(old_name) = c.old_name {
+                        // Tag was renamed - delete old, set new
+                        vec![
+                            TagEdit {
+                                tag_name: old_name,
+                                old_value: if c.old_value.is_empty() { None } else { Some(c.old_value.clone()) },
+                                new_value: None,  // Delete old tag
+                            },
+                            TagEdit {
+                                tag_name: c.field_name,
+                                old_value: None,  // New tag
+                                new_value: if c.new_value.is_empty() { None } else { Some(c.new_value) },
+                            },
+                        ]
+                    } else {
+                        // Normal value change
+                        vec![TagEdit {
+                            tag_name: c.field_name,
+                            old_value: if c.old_value.is_empty() { None } else { Some(c.old_value) },
+                            new_value: if c.new_value.is_empty() { None } else { Some(c.new_value) },
+                        }]
+                    }
+                })
+                .collect();
+
+            mutations.push(Mutation::TagEditAndFlush {
+                track_id,
+                path: PathBuf::from(&track.path),
+                edits,
+            });
+        }
+    }
+
+    mutations
+}
+
+// ============================================================================
+// Legacy Tag Editor State (to be removed after refactoring)
+// ============================================================================
 
 /// Tag editor navigation state
 #[derive(Debug)]
@@ -255,6 +2378,7 @@ impl TagEditorState {
             value: String::new(),
             editable: true,
             is_unique_per_track: false,
+            deleted: false,
         };
 
         // Insert before "New Tag" placeholder
@@ -366,160 +2490,155 @@ impl TagEditorState {
 // Conversion Functions
 // ============================================================================
 
-/// Convert a Track to editable tag fields.
+/// Load tag fields from disk for a track.
 ///
-/// Database-first design: Core fields come from the Track struct (database),
-/// extended fields (comment, composer, etc.) come from disk.
-///
-/// Priority order: track_number, title, artist, album, album_artist, genre, isrc
-/// Optimized for compilation tagging workflow (common: track_number -> title -> artist)
-/// Read-only fields (path, file_type, duration, bitrate) are NOT included.
+/// All tags are loaded from the audio file and sorted alphabetically.
 pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
-    let mut tag_fields = Vec::new();
-
-    // =========================================================================
-    // CORE FIELDS (from database Track struct)
-    // These are the source of truth - database values always shown
-    // =========================================================================
-
-    // 1. track_number (unique per track)
-    tag_fields.push(TagField {
-        name: "track_number".to_string(),
-        value: track.track_number.map(|n| n.to_string()).unwrap_or_default(),
-        editable: true,
-        is_unique_per_track: true,
-    });
-
-    // 2. title (unique per track)
-    tag_fields.push(TagField {
-        name: "title".to_string(),
-        value: track.title.clone().unwrap_or_default(),
-        editable: true,
-        is_unique_per_track: true,
-    });
-
-    // 3. artist
-    tag_fields.push(TagField {
-        name: "artist".to_string(),
-        value: track.artist.clone().unwrap_or_default(),
-        editable: true,
-        is_unique_per_track: false,
-    });
-
-    // 4. album
-    tag_fields.push(TagField {
-        name: "album".to_string(),
-        value: track.album.clone().unwrap_or_default(),
-        editable: true,
-        is_unique_per_track: false,
-    });
-
-    // 5. album_artist
-    tag_fields.push(TagField {
-        name: "album_artist".to_string(),
-        value: track.album_artist.clone().unwrap_or_default(),
-        editable: true,
-        is_unique_per_track: false,
-    });
-
-    // 6. genre
-    tag_fields.push(TagField {
-        name: "genre".to_string(),
-        value: track.genre.clone().unwrap_or_default(),
-        editable: true,
-        is_unique_per_track: false,
-    });
-
-    // 7. isrc
-    tag_fields.push(TagField {
-        name: "isrc".to_string(),
-        value: track.isrc.clone().unwrap_or_default(),
-        editable: true,
-        is_unique_per_track: false,
-    });
-
-    // =========================================================================
-    // EXTENDED FIELDS (from disk)
-    // Tags that exist in the file but aren't in the Track struct
-    // =========================================================================
-    let extended = load_extended_fields_from_disk(&track.path);
-    tag_fields.extend(extended);
-
-    // =========================================================================
-    // NEW TAG placeholder
-    // =========================================================================
-    tag_fields.push(TagField {
-        name: "New Tag".to_string(),
-        value: "[Press Enter to create]".to_string(),
-        editable: true,
-        is_unique_per_track: false,
-    });
-
-    tag_fields
-}
-
-/// Load extended fields from disk that aren't stored in the Track struct.
-/// Returns fields sorted alphabetically.
-fn load_extended_fields_from_disk(path: &str) -> Vec<TagField> {
-    // Core fields we get from database - skip these from disk
-    let core_fields: HashSet<&str> = [
-        "artist", "album", "album_artist", "title",
-        "track_number", "genre", "isrc",
-        // Also skip read-only technical fields
-        "bitrate", "sample_rate", "duration", "path", "file_type",
-    ].into_iter().collect();
-
-    let disk_path = Path::new(path);
+    let disk_path = Path::new(&track.path);
     let all_tags = match metadata::read_all_tags(disk_path) {
         Ok(tags) => tags,
         Err(e) => {
             let _ = crate::config::log_message(&format!(
-                "Warning: Could not read extended tags from {}: {}",
-                path, e
+                "Warning: Could not read tags from {}: {}",
+                track.path, e
             ));
-            return Vec::new();
+            Vec::new()
         }
     };
 
-    // Filter to only extended fields, sort alphabetically
-    let mut extended: Vec<_> = all_tags
-        .into_iter()
-        .filter(|(key, _)| !core_fields.contains(key.as_str()))
-        .collect();
-    extended.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    // Convert to TagField
-    extended
+    // Convert to TagField and sort alphabetically
+    let mut tag_fields: Vec<TagField> = all_tags
         .into_iter()
         .map(|(name, value)| TagField {
             name,
             value,
             editable: true,
             is_unique_per_track: false,
+            deleted: false,
         })
-        .collect()
+        .collect();
+
+    tag_fields.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    // Add "New Tag" placeholder at the end
+    tag_fields.push(TagField {
+        name: "New Tag".to_string(),
+        value: "[Press Enter to create]".to_string(),
+        editable: true,
+        is_unique_per_track: false,
+        deleted: false,
+    });
+
+    tag_fields
 }
 
 /// Compute all changes between original and current tag fields
+///
+/// This function handles multi-value tags by comparing values semantically
+/// rather than by position. It detects added, removed, and modified values
+/// for each tag name.
 pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) -> Vec<TagChange> {
     let mut changes = Vec::new();
 
     for (track_idx, (orig_fields, curr_fields)) in original.iter().zip(current.iter()).enumerate() {
-        // Compare field by field
-        for (orig_field, curr_field) in orig_fields.iter().zip(curr_fields.iter()) {
-            // Skip "New Tag" placeholder
-            if orig_field.name == "New Tag" || curr_field.name == "New Tag" {
-                continue;
+        // Build maps of tag name -> values for both original and current
+        let mut orig_values: HashMap<String, Vec<&TagField>> = HashMap::new();
+        let mut curr_values: HashMap<String, Vec<&TagField>> = HashMap::new();
+
+        for field in orig_fields {
+            if field.name != "New Tag" {
+                orig_values
+                    .entry(field.name.to_lowercase())
+                    .or_default()
+                    .push(field);
+            }
+        }
+
+        for field in curr_fields {
+            if field.name != "New Tag" {
+                curr_values
+                    .entry(field.name.to_lowercase())
+                    .or_default()
+                    .push(field);
+            }
+        }
+
+        // Collect all unique tag names
+        let mut all_names: HashSet<String> = orig_values.keys().cloned().collect();
+        all_names.extend(curr_values.keys().cloned());
+
+        for normalized_name in all_names {
+            let orig = orig_values.get(&normalized_name).map(|v| v.as_slice()).unwrap_or(&[]);
+            let curr = curr_values.get(&normalized_name).map(|v| v.as_slice()).unwrap_or(&[]);
+
+            // Get display name from current or original
+            let display_name = curr
+                .first()
+                .map(|f| f.name.clone())
+                .or_else(|| orig.first().map(|f| f.name.clone()))
+                .unwrap_or_else(|| normalized_name.clone());
+
+            // Check for deleted tags (marked deleted in current)
+            for field in curr {
+                if field.deleted {
+                    // Find corresponding original value
+                    let orig_value = orig
+                        .iter()
+                        .find(|o| o.value == field.value)
+                        .map(|o| o.value.clone())
+                        .unwrap_or_default();
+
+                    changes.push(TagChange {
+                        track_idx,
+                        field_name: display_name.clone(),
+                        old_value: orig_value,
+                        new_value: field.value.clone(),
+                        old_name: None,
+                        deleted: true,
+                    });
+                }
             }
 
-            // Detect changes in value
-            if orig_field.value != curr_field.value {
-                changes.push(TagChange {
-                    track_idx,
-                    field_name: curr_field.name.clone(),
-                    old_value: orig_field.value.clone(),
-                    new_value: curr_field.value.clone(),
-                });
+            // Skip further comparison if all values are deleted
+            let curr_active: Vec<_> = curr.iter().filter(|f| !f.deleted).collect();
+            if curr_active.is_empty() && !orig.is_empty() {
+                continue; // Deletion changes already added above
+            }
+
+            // Compare active (non-deleted) values
+            let orig_value_set: HashSet<_> = orig.iter().map(|f| &f.value).collect();
+            let curr_value_set: HashSet<_> = curr_active.iter().map(|f| &f.value).collect();
+
+            // Added values (in current but not in original)
+            for field in &curr_active {
+                if !orig_value_set.contains(&field.value) && !field.deleted {
+                    changes.push(TagChange {
+                        track_idx,
+                        field_name: display_name.clone(),
+                        old_value: String::new(), // New value, no old
+                        new_value: field.value.clone(),
+                        old_name: None,
+                        deleted: false,
+                    });
+                }
+            }
+
+            // Removed values (in original but not in current active)
+            for field in orig {
+                if !curr_value_set.contains(&field.value) {
+                    // Check if it's not already covered by a deletion flag
+                    let is_deleted_explicitly = curr.iter().any(|c| c.value == field.value && c.deleted);
+                    if !is_deleted_explicitly {
+                        changes.push(TagChange {
+                            track_idx,
+                            field_name: display_name.clone(),
+                            old_value: field.value.clone(),
+                            new_value: String::new(), // Removed
+                            old_name: None,
+                            deleted: true,
+                        });
+                    }
+                }
             }
         }
     }
@@ -566,4 +2685,194 @@ pub fn group_common_changes(changes: &[TagChange]) -> (Vec<GroupedChange>, Vec<T
     }
 
     (grouped, singles)
+}
+
+// ============================================================================
+// Tag Coalescing (for multi-value FLAC/Vorbis style tags)
+// ============================================================================
+
+use super::types::CoalescedTagField;
+use indexmap::IndexMap;
+
+/// Coalesce tag fields by normalized name (case-insensitive).
+/// Multiple tags with the same name (e.g., multiple ARTIST tags) are
+/// merged into a single CoalescedTagField with multiple values.
+///
+/// First occurrence's casing is used for display name.
+/// Empty values are always filtered out to avoid "[2 values]" displays
+/// when one value is empty (common when renaming tags).
+pub fn coalesce_tags(fields: &[TagField]) -> Vec<CoalescedTagField> {
+    // Use IndexMap to preserve insertion order (first occurrence)
+    let mut map: IndexMap<String, CoalescedTagField> = IndexMap::new();
+
+    for field in fields {
+        // Skip "New Tag" placeholder
+        if field.name == "New Tag" {
+            continue;
+        }
+
+        let normalized = field.name.to_lowercase();
+
+        // Skip empty values - they don't contribute meaningful data
+        // and cause confusing "[2 values]" displays when one is empty
+        if field.value.is_empty() {
+            continue;
+        }
+
+        if let Some(existing) = map.get_mut(&normalized) {
+            // Add value to existing coalesced field
+            existing.values.push(field.value.clone());
+            existing.original_values.push(field.value.clone());
+        } else {
+            // First occurrence - create new coalesced field
+            map.insert(
+                normalized.clone(),
+                CoalescedTagField {
+                    name: field.name.clone(), // Use first occurrence's casing
+                    normalized_name: normalized,
+                    values: vec![field.value.clone()],
+                    editable: field.editable,
+                    deleted: field.deleted,
+                    original_values: vec![field.value.clone()],
+                },
+            );
+        }
+    }
+
+    // Add back "New Tag" placeholder at end
+    let new_tag_exists = fields.iter().any(|f| f.name == "New Tag");
+    if new_tag_exists {
+        map.insert(
+            "new_tag".to_string(),
+            CoalescedTagField {
+                name: "New Tag".to_string(),
+                normalized_name: "new_tag".to_string(),
+                values: vec!["".to_string()],
+                editable: true,
+                deleted: false,
+                original_values: vec!["".to_string()],
+            },
+        );
+    }
+
+    map.into_values().collect()
+}
+
+/// Expand coalesced fields back to individual TagFields.
+/// Used when saving or for change comparison.
+pub fn expand_coalesced(coalesced: &[CoalescedTagField]) -> Vec<TagField> {
+    let mut fields = Vec::new();
+
+    for cf in coalesced {
+        if cf.name == "New Tag" {
+            // Keep single placeholder
+            fields.push(TagField {
+                name: cf.name.clone(),
+                value: cf.values.first().cloned().unwrap_or_default(),
+                editable: cf.editable,
+                is_unique_per_track: false,
+                deleted: cf.deleted,
+            });
+        } else {
+            // Expand each value to a separate TagField
+            for value in &cf.values {
+                fields.push(TagField {
+                    name: cf.name.clone(),
+                    value: value.clone(),
+                    editable: cf.editable,
+                    is_unique_per_track: false,
+                    deleted: cf.deleted,
+                });
+            }
+        }
+    }
+
+    fields
+}
+
+// ============================================================================
+// Directory-Level Tag Aggregation (across all tracks)
+// ============================================================================
+
+/// Aggregate tags across all tracks in a directory.
+///
+/// For each tag name (case-insensitive):
+/// - If all tracks have the same value → `AggregatedValue::Consistent(value)`
+/// - If values differ across tracks → `AggregatedValue::Various`
+///
+/// Empty values are filtered out. Tags are sorted alphabetically.
+/// This provides a unified view for directory-level tag editing where the user
+/// can see which tags are consistent and which need attention.
+pub fn aggregate_tags_across_tracks(tracks: &[Track]) -> Vec<AggregatedTagField> {
+    use std::collections::HashMap;
+
+    if tracks.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect all tag values per tag name across all tracks
+    // Key: normalized tag name, Value: (display name, set of unique non-empty values)
+    let mut tag_values: HashMap<String, (String, HashSet<String>)> = HashMap::new();
+
+    for track in tracks {
+        let fields = track_to_tag_fields(track);
+        for field in fields {
+            if field.name == "New Tag" {
+                continue;
+            }
+
+            // Skip empty values
+            if field.value.is_empty() {
+                continue;
+            }
+
+            let normalized = field.name.to_lowercase();
+
+            tag_values
+                .entry(normalized.clone())
+                .or_insert_with(|| (field.name.clone(), HashSet::new()))
+                .1
+                .insert(field.value);
+        }
+    }
+
+    // Convert to AggregatedTagField entries
+    let mut result: Vec<AggregatedTagField> = tag_values
+        .into_iter()
+        .map(|(normalized, (display_name, values))| {
+            let value = if values.len() == 1 {
+                // All tracks have the same value
+                AggregatedValue::Consistent(values.into_iter().next().unwrap_or_default())
+            } else {
+                // Tracks have different values
+                AggregatedValue::Various
+            };
+
+            // Per-track unique fields (title, track number) shouldn't be bulk-edited
+            let is_unique = matches!(
+                normalized.as_str(),
+                "title" | "tracknumber" | "track_number" | "discnumber" | "disc_number"
+            );
+
+            AggregatedTagField {
+                name: display_name,
+                value: value.clone(),
+                original_value: value,
+                editable: !is_unique,
+            }
+        })
+        .collect();
+
+    // Sort alphabetically by tag name
+    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    // Add "New Tag" placeholder at end
+    result.push(AggregatedTagField {
+        name: "New Tag".to_string(),
+        value: AggregatedValue::Consistent(String::new()),
+        original_value: AggregatedValue::Consistent(String::new()),
+        editable: true,
+    });
+
+    result
 }

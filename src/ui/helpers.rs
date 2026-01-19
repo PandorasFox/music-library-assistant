@@ -8,6 +8,34 @@ use crate::corpus::db::Database;
 // Re-export centered_rect from widgets module
 pub use super::widgets::centered_rect;
 
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+/// Compute a centered rectangle with fixed dimensions within an area.
+///
+/// If the fixed dimensions exceed the area, the modal is clamped to fit.
+pub fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let actual_width = width.min(area.width);
+    let actual_height = height.min(area.height);
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length((area.height.saturating_sub(actual_height)) / 2),
+            Constraint::Length(actual_height),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length((area.width.saturating_sub(actual_width)) / 2),
+            Constraint::Length(actual_width),
+            Constraint::Min(0),
+        ])
+        .split(popup_layout[1])[1]
+}
+
 // ============================================================================
 // Formatting Utilities
 // ============================================================================

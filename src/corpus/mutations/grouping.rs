@@ -42,6 +42,7 @@ pub fn group_by_file(mutations: Vec<Mutation>) -> Vec<WorkUnit> {
             let track_id = mutations.iter().find_map(|m| match m {
                 Mutation::TagEditAndFlush { track_id, .. } => Some(*track_id),
                 Mutation::IndexTrack { .. } => None, // Will be assigned during execution
+                Mutation::IndexFileFromPath { .. } => None, // Will be assigned during execution
                 Mutation::Move { track_id, .. } => *track_id,
                 Mutation::Delete { track_id, .. } => *track_id,
                 Mutation::MoveToStash { track_id, .. } => *track_id,

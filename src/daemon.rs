@@ -199,7 +199,7 @@ impl TaskLabel {
         let label = match mutation.category() {
             MutationCategory::TagEdit => "Tag edits",
             MutationCategory::Indexing => match mutation {
-                Mutation::IndexTrack { .. } => "Indexing tracks",
+                Mutation::IndexTrack { .. } | Mutation::IndexFileFromPath { .. } => "Indexing tracks",
                 Mutation::DropFromIndex { .. } => "Dropping from index",
                 Mutation::UpdateTrack { .. } => "Updating tracks",
                 Mutation::UpdateTrackPath { .. } => "Updating paths",

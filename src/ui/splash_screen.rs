@@ -30,6 +30,8 @@ use ratatui::{
     Frame,
 };
 
+use std::collections::HashMap;
+
 use crate::daemon::{DaemonStatus, EyeState, TaskDaemon};
 use super::app::EYE_CLOSED;
 
@@ -152,7 +154,48 @@ impl SplashScreen {
         let total = status.session_queued;
         if total > 0 {
             self.progress = Some(completed as f32 / total as f32);
-            self.progress_detail = Some(format!("{} / {} tasks", completed, total));
+
+            // Show current task type if available
+            let task_desc = Self::describe_current_task(&status.task_counts, total, completed);
+            self.progress_detail = Some(format!(
+                "{} ({}/{})",
+                task_desc, completed, total
+            ));
+        }
+    }
+
+    /// Describe the current task phase based on task_counts.
+    fn describe_current_task(task_counts: &HashMap<String, usize>, total: usize, completed: usize) -> &'static str {
+        // During eyeballing, the phases happen in order:
+        // 1. WalkCorpus (Eyeballing/Eyeballing (paranoid))
+        // 2. CompareInodes
+        // 3. VerifyMtime
+        // 4. VerifyTags (paranoid mode)
+        // 5. Create signals (MissingFromIndex, MissingFromDisk)
+
+        // Check which phase has incomplete work
+        let eyeball_count = task_counts.get("Eyeballing").copied().unwrap_or(0)
+            + task_counts.get("Eyeballing (paranoid)").copied().unwrap_or(0);
+        let compare_count = task_counts.get("Comparing inodes").copied().unwrap_or(0);
+        let mtime_count = task_counts.get("Verifying mtime").copied().unwrap_or(0);
+        let tag_count = task_counts.get("Tag verification").copied().unwrap_or(0);
+        let index_count = task_counts.get("Indexing tracks").copied().unwrap_or(0);
+
+        // Determine current phase (in-progress or about to start)
+        if eyeball_count > 0 && completed < eyeball_count {
+            "Walking filesystem..."
+        } else if compare_count > 0 && completed < (eyeball_count + compare_count) {
+            "Comparing inodes..."
+        } else if mtime_count > 0 && completed < (eyeball_count + compare_count + mtime_count) {
+            "Checking timestamps..."
+        } else if tag_count > 0 && completed < (eyeball_count + compare_count + mtime_count + tag_count) {
+            "Verifying tags..."
+        } else if index_count > 0 {
+            "Indexing files..."
+        } else if completed >= total {
+            "Finishing up..."
+        } else {
+            "Processing..."
         }
     }
 }

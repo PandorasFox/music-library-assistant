@@ -11,6 +11,7 @@ pub mod helpers;
 pub mod insights_view;
 pub mod render;
 pub mod splash_screen;
+pub mod startup;
 pub mod tag_editor;
 pub mod tree_browser;
 pub mod widgets;
@@ -107,6 +108,8 @@ pub(crate) enum UiMode {
     DeployConflictReview,
     /// Full-screen insights view (part of lateral view ring)
     Insights,
+    /// Intake confirmation - prompt to index unindexed files
+    IntakeConfirmation,
     /// Loading splash screen - centered eye with status message
     LoadingSplash,
     /// Unified tag editor with transaction support (replaces TagEditor and DirectoryTagEditor)
@@ -186,6 +189,8 @@ pub(crate) struct App {
     deploy_conflict_accumulated: Vec<DeployConflictGroupChanges>,
     // Insights view (lateral view ring)
     insights_view: Option<insights_view::InsightsViewState>,
+    // Intake confirmation modal
+    intake_confirmation: Option<startup::IntakeConfirmationState>,
 
     // Background tasks (supports multiple concurrent)
     pub background_tasks: Vec<BackgroundTask>,
@@ -227,6 +232,7 @@ impl App {
             deploy_conflict_review: None,
             deploy_conflict_accumulated: Vec::new(),
             insights_view: None,
+            intake_confirmation: None,
             background_tasks: Vec::new(),
             task_daemon: None,
             tag_cloud: None,
@@ -317,6 +323,12 @@ impl App {
                 // Loading splash ignores most keys - can't interact during loading
                 // Could potentially allow Esc to cancel certain operations in the future
             }
+            UiMode::IntakeConfirmation => {
+                if let Some(ref state) = self.intake_confirmation {
+                    let action = state.handle_key(key);
+                    self.handle_intake_confirmation_action(action);
+                }
+            }
             UiMode::UnifiedTagEditor => {
                 if let Some(ref mut editor) = self.unified_tag_editor {
                     let action = editor.handle_key(key);
@@ -352,6 +364,51 @@ impl App {
             insights_view::InsightsAction::LaunchFlow => {
                 // Stub: flows not yet implemented
                 self.status_message = Some("Flows not yet implemented".to_string());
+            }
+        }
+    }
+
+    /// Handle intake confirmation dialog actions.
+    fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction) {
+        use crate::daemon::confirm_decision;
+
+        match action {
+            startup::IntakeConfirmationAction::None => {}
+            startup::IntakeConfirmationAction::Confirmed => {
+                // User confirmed - create IndexTrack mutations
+                if let Some(ref state) = self.intake_confirmation {
+                    let mutations = state.create_index_mutations();
+                    let count = mutations.len();
+
+                    let _ = config::log_message(&format!(
+                        "IntakeConfirmation: user confirmed, queuing {} IndexTrack mutations",
+                        count
+                    ));
+
+                    // Use the transaction API to queue mutations
+                    let daemon = self.daemon();
+                    if daemon.start_transaction("Intake indexing").is_ok() {
+                        let witness = confirm_decision();
+                        let _ = daemon.add_decision(0, &witness, "Index unindexed files", mutations);
+                        let _ = daemon.confirm_transaction(&witness);
+                    }
+
+                    self.status_message = Some(format!("Indexing {} files...", count));
+                }
+
+                // Clean up and transition to Insights
+                self.intake_confirmation = None;
+                self.mode = UiMode::Insights;
+                self.start_insights_view();
+            }
+            startup::IntakeConfirmationAction::Skipped => {
+                // User skipped - proceed to Insights without indexing
+                // MissingFromIndex signals remain in health_issues for later handling
+                let _ = config::log_message("IntakeConfirmation: user skipped indexing");
+
+                self.intake_confirmation = None;
+                self.mode = UiMode::Insights;
+                self.start_insights_view();
             }
         }
     }
@@ -1627,12 +1684,32 @@ impl App {
 
         // Put it back or transition
         if splash.is_complete() {
-            // Don't put it back - transition to Insights
-            self.mode = UiMode::Insights;
-            self.start_insights_view();
+            // Don't put it back - check for unindexed files before transitioning
+            if let Some(intake_state) = self.check_for_unindexed_files() {
+                let _ = config::log_message(&format!(
+                    "IntakeConfirmation: showing prompt for {} files",
+                    intake_state.file_count
+                ));
+                self.intake_confirmation = Some(intake_state);
+                self.mode = UiMode::IntakeConfirmation;
+            } else {
+                self.mode = UiMode::Insights;
+                self.start_insights_view();
+            }
         } else {
             self.splash_screen = Some(splash);
         }
+    }
+
+    /// Check for unindexed files after eyeballing completes.
+    ///
+    /// Queries MissingFromIndex health issues and gathers file information.
+    /// Returns Some if there are unindexed files to confirm, None otherwise.
+    fn check_for_unindexed_files(&self) -> Option<startup::IntakeConfirmationState> {
+        let db_path = config::get_db_path().ok()?;
+        let db = Database::open(&db_path).ok()?;
+        let corpus_root = &self.config.corpus_root;
+        startup::IntakeConfirmationState::gather(&db, corpus_root, "corpus")
     }
 
     // ========================================================================
@@ -1832,6 +1909,7 @@ fn render(f: &mut Frame, app: &mut App) {
         splash_screen: app.splash_screen.as_ref(),
         deploy_conflict_review: app.deploy_conflict_review.as_ref(),
         insights_view: app.insights_view.as_mut(),
+        intake_confirmation: app.intake_confirmation.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,
@@ -1897,177 +1975,6 @@ fn check_and_maybe_rebuild_health(app: &mut App) {
 }
 
 // ============================================================================
-// First-Time Setup
-// ============================================================================
-
-/// Handle first-time setup when no database exists.
-///
-/// Shows a dialog prompting the user to create a new database, then
-/// initializes it with the latest schema version (no migrations needed).
-fn handle_first_time_setup<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    db_path: &std::path::Path,
-) -> Result<()> {
-    use crossterm::event::{self, Event, KeyCode};
-    use ratatui::layout::{Alignment, Rect};
-    use ratatui::style::{Color, Modifier, Style};
-    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-    use crate::daemon::confirm_decision;
-
-    // Ensure parent directory exists
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let db_display = db_path.to_string_lossy();
-
-    // Render first-time setup dialog
-    loop {
-        terminal.draw(|f| {
-            let area = f.area();
-
-            let dialog_width = 65.min(area.width.saturating_sub(4));
-            let dialog_height = 14.min(area.height.saturating_sub(4));
-
-            let dialog_area = Rect {
-                x: (area.width.saturating_sub(dialog_width)) / 2,
-                y: (area.height.saturating_sub(dialog_height)) / 2,
-                width: dialog_width,
-                height: dialog_height,
-            };
-
-            f.render_widget(Clear, dialog_area);
-
-            let lines = vec![
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from("Welcome to MLA!").style(
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ),
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from("No database found. MLA will create a new one at:").style(
-                    Style::default().fg(Color::White),
-                ),
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from(format!("  {}", db_display)).style(
-                    Style::default().fg(Color::Yellow),
-                ),
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from("After setup, your corpus will be scanned.").style(
-                    Style::default().fg(Color::DarkGray),
-                ),
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from("[Enter] Create Database    [Esc] Exit")
-                    .style(Style::default().fg(Color::Cyan)),
-            ];
-
-            let paragraph = Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .title(" First-Time Setup ")
-                        .title_alignment(Alignment::Center)
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan)),
-                )
-                .alignment(Alignment::Center);
-
-            f.render_widget(paragraph, dialog_area);
-        })?;
-
-        // Wait for user input
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Enter => {
-                    let _witness = confirm_decision();
-                    break;
-                }
-                KeyCode::Esc => {
-                    return Err(anyhow::anyhow!("Setup cancelled by user"));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Show "creating database" status
-    terminal.draw(|f| {
-        let area = f.area();
-        let dialog_width = 50.min(area.width.saturating_sub(4));
-        let dialog_height = 7;
-
-        let dialog_area = Rect {
-            x: (area.width.saturating_sub(dialog_width)) / 2,
-            y: (area.height.saturating_sub(dialog_height)) / 2,
-            width: dialog_width,
-            height: dialog_height,
-        };
-
-        f.render_widget(Clear, dialog_area);
-
-        let paragraph = Paragraph::new(vec![
-            ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Creating database...").style(
-                Style::default().fg(Color::Cyan),
-            ),
-            ratatui::text::Line::from(""),
-        ])
-        .block(
-            Block::default()
-                .title(" Setup ")
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
-        .alignment(Alignment::Center);
-
-        f.render_widget(paragraph, dialog_area);
-    })?;
-
-    // Create database and set to latest schema version
-    let db = Database::open(db_path)?;
-    let registry = MigrationRegistry::new();
-    db.set_schema_version(registry.latest_version())?;
-
-    // Show completion message
-    terminal.draw(|f| {
-        let area = f.area();
-        let dialog_width = 50.min(area.width.saturating_sub(4));
-        let dialog_height = 7;
-
-        let dialog_area = Rect {
-            x: (area.width.saturating_sub(dialog_width)) / 2,
-            y: (area.height.saturating_sub(dialog_height)) / 2,
-            width: dialog_width,
-            height: dialog_height,
-        };
-
-        f.render_widget(Clear, dialog_area);
-
-        let paragraph = Paragraph::new(vec![
-            ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Database created successfully!").style(
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            ),
-            ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Starting initial corpus scan...")
-                .style(Style::default().fg(Color::DarkGray)),
-        ])
-        .block(
-            Block::default()
-                .title(" Setup Complete ")
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green)),
-        )
-        .alignment(Alignment::Center);
-
-        f.render_widget(paragraph, dialog_area);
-    })?;
-
-    std::thread::sleep(std::time::Duration::from_millis(800));
-    Ok(())
-}
-
-// ============================================================================
 // Database Migration Check
 // ============================================================================
 
@@ -2101,7 +2008,7 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
 
     if is_first_time {
         // First-time setup: prompt to create new database
-        return handle_first_time_setup(terminal, &db_path);
+        return startup::handle_first_time_setup(terminal, &db_path);
     }
 
     // Existing database: open and check for migrations
@@ -2346,6 +2253,12 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
 // ============================================================================
 
 pub fn run_menu(config: Config) -> Result<()> {
+    // Log startup with timestamp
+    let _ = config::log_message(&format!(
+        "=== MLA startup: {} ===",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    ));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;

@@ -114,23 +114,26 @@ fn compute_corpus_health(db: &Database) -> Insight {
 
 /// Compute index desync insight from health_issues table.
 ///
-/// Counts unresolved issues for:
+/// Counts files (not issues) for:
 /// - MissingFromDisk: Indexed files not found on disk
 /// - MissingFromIndex: Disk files not in index
 /// - FileRelocated: Files moved to new paths (same inode)
+///
+/// Each health issue groups files by directory and stores file_count in metadata.
 fn compute_index_desync(db: &Database) -> Option<Insight> {
-    let missing_from_disk = db
-        .get_unresolved_health_issues(Some(HealthIssueType::MissingFromDisk))
-        .unwrap_or_default()
-        .len();
-    let missing_from_index = db
-        .get_unresolved_health_issues(Some(HealthIssueType::MissingFromIndex))
-        .unwrap_or_default()
-        .len();
-    let relocated = db
-        .get_unresolved_health_issues(Some(HealthIssueType::FileRelocated))
-        .unwrap_or_default()
-        .len();
+    // Sum file_count from each issue's metadata (issues are grouped by directory)
+    let missing_from_disk = sum_file_count_from_issues(
+        &db.get_unresolved_health_issues(Some(HealthIssueType::MissingFromDisk))
+            .unwrap_or_default(),
+    );
+    let missing_from_index = sum_file_count_from_issues(
+        &db.get_unresolved_health_issues(Some(HealthIssueType::MissingFromIndex))
+            .unwrap_or_default(),
+    );
+    let relocated = sum_file_count_from_issues(
+        &db.get_unresolved_health_issues(Some(HealthIssueType::FileRelocated))
+            .unwrap_or_default(),
+    );
 
     // Only include if there's something to report
     if missing_from_disk == 0 && missing_from_index == 0 && relocated == 0 {
@@ -142,6 +145,23 @@ fn compute_index_desync(db: &Database) -> Option<Insight> {
         missing_from_index,
         relocated,
     })
+}
+
+/// Sum file_count from health issue metadata.
+///
+/// Each issue stores metadata_json with {"file_count": N, ...}.
+/// Returns the sum of all file_count values.
+fn sum_file_count_from_issues(issues: &[crate::corpus::db::types::HealthIssue]) -> usize {
+    issues
+        .iter()
+        .filter_map(|issue| {
+            issue
+                .metadata_json
+                .as_ref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .and_then(|v| v.get("file_count")?.as_u64())
+        })
+        .sum::<u64>() as usize
 }
 
 /// Compute deployment conflicts from health_issues table.

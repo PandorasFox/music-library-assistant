@@ -47,6 +47,36 @@ pub fn execute_index_track(
     Ok(track_id)
 }
 
+/// Execute an IndexFileFromPath mutation.
+///
+/// Extracts metadata from the file and indexes it. This does the heavy lifting
+/// on the worker thread rather than the UI thread.
+pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str) -> Result<()> {
+    use crate::corpus::metadata;
+
+    // Extract audio properties
+    let track = metadata::extract_metadata(path, source)
+        .with_context(|| format!("Failed to extract metadata from {:?}", path))?;
+
+    // Read tags
+    let tags = metadata::read_all_tags(path)
+        .with_context(|| format!("Failed to read tags from {:?}", path))?;
+
+    let extracted = ExtractedMetadata {
+        inode: track.inode,
+        file_size: track.file_size,
+        file_type: track.file_type,
+        duration_ms: track.duration_ms,
+        bitrate_kbps: track.bitrate_kbps,
+        sample_rate: track.sample_rate,
+        fingerprint: None,
+        tags,
+    };
+
+    execute_index_track(db, path, source, &extracted)?;
+    Ok(())
+}
+
 /// Execute an UpdateScanState mutation.
 ///
 /// Updates the scan state entry for a file, enabling incremental scanning.
@@ -247,6 +277,10 @@ pub fn execute_single(
             source,
             metadata,
         } => execute_index_track(db, path, source, metadata).map(|_| ()),
+
+        Mutation::IndexFileFromPath { path, source } => {
+            execute_index_file_from_path(db, path, source)
+        }
 
         Mutation::UpdateScanState {
             source,

@@ -38,6 +38,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::config::log_message;
+
 /// A computation operation that derives facts without altering corpus state.
 ///
 /// Computations can be queued without a `DecisionWitness` because they only
@@ -251,6 +253,13 @@ fn execute_walk_corpus(
     let mut disk_state: Vec<(i64, PathBuf, i64, i64)> = Vec::new();
     walk_dir_recursive(root, &mut disk_state);
 
+    // Log walk results for diagnostics
+    let _ = log_message(&format!(
+        "WalkCorpus: found {} audio files in {:?}",
+        disk_state.len(),
+        root
+    ));
+
     // Spawn CompareInodes with collected state, passing through paranoid flag
     let spawn = vec![Computation::CompareInodes {
         source: source.to_string(),
@@ -446,6 +455,14 @@ fn create_missing_from_index_issues(db: &Database, missing_paths: &[String]) {
             .unwrap_or_else(|| "[root]".to_string());
         by_directory.entry(parent).or_default().push(path.clone());
     }
+
+    // Log signal creation for diagnostics
+    let total_files: usize = by_directory.values().map(|v| v.len()).sum();
+    let _ = log_message(&format!(
+        "MissingFromIndex: {} files across {} directories",
+        total_files,
+        by_directory.len()
+    ));
 
     for (directory, files) in by_directory {
         let issue_key = format!("missing_from_index:{}", directory);

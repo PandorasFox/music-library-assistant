@@ -37,6 +37,7 @@ pub struct RenderContext<'a> {
     pub splash_screen: Option<&'a super::splash_screen::SplashScreen>,
     pub deploy_conflict_review: Option<&'a super::DeployConflictReviewState>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
+    pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub eye: &'a EyeAnimation,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
     pub background_tasks: &'a [BackgroundTask],
@@ -103,6 +104,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::DeployConflictReview => Some("Deploy Conflict Review"),
         super::UiMode::Insights => Some("Corpus Insights"),
         super::UiMode::LoadingSplash => None, // Never reached - handled separately
+        super::UiMode::IntakeConfirmation => Some("Intake Confirmation"),
         super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
     };
 
@@ -184,6 +186,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         }
         super::UiMode::LoadingSplash => {
             // Never reached - handled separately in render() before this function
+        }
+        super::UiMode::IntakeConfirmation => {
+            if let Some(ref state) = ctx.intake_confirmation {
+                super::startup::intake_confirmation::render(f, area, state);
+            }
         }
         super::UiMode::UnifiedTagEditor => {
             if let Some(ref mut editor) = ctx.unified_tag_editor {
@@ -715,6 +722,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::DeployConflictReview => control_presets::deploy_conflict_review(),
         super::UiMode::Insights => control_presets::insights_view(),
         super::UiMode::LoadingSplash => control_presets::empty(),
+        super::UiMode::IntakeConfirmation => control_presets::empty(), // Modal handles its own hints
         super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
     };
     lines.push(controls.render_line());

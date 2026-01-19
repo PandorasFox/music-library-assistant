@@ -107,6 +107,15 @@ pub enum Mutation {
         metadata: ExtractedMetadata,
     },
 
+    /// Index a file from path only - extracts metadata during execution.
+    ///
+    /// This is the worker-thread-safe way to index files. Metadata extraction
+    /// happens on the worker thread, not the UI thread.
+    IndexFileFromPath {
+        path: PathBuf,
+        source: String,
+    },
+
     /// Update scan state entry for incremental scanning.
     UpdateScanState {
         source: String,
@@ -230,6 +239,7 @@ impl Mutation {
             | Mutation::TagEditAndFlush { .. } => MutationCategory::TagEdit,
 
             Mutation::IndexTrack { .. }
+            | Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateScanState { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::UpdateTrackPath { .. }
@@ -255,6 +265,7 @@ impl Mutation {
             Mutation::TagFlushToDisk { path, .. }
             | Mutation::TagEditAndFlush { path, .. }
             | Mutation::IndexTrack { path, .. }
+            | Mutation::IndexFileFromPath { path, .. }
             | Mutation::UpdateScanState { path, .. }
             | Mutation::Move { source: path, .. }
             | Mutation::Copy { source: path, .. }

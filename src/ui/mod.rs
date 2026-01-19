@@ -29,6 +29,8 @@ use ratatui::{
 };
 use std::collections::VecDeque;
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::config::{self, Config};
@@ -1371,7 +1373,24 @@ fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
 ) -> io::Result<()> {
+    // Set up signal handling - treat SIGINT/SIGTERM as ESC press
+    let signal_received = Arc::new(AtomicBool::new(false));
+
+    // Register signal handlers
+    if let Err(e) = register_signal_handlers(Arc::clone(&signal_received)) {
+        let _ = crate::config::log_message(&format!(
+            "[WARN] Failed to register signal handlers: {}",
+            e
+        ));
+    }
+
     loop {
+        // Check if a signal was received - treat as ESC
+        if signal_received.swap(false, Ordering::SeqCst) {
+            let esc_key = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
+            app.handle_key(esc_key);
+        }
+
         // Tick daemon first - she is the driving system
         app.daemon().tick();
         app.check_daemon_status();
@@ -1393,13 +1412,15 @@ fn run_app<B: ratatui::backend::Backend>(
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
-                    // Global quit shortcut
+                    // Ctrl+C: treat as ESC for graceful exit handling
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
                     {
-                        break;
+                        let esc_key = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
+                        app.handle_key(esc_key);
+                    } else {
+                        app.handle_key(key);
                     }
-                    app.handle_key(key);
                 }
                 Event::Mouse(mouse) => {
                     // Map scroll wheel to arrow keys
@@ -1423,6 +1444,21 @@ fn run_app<B: ratatui::backend::Backend>(
             break;
         }
     }
+
+    Ok(())
+}
+
+/// Register signal handlers for graceful shutdown.
+///
+/// SIGINT (Ctrl+C) and SIGTERM are caught and converted to ESC key presses
+/// so the app can handle them gracefully (show exit confirmation, etc.).
+fn register_signal_handlers(flag: Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
+    use signal_hook::consts::{SIGINT, SIGTERM};
+    use signal_hook::flag;
+
+    // Register both SIGINT and SIGTERM to set the flag
+    flag::register(SIGINT, Arc::clone(&flag))?;
+    flag::register(SIGTERM, flag)?;
 
     Ok(())
 }

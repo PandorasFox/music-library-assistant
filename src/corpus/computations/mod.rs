@@ -294,11 +294,11 @@ fn is_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Phase 1: Enumerate corpus directories and spawn per-directory scans.
+/// Phase 1: Enumerate ALL corpus directories and spawn per-directory scans.
 ///
-/// Instead of walking the entire corpus tree in one computation, this
-/// enumerates top-level directories and spawns `ScanCorpusDirectory` for each.
-/// This provides granular progress feedback during startup.
+/// Recursively walks the entire corpus tree to find all directories,
+/// then spawns `ScanCorpusDirectory` for each. This provides granular
+/// progress feedback during startup (one computation per directory).
 fn execute_walk_corpus(
     _db: &Database,
     root: &Path,
@@ -320,51 +320,68 @@ fn execute_walk_corpus(
         );
     }
 
-    // Enumerate immediate children of root
-    let mut spawn: Vec<Computation> = Vec::new();
-    let mut file_count = 0;
-    let mut dir_count = 0;
+    // Recursively enumerate ALL directories
+    let mut directories: Vec<PathBuf> = Vec::new();
+    let mut symlink_count = 0;
+    enumerate_directories_recursive(root, &mut directories, &mut symlink_count);
 
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
+    // Always include root itself (for files directly in root)
+    directories.push(root.to_path_buf());
 
-            if path.is_dir() {
-                // Spawn per-directory scan
-                spawn.push(Computation::ScanCorpusDirectory {
-                    directory: path,
-                    source: source.to_string(),
-                    paranoid,
-                });
-                dir_count += 1;
-            } else if is_audio_file(&path) {
-                // Files directly in root - these are rare but handle them
-                // by spawning a scan for the root itself if we find any
-                file_count += 1;
-            }
-        }
-    }
-
-    // If there are files directly in the root, scan the root as a "directory"
-    // (just for its immediate files, not recursive)
-    if file_count > 0 {
-        spawn.push(Computation::ScanCorpusDirectory {
-            directory: root.to_path_buf(),
-            source: source.to_string(),
-            paranoid,
-        });
+    if symlink_count > 0 {
+        let _ = log_message(&format!(
+            "[WARN] WalkCorpus: skipped {} directory symlinks in {:?}",
+            symlink_count, root
+        ));
     }
 
     let _ = log_message(&format!(
-        "[COMPUTE] WalkCorpus: found {} top-level directories, {} root files in {:?}",
-        dir_count, file_count, root
+        "[COMPUTE] WalkCorpus: found {} directories in {:?}",
+        directories.len(), root
     ));
+
+    // Spawn ScanCorpusDirectory for each directory
+    let spawn: Vec<Computation> = directories
+        .into_iter()
+        .map(|directory| Computation::ScanCorpusDirectory {
+            directory,
+            source: source.to_string(),
+            paranoid,
+        })
+        .collect();
 
     ComputationResult::success(
         computation,
         start.elapsed().as_millis() as u64,
         spawn,
     )
+}
+
+/// Recursively enumerate all directories under a root path.
+///
+/// Skips symlinks and logs a warning count.
+fn enumerate_directories_recursive(dir: &Path, directories: &mut Vec<PathBuf>, symlink_count: &mut usize) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Check for symlinks - we don't follow them
+        if path.is_symlink() {
+            if path.is_dir() {
+                *symlink_count += 1;
+            }
+            continue;
+        }
+
+        if path.is_dir() {
+            directories.push(path.clone());
+            enumerate_directories_recursive(&path, directories, symlink_count);
+        }
+    }
 }
 
 /// Recursively walk directory and collect audio file state.
@@ -393,9 +410,9 @@ fn walk_dir_recursive(dir: &Path, disk_state: &mut Vec<(i64, PathBuf, i64, i64)>
     }
 }
 
-/// Scan a single corpus directory subtree.
+/// Scan a single corpus directory (non-recursive).
 ///
-/// Walks the directory recursively, collects disk state, compares against
+/// Processes only audio files directly in the given directory, compares against
 /// scan_state, creates FileInCorpus signals, and spawns follow-up computations.
 fn execute_scan_corpus_directory(
     db: &Database,
@@ -420,21 +437,22 @@ fn execute_scan_corpus_directory(
         );
     }
 
-    // Collect disk state for this directory subtree
-    let mut disk_state: Vec<(i64, PathBuf, i64, i64)> = Vec::new();
-    walk_dir_recursive(directory, &mut disk_state);
+    // Collect disk state for files DIRECTLY in this directory (not recursive)
+    let disk_state = collect_directory_files(directory);
 
-    let _ = log_message(&format!(
-        "[COMPUTE] ScanCorpusDirectory: found {} audio files in {:?}",
-        disk_state.len(),
-        directory
-    ));
+    // Skip logging for empty directories
+    if disk_state.is_empty() {
+        return ComputationResult::success(
+            computation,
+            start.elapsed().as_millis() as u64,
+            Vec::new(),
+        );
+    }
 
     // Build lookup map for disk inodes
     let disk_inodes: HashSet<i64> = disk_state.iter().map(|(inode, _, _, _)| *inode).collect();
 
     // Get indexed inodes from scan_state for comparison
-    // We only want to compare inodes we actually found on disk in this directory
     let inode_vec: Vec<i64> = disk_inodes.iter().copied().collect();
     let indexed_by_inode = db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
@@ -474,7 +492,7 @@ fn execute_scan_corpus_directory(
         }
     }
 
-    // Create FileInCorpus signal for unindexed files (grouped by directory)
+    // Create FileInCorpus signal for unindexed files in this directory
     if !unindexed_paths.is_empty() {
         let dir_str = directory.to_string_lossy().to_string();
         let issue_key = format!("file_in_corpus:{}", dir_str);
@@ -502,20 +520,6 @@ fn execute_scan_corpus_directory(
 
             let _ = db.insert_health_issue(&issue);
         }
-
-        let _ = log_message(&format!(
-            "[COMPUTE] ScanCorpusDirectory: {} unindexed files in {:?}",
-            unindexed_paths.len(),
-            directory
-        ));
-    }
-
-    if !spawn.is_empty() {
-        let _ = log_message(&format!(
-            "[COMPUTE] ScanCorpusDirectory: spawning {} follow-up computations for {:?}",
-            spawn.len(),
-            directory
-        ));
     }
 
     ComputationResult::success(
@@ -523,6 +527,39 @@ fn execute_scan_corpus_directory(
         start.elapsed().as_millis() as u64,
         spawn,
     )
+}
+
+/// Collect audio files directly in a directory (non-recursive).
+fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
+    let mut disk_state = Vec::new();
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return disk_state,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Skip directories and symlinks
+        if path.is_dir() || path.is_symlink() {
+            continue;
+        }
+
+        if is_audio_file(&path) {
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                let inode = metadata.ino() as i64;
+                let mtime = metadata.modified().ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+                    .unwrap_or((0, 0));
+
+                disk_state.push((inode, path, mtime.0, mtime.1));
+            }
+        }
+    }
+
+    disk_state
 }
 
 /// Phase 2: Compare disk state to database index.
@@ -938,7 +975,7 @@ fn execute_derive_directory_signals(
     // Record the signals
     for signal in signals_to_create {
         if let Err(e) = db.insert_health_issue(&signal) {
-            log_message(&format!(
+            let _ = log_message(&format!(
                 "Failed to record {:?} signal for {}: {}",
                 signal.issue_type, signal.issue_key, e
             ));
@@ -974,7 +1011,7 @@ fn execute_check_deploy_conflicts(
     //
     // For now, this computation is a no-op - actual deploy conflicts are still
     // detected during the dedicated deploy conflict detection pass.
-    log_message(&format!(
+    let _ = log_message(&format!(
         "CheckDeployConflicts: skipping track {} (pending integration)",
         track_id
     ));

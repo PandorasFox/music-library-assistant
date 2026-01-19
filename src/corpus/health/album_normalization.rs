@@ -3,7 +3,7 @@
 //! Re-exports from mla-utils::metadata_magic::album for backward compatibility.
 //! New code should use `mla_utils::metadata_magic` directly.
 
-pub use mla_utils::metadata_magic::album::{normalize_album, AlbumFormat, NormalizedAlbum};
+pub use mla_utils::metadata_magic::album::normalize_album;
 
 // Re-export for tests only
 #[cfg(test)]

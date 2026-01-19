@@ -7,7 +7,6 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use std::path::Path;
 
-use crate::config;
 use crate::corpus::db::{Database, Track};
 use crate::flows::{changes, DecisionType, PendingDecision};
 
@@ -81,10 +80,7 @@ pub struct DropMissingResult {
 }
 
 /// Find tracks in the index whose files no longer exist on disk.
-pub fn find_missing_tracks() -> Result<Vec<Track>, String> {
-    let db_path = config::get_db_path().map_err(|e| format!("Config error: {}", e))?;
-    let db = Database::open(&db_path).map_err(|e| format!("Database error: {}", e))?;
-
+pub fn find_missing_tracks(db: &Database) -> Result<Vec<Track>, String> {
     // Get all corpus tracks
     let tracks = db
         .get_all_tracks(Some("corpus"))
@@ -100,7 +96,11 @@ pub fn find_missing_tracks() -> Result<Vec<Track>, String> {
 }
 
 /// Execute the drop missing operation.
-pub fn execute_drop_missing(missing_tracks: &[Track]) -> Result<DropMissingResult, String> {
+///
+/// NOTE: This uses vestigial execute_decisions which always fails.
+/// Needs refactoring to use daemon's transaction API (queue_mutations).
+pub fn execute_drop_missing(db: &Database, missing_tracks: &[Track]) -> Result<DropMissingResult, String> {
+    use crate::config;
     use std::fs::File;
     use std::io::Write;
 
@@ -141,10 +141,6 @@ pub fn execute_drop_missing(missing_tracks: &[Track]) -> Result<DropMissingResul
     })()
     .is_ok();
 
-    // Open database
-    let db_path = config::get_db_path().map_err(|e| format!("Config error: {}", e))?;
-    let db = Database::open(&db_path).map_err(|e| format!("Database error: {}", e))?;
-
     // Generate DropIndex decisions for each missing track
     let pending_decisions: Vec<PendingDecision> = missing_tracks
         .iter()
@@ -156,8 +152,8 @@ pub fn execute_drop_missing(missing_tracks: &[Track]) -> Result<DropMissingResul
         })
         .collect();
 
-    // Execute the decisions
-    let report = changes::execute_decisions(&db, &pending_decisions, false)
+    // Execute the decisions (NOTE: vestigial, will always fail)
+    let report = changes::execute_decisions(db, &pending_decisions, false)
         .map_err(|e| format!("Drop error: {}", e))?;
 
     // Clean up orphaned scan_state entries

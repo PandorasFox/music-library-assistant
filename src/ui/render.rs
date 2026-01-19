@@ -19,7 +19,7 @@ use crate::flows::background::BackgroundTask;
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::{calculate_rolling_throughput, format_bytes_binary, format_duration, format_eta, truncate_path_display};
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{deploy_flow, insights_view, tag_editor, tree_browser};
+use super::{deploy_flow, insights_view, tag_editor, tag_search, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -37,6 +37,7 @@ pub struct RenderContext<'a> {
     pub splash_screen: Option<&'a super::splash_screen::SplashScreen>,
     pub deploy_conflict_review: Option<&'a super::DeployConflictReviewState>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
+    pub tag_search: Option<&'a tag_search::TagSearchState>,
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub eye: &'a EyeAnimation,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
@@ -54,11 +55,12 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         return;
     }
 
-    // Lateral views (Corpus Browser, Insights, Deploy) have their own title bar
+    // Lateral views (Tag Search, Corpus Browser, Insights, Deploy) have their own title bar
     // and get the full header+content area
     let uses_unified_titlebar = matches!(
         ctx.mode,
-        super::UiMode::CorpusBrowser
+        super::UiMode::TagSearch
+            | super::UiMode::CorpusBrowser
             | super::UiMode::Insights
             | super::UiMode::DeploymentPreview
     );
@@ -105,6 +107,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::Insights => Some("Corpus Insights"),
         super::UiMode::LoadingSplash => None, // Never reached - handled separately
         super::UiMode::IntakeConfirmation => Some("Intake Confirmation"),
+        super::UiMode::TagSearch => Some("Tag Search"),
         super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
     };
 
@@ -182,6 +185,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             } else {
                 // Show loading state while insights view is initializing
                 render_insights_loading(f, area);
+            }
+        }
+        super::UiMode::TagSearch => {
+            if let Some(ref state) = ctx.tag_search {
+                state.render(f, area);
             }
         }
         super::UiMode::LoadingSplash => {
@@ -721,6 +729,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::CorpusBrowser => control_presets::corpus_browser(),
         super::UiMode::DeployConflictReview => control_presets::deploy_conflict_review(),
         super::UiMode::Insights => control_presets::insights_view(),
+        super::UiMode::TagSearch => control_presets::tag_search(),
         super::UiMode::LoadingSplash => control_presets::empty(),
         super::UiMode::IntakeConfirmation => control_presets::empty(), // Modal handles its own hints
         super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls

@@ -136,7 +136,8 @@ pub fn detect_fingerprint_issues(db: &Database, track: &Track) -> Result<Vec<Hea
 /// Refresh health issues for a specific track.
 ///
 /// Called after track mutations (tag edits, moves) to update associated health issues.
-#[allow(dead_code)]
+/// This is currently expensive (runs full deployment conflict detection) but comprehensive.
+/// Future optimization: compute only affected paths and check conflicts incrementally.
 pub fn refresh_health_for_track(db: &Database, track_id: i64) -> Result<()> {
     // Get the track
     let track = match db.get_track_by_id(track_id)? {
@@ -144,8 +145,16 @@ pub fn refresh_health_for_track(db: &Database, track_id: i64) -> Result<()> {
         None => return Ok(()), // Track was deleted
     };
 
-    // Re-run fingerprint detection
+    // Re-run fingerprint detection (relevant for new tracks, harmless for tag edits)
     detect_fingerprint_issues(db, &track)?;
+
+    // Re-run deployment conflict detection for all libraries
+    // This is expensive but correct - tag edits can change deployment paths
+    let config = crate::config::load_config()?;
+    detect_deployment_conflicts(&config, db)?;
+
+    // Clean up any conflicts that may have been resolved by this change
+    cleanup_resolved_deployment_conflicts(&config, db)?;
 
     Ok(())
 }

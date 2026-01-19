@@ -17,22 +17,26 @@ mod layout;
 mod list;
 mod modal;
 mod status;
+mod text_input;
 mod titlebar;
 
 // Layout widgets
-pub use layout::{FocusablePane, PaneConfig, PaneStyle, ThreePaneLayout, TwoPaneLayout};
+pub use layout::{PaneConfig, ThreePaneLayout};
 
 // Modal widgets
-pub use modal::{centered_rect, ConfirmationModal, Modal, ModalButton, ModalStyle, ScrollableModal};
+pub use modal::{centered_rect, Modal, ModalButton, ModalStyle};
 
 // Controls hint widgets
-pub use controls::{presets as control_presets, ControlsHint, ControlsStyle, KeyBinding};
+pub use controls::{presets as control_presets, ControlsHint};
 
 // List widgets
-pub use list::{SelectableItem, SelectableList, SelectableListState, SelectableListStyle, SimpleList};
+pub use list::{SelectableItem, SelectableList, SelectableListState, SelectableListStyle};
 
 // Status widgets
-pub use status::{HealthStatus, StatusColor, StatusIndicator};
+pub use status::HealthStatus;
 
 // Title bar widgets
 pub use titlebar::{LateralView, UnifiedTitleBar};
+
+// Text input widgets
+pub use text_input::TextInputState;

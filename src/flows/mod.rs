@@ -7,8 +7,7 @@ pub mod deploy;
 
 // Re-export daemon types from crate root (daemon module at src/daemon.rs)
 pub use crate::daemon::{
-    confirm_decision, CompletedSession, DaemonState, DaemonStatus, DecisionWitness, TaskDaemon,
-    TaskLabel,
+    DaemonStatus, TaskDaemon,
 };
 
 // =============================================================================

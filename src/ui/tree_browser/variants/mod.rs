@@ -6,7 +6,7 @@
 mod corpus;
 mod selector;
 
-pub use corpus::{CorpusBrowserVariant, FileMetadata, SearchState};
+pub use corpus::CorpusBrowserVariant;
 pub use selector::DirectorySelectorVariant;
 
 use crossterm::event::KeyEvent;

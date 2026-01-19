@@ -30,7 +30,7 @@ pub fn render(
     }
 }
 
-/// Render corpus browser layout (titlebar + tree + preview).
+/// Render corpus browser layout (titlebar + search bar + tree).
 fn render_corpus_browser(
     f: &mut Frame,
     area: Rect,
@@ -38,12 +38,13 @@ fn render_corpus_browser(
     nav: &mut TreeNavigator,
     variant: &mut CorpusBrowserVariant,
 ) {
-    // Layout: Title bar | Content (two-pane: tree | preview)
+    // Layout: Title bar | Search bar | Tree (full width)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(UnifiedTitleBar::height()),
-            Constraint::Min(5),
+            Constraint::Length(UnifiedTitleBar::height()), // Title bar (3 lines)
+            Constraint::Length(3),                          // Search bar (3 lines: border + content + border)
+            Constraint::Min(5),                             // Tree browser
         ])
         .split(area);
 
@@ -51,16 +52,13 @@ fn render_corpus_browser(
     let titlebar = UnifiedTitleBar::new(LateralView::CorpusBrowser);
     titlebar.render(f, main_chunks[0]);
 
-    // Two-pane: 65% tree, 35% preview
-    let content_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(main_chunks[1]);
+    // Search bar (persistent)
+    variant.render_search_bar(f, main_chunks[1]);
 
-    render_tree_pane(f, content_chunks[0], nav, variant, true);
-    variant.render_preview_pane(f, content_chunks[1], nav);
+    // Tree pane at full width
+    render_tree_pane(f, main_chunks[2], nav, variant, true);
 
-    // Overlays (search popup, match modal)
+    // Overlays (match selection modal)
     variant.render_overlays(f, area);
 }
 

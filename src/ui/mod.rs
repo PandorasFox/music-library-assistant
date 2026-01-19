@@ -13,12 +13,13 @@ pub mod render;
 pub mod splash_screen;
 pub mod startup;
 pub mod tag_editor;
+pub mod tag_search;
 pub mod tree_browser;
 pub mod widgets;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -28,14 +29,11 @@ use ratatui::{
 };
 use std::collections::VecDeque;
 use std::io;
-use std::path::Path;
-use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crate::config::{self, Config};
 use crate::corpus::db::{Database, HealthIssueType};
-use crate::flows::background::{log_task_summary, poll_tasks, BackgroundTask, TaskResult};
+use crate::flows::background::{log_task_summary, poll_tasks, BackgroundTask};
 
 use app::EyeAnimation;
 
@@ -112,6 +110,8 @@ pub(crate) enum UiMode {
     IntakeConfirmation,
     /// Loading splash screen - centered eye with status message
     LoadingSplash,
+    /// Tag search with query builder and results (part of lateral view ring)
+    TagSearch,
     /// Unified tag editor with transaction support (replaces TagEditor and DirectoryTagEditor)
     UnifiedTagEditor,
 }
@@ -189,6 +189,8 @@ pub(crate) struct App {
     deploy_conflict_accumulated: Vec<DeployConflictGroupChanges>,
     // Insights view (lateral view ring)
     insights_view: Option<insights_view::InsightsViewState>,
+    // Tag search (lateral view ring)
+    tag_search: Option<tag_search::TagSearchState>,
     // Intake confirmation modal
     intake_confirmation: Option<startup::IntakeConfirmationState>,
 
@@ -198,20 +200,11 @@ pub(crate) struct App {
     // Task daemon for mutation execution
     task_daemon: Option<crate::flows::TaskDaemon>,
 
-    // Tag cloud for canonicalization detection (cached, invalidated after mutations)
-    tag_cloud: Option<crate::corpus::health::TagCloud>,
-    tag_cloud_receiver: Option<mpsc::Receiver<anyhow::Result<crate::corpus::health::TagCloud>>>,
-
     // Throughput tracking for rolling average (timestamp, bytes_processed)
     throughput_samples: VecDeque<(Instant, u64)>,
 
     // Eye animation
     eye: EyeAnimation,
-
-    // Tag editing session
-    #[allow(dead_code)]
-    tag_edit_session_id: String,
-
 }
 
 impl App {
@@ -232,14 +225,12 @@ impl App {
             deploy_conflict_review: None,
             deploy_conflict_accumulated: Vec::new(),
             insights_view: None,
+            tag_search: None,
             intake_confirmation: None,
             background_tasks: Vec::new(),
             task_daemon: None,
-            tag_cloud: None,
-            tag_cloud_receiver: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
-            tag_edit_session_id: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -335,6 +326,12 @@ impl App {
                     self.handle_unified_tag_editor_action(action);
                 }
             }
+            UiMode::TagSearch => {
+                if let Some(ref mut search) = self.tag_search {
+                    let action = search.handle_key(key);
+                    self.handle_tag_search_action(action);
+                }
+            }
         }
     }
 
@@ -364,6 +361,46 @@ impl App {
             insights_view::InsightsAction::LaunchFlow => {
                 // Stub: flows not yet implemented
                 self.status_message = Some("Flows not yet implemented".to_string());
+            }
+        }
+    }
+
+    /// Handle tag search actions.
+    fn handle_tag_search_action(&mut self, action: tag_search::TagSearchAction) {
+        match action {
+            tag_search::TagSearchAction::None => {}
+            tag_search::TagSearchAction::Cancel => {
+                // Return to Insights view
+                self.tag_search = None;
+                self.start_insights_view();
+            }
+            tag_search::TagSearchAction::CycleNext => {
+                // TagSearch → CorpusBrowser
+                self.tag_search = None;
+                self.start_corpus_browser();
+            }
+            tag_search::TagSearchAction::CyclePrev => {
+                // TagSearch → Deploy
+                self.tag_search = None;
+                self.start_deployment_preview();
+            }
+            tag_search::TagSearchAction::ExecuteSearch => {
+                // Execute search with db access - take ownership temporarily to avoid borrow conflict
+                if let Some(mut search) = self.tag_search.take() {
+                    let db = self.daemon().read_only_db();
+                    search.execute_search(&db);
+                    self.tag_search = Some(search);
+                }
+            }
+            tag_search::TagSearchAction::EditTrack(track) => {
+                // Open unified tag editor for single track
+                self.tag_search = None;
+                self.start_unified_tag_editor_for_track(track);
+            }
+            tag_search::TagSearchAction::EditAllTracks(tracks) => {
+                // Open unified tag editor for all result tracks
+                self.tag_search = None;
+                self.start_unified_tag_editor_for_tracks(tracks);
             }
         }
     }
@@ -432,42 +469,47 @@ impl App {
             }
         };
 
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
+        let db = self.daemon().read_only_db();
 
         // Initialize insights view (queries health_issues table directly)
         let mut view = insights_view::InsightsViewState::new();
-        view.initialize(&db, db_path.to_str().unwrap_or(""));
+        view.initialize(db, db_path.to_str().unwrap_or(""));
 
         self.insights_view = Some(view);
         self.mode = UiMode::Insights;
     }
 
+    fn start_tag_search(&mut self) {
+        self.tag_search = Some(tag_search::TagSearchState::new());
+        self.mode = UiMode::TagSearch;
+    }
+
+    /// Start unified tag editor for a single track from tag search results
+    fn start_unified_tag_editor_for_track(&mut self, track: crate::corpus::db::Track) {
+        self.open_unified_tag_editor_single(
+            track,
+            tag_editor::TagEditorSource::TagSearch,
+            None,
+        );
+    }
+
+    /// Start unified tag editor for multiple tracks from tag search results
+    fn start_unified_tag_editor_for_tracks(&mut self, tracks: Vec<crate::corpus::db::Track>) {
+        self.open_unified_tag_editor_bulk(
+            tracks,
+            tag_editor::TagEditorSource::TagSearch,
+            None,
+        );
+    }
+
     fn start_deployment_preview(&mut self) {
         // Compute deployment status synchronously (could be made async for large libraries)
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
+        // Clone config to avoid borrow conflict with daemon's db reference
+        let config = self.config.clone();
+        let db = self.daemon().read_only_db();
 
         let _ = config::log_message("Computing deployment status...");
-        match crate::flows::deploy::compute_full_deployment_status(&self.config, &db) {
+        match crate::flows::deploy::compute_full_deployment_status(&config, db) {
             Ok(statuses) => {
                 let session_id = uuid::Uuid::new_v4().to_string();
                 let total_mutations: usize = statuses
@@ -498,7 +540,8 @@ impl App {
     }
 
     fn start_drop_missing_confirmation(&mut self) {
-        match drop_flow::find_missing_tracks() {
+        let db = self.daemon().read_only_db();
+        match drop_flow::find_missing_tracks(db) {
             Ok(missing) => {
                 if missing.is_empty() {
                     self.status_message = Some("No missing files found in index".to_string());
@@ -541,7 +584,8 @@ impl App {
             }
         };
 
-        match drop_flow::execute_drop_missing(&missing_tracks) {
+        let db = self.daemon().read_only_db();
+        match drop_flow::execute_drop_missing(db, &missing_tracks) {
             Ok(result) => {
                 let mut msg = if let Some(log_path) = result.log_path {
                     format!("Dropped {} entries from index. Log: {}", result.dropped_count, log_path)
@@ -573,23 +617,10 @@ impl App {
     /// Loads deployment conflicts from health_issues table and presents them
     /// in the tag editor for resolution (editing tags to create unique deploy paths).
     fn start_tag_editor(&mut self) {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-        let db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                return;
-            }
-        };
+        let db = self.daemon().read_only_db();
 
         // Load deploy conflict health issues
-        let all_groups = match load_deploy_conflict_groups(&db) {
+        let all_groups = match load_deploy_conflict_groups(db) {
             Ok(groups) => groups,
             Err(e) => {
                 self.status_message = Some(format!("Error loading conflicts: {}", e));
@@ -648,9 +679,9 @@ impl App {
                 self.start_insights_view();
             }
             tree_browser::TreeBrowserAction::CyclePrev => {
-                // Corpus Browser → Deploy
+                // Corpus Browser → TagSearch
                 self.tree_browser = None;
-                self.start_deployment_preview();
+                self.start_tag_search();
             }
             tree_browser::TreeBrowserAction::SelectPaths(paths) => {
                 // Directory selector completed - currently unused, placeholder for dedup flows
@@ -665,25 +696,7 @@ impl App {
     }
 
     fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
-        let db_path = match crate::config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                self.tree_browser = None;
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
-
-        let db = match crate::corpus::db::Database::open(&db_path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                self.tree_browser = None;
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
+        let db = self.daemon().read_only_db();
 
         // Load tracks from database
         let (tracks, selected_idx) = if recursive {
@@ -1096,7 +1109,7 @@ impl App {
             })
             .collect();
 
-        let mutation_count = mutations.len();
+        let _mutation_count = mutations.len();
 
         // TODO: Reconnect via DecisionWitness when UI integration is complete.
         // Tag editor saves are user-led decisions and need:
@@ -1107,7 +1120,7 @@ impl App {
 
         // Status message - execution is now async
         #[allow(unreachable_code)]
-        { self.status_message = Some(format!("Queued {} tag edit(s)", mutation_count)); }
+        { self.status_message = Some(format!("Queued {} tag edit(s)", _mutation_count)); }
 
         if advance_to_next {
             // Move to next duplicate group if in duplicate workflow
@@ -1160,6 +1173,7 @@ impl App {
                 tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
                 tag_editor::TagEditorSource::DuplicateResolution => "Duplicate resolution",
                 tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
+                tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             };
             let _ = daemon.start_transaction(label);
         }
@@ -1186,6 +1200,7 @@ impl App {
                 tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
                 tag_editor::TagEditorSource::DuplicateResolution => "Duplicate resolution",
                 tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
+                tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             };
             let _ = daemon.start_transaction(label);
         }
@@ -1201,21 +1216,7 @@ impl App {
     /// Open the unified tag editor for a directory path
     fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
         // Query database for tracks in this directory
-        let db_path = match crate::config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Failed to get database path: {}", e));
-                return;
-            }
-        };
-
-        let db = match crate::corpus::db::Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                self.status_message = Some(format!("Failed to open database: {}", e));
-                return;
-            }
-        };
+        let db = self.daemon().read_only_db();
 
         let tracks = match db.get_tracks_in_directory(directory) {
             Ok(tracks) => tracks,
@@ -1384,42 +1385,52 @@ impl App {
             UnifiedTagEditorAction::RequestFillFromDb { track_id } => {
                 match track_id {
                     Some(id) => {
-                        // Open database and query for tags
-                        let db_path = match config::get_db_path() {
-                            Ok(p) => p,
-                            Err(e) => {
-                                self.status_message = Some(format!("Config error: {}", e));
-                                return;
-                            }
-                        };
-                        match Database::open(&db_path) {
-                            Ok(db) => {
-                                match db.get_track_tags(id) {
-                                    Ok(tags) => {
-                                        // Convert TrackTag to (name, value) pairs
-                                        let tag_pairs: Vec<(String, String)> = tags
-                                            .into_iter()
-                                            .map(|t| (t.tag_name, t.tag_value))
-                                            .collect();
+                        let db = self.daemon().read_only_db();
+                        match db.get_track_tags(id) {
+                            Ok(tags) => {
+                                // Convert TrackTag to (name, value) pairs
+                                let tag_pairs: Vec<(String, String)> = tags
+                                    .into_iter()
+                                    .map(|t| (t.tag_name, t.tag_value))
+                                    .collect();
 
-                                        if let Some(ref mut editor) = self.unified_tag_editor {
-                                            editor.fill_from_db_result(tag_pairs);
-                                        }
-                                        self.status_message = Some("Tags loaded from database".to_string());
-                                    }
-                                    Err(e) => {
-                                        self.status_message = Some(format!("Error loading tags: {}", e));
-                                    }
+                                if let Some(ref mut editor) = self.unified_tag_editor {
+                                    editor.fill_from_db_result(tag_pairs);
                                 }
+                                self.status_message = Some("Tags loaded from database".to_string());
                             }
                             Err(e) => {
-                                self.status_message = Some(format!("Database error: {}", e));
+                                self.status_message = Some(format!("Error loading tags: {}", e));
                             }
                         }
                     }
                     None => {
                         self.status_message = Some("Track not indexed - no database tags available".to_string());
                     }
+                }
+            }
+
+            UnifiedTagEditorAction::RequestTransactionReview => {
+                // Query daemon for staged decisions and populate the review modal
+                let decisions: Vec<(usize, String, usize)> = if let Some(daemon) = self.task_daemon.as_ref() {
+                    daemon.decision_indices()
+                        .iter()
+                        .filter_map(|&idx| {
+                            daemon.get_decision(idx).map(|d| {
+                                (idx, d.label.clone(), d.mutations.len())
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    editor.modal = Some(tag_editor::UnifiedTagEditorModal::TransactionReview {
+                        decisions,
+                        scroll: 0,
+                        selected_button: tag_editor::TransactionReviewButton::CommitAll,
+                    });
                 }
             }
         }
@@ -1526,7 +1537,7 @@ impl App {
                         format!("{} libraries", library_names.len())
                     };
 
-                    let decision_count = all_decisions.len();
+                    let _decision_count = all_decisions.len();
 
                     // Convert decisions to mutations and queue to daemon
                     use crate::corpus::mutations::Mutation;
@@ -1563,7 +1574,7 @@ impl App {
                         })
                         .collect();
 
-                    let mutation_count = mutations.len();
+                    let _mutation_count = mutations.len();
                     let label = format!("Deploy to {}", library_display);
 
                     // TODO: Reconnect via DecisionWitness when UI integration is complete.
@@ -1576,7 +1587,7 @@ impl App {
                     #[allow(unreachable_code)]
                     { self.status_message = Some(format!(
                         "Queued {} deployment operations to {}",
-                        mutation_count, library_display
+                        _mutation_count, library_display
                     )); }
                 }
                 // Return to main menu immediately - deployment runs in background
@@ -1590,9 +1601,9 @@ impl App {
                 self.status_message = Some("Deployment cancelled".to_string());
             }
             deploy_flow::DeploymentPreviewAction::CycleNext => {
-                // Deploy → Corpus Browser
+                // Deploy → TagSearch
                 self.deployment_preview = None;
-                self.start_corpus_browser();
+                self.start_tag_search();
             }
             deploy_flow::DeploymentPreviewAction::CyclePrev => {
                 // Deploy → Insights
@@ -1608,11 +1619,6 @@ impl App {
         for (id, label, result) in completed {
             // Log task summary
             log_task_summary(&label, &result);
-
-            // Handle tag flush completion - invalidate tag cloud
-            if label.contains("tag") || label.contains("Flushing") {
-                self.invalidate_tag_cloud();
-            }
 
             // Format completion message
             self.status_message = Some(if result.succeeded == 0 && result.skipped > 0 {
@@ -1640,14 +1646,11 @@ impl App {
         // Tick task daemon (advance internal processing)
         if let Some(ref mut daemon) = self.task_daemon {
             let status = daemon.tick();
-            if status.completed > 0 || status.failed > 0 {
-                self.invalidate_tag_cloud();
-                if status.failed > 0 {
-                    self.status_message = Some(format!(
-                        "Tasks: {} done, {} failed",
-                        status.completed, status.failed
-                    ));
-                }
+            if status.failed > 0 {
+                self.status_message = Some(format!(
+                    "Tasks: {} done, {} failed",
+                    status.completed, status.failed
+                ));
             }
         }
     }
@@ -1705,61 +1708,11 @@ impl App {
     ///
     /// Queries MissingFromIndex health issues and gathers file information.
     /// Returns Some if there are unindexed files to confirm, None otherwise.
-    fn check_for_unindexed_files(&self) -> Option<startup::IntakeConfirmationState> {
-        let db_path = config::get_db_path().ok()?;
-        let db = Database::open(&db_path).ok()?;
-        let corpus_root = &self.config.corpus_root;
-        startup::IntakeConfirmationState::gather(&db, corpus_root, "corpus")
-    }
-
-    // ========================================================================
-    // Tag Cloud (canonicalization detection cache)
-    // ========================================================================
-
-    /// Start building tag cloud in background (non-blocking).
-    #[allow(dead_code)]
-    fn start_tag_cloud_build(&mut self) {
-        if self.tag_cloud_receiver.is_none() {
-            self.tag_cloud_receiver = Some(crate::corpus::health::spawn_tag_cloud_build());
-        }
-    }
-
-    /// Check if tag cloud build completed (call in update loop).
-    fn update_tag_cloud(&mut self) {
-        if let Some(ref rx) = self.tag_cloud_receiver {
-            if let Ok(result) = rx.try_recv() {
-                match result {
-                    Ok(cloud) => {
-                        let _ = crate::config::log_message(&format!(
-                            "TagCloud ready: {} tracks, {} artist collisions, {} genre collisions",
-                            cloud.track_count(),
-                            cloud.artist_collision_count(),
-                            cloud.genre_collision_count()
-                        ));
-                        self.tag_cloud = Some(cloud);
-                    }
-                    Err(e) => {
-                        let _ = crate::config::log_message(&format!(
-                            "TagCloud build failed: {}",
-                            e
-                        ));
-                    }
-                }
-                self.tag_cloud_receiver = None;
-            }
-        }
-    }
-
-    /// Invalidate the tag cloud (call after mutations).
-    pub fn invalidate_tag_cloud(&mut self) {
-        self.tag_cloud = None;
-        self.tag_cloud_receiver = None;
-    }
-
-    /// Get the current tag cloud, if available.
-    #[allow(dead_code)]
-    pub fn tag_cloud(&self) -> Option<&crate::corpus::health::TagCloud> {
-        self.tag_cloud.as_ref()
+    fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
+        // Clone corpus_root to avoid borrow conflict with daemon's db reference
+        let corpus_root = self.config.corpus_root.clone();
+        let db = self.daemon().read_only_db();
+        startup::IntakeConfirmationState::gather(db, &corpus_root, "corpus")
     }
 
     // =========================================================================
@@ -1799,29 +1752,10 @@ impl App {
     }
 
     fn commit_deploy_conflict_changes(&mut self) {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                self.deploy_conflict_review = None;
-                self.deploy_conflict_accumulated.clear();
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
+        // NOTE: This function uses vestigial execute_decisions which always fails.
+        // Needs refactoring to use daemon's transaction API (queue_mutations).
 
-        let db = match Database::open(&db_path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status_message = Some(format!("Database error: {}", e));
-                self.deploy_conflict_review = None;
-                self.deploy_conflict_accumulated.clear();
-                self.mode = UiMode::Insights;
-                return;
-            }
-        };
-
-        // Gather all pending decisions from accumulated groups
+        // Gather all pending decisions from accumulated groups (before db borrow)
         let all_decisions: Vec<_> = self.deploy_conflict_accumulated
             .iter()
             .flat_map(|g| g.decisions.clone())
@@ -1835,8 +1769,12 @@ impl App {
             return;
         }
 
+        // Clone config to avoid borrow conflict with daemon's db reference
+        let config = self.config.clone();
+        let db = self.daemon().read_only_db();
+
         // Execute all decisions in bulk
-        let report = match crate::flows::changes::execute_decisions(&db, &all_decisions, false) {
+        let report = match crate::flows::changes::execute_decisions(db, &all_decisions, false) {
             Ok(r) => r,
             Err(e) => {
                 self.status_message = Some(format!("Execution error: {}", e));
@@ -1848,7 +1786,7 @@ impl App {
         };
 
         // Cleanup resolved conflicts
-        let resolved_count = crate::corpus::health::cleanup_resolved_deployment_conflicts(&self.config, &db)
+        let resolved_count = crate::corpus::health::cleanup_resolved_deployment_conflicts(&config, db)
             .unwrap_or(0);
 
         // Build status message
@@ -1909,6 +1847,7 @@ fn render(f: &mut Frame, app: &mut App) {
         splash_screen: app.splash_screen.as_ref(),
         deploy_conflict_review: app.deploy_conflict_review.as_ref(),
         insights_view: app.insights_view.as_mut(),
+        tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
@@ -1937,16 +1876,15 @@ fn render(f: &mut Frame, app: &mut App) {
 /// Check health data version and trigger rebuild if needed.
 /// This runs at startup before the main event loop.
 fn check_and_maybe_rebuild_health(app: &mut App) {
-    // Open database to check version
+    // Check if database exists before trying to access
     let db_path = match config::get_db_path() {
-        Ok(p) => p,
-        Err(_) => return, // No DB yet, nothing to rebuild
+        Ok(p) if p.exists() => p,
+        _ => return, // No DB yet, nothing to rebuild
     };
 
-    let db = match Database::open(&db_path) {
-        Ok(db) => db,
-        Err(_) => return, // Can't open DB, skip check
-    };
+    // Use daemon's read-only connection
+    let _ = db_path; // Suppress unused warning - daemon handles path internally
+    let db = app.daemon().read_only_db();
 
     // Get stored version
     let stored_version = db.get_health_version().ok().flatten();
@@ -2012,6 +1950,9 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
     }
 
     // Existing database: open and check for migrations
+    // NOTE: This uses Database::open() (not read_only) because migrations
+    // need write access. This runs before daemon exists and is explicitly
+    // witnessed via confirm_decision() below.
     let db = match Database::open(&db_path) {
         Ok(d) => d,
         Err(_) => return Ok(()), // Can't open database, skip migrations
@@ -2316,7 +2257,6 @@ fn run_app<B: ratatui::backend::Backend>(
         let can_animate = app.daemon().eye_state() == crate::daemon::EyeState::Awake;
         app.eye.update(can_animate);
         app.update_operation_progress();
-        app.update_tag_cloud();
 
         // Always tick daemon (advances work state, handles eyeballing completion)
         app.daemon().tick();
@@ -2329,14 +2269,31 @@ fn run_app<B: ratatui::backend::Backend>(
         terminal.draw(|f| render(f, app))?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                // Global quit shortcut
-                if key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
-                {
-                    break;
+            match event::read()? {
+                Event::Key(key) => {
+                    // Global quit shortcut
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                    {
+                        break;
+                    }
+                    app.handle_key(key);
                 }
-                app.handle_key(key);
+                Event::Mouse(mouse) => {
+                    // Map scroll wheel to arrow keys
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            let key = KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE);
+                            app.handle_key(key);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            let key = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
+                            app.handle_key(key);
+                        }
+                        _ => {} // Ignore other mouse events
+                    }
+                }
+                _ => {} // Ignore other events (resize, etc.)
             }
         }
 

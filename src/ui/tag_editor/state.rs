@@ -17,8 +17,8 @@ use super::types::{
     // Legacy types (kept for backwards compatibility during transition)
     DuplicateGroupInfo, FieldEditState, GroupedChange, TagChange, TagEditorFocus, TagField,
     // Unified types
-    AggregatedTagField, AggregatedValue, FileEntry, GatheringState, GroupContext, TagEditContext,
-    TagEditorButton, TagEditorMode, TagEditorSource, UnifiedTagEditorAction, UnifiedTagEditorFocus,
+    AggregatedTagField, AggregatedValue, GroupContext, TagEditContext, TagEditorButton,
+    TagEditorMode, TagEditorSource, UnifiedTagEditorAction, UnifiedTagEditorFocus,
     UnifiedTagEditorModal, VariousConfirmState,
 };
 
@@ -98,9 +98,6 @@ pub struct UnifiedTagEditorState {
     /// BulkEdit: original aggregated fields
     pub original_aggregated_fields: Option<Vec<AggregatedTagField>>,
 
-    /// BulkEdit: file entries (for writing changes)
-    pub files: Vec<FileEntry>,
-
     // ========================================================================
     // UI State
     // ========================================================================
@@ -123,13 +120,6 @@ pub struct UnifiedTagEditorState {
 
     /// Whether OOB (out-of-band) tag change signal is present
     pub has_oob_signal: bool,
-
-    // ========================================================================
-    // Async Gathering (BulkEdit from directory)
-    // ========================================================================
-
-    /// Gathering state for async metadata loading
-    pub gathering_state: Option<GatheringState>,
 
     // ========================================================================
     // Sibling Directory Navigation (DirectoryEdit mode)
@@ -217,13 +207,11 @@ impl UnifiedTagEditorState {
             original_tag_fields,
             aggregated_fields,
             original_aggregated_fields,
-            files: Vec::new(),
             focus: UnifiedTagEditorFocus::TagFields,
             selected_button: TagEditorButton::Confirm,
             modal: None,
             signals: Vec::new(),
             has_oob_signal: false,
-            gathering_state: None,
             sibling_directories: Vec::new(),
             current_sibling_idx: 0,
             current_directory: None,
@@ -313,18 +301,35 @@ impl UnifiedTagEditorState {
         }
     }
 
-    /// Check if there are any unsaved changes
+    /// Check if there are any unsaved changes (all items)
     pub fn has_changes(&self) -> bool {
         !compute_changes(&self.original_tag_fields, &self.tag_fields).is_empty()
     }
 
-    /// Get changes for preview
+    /// Check if there are any unsaved changes for the current item only
+    pub fn has_changes_for_current_item(&self) -> bool {
+        compute_changes(&self.original_tag_fields, &self.tag_fields)
+            .iter()
+            .any(|c| c.track_idx == self.current_item_idx)
+    }
+
+    /// Get changes for preview (all items)
     pub fn get_changes_for_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
         let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
         group_common_changes(&changes)
     }
 
-    /// Generate mutations from current changes
+    /// Get changes for preview (current item only)
+    pub fn get_changes_for_current_item_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
+        let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+        let current_changes: Vec<_> = all_changes
+            .into_iter()
+            .filter(|c| c.track_idx == self.current_item_idx)
+            .collect();
+        group_common_changes(&current_changes)
+    }
+
+    /// Generate mutations from current changes (all items)
     pub fn generate_mutations(&self) -> Vec<Mutation> {
         let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
         let tracks = match &self.context {
@@ -335,7 +340,26 @@ impl UnifiedTagEditorState {
         changes_to_mutations(&changes, &tracks)
     }
 
-    /// Revert to original state
+    /// Generate mutations for the current item only.
+    /// This is what should be used when staging a decision for one track.
+    pub fn generate_mutations_for_current_item(&self) -> Vec<Mutation> {
+        let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+
+        // Filter to only changes for current_item_idx
+        let current_changes: Vec<_> = all_changes
+            .into_iter()
+            .filter(|c| c.track_idx == self.current_item_idx)
+            .collect();
+
+        let tracks = match &self.context {
+            TagEditContext::SingleFile { track, .. } => vec![track.clone()],
+            TagEditContext::BulkEdit { tracks, .. } => tracks.clone(),
+        };
+
+        changes_to_mutations(&current_changes, &tracks)
+    }
+
+    /// Revert to original state (all items)
     pub fn drop_changes(&mut self) {
         self.tag_fields = self.original_tag_fields.clone();
         if let Some(ref orig) = self.original_aggregated_fields {
@@ -344,13 +368,24 @@ impl UnifiedTagEditorState {
         self.field_edit_state = FieldEditState::NonEditable;
     }
 
-    /// Check if current changes match what's already staged in the transaction.
+    /// Revert to original state for current item only
+    pub fn drop_changes_for_current_item(&mut self) {
+        if let (Some(orig), Some(current)) = (
+            self.original_tag_fields.get(self.current_item_idx),
+            self.tag_fields.get_mut(self.current_item_idx),
+        ) {
+            *current = orig.clone();
+        }
+        self.field_edit_state = FieldEditState::NonEditable;
+    }
+
+    /// Check if current item's changes match what's already staged in the transaction.
     /// Used to skip confirmation dialogs when the user hasn't made new changes.
     pub fn changes_match_staged(&self) -> bool {
         match &self.staged_mutations_for_current {
             None => false, // Nothing staged yet, so can't match
             Some(staged) => {
-                let current = self.generate_mutations();
+                let current = self.generate_mutations_for_current_item();
                 // Compare mutation sets - simple equality check
                 // (mutations should be generated in same order)
                 current == *staged
@@ -506,8 +541,8 @@ impl UnifiedTagEditorState {
             Some(UnifiedTagEditorModal::ChangePreview { scroll, .. }) => {
                 match key.code {
                     KeyCode::Enter => {
-                        // Confirm changes -> stage decision AND continue to next item
-                        let mutations = self.generate_mutations();
+                        // Confirm changes -> stage decision for current item AND continue to next
+                        let mutations = self.generate_mutations_for_current_item();
                         self.modal = None;
                         UnifiedTagEditorAction::StageDecisionAndNext {
                             index: self.current_item_idx,
@@ -532,9 +567,9 @@ impl UnifiedTagEditorState {
             Some(UnifiedTagEditorModal::UnsavedChanges { destination }) => {
                 match key.code {
                     KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        // Discard changes and proceed
+                        // Discard current item's changes and proceed
                         let dest = *destination;
-                        self.drop_changes();
+                        self.drop_changes_for_current_item();
                         self.modal = None;
                         match dest {
                             super::types::UnsavedChangesDestination::Exit => {
@@ -700,7 +735,7 @@ impl UnifiedTagEditorState {
                 if self.field_edit_state != FieldEditState::NonEditable {
                     self.field_edit_state = FieldEditState::NonEditable;
                     UnifiedTagEditorAction::None
-                } else if self.has_changes() {
+                } else if self.has_changes_for_current_item() {
                     self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
                         destination: super::types::UnsavedChangesDestination::Exit,
                     });
@@ -755,10 +790,10 @@ impl UnifiedTagEditorState {
                 UnifiedTagEditorAction::None
             }
             KeyCode::Tab => {
-                // Tab: advance to next sibling (show change preview if changes exist)
+                // Tab: advance to next sibling (show change preview if current item has changes)
                 // Skip confirmation if changes match what's already staged
-                if self.has_changes() && !self.changes_match_staged() {
-                    let (grouped, single) = self.get_changes_for_preview();
+                if self.has_changes_for_current_item() && !self.changes_match_staged() {
+                    let (grouped, single) = self.get_changes_for_current_item_preview();
                     self.modal = Some(UnifiedTagEditorModal::ChangePreview {
                         changes: grouped,
                         single_changes: single,
@@ -771,8 +806,8 @@ impl UnifiedTagEditorState {
             }
             KeyCode::BackTab => {
                 // Shift-Tab: go to previous sibling
-                // Skip confirmation if changes match what's already staged
-                if self.has_changes() && !self.changes_match_staged() {
+                // Skip confirmation if current item's changes match what's already staged
+                if self.has_changes_for_current_item() && !self.changes_match_staged() {
                     self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
                         destination: super::types::UnsavedChangesDestination::PrevSibling,
                     });
@@ -786,14 +821,9 @@ impl UnifiedTagEditorState {
                 UnifiedTagEditorAction::None
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+R: Show transaction review
-                // Note: The actual decisions list will be populated by the UI layer
-                self.modal = Some(UnifiedTagEditorModal::TransactionReview {
-                    decisions: Vec::new(), // UI layer will fill this from daemon
-                    scroll: 0,
-                    selected_button: super::types::TransactionReviewButton::CommitAll,
-                });
-                UnifiedTagEditorAction::None
+                // Ctrl+R: Request transaction review
+                // UI layer will query daemon for decisions and populate the modal
+                UnifiedTagEditorAction::RequestTransactionReview
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.clear_current_field();
@@ -849,7 +879,7 @@ impl UnifiedTagEditorState {
             KeyCode::Enter => {
                 match self.selected_button {
                     TagEditorButton::Confirm => {
-                        let (grouped, single) = self.get_changes_for_preview();
+                        let (grouped, single) = self.get_changes_for_current_item_preview();
                         if grouped.is_empty() && single.is_empty() {
                             UnifiedTagEditorAction::StatusMessage("No changes to save".to_string())
                         } else {
@@ -862,7 +892,7 @@ impl UnifiedTagEditorState {
                         }
                     }
                     TagEditorButton::DropChanges => {
-                        self.drop_changes();
+                        self.drop_changes_for_current_item();
                         UnifiedTagEditorAction::StatusMessage("Changes dropped".to_string())
                     }
                     TagEditorButton::FillFromDisk => {
@@ -1191,7 +1221,7 @@ impl UnifiedTagEditorState {
             .map(|sr| format!("{} Hz", sr))
             .unwrap_or_else(|| "Unknown".to_string());
 
-        let info_lines = vec![
+        let mut info_lines = vec![
             Line::from(format!("Path: {}", path)),
             Line::from(format!(
                 "Format: {} | Size: {} | Duration: {} | Bitrate: {} | Sample Rate: {}",
@@ -1203,6 +1233,17 @@ impl UnifiedTagEditorState {
             )),
             Line::from(format!("Source: {}", source)),
         ];
+
+        // Add MP3 warning if applicable
+        let is_mp3 = file_type.to_lowercase() == "mp3";
+        if is_mp3 {
+            info_lines.push(Line::from(
+                Span::styled(
+                    "Warning: MP3 files use ID3v2.3 tags with limited field support. Some tag writes may fail.",
+                    Style::default().fg(Color::Rgb(255, 140, 0)) // Orange
+                )
+            ));
+        }
 
         let title = format!(
             "File Info [{}/{}]",
@@ -1308,6 +1349,7 @@ impl UnifiedTagEditorState {
                     TagEditorSource::DuplicateResolution => "Duplicate Group",
                     TagEditorSource::DeployConflict => "Deploy Conflict",
                     TagEditorSource::DirectoryEdit => "File",
+                    TagEditorSource::TagSearch => "Search Result",
                 },
                 TagEditContext::BulkEdit { source, .. } => match source {
                     TagEditorSource::DirectoryEdit => "Directory",
@@ -2044,7 +2086,6 @@ impl UnifiedTagEditorState {
     }
 }
 
-// Manual Debug implementation because GatheringState doesn't implement Debug
 impl std::fmt::Debug for UnifiedTagEditorState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UnifiedTagEditorState")
@@ -2056,7 +2097,6 @@ impl std::fmt::Debug for UnifiedTagEditorState {
             .field("focus", &self.focus)
             .field("selected_button", &self.selected_button)
             .field("tag_fields_len", &self.tag_fields.len())
-            .field("gathering_state", &self.gathering_state.is_some())
             .finish_non_exhaustive()
     }
 }

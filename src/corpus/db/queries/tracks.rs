@@ -487,6 +487,67 @@ impl Database {
         Ok(tags)
     }
 
+    /// Search tracks by tag value (case-insensitive substring match).
+    /// Returns all tracks that have a tag with the given name containing the value.
+    pub fn search_tracks_by_tag(&self, tag_name: &str, value_pattern: &str) -> Result<Vec<(Track, std::collections::HashMap<String, String>)>> {
+        let pattern = format!("%{}%", value_pattern.to_lowercase());
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
+                    t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint
+             FROM tracks t
+             JOIN track_tags tt ON t.id = tt.track_id
+             WHERE LOWER(tt.tag_name) = LOWER(?1) AND LOWER(tt.tag_value) LIKE ?2
+             ORDER BY t.path"
+        )?;
+
+        let track_rows = stmt.query_map(params![tag_name, pattern], |row| {
+            Ok(Track {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                source: row.get(2)?,
+                inode: row.get(3)?,
+                file_size: row.get(4)?,
+                file_type: row.get(5)?,
+                duration_ms: row.get(6)?,
+                bitrate_kbps: row.get(7)?,
+                sample_rate: row.get(8)?,
+                fingerprint: row.get(9)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for track_result in track_rows {
+            let track = track_result?;
+            if let Some(id) = track.id {
+                // Get all tags for this track
+                let tags = self.get_track_tags(id)?;
+                let tag_map: std::collections::HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|t| (t.tag_name, t.tag_value))
+                    .collect();
+                results.push((track, tag_map));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Get all tracks with their tags (for search functionality).
+    pub fn get_all_tracks_with_tags(&self) -> Result<Vec<(Track, std::collections::HashMap<String, String>)>> {
+        let tracks = self.get_all_tracks(None)?;
+        let mut results = Vec::new();
+        for track in tracks {
+            if let Some(id) = track.id {
+                let tags = self.get_track_tags(id)?;
+                let tag_map: std::collections::HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|t| (t.tag_name, t.tag_value))
+                    .collect();
+                results.push((track, tag_map));
+            }
+        }
+        Ok(results)
+    }
+
     /// Set all tags for a track (replaces existing tags).
     pub fn set_track_tags(&self, track_id: i64, tags: &[(String, String)]) -> Result<()> {
         // Delete existing tags

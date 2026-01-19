@@ -303,6 +303,34 @@ impl Mutation {
     pub fn requires_serial(&self) -> bool {
         matches!(self, Mutation::DbMigration { .. })
     }
+
+    /// Get the track ID affected by this mutation, if any.
+    ///
+    /// Used to trigger health signal refresh after mutations.
+    pub fn affected_track_id(&self) -> Option<i64> {
+        match self {
+            Mutation::TagEditDb { track_id, .. }
+            | Mutation::TagEditAndFlush { track_id, .. }
+            | Mutation::UpdateTrack { track_id, .. } => Some(*track_id),
+
+            // These don't have a track_id directly
+            Mutation::TagFlushToDisk { .. }
+            | Mutation::IndexTrack { .. }
+            | Mutation::IndexFileFromPath { .. }
+            | Mutation::UpdateScanState { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::Move { .. }
+            | Mutation::Copy { .. }
+            | Mutation::Delete { .. }
+            | Mutation::MoveToStash { .. }
+            | Mutation::HardLink { .. }
+            | Mutation::Unlink { .. }
+            | Mutation::DbMigration { .. } => None,
+        }
+    }
 }
 
 /// Result of executing a single mutation.

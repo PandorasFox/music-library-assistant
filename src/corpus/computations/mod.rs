@@ -308,7 +308,7 @@ fn execute_compare_inodes(
     paranoid: bool,
     start: Instant,
 ) -> ComputationResult {
-    use crate::corpus::db::{HealthIssue, HealthIssueType, HealthIssueSeverity};
+    
 
     let computation = Computation::CompareInodes {
         source: source.to_string(),

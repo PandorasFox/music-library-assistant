@@ -15,8 +15,7 @@ use ratatui::{
 
 use crate::corpus::health::insights::{Insight, InsightSeverity};
 use crate::ui::widgets::{
-    HealthStatus, LateralView, SelectableItem, SelectableList, SelectableListStyle,
-    StatusIndicator, UnifiedTitleBar,
+    HealthStatus, LateralView, SelectableItem, SelectableList, SelectableListStyle, UnifiedTitleBar,
 };
 
 use super::InsightsViewState;

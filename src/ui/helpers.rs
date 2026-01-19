@@ -2,9 +2,6 @@
 //!
 //! Common helpers used across multiple UI modules to avoid code duplication.
 
-use crate::config;
-use crate::corpus::db::Database;
-
 // Re-export centered_rect from widgets module
 pub use super::widgets::centered_rect;
 
@@ -184,31 +181,6 @@ pub fn calculate_rolling_throughput(
     let mib_per_sec = (bytes_diff as f64 / (1024.0 * 1024.0)) / time_diff;
 
     Some(mib_per_sec)
-}
-
-// ============================================================================
-// Database Helpers
-// ============================================================================
-
-/// Helper to initialize database connection with standard error handling.
-///
-/// Returns `None` and sets status message on the app if an error occurs.
-/// This eliminates the repeated db initialization boilerplate throughout flow handlers.
-pub fn open_database(status_message: &mut Option<String>) -> Option<Database> {
-    let db_path = match config::get_db_path() {
-        Ok(p) => p,
-        Err(e) => {
-            *status_message = Some(format!("Config error: {}", e));
-            return None;
-        }
-    };
-    match Database::open(&db_path) {
-        Ok(db) => Some(db),
-        Err(e) => {
-            *status_message = Some(format!("Database error: {}", e));
-            None
-        }
-    }
 }
 
 // ============================================================================

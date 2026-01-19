@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use parallel_worker::{CancelableWorker, WorkerInit, WorkerMethods};
 
-use crate::corpus::computations::{Computation, ComputationResult};
+use crate::config;
+use crate::corpus::computations::Computation;
+use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
 
 // ============================================================================
@@ -364,6 +366,9 @@ pub enum TransactionError {
     AlreadyActive,
     /// Attempted an operation requiring an active transaction.
     NoActiveTransaction,
+    /// Attempted to confirm transaction but daemon is not accepting mutations.
+    /// This happens if eyeballing hasn't completed or read-only mode is enabled.
+    NotAcceptingMutations,
 }
 
 impl std::fmt::Display for TransactionError {
@@ -371,6 +376,7 @@ impl std::fmt::Display for TransactionError {
         match self {
             TransactionError::AlreadyActive => write!(f, "Transaction already active"),
             TransactionError::NoActiveTransaction => write!(f, "No active transaction"),
+            TransactionError::NotAcceptingMutations => write!(f, "Not accepting mutations (eyeballing incomplete or read-only mode)"),
         }
     }
 }
@@ -466,6 +472,11 @@ pub struct TaskDaemon {
 
     // Transaction state
     pending_transaction: Option<PendingTransaction>,
+
+    /// Cached read-only database connection for UI queries.
+    /// Only accessed from the main thread via `read_only_db()`.
+    /// UI code should use this instead of creating direct connections.
+    read_only_conn: Option<Database>,
 }
 
 impl TaskDaemon {
@@ -495,6 +506,7 @@ impl TaskDaemon {
             completed_session: None,
             completed_at: None,
             pending_transaction: None,
+            read_only_conn: None,
         }
     }
 
@@ -802,6 +814,11 @@ impl TaskDaemon {
             })
             .collect();
 
+        let _ = config::log_message(&format!(
+            "[WORKER] queue_mutations_internal: queueing {} mutations (label={:?})",
+            tasks.len(), label
+        ));
+
         self.session_queued += tasks.len();
         self.in_flight += tasks.len();
         self.worker.add_tasks(tasks);
@@ -941,9 +958,17 @@ impl TaskDaemon {
     /// Returns Err if a transaction is already active.
     pub fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {
         if self.pending_transaction.is_some() {
+            let _ = config::log_message(&format!(
+                "[TRANSACTION] start_transaction({:?}) REJECTED: already active",
+                label
+            ));
             return Err(TransactionError::AlreadyActive);
         }
 
+        let _ = config::log_message(&format!(
+            "[TRANSACTION] start_transaction({:?}) OK",
+            label
+        ));
         self.pending_transaction = Some(PendingTransaction::new(label));
         Ok(())
     }
@@ -979,15 +1004,37 @@ impl TaskDaemon {
         label: impl Into<String>,
         mutations: Vec<Mutation>,
     ) -> Result<(), TransactionError> {
-        let txn = self
-            .pending_transaction
-            .as_mut()
-            .ok_or(TransactionError::NoActiveTransaction)?;
+        let label_str: String = label.into();
+        let mutation_count = mutations.len();
+
+        let txn = match self.pending_transaction.as_mut() {
+            Some(t) => t,
+            None => {
+                let _ = config::log_message(&format!(
+                    "[TRANSACTION] add_decision(idx={}, label={:?}, mutations={}) REJECTED: no active transaction",
+                    idx, label_str, mutation_count
+                ));
+                return Err(TransactionError::NoActiveTransaction);
+            }
+        };
+
+        let _ = config::log_message(&format!(
+            "[TRANSACTION] add_decision(idx={}, label={:?}, mutations={}) OK - txn now has {} decisions",
+            idx, label_str, mutation_count, txn.decision_count() + 1
+        ));
+
+        // Log each mutation for debugging
+        for (i, m) in mutations.iter().enumerate() {
+            let _ = config::log_message(&format!(
+                "[TRANSACTION]   mutation[{}]: {:?}",
+                i, m
+            ));
+        }
 
         txn.decisions.insert(
             idx,
             WitnessedDecision {
-                label: label.into(),
+                label: label_str,
                 mutations,
             },
         );
@@ -1036,15 +1083,28 @@ impl TaskDaemon {
     /// This is the primary way to add mutations to the execution queue.
     /// Requires a witness for the commit decision itself.
     ///
-    /// Returns summary of what was committed.
+    /// Returns summary of what was committed, or error if mutations not accepted.
     pub fn confirm_transaction(
         &mut self,
         _witness: &DecisionWitness,
     ) -> Result<CommitSummary, TransactionError> {
-        let txn = self
-            .pending_transaction
-            .take()
-            .ok_or(TransactionError::NoActiveTransaction)?;
+        // Gate: mutations must be accepted (eyeballing complete, not read-only)
+        if !self.accepting_mutations {
+            let _ = config::log_message(
+                "[TRANSACTION] confirm_transaction REJECTED: not accepting mutations (eyeballing incomplete or read-only mode)"
+            );
+            return Err(TransactionError::NotAcceptingMutations);
+        }
+
+        let txn = match self.pending_transaction.take() {
+            Some(t) => t,
+            None => {
+                let _ = config::log_message(
+                    "[TRANSACTION] confirm_transaction REJECTED: no active transaction"
+                );
+                return Err(TransactionError::NoActiveTransaction);
+            }
+        };
 
         let decision_count = txn.decision_count();
         let mut mutation_count = 0;
@@ -1059,9 +1119,18 @@ impl TaskDaemon {
             })
             .collect();
 
+        let _ = config::log_message(&format!(
+            "[TRANSACTION] confirm_transaction OK - {} decisions, {} mutations queued",
+            decision_count, mutation_count
+        ));
+
         // Queue mutations for execution
         if !all_mutations.is_empty() {
             self.queue_mutations_internal(all_mutations, Some(txn.label));
+        } else {
+            let _ = config::log_message(
+                "[TRANSACTION] confirm_transaction: no mutations to queue (empty transaction)"
+            );
         }
 
         Ok(CommitSummary {
@@ -1079,15 +1148,58 @@ impl TaskDaemon {
         &mut self,
         _witness: &DecisionWitness,
     ) -> Result<DiscardSummary, TransactionError> {
-        let txn = self
-            .pending_transaction
-            .take()
-            .ok_or(TransactionError::NoActiveTransaction)?;
+        let txn = match self.pending_transaction.take() {
+            Some(t) => t,
+            None => {
+                let _ = config::log_message(
+                    "[TRANSACTION] discard_transaction REJECTED: no active transaction"
+                );
+                return Err(TransactionError::NoActiveTransaction);
+            }
+        };
+
+        let _ = config::log_message(&format!(
+            "[TRANSACTION] discard_transaction OK - discarded {} decisions, {} mutations",
+            txn.decision_count(), txn.mutation_count()
+        ));
 
         Ok(DiscardSummary {
             decision_count: txn.decision_count(),
             mutation_count: txn.mutation_count(),
         })
+    }
+
+    // -------------------------------------------------------------------------
+    // Read-Only Database Access (UI Queries)
+    // -------------------------------------------------------------------------
+
+    /// Get a read-only database connection for UI queries.
+    ///
+    /// This connection is cached for the daemon's lifetime. All UI code
+    /// should use this instead of creating direct `Database::open()` connections.
+    ///
+    /// The connection uses `PRAGMA query_only = ON` to prevent any writes,
+    /// ensuring UI code cannot accidentally mutate the database.
+    ///
+    /// # Panics
+    ///
+    /// Panics if database path is not configured or database cannot be opened.
+    pub fn read_only_db(&mut self) -> &Database {
+        if self.read_only_conn.is_none() {
+            let db_path = config::get_db_path().expect("Database path not configured");
+            let db = Database::open_read_only(&db_path)
+                .expect("Failed to open read-only database connection");
+            self.read_only_conn = Some(db);
+        }
+        self.read_only_conn.as_ref().unwrap()
+    }
+
+    /// Invalidate the cached read-only connection.
+    ///
+    /// Call this after schema migrations to ensure the UI sees the updated schema.
+    /// The next call to `read_only_db()` will open a fresh connection.
+    pub fn invalidate_read_only_conn(&mut self) {
+        self.read_only_conn = None;
     }
 
     // -------------------------------------------------------------------------
@@ -1155,7 +1267,13 @@ fn execute_task(task: Task, label: String) -> TaskResult {
 fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
     use crate::config;
     use crate::corpus::db::Database;
+    use crate::corpus::health::refresh_health_for_track;
     use crate::corpus::mutations::{file_ops, tag_edit, indexing, MutationCategory};
+
+    let _ = config::log_message(&format!(
+        "[EXECUTION] execute_mutation START: {:?} (label={:?})",
+        mutation.category(), label
+    ));
 
     // Create execution witness - proves we're inside daemon execution context
     let witness = MutationExecutionWitness::new();
@@ -1163,18 +1281,31 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
     // Open database
     let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
         Ok(db) => db,
-        Err(e) => return TaskResult {
-            success: false,
-            error: Some(format!("DB error: {}", e)),
-            label,
-            spawn: Vec::new(),
-        },
+        Err(e) => {
+            let _ = config::log_message(&format!(
+                "[EXECUTION] execute_mutation FAILED: DB error: {}",
+                e
+            ));
+            return TaskResult {
+                success: false,
+                error: Some(format!("DB error: {}", e)),
+                label,
+                spawn: Vec::new(),
+            };
+        }
     };
 
     let session_id = "daemon";
 
+    // Track the affected track_id for post-mutation health refresh
+    let affected_track_id = mutation.affected_track_id();
+
     let (success, error) = match mutation.category() {
         MutationCategory::TagEdit => {
+            let _ = config::log_message(&format!(
+                "[EXECUTION] TagEdit mutation: {:?}",
+                mutation
+            ));
             let r = tag_edit::execute_single(&db, &mutation, session_id, &witness);
             (r.success, r.error)
         }
@@ -1191,6 +1322,25 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
             (false, Some("Migrations not supported in daemon".to_string()))
         }
     };
+
+    let _ = config::log_message(&format!(
+        "[EXECUTION] execute_mutation END: success={}, error={:?}",
+        success, error
+    ));
+
+    // After successful mutation, refresh health signals for affected track
+    // This is expensive (full deployment conflict detection) but comprehensive
+    if success {
+        if let Some(track_id) = affected_track_id {
+            if let Err(e) = refresh_health_for_track(&db, track_id) {
+                let _ = config::log_message(&format!(
+                    "Warning: health refresh failed for track {}: {}",
+                    track_id, e
+                ));
+                // Don't fail the mutation for health refresh errors
+            }
+        }
+    }
 
     TaskResult { success, error, label, spawn: Vec::new() }
 }

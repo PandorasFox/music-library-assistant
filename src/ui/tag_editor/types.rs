@@ -2,14 +2,9 @@
 //!
 //! Core type definitions for the tag editor workflow.
 //!
-//! This module contains both legacy types (TagEditorFocus, DirectoryTagEditorFocus, etc.)
+//! This module contains both legacy types (TagEditorFocus, TagEditorModal, etc.)
 //! and the new unified types (TagEditorSource, TagEditContext, UnifiedTagEditorAction, etc.).
 //! The legacy types will be removed after the refactoring is complete.
-
-use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 
 use crate::corpus::db::Track;
 use crate::corpus::mutations::Mutation;
@@ -29,6 +24,8 @@ pub enum TagEditorSource {
     DuplicateResolution,
     /// From deploy conflict resolution
     DeployConflict,
+    /// From tag search results
+    TagSearch,
 }
 
 /// Editing mode for the tag editor
@@ -124,6 +121,8 @@ pub enum UnifiedTagEditorAction {
     /// Request to fill tags from database (requires DB access from UI layer)
     /// track_id is None if the track hasn't been indexed yet
     RequestFillFromDb { track_id: Option<i64> },
+    /// Request to show transaction review (requires daemon access to populate decisions)
+    RequestTransactionReview,
 }
 
 /// Modal dialogs for the unified tag editor
@@ -291,14 +290,6 @@ pub struct DuplicateGroupInfo {
     pub resolved: bool,
 }
 
-/// Type of duplicate (for legacy workflow)
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum DuplicateGroupType {
-    ExactMatch,    // Same file in multiple locations
-    MetadataMatch, // Same metadata, different files
-}
-
 /// Modal states for tag editor
 #[derive(Debug)]
 pub enum TagEditorModal {
@@ -367,86 +358,3 @@ pub struct AggregatedTagField {
     pub editable: bool,
 }
 
-/// Which pane has focus in the directory tag editor
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DirectoryTagEditorFocus {
-    /// Tag fields pane (middle)
-    #[default]
-    TagFields,
-    /// Action pane (right) - "Proceed" button
-    ActionPane,
-}
-
-/// Modal states for directory tag editor
-#[derive(Debug)]
-pub enum DirectoryTagEditorModal {
-    /// Change preview modal (shown before saving)
-    ChangePreview {
-        scroll_offset: usize,
-        save_and_next: bool,
-    },
-    /// Unsaved changes prompt when switching directories
-    UnsavedChanges {
-        /// Direction: true = next sibling, false = previous sibling
-        going_next: bool,
-    },
-}
-
-/// Result of handling a key press in directory tag editor
-#[derive(Debug)]
-pub enum DirectoryTagEditorAction {
-    /// No action, continue in editor
-    None,
-    /// Show a modal
-    ShowModal(DirectoryTagEditorModal),
-    /// Save all changes to files
-    SaveAll,
-    /// Save and advance to next sibling directory
-    SaveAndNext,
-    /// Exit without saving
-    Exit,
-    /// Update status message
-    StatusMessage(String),
-    /// Switch to sibling directory (true = next, false = prev)
-    SwitchDirectory(bool),
-}
-
-/// Progress message for metadata gathering
-#[derive(Debug, Clone)]
-pub enum GatheringMessage {
-    /// Found total number of files
-    TotalFiles(usize),
-    /// Processing a file (index, path)
-    Processing(usize, String),
-    /// File processed with tags
-    FileProcessed {
-        index: usize,
-        path: String,
-        tags: Vec<(String, String)>,
-    },
-    /// Error processing file
-    FileError {
-        index: usize,
-        path: String,
-        error: String,
-    },
-    /// All files processed
-    Complete,
-}
-
-/// A file entry with its loaded tags (for bulk editing)
-#[derive(Debug, Clone)]
-pub struct FileEntry {
-    pub path: PathBuf,
-    pub filename: String,
-    pub tags: Vec<(String, String)>,
-}
-
-/// State for async metadata gathering
-pub struct GatheringState {
-    pub total_files: usize,
-    pub processed_files: usize,
-    pub current_file: Option<String>,
-    pub cancel_flag: Arc<AtomicBool>,
-    pub receiver: Receiver<GatheringMessage>,
-}

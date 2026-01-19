@@ -340,6 +340,15 @@ pub mod presets {
             .binding(KeyBinding::new("Esc", "Menu"))
     }
 
+    /// Tag search controls
+    pub fn tag_search() -> ControlsHint {
+        ControlsHint::new()
+            .binding(KeyBinding::new("↑↓←→", "Navigate"))
+            .binding(KeyBinding::new("Tab", "Autocomplete/Cycle"))
+            .binding(KeyBinding::new("Enter", "Search/Select"))
+            .binding(KeyBinding::new("Esc", "Back"))
+    }
+
     /// Empty/loading controls
     pub fn empty() -> ControlsHint {
         ControlsHint::new()

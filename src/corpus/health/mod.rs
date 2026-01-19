@@ -40,24 +40,8 @@ pub mod library;
 pub mod normalization;
 pub mod tag_cloud;
 
-pub use canonicalization::detect_and_store_canonicalizations;
-pub use collision::get_genre_collisions;
-pub use detection::{
-    cleanup_resolved_deployment_conflicts, detect_fingerprint_issues,
-};
-#[allow(unused_imports)]
-pub use filter::{
-    durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks,
-};
-#[allow(unused_imports)]
-pub use library::{
-    check_all_libraries_health, check_library_health, LibraryHealthResult, OrphanFile,
-    StaleDeployment,
-};
-pub use tag_cloud::{spawn_tag_cloud_build, TagCloud};
+pub use detection::{cleanup_resolved_deployment_conflicts, refresh_health_for_track};
 
-// Insights - computed views over signals
-pub use insights::{
-    compute_one_dim_insights, spawn_multi_dim_insight, FlowType, Insight, InsightHandle,
-    InsightMessage, InsightSeverity, MultiDimInsightType,
-};
+// TODO: Canonicalization detection should be reimplemented with direct SQL queries
+// against the read-only db accessor on the task daemon, replacing the TagCloud approach.
+// See: canonicalization.rs, tag_cloud.rs, collision.rs

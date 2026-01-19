@@ -11,8 +11,8 @@ pub mod types;
 
 // Re-export core types
 pub use queries::Database;
-pub use types::{CorpusSummary, ScanStateEntry, Track};
+pub use types::{ScanStateEntry, Track};
 pub use types::{
-    HealthIssue, HealthIssueSeverity, HealthIssueType, HealthSummary, KnownVariant,
+    HealthIssue, HealthIssueSeverity, HealthIssueType, KnownVariant,
     ResolutionType, TrackRole, VariantType,
 };

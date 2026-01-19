@@ -26,6 +26,13 @@ pub struct Database {
 }
 
 impl Database {
+    /// Open a read-write database connection.
+    ///
+    /// This should only be used in:
+    /// - First-time setup (creating new database)
+    /// - Worker thread execution contexts (mutations, migrations, computations)
+    ///
+    /// UI code should use `TaskDaemon::read_only_db()` instead.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
 
@@ -36,6 +43,27 @@ impl Database {
         let db = Database { conn };
         db.initialize_schema()?;
         Ok(db)
+    }
+
+    /// Open a read-only database connection.
+    ///
+    /// Uses SQLite's `PRAGMA query_only = ON` to prevent any writes.
+    /// This is the correct way for UI code to access the database.
+    ///
+    /// Note: Does not initialize schema (read-only connections cannot create tables).
+    /// The database must already exist and have the correct schema.
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path).context("Failed to open database")?;
+
+        // Enable foreign key constraint enforcement
+        conn.execute("PRAGMA foreign_keys = ON", [])
+            .context("Failed to enable foreign key constraints")?;
+
+        // Enable read-only mode - prevents any writes
+        conn.execute("PRAGMA query_only = ON", [])
+            .context("Failed to enable read-only mode")?;
+
+        Ok(Database { conn })
     }
 
     fn initialize_schema(&self) -> Result<()> {

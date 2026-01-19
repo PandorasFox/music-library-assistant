@@ -26,6 +26,5 @@
 
 mod renderer;
 
-// Re-export report infrastructure (for use by future report implementations)
-#[allow(unused_imports)]
-pub use renderer::{write_report_to_file, ReportRenderer, ReportSummary};
+// Re-export report infrastructure
+// TODO: Migrate report implementations to use ReportRenderer trait

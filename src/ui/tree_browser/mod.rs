@@ -42,7 +42,7 @@ pub use actions::TreeBrowserAction;
 pub use config::{CorpusBrowserConfig, DirectorySelectorConfig, TreeBrowserConfig};
 pub use entry::TreeEntry;
 pub use navigator::{EntryFilter, TreeNavigator};
-pub use variants::{BrowserVariant, CorpusBrowserVariant, DirectorySelectorVariant, FileMetadata, SearchState};
+pub use variants::{BrowserVariant, CorpusBrowserVariant, DirectorySelectorVariant};
 
 /// Unified tree browser state.
 ///
@@ -58,11 +58,10 @@ pub struct TreeBrowserState {
 }
 
 impl TreeBrowserState {
-    /// Create a CorpusBrowser for browsing files with metadata preview.
+    /// Create a CorpusBrowser for browsing files and directories.
     ///
     /// Features:
-    /// - Shows both files and directories
-    /// - Right pane displays file metadata (bitrate, duration, tags)
+    /// - Shows both files and directories (full width)
     /// - Type-to-jump search for directories
     /// - Enter launches tag editor (directory = bulk edit, file = single edit)
     /// - Part of lateral view ring (Tab/Shift-Tab cycling)

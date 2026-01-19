@@ -33,7 +33,6 @@ pub mod indexing;
 pub mod file_ops;
 
 pub use types::*;
-pub use grouping::{group_by_file, sort_work_units};
 pub use migration::MigrationRegistry;
 
 /// Access control for corpus-mutating operations.

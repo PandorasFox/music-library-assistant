@@ -74,6 +74,32 @@ content below this point has been authored by claude, and are claude's notes on 
 - **PendingDecision**: Operator-driven decision representation (in `flows/decisions.rs`)
 - **ConflictSet**: Duplicate grouping for resolution
 
+### Database Access Patterns
+
+MLA enforces strict separation between read-only UI queries and write mutations:
+
+**Read-Only Access (UI Code):**
+- All UI code uses `daemon.read_only_db()` for database queries
+- The daemon caches a single read-only connection (`PRAGMA query_only = ON`)
+- This prevents accidental writes from UI code paths
+
+**Write Access (Worker Threads Only):**
+- Only daemon worker threads create write connections via `Database::open()`
+- Mutations require `MutationExecutionWitness` tokens (zero-sized proof types)
+- Migrations require `DecisionWitness` via explicit operator confirmation
+- Write connections are created inside `execute_mutation()` and `execute_migration()`
+
+**Exceptions:**
+- First-time setup (`startup/first_time_setup.rs`) creates new database with write access
+- Pre-App startup migrations (`check_and_run_migrations`) need write access before daemon exists
+
+**Anti-patterns:**
+- Never call `Database::open()` directly in UI code
+- Never pass write connections from UI to mutation contexts
+- Never create Database connections in rendering/display code
+
+This pattern ensures all mutations are properly witnessed and attributable to operator decisions, enforcing the "operator-driven" principle from PHILOSOPHY.md.
+
 ### Widget-First UI Development
 
 When building new UI components, **always use existing widgets first**. The `ui/widgets/` module provides reusable, composable components:
@@ -217,3 +243,19 @@ When resolving a TODO:
 2. Remove the corresponding entry from `docs/FUTURE_FEATURES.md`
 
 Periodically grep for `TODO|FIXME|HACK|XXX` and reconcile with the docs page.
+
+### Dead Code Policy
+
+**Never use `#[allow(dead_code)]`.** Dead code accumulates and rots. Instead:
+
+1. **If code is vestigial** (was used, no longer is): Remove it entirely. Stub callers with `todo!("reconnect when X is implemented")`.
+
+2. **If code is forward-looking** (building systems to connect later): New code should largely always be connected at this point. Un-integrated new code should be reported back as explicitly needing to be integrated and have a todo!("call this") to be removed once integrated.
+
+3. **If removing would be expensive**: Prefer wholesale removal over surgical extraction. Rip out entire subsystems and leave `todo!()` stubs at the call sites.
+
+4. **For unused imports**: Remove them. Don't annotate with `#[allow(unused_imports)]` "for future use" - imports are trivial to re-add.
+
+**Rationale**: `#[allow(dead_code)]` silences the compiler's useful signal that code is disconnected. Over time, allowed dead code diverges from the live codebase (API changes, pattern evolution) making eventual reconnection harder than rewriting. The compiler warning is a feature, not noise. Explicit `todo!()` stubs are preferable because they're searchable, intentional, and will panic loudly if accidentally reached.
+
+**Exceptions**: Test utilities (`#[cfg(test)]` modules) may have helpers not used by all tests.

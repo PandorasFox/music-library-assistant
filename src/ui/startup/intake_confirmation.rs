@@ -51,7 +51,7 @@ impl IntakeConfirmationState {
     /// to get actual file paths and sizes.
     ///
     /// Returns None if there are no unindexed files.
-    pub fn gather(db: &Database, corpus_root: &std::path::Path, source: &str) -> Option<Self> {
+    pub fn gather(db: &Database, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
         // Get all MissingFromIndex issues
         let issues = db
             .get_unresolved_health_issues(Some(HealthIssueType::MissingFromIndex))

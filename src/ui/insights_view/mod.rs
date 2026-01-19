@@ -20,7 +20,6 @@
 
 mod render;
 
-use std::sync::mpsc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

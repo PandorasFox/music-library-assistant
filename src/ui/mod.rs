@@ -103,14 +103,14 @@ pub(crate) enum UiMode {
     ExitConfirmModal,
     /// Corpus browser with directory tree and metadata preview
     CorpusBrowser,
-    /// Directory-based bulk tag editor (aggregated view)
-    DirectoryTagEditor,
     /// Deploy conflict resolution - review accumulated changes before commit
     DeployConflictReview,
     /// Full-screen insights view (part of lateral view ring)
     Insights,
     /// Loading splash screen - centered eye with status message
     LoadingSplash,
+    /// Unified tag editor with transaction support (replaces TagEditor and DirectoryTagEditor)
+    UnifiedTagEditor,
 }
 
 /// Re-export from drop_flow module
@@ -175,9 +175,8 @@ pub(crate) struct App {
     tree_browser: Option<tree_browser::TreeBrowserState>,
     drop_missing_state: Option<DropMissingState>,
     deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
-    // Directory tag editor (bulk editing)
-    directory_tag_editor: Option<tag_editor::DirectoryTagEditorState>,
-    directory_tag_editor_modal: Option<tag_editor::types::DirectoryTagEditorModal>,
+    // Unified tag editor (transaction-based)
+    unified_tag_editor: Option<tag_editor::UnifiedTagEditorState>,
     // Exit confirmation modal
     exit_confirm_modal_state: Option<ExitConfirmModalState>,
     // Startup splash screen
@@ -222,8 +221,7 @@ impl App {
             tree_browser: None,
             drop_missing_state: None,
             deployment_preview: None,
-            directory_tag_editor: None,
-            directory_tag_editor_modal: None,
+            unified_tag_editor: None,
             exit_confirm_modal_state: None,
             splash_screen: None,
             deploy_conflict_review: None,
@@ -306,15 +304,6 @@ impl App {
                     self.handle_tree_browser_action(action);
                 }
             }
-            UiMode::DirectoryTagEditor => {
-                // Handle modal keys first if modal is active
-                if self.directory_tag_editor_modal.is_some() {
-                    self.handle_directory_tag_editor_modal_key(key);
-                } else if let Some(ref mut editor) = self.directory_tag_editor {
-                    let action = editor.handle_key(key);
-                    self.handle_directory_tag_editor_action(action);
-                }
-            }
             UiMode::DeployConflictReview => {
                 self.handle_deploy_conflict_review_key(key);
             }
@@ -327,6 +316,12 @@ impl App {
             UiMode::LoadingSplash => {
                 // Loading splash ignores most keys - can't interact during loading
                 // Could potentially allow Esc to cancel certain operations in the future
+            }
+            UiMode::UnifiedTagEditor => {
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    let action = editor.handle_key(key);
+                    self.handle_unified_tag_editor_action(action);
+                }
             }
         }
     }
@@ -583,8 +578,8 @@ impl App {
                 self.mode = UiMode::Insights;
             }
             tree_browser::TreeBrowserAction::EditDirectory(path) => {
-                // Start directory tag editor with aggregated view
-                self.start_directory_tag_editor(&path);
+                // Load tracks from directory and open unified tag editor
+                self.open_unified_tag_editor_for_directory(&path);
             }
             tree_browser::TreeBrowserAction::EditFile(path) => {
                 // Load single track for editing
@@ -741,18 +736,29 @@ impl App {
             return;
         }
 
-        // Create tag editor with tracks (no duplicate groups for corpus browser)
-        let mut editor = tag_editor::TagEditorState::new(tracks.clone(), Vec::new());
-        // Position on the selected track
-        editor.current_track_idx = selected_idx;
-        self.tag_editor = Some(editor);
-        self.status_message = Some(format!(
-            "Loaded {} track(s) from {}",
-            tracks.len(),
-            path.display()
-        ));
+        // Use the unified tag editor for single-file editing
         self.tree_browser = None;
-        self.mode = UiMode::TagEditor;
+        if tracks.len() == 1 {
+            // Single track - use single file mode
+            self.open_unified_tag_editor_single(
+                tracks.into_iter().next().unwrap(),
+                tag_editor::TagEditorSource::CorpusBrowser,
+                None,
+            );
+        } else {
+            // Multiple tracks in same directory - use bulk mode with CorpusBrowser source
+            // This allows cycling through sibling files with tab/shift-tab
+            self.open_unified_tag_editor_bulk(
+                tracks,
+                tag_editor::TagEditorSource::CorpusBrowser,
+                None,
+            );
+            // Position on the selected track
+            if let Some(editor) = self.unified_tag_editor.as_mut() {
+                editor.current_item_idx = selected_idx;
+            }
+        }
+        self.status_message = Some(format!("Editing tags for {}", path.display()));
     }
 
 
@@ -943,15 +949,14 @@ impl App {
 
             // Build group info for accumulation
             let group_info = editor.duplicate_groups.get(current_idx).map(|group| {
+                // Use path for display since tags are stored separately
                 let target_path = group.tracks.first()
                     .map(|t| {
-                        format!("{}/{}/{}",
-                            t.album_artist.as_deref()
-                                .or(t.artist.as_deref())
-                                .unwrap_or("Unknown Artist"),
-                            t.album.as_deref().unwrap_or("Unknown Album"),
-                            t.title.as_deref().unwrap_or("Unknown")
-                        )
+                        std::path::Path::new(&t.path)
+                            .file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or("Unknown")
+                            .to_string()
                     })
                     .unwrap_or_else(|| "Unknown".to_string());
                 (group.group_id, target_path, group.tracks.len())
@@ -1077,6 +1082,353 @@ impl App {
         } else {
             self.tag_editor = None;
             self.mode = UiMode::Insights;
+        }
+    }
+
+    // =========================================================================
+    // Unified Tag Editor (Transaction-Based)
+    // =========================================================================
+
+    /// Open the unified tag editor with a single track
+    fn open_unified_tag_editor_single(
+        &mut self,
+        track: crate::corpus::db::Track,
+        source: tag_editor::TagEditorSource,
+        group_context: Option<tag_editor::GroupContext>,
+    ) {
+        // Start transaction
+        if let Some(daemon) = self.task_daemon.as_mut() {
+            let label = match source {
+                tag_editor::TagEditorSource::CorpusBrowser => "Tag edits",
+                tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
+                tag_editor::TagEditorSource::DuplicateResolution => "Duplicate resolution",
+                tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
+            };
+            let _ = daemon.start_transaction(label);
+        }
+
+        self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::single_file(
+            track,
+            source,
+            group_context,
+        ));
+        self.mode = UiMode::UnifiedTagEditor;
+    }
+
+    /// Open the unified tag editor with multiple tracks
+    fn open_unified_tag_editor_bulk(
+        &mut self,
+        tracks: Vec<crate::corpus::db::Track>,
+        source: tag_editor::TagEditorSource,
+        group_context: Option<tag_editor::GroupContext>,
+    ) {
+        // Start transaction
+        if let Some(daemon) = self.task_daemon.as_mut() {
+            let label = match source {
+                tag_editor::TagEditorSource::CorpusBrowser => "Bulk tag edits",
+                tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
+                tag_editor::TagEditorSource::DuplicateResolution => "Duplicate resolution",
+                tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
+            };
+            let _ = daemon.start_transaction(label);
+        }
+
+        self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::bulk_from_tracks(
+            tracks,
+            source,
+            group_context,
+        ));
+        self.mode = UiMode::UnifiedTagEditor;
+    }
+
+    /// Open the unified tag editor for a directory path
+    fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
+        // Query database for tracks in this directory
+        let db_path = match crate::config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Failed to get database path: {}", e));
+                return;
+            }
+        };
+
+        let db = match crate::corpus::db::Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.status_message = Some(format!("Failed to open database: {}", e));
+                return;
+            }
+        };
+
+        let tracks = match db.get_tracks_in_directory(directory) {
+            Ok(tracks) => tracks,
+            Err(e) => {
+                self.status_message = Some(format!("Failed to query tracks: {}", e));
+                return;
+            }
+        };
+
+        if tracks.is_empty() {
+            self.status_message = Some(format!(
+                "No indexed tracks found in {}",
+                directory.display()
+            ));
+            return;
+        }
+
+        // Find sibling directories (other directories at the same level)
+        let sibling_directories = if let Some(parent) = directory.parent() {
+            std::fs::read_dir(parent)
+                .ok()
+                .map(|entries| {
+                    let mut dirs: Vec<std::path::PathBuf> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .map(|e| e.path())
+                        .collect();
+                    dirs.sort();
+                    dirs
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        self.tree_browser = None;
+
+        // Start transaction for directory edits
+        if let Some(daemon) = self.task_daemon.as_mut() {
+            let _ = daemon.start_transaction("Directory tag edits");
+        }
+
+        // Use directory_aggregated for aggregated tag view across all files
+        let mut editor = tag_editor::UnifiedTagEditorState::directory_aggregated(tracks, None);
+        editor.set_sibling_directories(directory.to_path_buf(), sibling_directories);
+
+        self.unified_tag_editor = Some(editor);
+        self.mode = UiMode::UnifiedTagEditor;
+    }
+
+    fn handle_unified_tag_editor_action(&mut self, action: tag_editor::UnifiedTagEditorAction) {
+        use tag_editor::UnifiedTagEditorAction;
+
+        match action {
+            UnifiedTagEditorAction::None => {}
+            UnifiedTagEditorAction::CloseModal => {}
+
+            UnifiedTagEditorAction::StageDecision { index, mutations } => {
+                // User confirmed changes for this item - stage to transaction
+                let witness = crate::daemon::confirm_decision();
+                if let Some(daemon) = self.task_daemon.as_mut() {
+                    let label = self.unified_tag_editor
+                        .as_ref()
+                        .map(|e| e.current_item_label())
+                        .unwrap_or_else(|| "Tag edit".to_string());
+                    let _ = daemon.add_decision(index, &witness, label, mutations.clone());
+                }
+                // Track staged mutations for redundant confirmation skipping
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    editor.set_staged_mutations(mutations);
+                }
+                self.status_message = Some(format!("Decision staged (item {})", index + 1));
+            }
+
+            UnifiedTagEditorAction::StageDecisionAndNext { index, mutations } => {
+                // Stage the decision AND navigate to next sibling
+                let witness = crate::daemon::confirm_decision();
+                if let Some(daemon) = self.task_daemon.as_mut() {
+                    let label = self.unified_tag_editor
+                        .as_ref()
+                        .map(|e| e.current_item_label())
+                        .unwrap_or_else(|| "Tag edit".to_string());
+                    let _ = daemon.add_decision(index, &witness, label, mutations.clone());
+                }
+                // Track staged mutations
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    editor.set_staged_mutations(mutations);
+                }
+                self.status_message = Some(format!("Decision staged (item {})", index + 1));
+                // Now navigate to next sibling
+                self.navigate_to_next_sibling();
+            }
+
+            UnifiedTagEditorAction::CommitTransaction => {
+                // Commit all staged decisions
+                let witness = crate::daemon::confirm_decision();
+                if let Some(daemon) = self.task_daemon.as_mut() {
+                    match daemon.confirm_transaction(&witness) {
+                        Ok(summary) => {
+                            self.status_message = Some(format!(
+                                "Committed {} decisions ({} mutations)",
+                                summary.decision_count,
+                                summary.mutation_count
+                            ));
+                        }
+                        Err(e) => {
+                            self.status_message = Some(format!("Commit failed: {}", e));
+                        }
+                    }
+                }
+                self.unified_tag_editor = None;
+                self.mode = UiMode::Insights;
+            }
+
+            UnifiedTagEditorAction::DiscardTransaction => {
+                // Discard all staged decisions
+                let witness = crate::daemon::confirm_decision();
+                if let Some(daemon) = self.task_daemon.as_mut() {
+                    let _ = daemon.discard_transaction(&witness);
+                }
+                self.unified_tag_editor = None;
+                self.mode = UiMode::Insights;
+                self.status_message = Some("Edits discarded".to_string());
+            }
+
+            UnifiedTagEditorAction::NextItem => {
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    if editor.current_item_idx < editor.total_items.saturating_sub(1) {
+                        editor.current_item_idx += 1;
+                        editor.current_field_idx = 0;
+                        editor.field_scroll_offset = 0;
+                        editor.clear_staged_mutations();
+                    }
+                }
+            }
+
+            UnifiedTagEditorAction::PrevItem => {
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    if editor.current_item_idx > 0 {
+                        editor.current_item_idx -= 1;
+                        editor.current_field_idx = 0;
+                        editor.field_scroll_offset = 0;
+                        editor.clear_staged_mutations();
+                    }
+                }
+            }
+
+            UnifiedTagEditorAction::NextSibling => {
+                self.navigate_to_next_sibling();
+            }
+
+            UnifiedTagEditorAction::PrevSibling => {
+                self.navigate_to_prev_sibling();
+            }
+
+            UnifiedTagEditorAction::ShowModal(modal) => {
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    editor.modal = Some(modal);
+                }
+            }
+
+            UnifiedTagEditorAction::StatusMessage(msg) => {
+                self.status_message = Some(msg);
+            }
+
+            UnifiedTagEditorAction::RequestFillFromDb { track_id } => {
+                match track_id {
+                    Some(id) => {
+                        // Open database and query for tags
+                        let db_path = match config::get_db_path() {
+                            Ok(p) => p,
+                            Err(e) => {
+                                self.status_message = Some(format!("Config error: {}", e));
+                                return;
+                            }
+                        };
+                        match Database::open(&db_path) {
+                            Ok(db) => {
+                                match db.get_track_tags(id) {
+                                    Ok(tags) => {
+                                        // Convert TrackTag to (name, value) pairs
+                                        let tag_pairs: Vec<(String, String)> = tags
+                                            .into_iter()
+                                            .map(|t| (t.tag_name, t.tag_value))
+                                            .collect();
+
+                                        if let Some(ref mut editor) = self.unified_tag_editor {
+                                            editor.fill_from_db_result(tag_pairs);
+                                        }
+                                        self.status_message = Some("Tags loaded from database".to_string());
+                                    }
+                                    Err(e) => {
+                                        self.status_message = Some(format!("Error loading tags: {}", e));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.status_message = Some(format!("Database error: {}", e));
+                            }
+                        }
+                    }
+                    None => {
+                        self.status_message = Some("Track not indexed - no database tags available".to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Navigate to the next sibling in the tag editor.
+    /// For DirectoryEdit mode: next sibling directory.
+    /// For bulk edit mode: next track.
+    fn navigate_to_next_sibling(&mut self) {
+        let is_directory_edit = self.unified_tag_editor
+            .as_ref()
+            .map(|e| e.is_directory_edit())
+            .unwrap_or(false);
+
+        if is_directory_edit {
+            // Navigate to next sibling directory
+            if let Some(ref editor) = self.unified_tag_editor {
+                let next_idx = editor.current_sibling_idx + 1;
+                if next_idx < editor.sibling_directories.len() {
+                    let next_dir = editor.sibling_directories[next_idx].clone();
+                    // Re-open the tag editor for the new directory
+                    self.open_unified_tag_editor_for_directory(&next_dir);
+                }
+            }
+        } else {
+            // Navigate to next track (same as NextItem)
+            if let Some(ref mut editor) = self.unified_tag_editor {
+                if editor.current_item_idx < editor.total_items.saturating_sub(1) {
+                    editor.current_item_idx += 1;
+                    editor.current_field_idx = 0;
+                    editor.field_scroll_offset = 0;
+                    editor.clear_staged_mutations();
+                }
+            }
+        }
+    }
+
+    /// Navigate to the previous sibling in the tag editor.
+    /// For DirectoryEdit mode: previous sibling directory.
+    /// For bulk edit mode: previous track.
+    fn navigate_to_prev_sibling(&mut self) {
+        let is_directory_edit = self.unified_tag_editor
+            .as_ref()
+            .map(|e| e.is_directory_edit())
+            .unwrap_or(false);
+
+        if is_directory_edit {
+            // Navigate to previous sibling directory
+            if let Some(ref editor) = self.unified_tag_editor {
+                if editor.current_sibling_idx > 0 {
+                    let prev_idx = editor.current_sibling_idx - 1;
+                    let prev_dir = editor.sibling_directories[prev_idx].clone();
+                    // Re-open the tag editor for the new directory
+                    self.open_unified_tag_editor_for_directory(&prev_dir);
+                }
+            }
+        } else {
+            // Navigate to previous track (same as PrevItem)
+            if let Some(ref mut editor) = self.unified_tag_editor {
+                if editor.current_item_idx > 0 {
+                    editor.current_item_idx -= 1;
+                    editor.current_field_idx = 0;
+                    editor.field_scroll_offset = 0;
+                    editor.clear_staged_mutations();
+                }
+            }
         }
     }
 
@@ -1251,13 +1603,6 @@ impl App {
         self.task_daemon.as_mut().unwrap()
     }
 
-    /// Queue mutations to the task daemon.
-    ///
-    /// Requires a DecisionWitness - mutations must come from user-led decisions.
-    #[allow(dead_code)]
-    fn queue_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, witness: &crate::daemon::DecisionWitness) {
-        self.daemon().queue_all(mutations, witness);
-    }
 
     /// Tick the splash screen and check for completion.
     ///
@@ -1338,199 +1683,6 @@ impl App {
     #[allow(dead_code)]
     pub fn tag_cloud(&self) -> Option<&crate::corpus::health::TagCloud> {
         self.tag_cloud.as_ref()
-    }
-
-    // ========================================================================
-    // Directory Tag Editor
-    // ========================================================================
-
-    fn start_directory_tag_editor(&mut self, directory: &std::path::Path) {
-        self.tree_browser = None;
-        self.directory_tag_editor = Some(tag_editor::DirectoryTagEditorState::start_gathering(
-            directory.to_path_buf(),
-        ));
-        self.directory_tag_editor_modal = None;
-        self.mode = UiMode::DirectoryTagEditor;
-    }
-
-    fn update_directory_tag_editor(&mut self) {
-        if let Some(ref mut editor) = self.directory_tag_editor {
-            if editor.is_gathering() {
-                let complete = editor.poll_gathering();
-                if complete {
-                    self.status_message = Some(format!(
-                        "Loaded {} files from {}",
-                        editor.files.len(),
-                        editor.current_directory.display()
-                    ));
-                }
-            }
-        }
-    }
-
-    fn handle_directory_tag_editor_action(
-        &mut self,
-        action: tag_editor::types::DirectoryTagEditorAction,
-    ) {
-        use tag_editor::types::DirectoryTagEditorAction;
-
-        match action {
-            DirectoryTagEditorAction::None => {}
-            DirectoryTagEditorAction::ShowModal(modal) => {
-                self.directory_tag_editor_modal = Some(modal);
-            }
-            DirectoryTagEditorAction::SaveAll => {
-                self.save_directory_tag_changes(false);
-            }
-            DirectoryTagEditorAction::SaveAndNext => {
-                self.save_directory_tag_changes(true);
-            }
-            DirectoryTagEditorAction::Exit => {
-                self.directory_tag_editor = None;
-                self.directory_tag_editor_modal = None;
-                self.mode = UiMode::CorpusBrowser;
-                // Restore corpus browser if it was set
-                if self.tree_browser.is_none() {
-                    self.start_corpus_browser();
-                }
-            }
-            DirectoryTagEditorAction::StatusMessage(msg) => {
-                self.status_message = Some(msg);
-            }
-            DirectoryTagEditorAction::SwitchDirectory(next) => {
-                if let Some(ref editor) = self.directory_tag_editor {
-                    if let Some(new_dir) = editor.switch_to_sibling(next).clone() {
-                        // Start gathering for new directory
-                        self.directory_tag_editor = Some(
-                            tag_editor::DirectoryTagEditorState::start_gathering(new_dir),
-                        );
-                    } else {
-                        let msg = if next {
-                            "No more directories after this one"
-                        } else {
-                            "No more directories before this one"
-                        };
-                        self.status_message = Some(msg.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    fn handle_directory_tag_editor_modal_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-        use tag_editor::types::DirectoryTagEditorModal;
-
-        let modal = match &self.directory_tag_editor_modal {
-            Some(m) => m,
-            None => return,
-        };
-
-        match modal {
-            DirectoryTagEditorModal::ChangePreview { scroll_offset, save_and_next } => {
-                let mut scroll = *scroll_offset;
-                let save_next = *save_and_next;
-
-                match key.code {
-                    KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        self.directory_tag_editor_modal = None;
-                        if save_next {
-                            self.save_directory_tag_changes(true);
-                        } else {
-                            self.save_directory_tag_changes(false);
-                        }
-                    }
-                    KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                        self.directory_tag_editor_modal = None;
-                    }
-                    KeyCode::Up => {
-                        scroll = scroll.saturating_sub(1);
-                        self.directory_tag_editor_modal =
-                            Some(DirectoryTagEditorModal::ChangePreview {
-                                scroll_offset: scroll,
-                                save_and_next: save_next,
-                            });
-                    }
-                    KeyCode::Down => {
-                        scroll += 1;
-                        self.directory_tag_editor_modal =
-                            Some(DirectoryTagEditorModal::ChangePreview {
-                                scroll_offset: scroll,
-                                save_and_next: save_next,
-                            });
-                    }
-                    _ => {}
-                }
-            }
-            DirectoryTagEditorModal::UnsavedChanges { going_next } => {
-                let next = *going_next;
-                match key.code {
-                    KeyCode::Char('s') | KeyCode::Char('S') => {
-                        // Save & Switch
-                        self.directory_tag_editor_modal = None;
-                        self.save_directory_tag_changes(false);
-                        // After saving, switch directory
-                        self.handle_directory_tag_editor_action(
-                            tag_editor::types::DirectoryTagEditorAction::SwitchDirectory(next),
-                        );
-                    }
-                    KeyCode::Char('d') | KeyCode::Char('D') => {
-                        // Discard & Switch
-                        self.directory_tag_editor_modal = None;
-                        self.handle_directory_tag_editor_action(
-                            tag_editor::types::DirectoryTagEditorAction::SwitchDirectory(next),
-                        );
-                    }
-                    KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Esc => {
-                        // Cancel
-                        self.directory_tag_editor_modal = None;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    fn save_directory_tag_changes(&mut self, switch_to_next: bool) {
-        use crate::corpus::metadata;
-
-        let editor = match &self.directory_tag_editor {
-            Some(e) => e,
-            None => return,
-        };
-
-        let changes = editor.compute_changes();
-        if changes.is_empty() {
-            self.status_message = Some("No changes to save".to_string());
-            return;
-        }
-
-        let mut success_count = 0;
-        let mut error_count = 0;
-
-        // TODO: This bypasses the mutation system. Directory tag editor saves should
-        // queue TagEditAndFlush mutations to TaskDaemon instead of calling write_tags directly.
-        // See docs/MUTATION_CLEANUP.md for the refactor plan.
-        //
-        // The directory tag editor needs to:
-        // 1. Look up track_id for each file from the database
-        // 2. Create TagEditAndFlush mutations for each file
-        // 3. Queue them to TaskDaemon
-        // 4. Show progress/results from daemon status
-        let _ = (success_count, error_count, &editor.files, &changes);
-        todo!("Refactor: Queue TagEditAndFlush mutations to TaskDaemon");
-
-        if switch_to_next {
-            if let Some(ref editor) = self.directory_tag_editor {
-                if let Some(new_dir) = editor.switch_to_sibling(true).clone() {
-                    self.directory_tag_editor = Some(
-                        tag_editor::DirectoryTagEditorState::start_gathering(new_dir),
-                    );
-                } else {
-                    self.status_message = Some("Saved. No more sibling directories.".to_string());
-                }
-            }
-        }
     }
 
     // =========================================================================
@@ -1676,12 +1828,11 @@ fn render(f: &mut Frame, app: &mut App) {
         tree_browser: app.tree_browser.as_mut(),
         drop_missing_state: app.drop_missing_state.as_ref(),
         deployment_preview: app.deployment_preview.as_mut(),
-        directory_tag_editor: app.directory_tag_editor.as_mut(),
-        directory_tag_editor_modal: app.directory_tag_editor_modal.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         splash_screen: app.splash_screen.as_ref(),
         deploy_conflict_review: app.deploy_conflict_review.as_ref(),
         insights_view: app.insights_view.as_mut(),
+        unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,
         background_tasks: &app.background_tasks,
@@ -1746,6 +1897,177 @@ fn check_and_maybe_rebuild_health(app: &mut App) {
 }
 
 // ============================================================================
+// First-Time Setup
+// ============================================================================
+
+/// Handle first-time setup when no database exists.
+///
+/// Shows a dialog prompting the user to create a new database, then
+/// initializes it with the latest schema version (no migrations needed).
+fn handle_first_time_setup<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    db_path: &std::path::Path,
+) -> Result<()> {
+    use crossterm::event::{self, Event, KeyCode};
+    use ratatui::layout::{Alignment, Rect};
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+    use crate::daemon::confirm_decision;
+
+    // Ensure parent directory exists
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let db_display = db_path.to_string_lossy();
+
+    // Render first-time setup dialog
+    loop {
+        terminal.draw(|f| {
+            let area = f.area();
+
+            let dialog_width = 65.min(area.width.saturating_sub(4));
+            let dialog_height = 14.min(area.height.saturating_sub(4));
+
+            let dialog_area = Rect {
+                x: (area.width.saturating_sub(dialog_width)) / 2,
+                y: (area.height.saturating_sub(dialog_height)) / 2,
+                width: dialog_width,
+                height: dialog_height,
+            };
+
+            f.render_widget(Clear, dialog_area);
+
+            let lines = vec![
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from("Welcome to MLA!").style(
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from("No database found. MLA will create a new one at:").style(
+                    Style::default().fg(Color::White),
+                ),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from(format!("  {}", db_display)).style(
+                    Style::default().fg(Color::Yellow),
+                ),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from("After setup, your corpus will be scanned.").style(
+                    Style::default().fg(Color::DarkGray),
+                ),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from("[Enter] Create Database    [Esc] Exit")
+                    .style(Style::default().fg(Color::Cyan)),
+            ];
+
+            let paragraph = Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .title(" First-Time Setup ")
+                        .title_alignment(Alignment::Center)
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan)),
+                )
+                .alignment(Alignment::Center);
+
+            f.render_widget(paragraph, dialog_area);
+        })?;
+
+        // Wait for user input
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Enter => {
+                    let _witness = confirm_decision();
+                    break;
+                }
+                KeyCode::Esc => {
+                    return Err(anyhow::anyhow!("Setup cancelled by user"));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Show "creating database" status
+    terminal.draw(|f| {
+        let area = f.area();
+        let dialog_width = 50.min(area.width.saturating_sub(4));
+        let dialog_height = 7;
+
+        let dialog_area = Rect {
+            x: (area.width.saturating_sub(dialog_width)) / 2,
+            y: (area.height.saturating_sub(dialog_height)) / 2,
+            width: dialog_width,
+            height: dialog_height,
+        };
+
+        f.render_widget(Clear, dialog_area);
+
+        let paragraph = Paragraph::new(vec![
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::from("Creating database...").style(
+                Style::default().fg(Color::Cyan),
+            ),
+            ratatui::text::Line::from(""),
+        ])
+        .block(
+            Block::default()
+                .title(" Setup ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .alignment(Alignment::Center);
+
+        f.render_widget(paragraph, dialog_area);
+    })?;
+
+    // Create database and set to latest schema version
+    let db = Database::open(db_path)?;
+    let registry = MigrationRegistry::new();
+    db.set_schema_version(registry.latest_version())?;
+
+    // Show completion message
+    terminal.draw(|f| {
+        let area = f.area();
+        let dialog_width = 50.min(area.width.saturating_sub(4));
+        let dialog_height = 7;
+
+        let dialog_area = Rect {
+            x: (area.width.saturating_sub(dialog_width)) / 2,
+            y: (area.height.saturating_sub(dialog_height)) / 2,
+            width: dialog_width,
+            height: dialog_height,
+        };
+
+        f.render_widget(Clear, dialog_area);
+
+        let paragraph = Paragraph::new(vec![
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::from("Database created successfully!").style(
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::from("Starting initial corpus scan...")
+                .style(Style::default().fg(Color::DarkGray)),
+        ])
+        .block(
+            Block::default()
+                .title(" Setup Complete ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green)),
+        )
+        .alignment(Alignment::Center);
+
+        f.render_widget(paragraph, dialog_area);
+    })?;
+
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    Ok(())
+}
+
+// ============================================================================
 // Database Migration Check
 // ============================================================================
 
@@ -1753,10 +2075,12 @@ fn check_and_maybe_rebuild_health(app: &mut App) {
 ///
 /// This runs before the main app loop starts to ensure the database schema
 /// is up to date. Shows a blocking dialog during migration execution.
-/// Check for pending migrations and run them with user approval.
 ///
-/// Displays a dialog showing pending migrations with [Enter] to proceed or [Esc] to exit.
-/// User must explicitly approve migrations (DecisionWitness pattern).
+/// For first-time setup (no database exists), shows a "Create new database?"
+/// dialog and initializes with the latest schema version.
+///
+/// For existing databases, checks for pending migrations and prompts user
+/// to approve them (DecisionWitness pattern).
 fn check_and_run_migrations<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
 ) -> Result<()> {
@@ -1766,12 +2090,21 @@ fn check_and_run_migrations<B: ratatui::backend::Backend>(
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
     use crate::daemon::confirm_decision;
 
-    // Open database
+    // Get database path
     let db_path = match config::get_db_path() {
         Ok(p) => p,
-        Err(_) => return Ok(()), // No database path configured, skip migrations
+        Err(_) => return Ok(()), // No database path configured, skip
     };
 
+    // Check if this is first-time setup (no database file exists)
+    let is_first_time = !db_path.exists();
+
+    if is_first_time {
+        // First-time setup: prompt to create new database
+        return handle_first_time_setup(terminal, &db_path);
+    }
+
+    // Existing database: open and check for migrations
     let db = match Database::open(&db_path) {
         Ok(d) => d,
         Err(_) => return Ok(()), // Can't open database, skip migrations
@@ -2071,7 +2404,6 @@ fn run_app<B: ratatui::backend::Backend>(
         app.eye.update(can_animate);
         app.update_operation_progress();
         app.update_tag_cloud();
-        app.update_directory_tag_editor();
 
         // Always tick daemon (advances work state, handles eyeballing completion)
         app.daemon().tick();

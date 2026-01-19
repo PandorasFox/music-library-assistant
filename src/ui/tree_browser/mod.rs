@@ -16,11 +16,11 @@
 //! // Create a corpus browser
 //! let browser = TreeBrowserState::corpus_browser(corpus_root, CorpusBrowserConfig::default());
 //!
-//! // Create a directory selector for dedup
+//! // Create a directory selector
 //! let selector = TreeBrowserState::directory_selector(
 //!     corpus_root,
 //!     "Select Directories",
-//!     DirectorySelectorConfig::for_sleuthing(),
+//!     DirectorySelectorConfig::default(),
 //! );
 //! ```
 

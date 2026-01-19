@@ -63,12 +63,3 @@ impl Default for DirectorySelectorConfig {
     }
 }
 
-impl DirectorySelectorConfig {
-    /// Create a config preset for fingerprint-based deduplication (sleuthing).
-    pub fn for_sleuthing() -> Self {
-        Self {
-            multi_select: true,
-            show_item_counts: true,
-        }
-    }
-}

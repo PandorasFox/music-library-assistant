@@ -32,59 +32,7 @@ use std::io;
 use std::time::Instant;
 
 use crate::config::{self, Config};
-use crate::corpus::db::{Database, HealthIssueType};
-use crate::flows::background::{log_task_summary, poll_tasks, BackgroundTask};
-
 use app::EyeAnimation;
-
-use crate::corpus::mutations::MigrationRegistry;
-
-// ============================================================================
-// Deploy Conflict Resolution
-// ============================================================================
-
-/// Load deployment conflict groups from health issues.
-///
-/// Queries for unresolved `DeployConflict` health issues and converts them to
-/// `DuplicateGroupInfo` format for the tag editor.
-fn load_deploy_conflict_groups(db: &Database) -> Result<Vec<tag_editor::DuplicateGroupInfo>> {
-    let issues = db.get_unresolved_health_issues(Some(HealthIssueType::DeployConflict))?;
-
-    let mut groups = Vec::with_capacity(issues.len());
-
-    for issue in issues {
-        let issue_id = match issue.id {
-            Some(id) => id,
-            None => continue,
-        };
-
-        // Get tracks associated with this conflict
-        let track_roles = db.get_health_issue_tracks(issue_id)?;
-        let tracks: Vec<_> = track_roles.into_iter().map(|(track, _role)| track).collect();
-
-        // Skip if fewer than 2 tracks (not really a conflict)
-        if tracks.len() < 2 {
-            continue;
-        }
-
-        groups.push(tag_editor::DuplicateGroupInfo {
-            group_id: issue_id,
-            tracks,
-            resolved: false,
-        });
-    }
-
-    Ok(groups)
-}
-
-// ============================================================================
-// Health Data Version
-// ============================================================================
-
-/// Current health data schema version.
-/// Increment this when health detection algorithms change significantly.
-/// On startup, if DB version differs from this, health index is rebuilt.
-pub const HEALTH_DATA_VERSION: u32 = 1;
 
 // ============================================================================
 // Application State
@@ -94,7 +42,6 @@ pub const HEALTH_DATA_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum UiMode {
-    TagEditor,
     DirBrowser,
     DropMissingConfirmation,
     DeploymentPreview,
@@ -102,8 +49,6 @@ pub(crate) enum UiMode {
     ExitConfirmModal,
     /// Corpus browser with directory tree and metadata preview
     CorpusBrowser,
-    /// Deploy conflict resolution - review accumulated changes before commit
-    DeployConflictReview,
     /// Full-screen insights view (part of lateral view ring)
     Insights,
     /// Intake confirmation - prompt to index unindexed files
@@ -141,30 +86,6 @@ impl ExitConfirmModalState {
 
 // LoadingType and SplashScreen are now in splash_screen module
 
-/// Accumulated changes for a single deploy conflict group
-#[derive(Debug, Clone)]
-pub(crate) struct DeployConflictGroupChanges {
-    /// Health issue ID for this conflict group
-    pub group_id: i64,
-    /// Target deployment path this conflict was about
-    pub target_path: String,
-    /// Track count in this group
-    pub track_count: usize,
-    /// Pending decisions for this group
-    pub decisions: Vec<crate::flows::PendingDecision>,
-}
-
-/// State for the deploy conflict review screen
-#[derive(Debug, Clone)]
-pub(crate) struct DeployConflictReviewState {
-    /// Accumulated changes from all processed groups
-    pub groups: Vec<DeployConflictGroupChanges>,
-    /// Scroll offset for the list
-    pub scroll_offset: usize,
-    /// Selected button: 0 = Commit, 1 = Discard
-    pub selected_button: usize,
-}
-
 /// Main application state
 pub(crate) struct App {
     config: Config,
@@ -173,8 +94,6 @@ pub(crate) struct App {
 
     // UI mode and state
     mode: UiMode,
-    tag_editor: Option<tag_editor::TagEditorState>,
-    tag_editor_modal: Option<tag_editor::TagEditorModal>,
     tree_browser: Option<tree_browser::TreeBrowserState>,
     drop_missing_state: Option<DropMissingState>,
     deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
@@ -184,18 +103,12 @@ pub(crate) struct App {
     exit_confirm_modal_state: Option<ExitConfirmModalState>,
     // Startup splash screen
     splash_screen: Option<splash_screen::SplashScreen>,
-    // Deploy conflict resolution flow
-    deploy_conflict_review: Option<DeployConflictReviewState>,
-    deploy_conflict_accumulated: Vec<DeployConflictGroupChanges>,
     // Insights view (lateral view ring)
     insights_view: Option<insights_view::InsightsViewState>,
     // Tag search (lateral view ring)
     tag_search: Option<tag_search::TagSearchState>,
     // Intake confirmation modal
     intake_confirmation: Option<startup::IntakeConfirmationState>,
-
-    // Background tasks (supports multiple concurrent)
-    pub background_tasks: Vec<BackgroundTask>,
 
     // Task daemon for mutation execution
     task_daemon: Option<crate::flows::TaskDaemon>,
@@ -214,20 +127,15 @@ impl App {
             should_quit: false,
             status_message: None,
             mode: UiMode::Insights,
-            tag_editor: None,
-            tag_editor_modal: None,
             tree_browser: None,
             drop_missing_state: None,
             deployment_preview: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
             splash_screen: None,
-            deploy_conflict_review: None,
-            deploy_conflict_accumulated: Vec::new(),
             insights_view: None,
             tag_search: None,
             intake_confirmation: None,
-            background_tasks: Vec::new(),
             task_daemon: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
@@ -236,15 +144,6 @@ impl App {
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         match self.mode {
-            UiMode::TagEditor => {
-                // If there's a modal active, handle modal keys first
-                if self.tag_editor_modal.is_some() {
-                    self.handle_tag_editor_modal_key(key);
-                } else if let Some(ref mut editor) = self.tag_editor {
-                    let action = editor.handle_key(key);
-                    self.handle_tag_editor_action(action);
-                }
-            }
             UiMode::DirBrowser => {
                 if let Some(ref mut browser) = self.tree_browser {
                     let action = browser.handle_key(key);
@@ -300,9 +199,6 @@ impl App {
                     let action = browser.handle_key(key);
                     self.handle_tree_browser_action(action);
                 }
-            }
-            UiMode::DeployConflictReview => {
-                self.handle_deploy_conflict_review_key(key);
             }
             UiMode::Insights => {
                 if let Some(ref mut view) = self.insights_view {
@@ -387,7 +283,7 @@ impl App {
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search with db access - take ownership temporarily to avoid borrow conflict
                 if let Some(mut search) = self.tag_search.take() {
-                    let db = self.daemon().read_only_db();
+                    let db = self.db();
                     search.execute_search(&db);
                     self.tag_search = Some(search);
                 }
@@ -448,10 +344,9 @@ impl App {
         }
     }
 
-    /// Check if there are any pending operations (daemon work, background tasks, etc.)
+    /// Check if there are any pending operations (daemon work).
     fn has_pending_operations(&self) -> bool {
-        let daemon_busy = self.task_daemon.as_ref().map(|d| d.has_pending()).unwrap_or(false);
-        daemon_busy || !self.background_tasks.is_empty()
+        self.task_daemon.as_ref().map(|d| d.has_pending()).unwrap_or(false)
     }
 
     /// Start the insights view.
@@ -467,7 +362,7 @@ impl App {
             }
         };
 
-        let db = self.daemon().read_only_db();
+        let db = self.db();
 
         // Initialize insights view (queries health_issues table directly)
         let mut view = insights_view::InsightsViewState::new();
@@ -510,7 +405,7 @@ impl App {
         // Compute deployment status synchronously (could be made async for large libraries)
         // Clone config to avoid borrow conflict with daemon's db reference
         let config = self.config.clone();
-        let db = self.daemon().read_only_db();
+        let db = self.db();
 
         let _ = config::log_message("Computing deployment status...");
         match crate::flows::deploy::compute_full_deployment_status(&config, db) {
@@ -538,13 +433,8 @@ impl App {
         }
     }
 
-    fn rebuild_health_index(&mut self) {
-        // TODO: Signals now have stronger guarantees - this is vestigial
-        self.status_message = Some("Health rebuild no longer needed - signals are authoritative".to_string());
-    }
-
     fn start_drop_missing_confirmation(&mut self) {
-        let db = self.daemon().read_only_db();
+        let db = self.db();
         match drop_flow::find_missing_tracks(db) {
             Ok(missing) => {
                 if missing.is_empty() {
@@ -588,7 +478,7 @@ impl App {
             }
         };
 
-        let db = self.daemon().read_only_db();
+        let db = self.db();
         match drop_flow::execute_drop_missing(db, &missing_tracks) {
             Ok(result) => {
                 let mut msg = if let Some(log_path) = result.log_path {
@@ -616,33 +506,6 @@ impl App {
         self.start_insights_view();
     }
 
-    /// Start tag editor for deploy conflict resolution.
-    ///
-    /// Loads deployment conflicts from health_issues table and presents them
-    /// in the tag editor for resolution (editing tags to create unique deploy paths).
-    fn start_tag_editor(&mut self) {
-        let db = self.daemon().read_only_db();
-
-        // Load deploy conflict health issues
-        let all_groups = match load_deploy_conflict_groups(db) {
-            Ok(groups) => groups,
-            Err(e) => {
-                self.status_message = Some(format!("Error loading conflicts: {}", e));
-                return;
-            }
-        };
-
-        if all_groups.is_empty() {
-            self.status_message = Some("No deployment conflicts to resolve".to_string());
-            return;
-        }
-
-        // Start with first group's tracks
-        let first_tracks = all_groups[0].tracks.clone();
-        self.tag_editor = Some(tag_editor::TagEditorState::new(first_tracks, all_groups));
-        self.mode = UiMode::TagEditor;
-    }
-
     fn start_corpus_browser(&mut self) {
         let config = tree_browser::CorpusBrowserConfig::default();
         self.tree_browser = Some(tree_browser::TreeBrowserState::corpus_browser(
@@ -650,16 +513,6 @@ impl App {
             config,
         ));
         self.mode = UiMode::CorpusBrowser;
-    }
-
-    fn start_directory_selector(&mut self, title: &str) {
-        let config = tree_browser::DirectorySelectorConfig::for_sleuthing();
-        self.tree_browser = Some(tree_browser::TreeBrowserState::directory_selector(
-            self.config.corpus_root.clone(),
-            title,
-            config,
-        ));
-        self.mode = UiMode::DirBrowser;
     }
 
     fn handle_tree_browser_action(&mut self, action: tree_browser::TreeBrowserAction) {
@@ -700,7 +553,7 @@ impl App {
     }
 
     fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
-        let db = self.daemon().read_only_db();
+        let db = self.db();
 
         // Load tracks from database
         let (tracks, selected_idx) = if recursive {
@@ -835,330 +688,6 @@ impl App {
         self.status_message = Some(format!("Editing tags for {}", path.display()));
     }
 
-
-    fn handle_tag_editor_action(&mut self, action: tag_editor::TagEditorAction) {
-        match action {
-            tag_editor::TagEditorAction::None => {}
-            tag_editor::TagEditorAction::Exit => {
-                self.tag_editor = None;
-                self.start_insights_view();
-            }
-            tag_editor::TagEditorAction::SaveAll => {
-                self.save_tag_editor_changes(false);
-            }
-            tag_editor::TagEditorAction::SaveAndNext => {
-                self.save_tag_editor_changes(true);
-            }
-            tag_editor::TagEditorAction::ShowModal(modal) => {
-                self.tag_editor_modal = Some(modal);
-            }
-            tag_editor::TagEditorAction::StatusMessage(msg) => {
-                self.status_message = Some(msg);
-            }
-        }
-    }
-
-    fn handle_tag_editor_modal_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-
-        let modal = match self.tag_editor_modal.take() {
-            Some(m) => m,
-            None => return,
-        };
-
-        match modal {
-            tag_editor::TagEditorModal::SaveConfirmation { mut selected_button } => {
-                match key.code {
-                    KeyCode::Left => {
-                        selected_button = selected_button.saturating_sub(1);
-                        self.tag_editor_modal =
-                            Some(tag_editor::TagEditorModal::SaveConfirmation { selected_button });
-                    }
-                    KeyCode::Right => {
-                        selected_button = (selected_button + 1).min(2);
-                        self.tag_editor_modal =
-                            Some(tag_editor::TagEditorModal::SaveConfirmation { selected_button });
-                    }
-                    KeyCode::Enter => {
-                        match selected_button {
-                            0 => {
-                                // Save All
-                                self.save_tag_editor_changes(false);
-                            }
-                            1 => {
-                                // Save & Next
-                                self.save_tag_editor_changes(true);
-                            }
-                            2 => {
-                                // Return to editor
-                                self.tag_editor_modal = None;
-                            }
-                            _ => {}
-                        }
-                    }
-                    KeyCode::Esc => {
-                        // Cancel modal, return to editor
-                        self.tag_editor_modal = None;
-                    }
-                    _ => {
-                        // Put modal back
-                        self.tag_editor_modal =
-                            Some(tag_editor::TagEditorModal::SaveConfirmation { selected_button });
-                    }
-                }
-            }
-            tag_editor::TagEditorModal::ChangePreview {
-                grouped_changes,
-                single_changes,
-                mut scroll_offset,
-                save_and_next,
-            } => {
-                match key.code {
-                    KeyCode::Up => {
-                        scroll_offset = scroll_offset.saturating_sub(1);
-                        self.tag_editor_modal = Some(tag_editor::TagEditorModal::ChangePreview {
-                            grouped_changes,
-                            single_changes,
-                            scroll_offset,
-                            save_and_next,
-                        });
-                    }
-                    KeyCode::Down => {
-                        scroll_offset += 1;
-                        self.tag_editor_modal = Some(tag_editor::TagEditorModal::ChangePreview {
-                            grouped_changes,
-                            single_changes,
-                            scroll_offset,
-                            save_and_next,
-                        });
-                    }
-                    KeyCode::Enter => {
-                        // Proceed with save
-                        self.save_tag_editor_changes(save_and_next);
-                    }
-                    KeyCode::Esc => {
-                        // Cancel modal
-                        self.tag_editor_modal = None;
-                    }
-                    _ => {
-                        self.tag_editor_modal = Some(tag_editor::TagEditorModal::ChangePreview {
-                            grouped_changes,
-                            single_changes,
-                            scroll_offset,
-                            save_and_next,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    fn save_tag_editor_changes(&mut self, advance_to_next: bool) {
-        use std::collections::HashMap;
-        use crate::flows::PendingDecision;
-
-        // Step 1: Compute changes from tag editor
-        let Some(ref editor) = self.tag_editor else {
-            self.status_message = Some("No tag editor state".to_string());
-            return;
-        };
-
-        let changes = tag_editor::state::compute_changes(
-            &editor.original_tag_fields,
-            &editor.tag_fields,
-        );
-
-        // Check if we're in a deploy conflict workflow (accumulating mode)
-        let in_workflow = editor.is_in_duplicate_workflow();
-
-        // For workflow mode with advance_to_next: allow proceeding even with no changes
-        // (user might just want to skip a group without editing)
-        if changes.is_empty() && !advance_to_next {
-            self.tag_editor = None;
-            self.start_insights_view();
-            self.status_message = Some("No changes to save".to_string());
-            return;
-        }
-
-        // Step 2: Group changes by track index
-        let mut changes_by_track: HashMap<usize, Vec<(String, String)>> = HashMap::new();
-        for change in &changes {
-            changes_by_track
-                .entry(change.track_idx)
-                .or_default()
-                .push((change.field_name.clone(), change.new_value.clone()));
-        }
-
-        // Step 3: Create PendingDecision records for each track
-        let mut pending_decisions: Vec<PendingDecision> = Vec::new();
-
-        for (track_idx, track_changes) in &changes_by_track {
-            if let Some(track) = editor.tracks.get(*track_idx) {
-                let track_id = track.id.unwrap_or(0);
-
-                // Build metadata JSON: { "tags": [["field", "value"], ...], "track_id": N }
-                let tags_json: Vec<serde_json::Value> = track_changes
-                    .iter()
-                    .map(|(k, v)| serde_json::json!([k, v]))
-                    .collect();
-
-                let metadata = serde_json::json!({
-                    "tags": tags_json,
-                    "track_id": track_id,
-                });
-
-                pending_decisions.push(PendingDecision::tag_edit(
-                    &track.path,
-                    metadata,
-                ));
-            }
-        }
-
-        // Step 4: Handle differently based on workflow mode
-        if in_workflow && advance_to_next {
-            // ACCUMULATING MODE: Store changes for later bulk execution
-            // Extract needed data from immutable borrow first
-            let current_idx = editor.current_group_idx.unwrap_or(0);
-            let total_groups = editor.duplicate_groups.len();
-
-            // Build group info for accumulation
-            let group_info = editor.duplicate_groups.get(current_idx).map(|group| {
-                // Use path for display since tags are stored separately
-                let target_path = group.tracks.first()
-                    .map(|t| {
-                        std::path::Path::new(&t.path)
-                            .file_name()
-                            .and_then(|f| f.to_str())
-                            .unwrap_or("Unknown")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| "Unknown".to_string());
-                (group.group_id, target_path, group.tracks.len())
-            });
-
-            // Drop immutable borrow by ending the else block scope
-            // Now we can mutate
-            if let Some((group_id, target_path, track_count)) = group_info {
-                self.deploy_conflict_accumulated.push(DeployConflictGroupChanges {
-                    group_id,
-                    target_path,
-                    track_count,
-                    decisions: pending_decisions,
-                });
-            }
-
-            // Advance to next group
-            let next_idx = current_idx + 1;
-            if next_idx < total_groups {
-                // Move to next group
-                if let Some(ref mut editor) = self.tag_editor {
-                    editor.current_group_idx = Some(next_idx);
-                    let group = &editor.duplicate_groups[next_idx];
-                    editor.tracks = group.tracks.clone();
-                    editor.current_track_idx = 0;
-                    editor.current_field_idx = 0;
-                    // Reload tag fields from disk
-                    editor.tag_fields = editor.tracks.iter()
-                        .map(tag_editor::state::track_to_tag_fields)
-                        .collect();
-                    editor.original_tag_fields = editor.tag_fields.clone();
-                }
-
-                let groups_remaining = total_groups - next_idx;
-                self.status_message = Some(format!(
-                    "Group {} decisions saved. {} group(s) remaining.",
-                    current_idx + 1,
-                    groups_remaining
-                ));
-            } else {
-                // No more groups - transition to review screen
-                self.tag_editor = None;
-                self.deploy_conflict_review = Some(DeployConflictReviewState {
-                    groups: self.deploy_conflict_accumulated.clone(),
-                    scroll_offset: 0,
-                    selected_button: 0, // Default to Commit
-                });
-                self.mode = UiMode::DeployConflictReview;
-                self.status_message = Some(format!(
-                    "All {} groups processed. Review and commit changes.",
-                    self.deploy_conflict_accumulated.len()
-                ));
-            }
-            return;
-        }
-
-        // IMMEDIATE MODE: Queue changes to daemon for async execution
-        use crate::corpus::mutations::{Mutation, TagEdit};
-        use std::path::PathBuf;
-
-        // Convert to Mutations and queue to daemon
-        let mutations: Vec<Mutation> = changes_by_track
-            .iter()
-            .filter_map(|(track_idx, track_changes)| {
-                let track = editor.tracks.get(*track_idx)?;
-                let track_id = track.id.unwrap_or(0);
-                let edits: Vec<TagEdit> = track_changes
-                    .iter()
-                    .map(|(field, value)| TagEdit {
-                        tag_name: field.clone(),
-                        old_value: None, // We don't track old value here
-                        new_value: Some(value.clone()),
-                    })
-                    .collect();
-                Some(Mutation::TagEditAndFlush {
-                    track_id,
-                    path: PathBuf::from(&track.path),
-                    edits,
-                })
-            })
-            .collect();
-
-        let _mutation_count = mutations.len();
-
-        // TODO: Reconnect via DecisionWitness when UI integration is complete.
-        // Tag editor saves are user-led decisions and need:
-        //   let witness = crate::daemon::confirm_decision();
-        //   self.daemon().queue_all_with_label(mutations, Some("Tag edits".to_string()), &witness);
-        let _ = mutations;
-        todo!("Reconnect: Tag editor save needs DecisionWitness");
-
-        // Status message - execution is now async
-        #[allow(unreachable_code)]
-        { self.status_message = Some(format!("Queued {} tag edit(s)", _mutation_count)); }
-
-        if advance_to_next {
-            // Move to next duplicate group if in duplicate workflow
-            if let Some(ref mut editor) = self.tag_editor {
-                if editor.current_group_idx.is_some() {
-                    let current_idx = editor.current_group_idx.unwrap();
-                    editor.current_group_idx = Some(current_idx + 1);
-
-                    // Load the next group if one exists
-                    let next_idx = editor.current_group_idx.unwrap();
-                    if next_idx < editor.duplicate_groups.len() {
-                        let group = &editor.duplicate_groups[next_idx];
-                        editor.tracks = group.tracks.clone();
-                        editor.current_track_idx = 0;
-                        editor.current_field_idx = 0;
-                        // Reload tag fields from disk
-                        editor.tag_fields = editor.tracks.iter()
-                            .map(tag_editor::state::track_to_tag_fields)
-                            .collect();
-                        editor.original_tag_fields = editor.tag_fields.clone();
-                    } else {
-                        // No more groups
-                        self.tag_editor = None;
-                        self.start_insights_view();
-                        self.status_message = Some("All conflicts processed.".to_string());
-                    }
-                }
-            }
-        } else {
-            self.tag_editor = None;
-            self.start_insights_view();
-        }
-    }
-
     // =========================================================================
     // Unified Tag Editor (Transaction-Based)
     // =========================================================================
@@ -1220,7 +749,7 @@ impl App {
     /// Open the unified tag editor for a directory path
     fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
         // Query database for tracks in this directory
-        let db = self.daemon().read_only_db();
+        let db = self.db();
 
         let tracks = match db.get_tracks_in_directory(directory) {
             Ok(tracks) => tracks,
@@ -1432,7 +961,7 @@ impl App {
             UnifiedTagEditorAction::RequestFillFromDb { track_id } => {
                 match track_id {
                     Some(id) => {
-                        let db = self.daemon().read_only_db();
+                        let db = self.db();
                         match db.get_track_tags(id) {
                             Ok(tags) => {
                                 // Convert TrackTag to (name, value) pairs
@@ -1660,39 +1189,11 @@ impl App {
         }
     }
 
-    fn update_operation_progress(&mut self) {
-        // Poll all tracked background tasks (legacy)
-        let completed = poll_tasks(&mut self.background_tasks);
-        for (id, label, result) in completed {
-            // Log task summary
-            log_task_summary(&label, &result);
-
-            // Format completion message
-            self.status_message = Some(if result.succeeded == 0 && result.skipped > 0 {
-                format!(
-                    "[{}] Complete! {} skipped (unchanged) in {:.1}s",
-                    id,
-                    result.skipped,
-                    result.duration.as_secs_f64()
-                )
-            } else {
-                let bytes_str = result
-                    .bytes_processed
-                    .map(|b| format!(" ({:.2} GB)", b as f64 / 1_000_000_000.0))
-                    .unwrap_or_default();
-                format!(
-                    "[{}] Complete! {} succeeded{} in {:.1}s",
-                    id,
-                    result.succeeded,
-                    bytes_str,
-                    result.duration.as_secs_f64()
-                )
-            });
-        }
-
-        // Tick task daemon (advance internal processing)
-        if let Some(ref mut daemon) = self.task_daemon {
-            let status = daemon.tick();
+    /// Check daemon status and update UI with any failure messages.
+    /// Note: Actual daemon ticking happens in run_app via daemon().tick()
+    fn check_daemon_status(&mut self) {
+        if let Some(ref daemon) = self.task_daemon {
+            let status = daemon.status();
             if status.failed > 0 {
                 self.status_message = Some(format!(
                     "Tasks: {} done, {} failed",
@@ -1710,6 +1211,10 @@ impl App {
         self.task_daemon.as_mut().unwrap()
     }
 
+    /// Shorthand for read-only database access.
+    fn db(&mut self) -> &crate::corpus::db::Database {
+        self.daemon().read_only_db()
+    }
 
     /// Tick the splash screen and check for completion.
     ///
@@ -1760,130 +1265,15 @@ impl App {
         }
     }
 
-    /// Check for unindexed files after eyeballing completes.
+    /// Check for unindexed files after Awakening completes.
     ///
-    /// Queries MissingFromIndex health issues and gathers file information.
+    /// Queries UnindexedFile signals (computed during second-level derivation).
     /// Returns Some if there are unindexed files to confirm, None otherwise.
     fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
         // Clone corpus_root to avoid borrow conflict with daemon's db reference
         let corpus_root = self.config.corpus_root.clone();
-        let db = self.daemon().read_only_db();
+        let db = self.db();
         startup::IntakeConfirmationState::gather(db, &corpus_root, "corpus")
-    }
-
-    // =========================================================================
-    // Deploy Conflict Review Handlers
-    // =========================================================================
-
-    fn handle_deploy_conflict_review_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-
-        let review = match &mut self.deploy_conflict_review {
-            Some(r) => r,
-            None => return,
-        };
-
-        match key.code {
-            KeyCode::Left => {
-                review.selected_button = 0; // Commit
-            }
-            KeyCode::Right => {
-                review.selected_button = 1; // Discard
-            }
-            KeyCode::Enter => {
-                if review.selected_button == 0 {
-                    // Commit all accumulated changes
-                    self.commit_deploy_conflict_changes();
-                } else {
-                    // Discard - just clear state and return to menu
-                    self.discard_deploy_conflict_changes();
-                }
-            }
-            KeyCode::Esc => {
-                // Cancel - return to menu without committing
-                self.discard_deploy_conflict_changes();
-            }
-            _ => {}
-        }
-    }
-
-    fn commit_deploy_conflict_changes(&mut self) {
-        // NOTE: This function uses vestigial execute_decisions which always fails.
-        // Needs refactoring to use daemon's transaction API (queue_mutations).
-
-        // Gather all pending decisions from accumulated groups (before db borrow)
-        let all_decisions: Vec<_> = self.deploy_conflict_accumulated
-            .iter()
-            .flat_map(|g| g.decisions.clone())
-            .collect();
-
-        if all_decisions.is_empty() {
-            self.deploy_conflict_review = None;
-            self.deploy_conflict_accumulated.clear();
-            self.start_insights_view();
-            self.status_message = Some("No changes to commit".to_string());
-            return;
-        }
-
-        // Clone config to avoid borrow conflict with daemon's db reference
-        let config = self.config.clone();
-        let db = self.daemon().read_only_db();
-
-        // Execute all decisions in bulk
-        let report = match crate::flows::changes::execute_decisions(db, &all_decisions, false) {
-            Ok(r) => r,
-            Err(e) => {
-                self.deploy_conflict_review = None;
-                self.deploy_conflict_accumulated.clear();
-                self.start_insights_view();
-                self.status_message = Some(format!("Execution error: {}", e));
-                return;
-            }
-        };
-
-        // Cleanup resolved conflicts
-        let resolved_count = crate::corpus::health::cleanup_resolved_deployment_conflicts(&config, db)
-            .unwrap_or(0);
-
-        // Build status message
-        let groups_count = self.deploy_conflict_accumulated.len();
-        let base_msg = if report.failed > 0 {
-            format!(
-                "Committed {} groups: {} succeeded, {} failed",
-                groups_count, report.succeeded, report.failed
-            )
-        } else {
-            format!(
-                "Committed {} groups: {} changes applied",
-                groups_count, report.succeeded
-            )
-        };
-
-        let resolved_msg = if resolved_count > 0 {
-            format!(". {} conflict(s) resolved", resolved_count)
-        } else {
-            String::new()
-        };
-
-        let status_msg = format!("{}{}", base_msg, resolved_msg);
-
-        // Clear state
-        self.deploy_conflict_review = None;
-        self.deploy_conflict_accumulated.clear();
-        self.start_insights_view();
-        self.status_message = Some(status_msg);
-    }
-
-    fn discard_deploy_conflict_changes(&mut self) {
-        let groups_count = self.deploy_conflict_accumulated.len();
-        let status_msg = format!(
-            "Discarded changes from {} conflict group(s)",
-            groups_count
-        );
-        self.deploy_conflict_review = None;
-        self.deploy_conflict_accumulated.clear();
-        self.start_insights_view();
-        self.status_message = Some(status_msg);
     }
 }
 
@@ -1896,21 +1286,17 @@ fn render(f: &mut Frame, app: &mut App) {
         mode: app.mode,
         config: &app.config,
         status_message: app.status_message.as_deref(),
-        tag_editor: app.tag_editor.as_mut(),
-        tag_editor_modal: app.tag_editor_modal.as_ref(),
         tree_browser: app.tree_browser.as_mut(),
         drop_missing_state: app.drop_missing_state.as_ref(),
         deployment_preview: app.deployment_preview.as_mut(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         splash_screen: app.splash_screen.as_ref(),
-        deploy_conflict_review: app.deploy_conflict_review.as_ref(),
         insights_view: app.insights_view.as_mut(),
         tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,
-        background_tasks: &app.background_tasks,
         daemon_status: app.task_daemon.as_mut().and_then(|d| {
             // Tick to advance daemon and get current status (including lingering completed sessions)
             let status = d.tick();
@@ -1923,328 +1309,6 @@ fn render(f: &mut Frame, app: &mut App) {
         }),
     };
     render::render(f, &mut ctx);
-}
-
-
-
-// ============================================================================
-// Startup Health Version Check
-// ============================================================================
-
-/// Check health data version and trigger rebuild if needed.
-/// This runs at startup before the main event loop.
-fn check_and_maybe_rebuild_health(app: &mut App) {
-    // Check if database exists before trying to access
-    let db_path = match config::get_db_path() {
-        Ok(p) if p.exists() => p,
-        _ => return, // No DB yet, nothing to rebuild
-    };
-
-    // Use daemon's read-only connection
-    let _ = db_path; // Suppress unused warning - daemon handles path internally
-    let db = app.daemon().read_only_db();
-
-    // Get stored version
-    let stored_version = db.get_health_version().ok().flatten();
-
-    match stored_version {
-        None => {
-            // No version stored - potential corruption or first run after adding versioning.
-            // Rebuild to ensure consistency.
-            app.status_message = Some(
-                "Health index version missing (potential corruption detected), rebuilding...".to_string()
-            );
-            app.rebuild_health_index();
-        }
-        Some(v) if v != HEALTH_DATA_VERSION => {
-            // Version mismatch - need to rebuild for upgrade
-            app.status_message = Some(format!(
-                "Health data version changed ({} → {}), rebuilding...",
-                v, HEALTH_DATA_VERSION
-            ));
-            app.rebuild_health_index();
-        }
-        Some(_) => {
-            // Version matches, no rebuild needed
-        }
-    }
-}
-
-// ============================================================================
-// Database Migration Check
-// ============================================================================
-
-/// Check for pending database migrations and run them with a blocking UI.
-///
-/// This runs before the main app loop starts to ensure the database schema
-/// is up to date. Shows a blocking dialog during migration execution.
-///
-/// For first-time setup (no database exists), shows a "Create new database?"
-/// dialog and initializes with the latest schema version.
-///
-/// For existing databases, checks for pending migrations and prompts user
-/// to approve them (DecisionWitness pattern).
-fn check_and_run_migrations<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-) -> Result<()> {
-    use crossterm::event::{self, Event, KeyCode};
-    use ratatui::layout::{Alignment, Rect};
-    use ratatui::style::{Color, Modifier, Style};
-    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-    use crate::daemon::confirm_decision;
-
-    // Get database path
-    let db_path = match config::get_db_path() {
-        Ok(p) => p,
-        Err(_) => return Ok(()), // No database path configured, skip
-    };
-
-    // Check if this is first-time setup (no database file exists)
-    let is_first_time = !db_path.exists();
-
-    if is_first_time {
-        // First-time setup: prompt to create new database
-        return startup::handle_first_time_setup(terminal, &db_path);
-    }
-
-    // Existing database: open and check for migrations
-    // NOTE: This uses Database::open() (not read_only) because migrations
-    // need write access. This runs before daemon exists and is explicitly
-    // witnessed via confirm_decision() below.
-    let db = match Database::open(&db_path) {
-        Ok(d) => d,
-        Err(_) => return Ok(()), // Can't open database, skip migrations
-    };
-
-    // Check if migrations are needed
-    let registry = MigrationRegistry::new();
-    if !registry.needs_migration(&db) {
-        return Ok(());
-    }
-
-    // Get pending migration descriptions
-    let pending = registry.pending_descriptions(&db);
-    let migration_count = pending.len();
-
-    // Render approval dialog and wait for user input
-    loop {
-        terminal.draw(|f| {
-            let area = f.area();
-
-            // Center the dialog
-            let dialog_width = 60.min(area.width.saturating_sub(4));
-            let dialog_height = (migration_count as u16 + 12).min(area.height.saturating_sub(4));
-
-            let dialog_area = Rect {
-                x: (area.width.saturating_sub(dialog_width)) / 2,
-                y: (area.height.saturating_sub(dialog_height)) / 2,
-                width: dialog_width,
-                height: dialog_height,
-            };
-
-            // Clear the area behind the dialog
-            f.render_widget(Clear, dialog_area);
-
-            // Build migration list text
-            let mut lines = vec![
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from("MLA needs to upgrade your database.").style(
-                    Style::default().fg(Color::White),
-                ),
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from("Pending migrations:").style(
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                ),
-            ];
-
-            for desc in &pending {
-                lines.push(ratatui::text::Line::from(format!("  • {}", desc)));
-            }
-
-            lines.push(ratatui::text::Line::from(""));
-            lines.push(
-                ratatui::text::Line::from("⚠ This cannot be interrupted once started.")
-                    .style(Style::default().fg(Color::Yellow)),
-            );
-            lines.push(ratatui::text::Line::from(""));
-            lines.push(
-                ratatui::text::Line::from("[Enter] Proceed    [Esc] Exit")
-                    .style(Style::default().fg(Color::Cyan)),
-            );
-
-            let paragraph = Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .title(" Database Migration Required ")
-                        .title_alignment(Alignment::Center)
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow)),
-                )
-                .alignment(Alignment::Center);
-
-            f.render_widget(paragraph, dialog_area);
-        })?;
-
-        // Wait for user input
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Enter => {
-                    // User approved - create witness and proceed
-                    let _witness = confirm_decision();
-                    break;
-                }
-                KeyCode::Esc => {
-                    // User declined - exit application
-                    return Err(anyhow::anyhow!("Migration cancelled by user"));
-                }
-                _ => {
-                    // Ignore other keys
-                }
-            }
-        }
-    }
-
-    // Show "running migrations" status
-    terminal.draw(|f| {
-        let area = f.area();
-
-        let dialog_width = 60.min(area.width.saturating_sub(4));
-        let dialog_height = (migration_count as u16 + 8).min(area.height.saturating_sub(4));
-
-        let dialog_area = Rect {
-            x: (area.width.saturating_sub(dialog_width)) / 2,
-            y: (area.height.saturating_sub(dialog_height)) / 2,
-            width: dialog_width,
-            height: dialog_height,
-        };
-
-        f.render_widget(Clear, dialog_area);
-
-        let mut lines = vec![
-            ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Running migrations:").style(
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-            ratatui::text::Line::from(""),
-        ];
-
-        for desc in &pending {
-            lines.push(ratatui::text::Line::from(format!("  • {}", desc)));
-        }
-
-        lines.push(ratatui::text::Line::from(""));
-        lines.push(
-            ratatui::text::Line::from("Please wait...")
-                .style(Style::default().fg(Color::Cyan)),
-        );
-
-        let paragraph = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .title(" Database Migration ")
-                    .title_alignment(Alignment::Center)
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow)),
-            )
-            .alignment(Alignment::Center);
-
-        f.render_widget(paragraph, dialog_area);
-    })?;
-
-    // Execute migrations (with witness created above)
-    let result = registry.apply_all_pending(&db);
-
-    match result {
-        Ok(count) => {
-            // Show completion message briefly
-            terminal.draw(|f| {
-                let area = f.area();
-                let dialog_width = 50.min(area.width.saturating_sub(4));
-                let dialog_height = 7;
-
-                let dialog_area = Rect {
-                    x: (area.width.saturating_sub(dialog_width)) / 2,
-                    y: (area.height.saturating_sub(dialog_height)) / 2,
-                    width: dialog_width,
-                    height: dialog_height,
-                };
-
-                f.render_widget(Clear, dialog_area);
-
-                let paragraph = Paragraph::new(vec![
-                    ratatui::text::Line::from(""),
-                    ratatui::text::Line::from(format!("✓ {} migration(s) completed successfully", count))
-                        .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    ratatui::text::Line::from(""),
-                    ratatui::text::Line::from("Starting application...")
-                        .style(Style::default().fg(Color::DarkGray)),
-                ])
-                .block(
-                    Block::default()
-                        .title(" Migration Complete ")
-                        .title_alignment(Alignment::Center)
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Green)),
-                )
-                .alignment(Alignment::Center);
-
-                f.render_widget(paragraph, dialog_area);
-            })?;
-
-            // Brief pause to show completion
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            Ok(())
-        }
-        Err(e) => {
-            // Show error and wait for keypress
-            terminal.draw(|f| {
-                let area = f.area();
-                let dialog_width = 60.min(area.width.saturating_sub(4));
-                let dialog_height = 10;
-
-                let dialog_area = Rect {
-                    x: (area.width.saturating_sub(dialog_width)) / 2,
-                    y: (area.height.saturating_sub(dialog_height)) / 2,
-                    width: dialog_width,
-                    height: dialog_height,
-                };
-
-                f.render_widget(Clear, dialog_area);
-
-                let paragraph = Paragraph::new(vec![
-                    ratatui::text::Line::from(""),
-                    ratatui::text::Line::from("✗ Migration failed")
-                        .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                    ratatui::text::Line::from(""),
-                    ratatui::text::Line::from(format!("{}", e))
-                        .style(Style::default().fg(Color::Red)),
-                    ratatui::text::Line::from(""),
-                    ratatui::text::Line::from("Press any key to continue...")
-                        .style(Style::default().fg(Color::DarkGray)),
-                ])
-                .block(
-                    Block::default()
-                        .title(" Migration Error ")
-                        .title_alignment(Alignment::Center)
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Red)),
-                )
-                .alignment(Alignment::Center);
-
-                f.render_widget(paragraph, dialog_area);
-            })?;
-
-            // Wait for any keypress
-            loop {
-                if let Ok(Event::Key(_)) = event::read() {
-                    break;
-                }
-            }
-
-            // Continue anyway - app will handle errors as they arise
-            Ok(())
-        }
-    }
 }
 
 // ============================================================================
@@ -2265,12 +1329,9 @@ pub fn run_menu(config: Config) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Check for and run database migrations before starting app
-    check_and_run_migrations(&mut terminal)?;
+    startup::check_and_run_migrations(&mut terminal)?;
 
     let mut app = App::new(config);
-
-    // Check health data version and trigger rebuild if needed
-    check_and_maybe_rebuild_health(&mut app);
 
     // Eyeballing ALWAYS runs at startup (only paranoid mode is configurable)
     // Create splash screen and queue initial eyeballing via daemon
@@ -2311,13 +1372,13 @@ fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
 ) -> io::Result<()> {
     loop {
+        // Tick daemon first - she is the driving system
+        app.daemon().tick();
+        app.check_daemon_status();
+
         // Update eye animation - only animate when daemon eye is Awake
         let can_animate = app.daemon().eye_state() == crate::daemon::EyeState::Awake;
         app.eye.update(can_animate);
-        app.update_operation_progress();
-
-        // Always tick daemon (advances work state, handles eyeballing completion)
-        app.daemon().tick();
 
         // Tick splash screen if active (startup eyeballing)
         if app.splash_screen.is_some() {

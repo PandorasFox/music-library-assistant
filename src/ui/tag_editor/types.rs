@@ -1,10 +1,6 @@
 //! Tag Editor Types
 //!
 //! Core type definitions for the tag editor workflow.
-//!
-//! This module contains both legacy types (TagEditorFocus, TagEditorModal, etc.)
-//! and the new unified types (TagEditorSource, TagEditContext, UnifiedTagEditorAction, etc.).
-//! The legacy types will be removed after the refactoring is complete.
 
 use crate::corpus::db::Track;
 use crate::corpus::mutations::Mutation;
@@ -26,6 +22,19 @@ pub enum TagEditorSource {
     DeployConflict,
     /// From tag search results
     TagSearch,
+}
+
+impl TagEditorSource {
+    /// Get the transaction label for this source.
+    pub fn transaction_label(&self) -> &'static str {
+        match self {
+            Self::CorpusBrowser => "Tag edits",
+            Self::DirectoryEdit => "Directory tag edits",
+            Self::DuplicateResolution => "Duplicate resolution",
+            Self::DeployConflict => "Deploy conflict resolution",
+            Self::TagSearch => "Tag search edits",
+        }
+    }
 }
 
 /// Editing mode for the tag editor
@@ -205,18 +214,6 @@ pub enum FieldEditState {
     EditingValue,
 }
 
-/// Which pane currently has focus in the tag editor
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TagEditorFocus {
-    /// Track list pane (left)
-    TrackList,
-    /// Tag fields pane (middle)
-    #[default]
-    TagFields,
-    /// Action pane (right) - "Proceed" button
-    ActionPane,
-}
-
 /// A single tag field with its metadata
 #[derive(Debug, Clone)]
 pub struct TagField {
@@ -282,47 +279,6 @@ pub struct GroupedChange {
     pub old_value: String,
     pub new_value: String,
     pub track_indices: Vec<usize>,
-}
-
-/// Information about a duplicate group being resolved
-#[derive(Debug, Clone)]
-pub struct DuplicateGroupInfo {
-    pub group_id: i64,
-    pub tracks: Vec<Track>,
-    pub resolved: bool,
-}
-
-/// Modal states for tag editor
-#[derive(Debug)]
-pub enum TagEditorModal {
-    /// Save confirmation modal (shown when tabbing past last track)
-    SaveConfirmation {
-        selected_button: usize, // 0 = Save All, 1 = Save & Next, 2 = Return
-    },
-    /// Change preview modal (shown before saving)
-    ChangePreview {
-        grouped_changes: Vec<GroupedChange>,
-        single_changes: Vec<TagChange>,
-        scroll_offset: usize,
-        save_and_next: bool,
-    },
-}
-
-/// Result of handling a key press in tag editor
-#[derive(Debug)]
-pub enum TagEditorAction {
-    /// No action, continue in tag editor
-    None,
-    /// Show a modal
-    ShowModal(TagEditorModal),
-    /// Save all changes and exit
-    SaveAll,
-    /// Save and advance to next duplicate group
-    SaveAndNext,
-    /// Exit without saving
-    Exit,
-    /// Update status message
-    StatusMessage(String),
 }
 
 // ============================================================================

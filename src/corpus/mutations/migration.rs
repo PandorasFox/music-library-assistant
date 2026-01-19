@@ -119,6 +119,53 @@ impl MigrationRegistry {
             },
         });
 
+        // Version 4 -> 5: Remove resolution columns from health_issues
+        // Signals are now facts that are deleted when stale, not "resolved"
+        registry.register(Migration {
+            from_version: 4,
+            to_version: 5,
+            description: "Remove resolution columns from health_issues (signals are deleted, not resolved)",
+            apply: |db| {
+                // SQLite doesn't support DROP COLUMN in older versions, so we recreate the table
+                db.execute_batch(
+                    r#"
+                    -- Create new table without resolution columns
+                    CREATE TABLE health_issues_new (
+                        id INTEGER PRIMARY KEY,
+                        issue_type TEXT NOT NULL,
+                        issue_key TEXT NOT NULL,
+                        severity TEXT NOT NULL,
+                        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        metadata_json TEXT
+                    );
+
+                    -- Copy data from old table
+                    INSERT INTO health_issues_new (id, issue_type, issue_key, severity, discovered_at, metadata_json)
+                    SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+                    FROM health_issues
+                    WHERE resolved_at IS NULL;
+
+                    -- Drop old table and rename new one
+                    DROP TABLE health_issues;
+                    ALTER TABLE health_issues_new RENAME TO health_issues;
+
+                    -- Recreate indexes
+                    CREATE INDEX IF NOT EXISTS idx_health_issues_type ON health_issues(issue_type);
+                    CREATE INDEX IF NOT EXISTS idx_health_issues_key ON health_issues(issue_key);
+                    CREATE INDEX IF NOT EXISTS idx_health_issues_severity ON health_issues(severity);
+                    CREATE INDEX IF NOT EXISTS idx_health_issues_discovered ON health_issues(discovered_at);
+
+                    -- Migrate signal type names
+                    UPDATE health_issues SET issue_type = 'missing_file' WHERE issue_type = 'missing_from_disk';
+                    UPDATE health_issues SET issue_type = 'file_in_corpus' WHERE issue_type = 'missing_from_index';
+                    UPDATE health_issues SET issue_type = 'moved_file' WHERE issue_type = 'file_relocated';
+                    UPDATE health_issues SET issue_type = 'corpus_file_modified_oob' WHERE issue_type = 'oob_file_change';
+                    "#,
+                )?;
+                db.set_schema_version(5)
+            },
+        });
+
         registry
     }
 
@@ -201,17 +248,18 @@ mod tests {
     fn test_migration_registry() {
         let registry = MigrationRegistry::new();
 
-        // Should have migrations up to v4
-        assert!(registry.latest_version() >= 4);
+        // Should have migrations up to v5
+        assert!(registry.latest_version() >= 5);
 
-        // Pending from version 2 should include v2->v3 and v3->v4
+        // Pending from version 2 should include v2->v3, v3->v4, and v4->v5
         let pending = registry.pending_migrations(2);
         assert!(!pending.is_empty());
         assert!(pending.iter().any(|m| m.to_version == 3));
         assert!(pending.iter().any(|m| m.to_version == 4));
+        assert!(pending.iter().any(|m| m.to_version == 5));
 
-        // Pending from version 4 should be empty
-        let pending_from_4 = registry.pending_migrations(4);
-        assert!(pending_from_4.is_empty());
+        // Pending from version 5 should be empty
+        let pending_from_5 = registry.pending_migrations(5);
+        assert!(pending_from_5.is_empty());
     }
 }

@@ -1,4 +1,8 @@
-//! Health issue and known variant operations.
+//! Health signal and known variant operations.
+//!
+//! Signals are facts about corpus state. They are created by computations and
+//! deleted when they become stale. There is no "resolution" concept - signals
+//! simply exist or don't exist based on current corpus state.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
@@ -6,7 +10,7 @@ use rusqlite::{params, OptionalExtension};
 use super::Database;
 use crate::corpus::db::types::{
     CorpusSummary, HealthIssue, HealthIssueSeverity, HealthIssueType, HealthSummary,
-    KnownVariant, ResolutionType, Track, TrackRole, VariantType,
+    KnownVariant, Track, TrackRole, VariantType,
 };
 
 impl Database {
@@ -18,9 +22,9 @@ impl Database {
     pub fn get_corpus_summary(&self) -> Result<CorpusSummary> {
         let track_count = self.get_track_count(Some("corpus")).unwrap_or(0);
 
-        // Count unresolved deploy conflicts from health_issues
+        // Count deploy conflict signals
         let deploy_conflicts: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'deploy_conflict' AND resolved_at IS NULL",
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'deploy_conflict'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
@@ -55,50 +59,43 @@ impl Database {
     // Health Issue Operations
     // ========================================================================
 
-    /// Insert a new health issue.
+    /// Insert a new health signal.
     pub fn insert_health_issue(&self, issue: &HealthIssue) -> Result<i64> {
         self.conn
             .execute(
                 r#"
                 INSERT INTO health_issues
-                (issue_type, issue_key, severity, discovered_at, resolved_at,
-                 resolution_type, resolution_session, metadata_json)
-                VALUES (?1, ?2, ?3, COALESCE(?4, CURRENT_TIMESTAMP), ?5, ?6, ?7, ?8)
+                (issue_type, issue_key, severity, discovered_at, metadata_json)
+                VALUES (?1, ?2, ?3, COALESCE(?4, CURRENT_TIMESTAMP), ?5)
                 "#,
                 params![
                     issue.issue_type.as_str(),
                     &issue.issue_key,
                     issue.severity.as_str(),
                     &issue.discovered_at,
-                    &issue.resolved_at,
-                    issue.resolution_type.map(|r| r.as_str()),
-                    &issue.resolution_session,
                     &issue.metadata_json,
                 ],
             )
-            .context("Failed to insert health issue")?;
+            .context("Failed to insert health signal")?;
 
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Get unresolved health issues by type.
-    pub fn get_unresolved_health_issues(
+    /// Get health signals, optionally filtered by type.
+    pub fn get_health_signals(
         &self,
         issue_type: Option<HealthIssueType>,
     ) -> Result<Vec<HealthIssue>> {
         let sql = match issue_type {
             Some(_) => {
-                r#"SELECT id, issue_type, issue_key, severity, discovered_at,
-                          resolved_at, resolution_type, resolution_session, metadata_json
+                r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
                    FROM health_issues
-                   WHERE resolved_at IS NULL AND issue_type = ?1
+                   WHERE issue_type = ?1
                    ORDER BY discovered_at DESC"#
             }
             None => {
-                r#"SELECT id, issue_type, issue_key, severity, discovered_at,
-                          resolved_at, resolution_type, resolution_session, metadata_json
+                r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
                    FROM health_issues
-                   WHERE resolved_at IS NULL
                    ORDER BY discovered_at DESC"#
             }
         };
@@ -118,7 +115,16 @@ impl Database {
         Ok(issues)
     }
 
-    /// Get health issue by key (e.g., fingerprint).
+    /// Backwards compatibility alias
+    #[deprecated(note = "Use get_health_signals instead")]
+    pub fn get_unresolved_health_issues(
+        &self,
+        issue_type: Option<HealthIssueType>,
+    ) -> Result<Vec<HealthIssue>> {
+        self.get_health_signals(issue_type)
+    }
+
+    /// Get health signal by type and key (e.g., path or fingerprint).
     pub fn get_health_issue_by_key(
         &self,
         issue_type: HealthIssueType,
@@ -126,35 +132,155 @@ impl Database {
     ) -> Result<Option<HealthIssue>> {
         self.conn
             .query_row(
-                r#"SELECT id, issue_type, issue_key, severity, discovered_at,
-                          resolved_at, resolution_type, resolution_session, metadata_json
+                r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
                    FROM health_issues
-                   WHERE issue_type = ?1 AND issue_key = ?2 AND resolved_at IS NULL"#,
+                   WHERE issue_type = ?1 AND issue_key = ?2"#,
                 params![issue_type.as_str(), issue_key],
                 Self::row_to_health_issue,
             )
             .optional()
-            .context("Failed to query health issue by key")
+            .context("Failed to query health signal by key")
     }
 
-    /// Resolve a health issue.
-    pub fn resolve_health_issue(
-        &self,
-        issue_id: i64,
-        resolution_type: ResolutionType,
-        session_id: Option<&str>,
-    ) -> Result<()> {
+    /// Delete a health signal by ID.
+    pub fn delete_health_signal(&self, signal_id: i64) -> Result<()> {
         self.conn
-            .execute(
-                r#"UPDATE health_issues
-                   SET resolved_at = CURRENT_TIMESTAMP,
-                       resolution_type = ?2,
-                       resolution_session = ?3
-                   WHERE id = ?1"#,
-                params![issue_id, resolution_type.as_str(), session_id],
-            )
-            .context("Failed to resolve health issue")?;
+            .execute("DELETE FROM health_issues WHERE id = ?1", params![signal_id])
+            .context("Failed to delete health signal")?;
         Ok(())
+    }
+
+    /// Delete health signals by type and key.
+    pub fn delete_health_signals_by_key(
+        &self,
+        issue_type: HealthIssueType,
+        issue_key: &str,
+    ) -> Result<usize> {
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                params![issue_type.as_str(), issue_key],
+            )
+            .context("Failed to delete health signals")?;
+        Ok(deleted)
+    }
+
+    /// Delete all signals of a given type for a specific path.
+    pub fn delete_signals_for_path(&self, path: &str) -> Result<usize> {
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_key = ?1",
+                params![path],
+            )
+            .context("Failed to delete signals for path")?;
+        Ok(deleted)
+    }
+
+    // ========================================================================
+    // Directory-Level Queries (for chunked computations)
+    // ========================================================================
+
+    /// Get distinct parent directories from tracks table.
+    pub fn get_distinct_track_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+        use std::path::PathBuf;
+
+        // Fetch all paths and compute parent directories in Rust
+        let mut stmt = self.conn.prepare("SELECT DISTINCT path FROM tracks")?;
+        let rows = stmt.query_map(params![], |row| {
+            let path: String = row.get(0)?;
+            Ok(path)
+        })?;
+
+        let mut directories = std::collections::HashSet::new();
+        for row in rows {
+            let path = row?;
+            if let Some(parent) = PathBuf::from(&path).parent() {
+                directories.insert(parent.to_path_buf());
+            }
+        }
+
+        Ok(directories.into_iter().collect())
+    }
+
+    /// Get distinct parent directories from FileInCorpus signals.
+    pub fn get_distinct_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+        use std::path::PathBuf;
+
+        // FileInCorpus signals use issue_key format "file_in_corpus:{directory}"
+        let mut stmt = self.conn.prepare(
+            r#"SELECT DISTINCT issue_key FROM health_issues
+               WHERE issue_type = 'file_in_corpus'"#
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            let key: String = row.get(0)?;
+            Ok(key)
+        })?;
+
+        let mut directories = Vec::new();
+        for row in rows {
+            let key = row?;
+            // Parse "file_in_corpus:{directory}" format
+            if let Some(dir) = key.strip_prefix("file_in_corpus:") {
+                directories.push(PathBuf::from(dir));
+            }
+        }
+
+        Ok(directories)
+    }
+
+    /// Get signals in a specific directory.
+    pub fn get_signals_in_directory(
+        &self,
+        dir: &std::path::Path,
+        signal_type: HealthIssueType,
+    ) -> Result<Vec<HealthIssue>> {
+        let dir_str = dir.to_string_lossy();
+        let pattern = format!("{}%", dir_str);
+
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+               FROM health_issues
+               WHERE issue_type = ?1 AND issue_key LIKE ?2"#
+        )?;
+
+        let rows = stmt.query_map(
+            params![signal_type.as_str(), pattern],
+            Self::row_to_health_issue
+        )?;
+
+        let mut issues = Vec::new();
+        for row in rows {
+            issues.push(row?);
+        }
+        Ok(issues)
+    }
+
+    // Note: get_tracks_in_directory is defined in tracks.rs
+
+    /// Get signals discovered since a given timestamp.
+    pub fn get_signals_since(
+        &self,
+        signal_type: HealthIssueType,
+        since: &str,
+    ) -> Result<Vec<HealthIssue>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+               FROM health_issues
+               WHERE issue_type = ?1 AND discovered_at > ?2
+               ORDER BY discovered_at DESC"#
+        )?;
+
+        let rows = stmt.query_map(
+            params![signal_type.as_str(), since],
+            Self::row_to_health_issue
+        )?;
+
+        let mut issues = Vec::new();
+        for row in rows {
+            issues.push(row?);
+        }
+        Ok(issues)
     }
 
     /// Add a track to a health issue.
@@ -202,14 +328,13 @@ impl Database {
         Ok(results)
     }
 
-    /// Get health issues for a specific track.
+    /// Get health signals for a specific track.
     pub fn get_health_issues_for_track(&self, track_id: i64) -> Result<Vec<HealthIssue>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT hi.id, hi.issue_type, hi.issue_key, hi.severity, hi.discovered_at,
-                      hi.resolved_at, hi.resolution_type, hi.resolution_session, hi.metadata_json
+            r#"SELECT hi.id, hi.issue_type, hi.issue_key, hi.severity, hi.discovered_at, hi.metadata_json
                FROM health_issues hi
                JOIN health_issue_tracks hit ON hi.id = hit.issue_id
-               WHERE hit.track_id = ?1 AND hi.resolved_at IS NULL"#,
+               WHERE hit.track_id = ?1"#,
         )?;
 
         let rows = stmt.query_map(params![track_id], Self::row_to_health_issue)?;
@@ -229,7 +354,6 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT issue_type, severity, COUNT(*)
                FROM health_issues
-               WHERE resolved_at IS NULL
                GROUP BY issue_type, severity"#,
         )?;
 
@@ -357,10 +481,11 @@ impl Database {
     // Row Conversion Helpers
     // ========================================================================
 
+    /// Convert a row to HealthIssue.
+    /// Expected columns: id, issue_type, issue_key, severity, discovered_at, metadata_json
     pub(super) fn row_to_health_issue(row: &rusqlite::Row) -> rusqlite::Result<HealthIssue> {
         let issue_type_str: String = row.get(1)?;
         let severity_str: String = row.get(3)?;
-        let resolution_type_str: Option<String> = row.get(6)?;
 
         Ok(HealthIssue {
             id: Some(row.get(0)?),
@@ -370,10 +495,7 @@ impl Database {
             severity: HealthIssueSeverity::from_str(&severity_str)
                 .unwrap_or(HealthIssueSeverity::ManualReview),
             discovered_at: row.get(4)?,
-            resolved_at: row.get(5)?,
-            resolution_type: resolution_type_str.and_then(|s| ResolutionType::from_str(&s)),
-            resolution_session: row.get(7)?,
-            metadata_json: row.get(8)?,
+            metadata_json: row.get(5)?,
         })
     }
 

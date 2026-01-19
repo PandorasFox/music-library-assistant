@@ -56,9 +56,43 @@ pub struct DeploymentStats {
 // Health Issue Types
 // ============================================================================
 
-/// Type of health issue detected in the corpus.
+/// Type of health signal detected in the corpus.
+///
+/// Signals are organized into levels:
+/// - **First-level**: Computed directly from corpus + index state (WalkCorpus, etc.)
+/// - **Second-level**: Derived from comparing first-level signals
+/// - **Third-level**: Triggered when files become healthy (e.g., deploy conflicts)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HealthIssueType {
+    // =========================================================================
+    // First-level signals (computed from corpus + index state)
+    // =========================================================================
+    /// File exists in corpus directory (discovered during WalkCorpus)
+    FileInCorpus,
+
+    // =========================================================================
+    // Second-level signals (derived from first-level signals)
+    // =========================================================================
+    /// File in corpus but not in index (needs indexing)
+    UnindexedFile,
+    /// File in corpus + index with matching inode/mtime (healthy state)
+    HealthyFile,
+    /// File in index but mtime differs from disk (modified outside MLA)
+    CorpusFileModifiedOutOfBand,
+    /// File in index with different path but same inode (file was moved)
+    MovedFile,
+    /// File in index but no longer exists in corpus
+    MissingFile,
+
+    // =========================================================================
+    // Third-level signals (computed for healthy files)
+    // =========================================================================
+    /// Multiple corpus files would deploy to the same library path
+    DeployConflict,
+
+    // =========================================================================
+    // Content-level signals (tag and fingerprint analysis)
+    // =========================================================================
     /// Same fingerprint across multiple files
     FingerprintDuplicate,
     /// Same metadata (artist/album/title) across multiple files
@@ -70,57 +104,95 @@ pub enum HealthIssueType {
     MissingTag,
     /// Quality variants (same content, different quality)
     QualityVariant,
-    /// Multiple corpus files would deploy to the same library path
-    DeployConflict,
-    /// Tags on disk differ from indexed tags (out-of-band change)
+    /// Tags on disk differ from indexed tags (out-of-band tag change)
     OutOfBandTagChange,
-    /// Files exist on disk but are not in the index (need to be scanned)
-    MissingFromIndex,
-    /// File moved to different path (same inode detected at new location)
-    FileRelocated,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
-    /// Indexed file no longer exists on disk
+
+    // =========================================================================
+    // Legacy types (kept for DB compatibility, will be migrated)
+    // =========================================================================
+    /// Legacy: renamed to MissingFile
+    #[deprecated(note = "Use MissingFile instead")]
     MissingFromDisk,
-    /// File's inode/size/duration changed out-of-band (file was replaced externally)
+    /// Legacy: renamed to FileInCorpus + UnindexedFile derivation
+    #[deprecated(note = "Use FileInCorpus/UnindexedFile instead")]
+    MissingFromIndex,
+    /// Legacy: renamed to MovedFile
+    #[deprecated(note = "Use MovedFile instead")]
+    FileRelocated,
+    /// Legacy: renamed to CorpusFileModifiedOutOfBand
+    #[deprecated(note = "Use CorpusFileModifiedOutOfBand instead")]
     OutOfBandFileChange,
 }
 
 impl HealthIssueType {
+    #[allow(deprecated)]
     pub fn as_str(&self) -> &'static str {
         match self {
+            // First-level signals
+            Self::FileInCorpus => "file_in_corpus",
+
+            // Second-level signals
+            Self::UnindexedFile => "unindexed_file",
+            Self::HealthyFile => "healthy_file",
+            Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
+            Self::MovedFile => "moved_file",
+            Self::MissingFile => "missing_file",
+
+            // Third-level signals
+            Self::DeployConflict => "deploy_conflict",
+
+            // Content-level signals
             Self::FingerprintDuplicate => "fingerprint_dup",
             Self::MetadataDuplicate => "metadata_dup",
             Self::TagCanonical => "tag_canon",
             Self::MissingTag => "missing_tag",
             Self::QualityVariant => "quality",
-            Self::DeployConflict => "deploy_conflict",
             Self::OutOfBandTagChange => "oob_tag",
-            Self::MissingFromIndex => "missing_from_index",
-            Self::FileRelocated => "file_relocated",
             Self::DuplicateInode => "duplicate_inode",
-            Self::MissingFromDisk => "missing_from_disk",
-            Self::OutOfBandFileChange => "oob_file_change",
+
+            // Legacy types (write using new names for forwards compatibility)
+            Self::MissingFromDisk => "missing_file",
+            Self::MissingFromIndex => "file_in_corpus",
+            Self::FileRelocated => "moved_file",
+            Self::OutOfBandFileChange => "corpus_file_modified_oob",
         }
     }
 
+    #[allow(deprecated)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
+            // First-level signals
+            "file_in_corpus" => Some(Self::FileInCorpus),
+
+            // Second-level signals
+            "unindexed_file" => Some(Self::UnindexedFile),
+            "healthy_file" => Some(Self::HealthyFile),
+            "corpus_file_modified_oob" => Some(Self::CorpusFileModifiedOutOfBand),
+            "moved_file" => Some(Self::MovedFile),
+            "missing_file" => Some(Self::MissingFile),
+
+            // Third-level signals
+            "deploy_conflict" => Some(Self::DeployConflict),
+
+            // Content-level signals
             "fingerprint_dup" => Some(Self::FingerprintDuplicate),
             "metadata_dup" => Some(Self::MetadataDuplicate),
             "tag_canon" => Some(Self::TagCanonical),
-            // Legacy support: map old types to unified TagCanonical
-            "canon" => Some(Self::TagCanonical),
-            "genre_canon" => Some(Self::TagCanonical),
+            "canon" => Some(Self::TagCanonical),        // Legacy
+            "genre_canon" => Some(Self::TagCanonical),  // Legacy
             "missing_tag" => Some(Self::MissingTag),
             "quality" => Some(Self::QualityVariant),
-            "deploy_conflict" => Some(Self::DeployConflict),
             "oob_tag" => Some(Self::OutOfBandTagChange),
-            "missing_from_index" => Some(Self::MissingFromIndex),
-            "file_relocated" => Some(Self::FileRelocated),
             "duplicate_inode" => Some(Self::DuplicateInode),
-            "missing_from_disk" => Some(Self::MissingFromDisk),
-            "oob_file_change" => Some(Self::OutOfBandFileChange),
+
+            // Legacy DB values → map to new types
+            "missing_from_disk" => Some(Self::MissingFile),
+            "missing_from_index" => Some(Self::FileInCorpus),
+            "file_relocated" => Some(Self::MovedFile),
+            "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
+
             _ => None,
         }
     }
@@ -156,55 +228,17 @@ impl HealthIssueSeverity {
     }
 }
 
-/// How an issue was resolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolutionType {
-    /// One track was kept, others stashed
-    Kept,
-    /// Files were stashed to stash directory
-    Stashed,
-    /// Tags were merged/unified
-    Merged,
-    /// Marked as known variant (re-release, remix, etc.)
-    MarkedVariant,
-    /// Issue was ignored/dismissed
-    Ignored,
-}
-
-impl ResolutionType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Kept => "kept",
-            Self::Stashed => "stashed",
-            Self::Merged => "merged",
-            Self::MarkedVariant => "marked_variant",
-            Self::Ignored => "ignored",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "kept" => Some(Self::Kept),
-            "stashed" => Some(Self::Stashed),
-            "merged" => Some(Self::Merged),
-            "marked_variant" => Some(Self::MarkedVariant),
-            "ignored" => Some(Self::Ignored),
-            _ => None,
-        }
-    }
-}
-
-/// A health issue detected in the corpus.
+/// A health signal detected in the corpus.
+///
+/// Signals are facts about corpus state. They are created by computations and
+/// deleted when they become stale (not "resolved" - there is no resolution concept).
 #[derive(Debug, Clone)]
 pub struct HealthIssue {
     pub id: Option<i64>,
     pub issue_type: HealthIssueType,
-    pub issue_key: String, // Fingerprint, normalized metadata key, etc.
+    pub issue_key: String, // Path, fingerprint, normalized metadata key, etc.
     pub severity: HealthIssueSeverity,
     pub discovered_at: Option<String>,
-    pub resolved_at: Option<String>,
-    pub resolution_type: Option<ResolutionType>,
-    pub resolution_session: Option<String>,
     pub metadata_json: Option<String>,
 }
 

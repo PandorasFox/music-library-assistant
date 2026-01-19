@@ -14,5 +14,5 @@ pub use queries::Database;
 pub use types::{ScanStateEntry, Track};
 pub use types::{
     HealthIssue, HealthIssueSeverity, HealthIssueType, KnownVariant,
-    ResolutionType, TrackRole, VariantType,
+    TrackRole, VariantType,
 };

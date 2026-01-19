@@ -14,10 +14,9 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::config::Config;
-use crate::flows::background::BackgroundTask;
 
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
-use super::helpers::{calculate_rolling_throughput, format_bytes_binary, format_duration, format_eta, truncate_path_display};
+use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
 use super::{deploy_flow, insights_view, tag_editor, tag_search, tree_browser};
 
@@ -27,21 +26,17 @@ pub struct RenderContext<'a> {
     pub mode: super::UiMode,
     pub config: &'a Config,
     pub status_message: Option<&'a str>,
-    pub tag_editor: Option<&'a mut tag_editor::TagEditorState>,
-    pub tag_editor_modal: Option<&'a tag_editor::TagEditorModal>,
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub drop_missing_state: Option<&'a super::DropMissingState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub splash_screen: Option<&'a super::splash_screen::SplashScreen>,
-    pub deploy_conflict_review: Option<&'a super::DeployConflictReviewState>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
     pub tag_search: Option<&'a tag_search::TagSearchState>,
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub eye: &'a EyeAnimation,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
-    pub background_tasks: &'a [BackgroundTask],
     pub daemon_status: Option<crate::flows::DaemonStatus>,
 }
 
@@ -97,13 +92,11 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
 fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
     // Get mode-specific suffix (if any)
     let suffix = match ctx.mode {
-        super::UiMode::TagEditor => Some("Tag Editor"),
         super::UiMode::DirBrowser => Some("Directory Browser"),
         super::UiMode::DropMissingConfirmation => Some("Drop Missing From Index"),
         super::UiMode::DeploymentPreview => Some("Deployment Preview"),
         super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
         super::UiMode::CorpusBrowser => Some("Corpus Browser"),
-        super::UiMode::DeployConflictReview => Some("Deploy Conflict Review"),
         super::UiMode::Insights => Some("Corpus Insights"),
         super::UiMode::LoadingSplash => None, // Never reached - handled separately
         super::UiMode::IntakeConfirmation => Some("Intake Confirmation"),
@@ -126,33 +119,6 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
 
 fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderContext) {
     match ctx.mode {
-        super::UiMode::TagEditor => {
-            if let Some(ref mut editor) = ctx.tag_editor {
-                editor.render(f, area, ctx.status_message);
-            }
-            // Render modal on top if present
-            if let Some(ref modal) = ctx.tag_editor_modal {
-                match modal {
-                    tag_editor::TagEditorModal::SaveConfirmation { selected_button } => {
-                        tag_editor::render_save_confirmation_modal(f, area, *selected_button);
-                    }
-                    tag_editor::TagEditorModal::ChangePreview {
-                        grouped_changes,
-                        single_changes,
-                        scroll_offset,
-                        ..
-                    } => {
-                        tag_editor::render_change_preview_modal(
-                            f,
-                            area,
-                            grouped_changes,
-                            single_changes,
-                            *scroll_offset,
-                        );
-                    }
-                }
-            }
-        }
         super::UiMode::DirBrowser => {
             if let Some(ref mut browser) = ctx.tree_browser {
                 browser.render(f, area);
@@ -172,11 +138,6 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::CorpusBrowser => {
             if let Some(ref mut browser) = ctx.tree_browser {
                 browser.render(f, area);
-            }
-        }
-        super::UiMode::DeployConflictReview => {
-            if let Some(ref review) = ctx.deploy_conflict_review {
-                render_deploy_conflict_review(f, area, review, ctx.status_message);
             }
         }
         super::UiMode::Insights => {
@@ -234,97 +195,6 @@ fn render_insights_loading(f: &mut Frame, area: ratatui::layout::Rect) {
         .block(Block::default().borders(Borders::ALL).title("Insights"));
 
     f.render_widget(loading, chunks[1]);
-}
-
-/// Render the deploy conflict review screen
-fn render_deploy_conflict_review(
-    f: &mut Frame,
-    area: ratatui::layout::Rect,
-    review: &super::DeployConflictReviewState,
-    status_message: Option<&str>,
-) {
-    
-
-    // Layout: content area | buttons | status
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(10),    // Group list
-            Constraint::Length(3),  // Buttons
-            Constraint::Length(3),  // Status
-        ])
-        .split(area);
-
-    // Render group list
-    let total_tracks: usize = review.groups.iter().map(|g| g.track_count).sum();
-    let total_decisions: usize = review.groups.iter().map(|g| g.decisions.len()).sum();
-
-    let mut items: Vec<ListItem> = Vec::new();
-    for (idx, group) in review.groups.iter().enumerate() {
-        let decision_count = group.decisions.len();
-        let line = if decision_count > 0 {
-            format!(
-                "Group {}: {} tracks → {} edits  [{}]",
-                idx + 1,
-                group.track_count,
-                decision_count,
-                truncate_path_display(&group.target_path, 40)
-            )
-        } else {
-            format!(
-                "Group {}: {} tracks → (no edits)  [{}]",
-                idx + 1,
-                group.track_count,
-                truncate_path_display(&group.target_path, 40)
-            )
-        };
-        items.push(ListItem::new(line));
-    }
-
-    let summary = format!(
-        "Deploy Conflict Resolution - {} groups, {} tracks, {} total edits",
-        review.groups.len(),
-        total_tracks,
-        total_decisions
-    );
-
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(summary))
-        .style(Style::default().fg(Color::White));
-    f.render_widget(list, chunks[0]);
-
-    // Render buttons
-    let commit_style = if review.selected_button == 0 {
-        Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-    let discard_style = if review.selected_button == 1 {
-        Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Red)
-    };
-
-    let button_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(" Commit ", commit_style),
-        Span::raw("   "),
-        Span::styled(" Discard ", discard_style),
-        Span::raw("  "),
-    ]);
-
-    let buttons = Paragraph::new(button_line)
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title("Actions"));
-    f.render_widget(buttons, chunks[1]);
-
-    // Render status
-    let status_text = status_message.unwrap_or("←/→ Select | Enter Confirm | Esc Cancel");
-    let status = Paragraph::new(status_text)
-        .style(Style::default().fg(Color::Yellow))
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title("Status"));
-    f.render_widget(status, chunks[2]);
 }
 
 fn render_exit_confirm_modal(
@@ -548,17 +418,12 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, _ctx: &Rende
 fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
     let mut lines = Vec::new();
 
-    let total_tasks = ctx.background_tasks.len();
     let has_daemon_work = ctx.daemon_status.as_ref().map(|s| s.pending > 0).unwrap_or(false);
     let has_completed_session = ctx.daemon_status.as_ref()
         .and_then(|s| s.completed_session.as_ref())
         .is_some();
 
-    if total_tasks == 0 && !has_daemon_work && !has_completed_session {
-        lines.push(
-            Line::from("No operation in progress").style(Style::default().fg(Color::DarkGray)),
-        );
-    } else if has_daemon_work {
+    if has_daemon_work {
         // Show active daemon status
         if let Some(ref status) = ctx.daemon_status {
             // Build task type summary
@@ -622,92 +487,14 @@ fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Ren
             }
         }
     } else {
-        // Render background tasks
-        for (i, task) in ctx.background_tasks.iter().enumerate() {
-            let progress = &task.progress;
-
-            // Task description with ETA
-            let eta_span = if i == 0 {
-                if let Some((processed, total)) = progress.bytes {
-                    if processed > 0 && total > 0 {
-                        let throughput = calculate_rolling_throughput(ctx.throughput_samples, 8);
-                        if let Some(mib_per_sec) = throughput {
-                            if mib_per_sec > 0.01 {
-                                let remaining_bytes = total.saturating_sub(processed);
-                                let remaining_mib = remaining_bytes as f64 / (1024.0 * 1024.0);
-                                let eta_secs = (remaining_mib / mib_per_sec) as u64;
-                                Span::styled(
-                                    format!(" (ETA: {})", format_eta(eta_secs)),
-                                    Style::default().fg(Color::DarkGray),
-                                )
-                            } else {
-                                Span::raw("")
-                            }
-                        } else {
-                            Span::raw("")
-                        }
-                    } else {
-                        Span::raw("")
-                    }
-                } else {
-                    Span::raw("")
-                }
-            } else {
-                Span::raw("")
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(&task.label, Style::default().fg(Color::Cyan)),
-                eta_span,
-            ]));
-
-            // Items progress
-            if total_tasks > 1 {
-                lines.push(Line::from(format!(
-                    "  {}/{} ({} skipped)",
-                    progress.completed,
-                    progress.total,
-                    progress.skipped
-                )));
-            } else {
-                lines.push(Line::from(format!(
-                    "Items: {}/{} | Skipped: {} unchanged",
-                    progress.completed,
-                    progress.total,
-                    progress.skipped
-                )));
-
-                // Bytes progress
-                if let Some((processed, total)) = progress.bytes {
-                    let processed_str = format_bytes_binary(processed);
-                    let total_str = format_bytes_binary(total);
-                    let throughput_str = match calculate_rolling_throughput(ctx.throughput_samples, 8) {
-                        Some(mib_per_sec) => format!(" ({:.1} MiB/s)", mib_per_sec),
-                        None => String::new(),
-                    };
-                    lines.push(Line::from(format!(
-                        "Bytes: {} / {}{}",
-                        processed_str, total_str, throughput_str
-                    )));
-                }
-
-                // Current item
-                if let Some(ref item) = progress.current_item {
-                    let display = truncate_path_display(item, 50);
-                    lines.push(Line::from(display).style(Style::default().fg(Color::DarkGray)));
-                }
-            }
-        }
+        // No active work
+        lines.push(
+            Line::from("No operation in progress").style(Style::default().fg(Color::DarkGray)),
+        );
     }
 
-    let title = if total_tasks > 1 {
-        format!("Tasks ({})", total_tasks)
-    } else {
-        "Task".to_string()
-    };
-
     let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(title));
+        .block(Block::default().borders(Borders::ALL).title("Task"));
     f.render_widget(para, area);
 }
 
@@ -721,13 +508,11 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
 
     // Get mode-specific controls hint
     let controls = match ctx.mode {
-        super::UiMode::TagEditor => control_presets::tag_editor(),
         super::UiMode::DirBrowser => control_presets::dir_browser(),
         super::UiMode::DropMissingConfirmation => control_presets::drop_missing(),
         super::UiMode::DeploymentPreview => control_presets::deployment_preview(),
         super::UiMode::ExitConfirmModal => control_presets::exit_confirm_modal(),
         super::UiMode::CorpusBrowser => control_presets::corpus_browser(),
-        super::UiMode::DeployConflictReview => control_presets::deploy_conflict_review(),
         super::UiMode::Insights => control_presets::insights_view(),
         super::UiMode::TagSearch => control_presets::tag_search(),
         super::UiMode::LoadingSplash => control_presets::empty(),

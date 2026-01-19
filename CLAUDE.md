@@ -109,7 +109,7 @@ When building new UI components, **always use existing widgets first**. The `ui/
 | `SelectableList` | Navigable lists with selection highlighting |
 | `HealthStatus` | Consistent status coloring (Healthy, Info, Warning, Critical) |
 | `StatusIndicator` | Single-item status display with icon/label |
-| `TwoPaneLayout`, `ThreePaneLayout` | Standard multi-pane layouts |
+| `ThreePaneLayout` | Standard multi-pane layouts |
 | `Modal`, `ConfirmationModal` | Popup dialogs |
 | `ControlsHint` | Context-sensitive keyboard hints |
 
@@ -118,6 +118,8 @@ When building new UI components, **always use existing widgets first**. The `ui/
 2. If existing widgets don't fit, add to or extend them rather than creating ad-hoc rendering
 3. Keep UI-agnostic logic (like severity levels) separate from widget styling
 4. Map domain types to widget types at render time (e.g., `InsightSeverity` → `HealthStatus`)
+
+For comprehensive UI architecture guidelines including module organization, action patterns, and anti-patterns to avoid, see [docs/UI_GUIDELINES.md](docs/UI_GUIDELINES.md).
 
 ### Three-Layer Health Architecture
 

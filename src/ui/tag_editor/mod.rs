@@ -10,23 +10,12 @@
 //! ## Module Structure
 //!
 //! - `types`: Core type definitions (TagField, TagChange, etc.)
-//! - `state`: TagEditorState (legacy) and UnifiedTagEditorState (new)
-//! - `input`: Keyboard input handling
-//! - `render`: UI rendering functions
+//! - `state`: UnifiedTagEditorState for transaction-based editing
 
-mod input;
-mod render;
 pub mod state;
 pub mod types;
 
-// Re-export public types
-pub use render::{render_change_preview_modal, render_save_confirmation_modal};
-pub use state::TagEditorState;
-pub use types::{
-    DuplicateGroupInfo, TagEditorAction, TagEditorModal,
-};
-
-// Unified tag editor exports (new transaction-based API)
+// Unified tag editor exports (transaction-based API)
 pub use state::UnifiedTagEditorState;
 pub use types::{
     GroupContext, TagEditorSource,

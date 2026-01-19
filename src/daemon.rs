@@ -8,6 +8,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
+
 use parallel_worker::{CancelableWorker, WorkerInit, WorkerMethods};
 
 use crate::config;
@@ -436,6 +438,10 @@ struct TaskResult {
 pub struct TaskDaemon {
     worker: CancelableWorker<(Task, String), TaskResult>,
 
+    /// When this daemon instance was created.
+    /// Used for signal freshness tracking (`discovered_at > launch_time` = new signal).
+    launch_time: DateTime<Utc>,
+
     // State machine
     state: DaemonState,
 
@@ -490,6 +496,7 @@ impl TaskDaemon {
 
         Self {
             worker,
+            launch_time: Utc::now(),
             state: DaemonState::Idle,
             eye_state: EyeState::Closed,
             observation_state: CorpusObservationState::Unseen,
@@ -524,6 +531,14 @@ impl TaskDaemon {
     /// O(1) state check - returns current daemon state.
     pub fn state(&self) -> DaemonState {
         self.state
+    }
+
+    /// Get the timestamp when this daemon was created.
+    ///
+    /// Used for signal freshness tracking: signals with `discovered_at > launch_time`
+    /// are new this session.
+    pub fn launch_time(&self) -> DateTime<Utc> {
+        self.launch_time
     }
 
     // -------------------------------------------------------------------------
@@ -736,20 +751,49 @@ impl TaskDaemon {
         self.completed_at = Some(Instant::now());
         self.state = DaemonState::Completed;
 
-        // Handle eyeballing completion
+        // Handle eyeballing completion (first-level computations)
         if self.is_eyeballing() {
             self.observation_state = CorpusObservationState::Complete;
 
-            // Wake eye on first eyeballing completion
-            if self.eye_state == EyeState::Closed {
-                // Awakening is NOP for now, go straight to Awake
-                self.eye_state = EyeState::Awake;
+            match self.eye_state {
+                EyeState::Closed => {
+                    // First eyeballing complete - enter Awakening
+                    let _ = crate::config::log_message(&format!(
+                        "[STATE] Eyeballing complete. Transitioning Closed → Awakening. \
+                         Processed {} tasks.",
+                        self.total_processed
+                    ));
+                    self.eye_state = EyeState::Awakening;
+                    self.queue_awakening_computations();
+                    // transition_to_completed will be called again when those complete
+                }
+                EyeState::Awake => {
+                    let _ = crate::config::log_message(
+                        "[STATE] Re-eyeballing complete while Awake. NOP."
+                    );
+                }
+                EyeState::Awakening => {
+                    // Invalid: can't complete eyeballing while already awakening
+                    panic!("Invalid state: eyeballing completed while eye is Awakening");
+                }
             }
+        }
+        // Handle awakening completion (second-level computations)
+        // Separate from eyeballing - observation_state is already Complete here
+        else if self.eye_state == EyeState::Awakening {
+            let _ = crate::config::log_message(&format!(
+                "[STATE] Awakening complete. Transitioning Awakening → Awake. \
+                 Processed {} tasks.",
+                self.total_processed
+            ));
+            self.eye_state = EyeState::Awake;
 
-            // Enable mutations if not in read-only mode
-            // This is the ONLY place accepting_mutations can become true
+            // Enable mutations - ONE-TIME transition from read-only init to read-write operation
             if !self.read_only_mode {
                 self.accepting_mutations = true;
+                let _ = crate::config::log_message(
+                    "[STATE] Mutations now enabled (read-write mode)."
+                );
             }
         }
 
@@ -761,6 +805,24 @@ impl TaskDaemon {
         self.task_counts.clear();
         self.recent_errors.clear();
         self.current_label = None;
+    }
+
+    /// Queue second-level signal computations during Awakening phase.
+    ///
+    /// This queues `ScheduleSecondLevelDerivations` which will spawn per-directory
+    /// computations to derive signals like UnindexedFile, MissingFile, etc.
+    fn queue_awakening_computations(&mut self) {
+        use crate::corpus::computations::Computation;
+
+        let _ = crate::config::log_message(
+            "[STATE] Queueing ScheduleSecondLevelDerivations for Awakening phase"
+        );
+
+        // Queue the orchestrator computation that will spawn per-directory derivations
+        self.queue_computation_with_label(
+            Computation::ScheduleSecondLevelDerivations,
+            Some("Computing signals".to_string()),
+        );
     }
 
     fn transition_to_idle(&mut self) {
@@ -1330,6 +1392,8 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
 
     // After successful mutation, refresh health signals for affected track
     // This is expensive (full deployment conflict detection) but comprehensive
+    // TODO: Consider removing this once we're confident the computation-based
+    // signal recomputation is working reliably
     if success {
         if let Some(track_id) = affected_track_id {
             if let Err(e) = refresh_health_for_track(&db, track_id) {
@@ -1342,7 +1406,19 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
         }
     }
 
-    TaskResult { success, error, label, spawn: Vec::new() }
+    // Queue computations to recompute signals for affected directories
+    // This ensures signals like UnindexedFile → HealthyFile are updated
+    let spawn = if success {
+        mutation
+            .affected_directories()
+            .into_iter()
+            .map(|directory| Computation::DeriveDirectorySignals { directory })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    TaskResult { success, error, label, spawn }
 }
 
 /// Execute a single computation. Opens DB connection as needed.

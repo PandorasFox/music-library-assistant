@@ -313,24 +313,6 @@ pub mod presets {
             .binding(KeyBinding::new("Esc", "Exit"))
     }
 
-    /// Directory tag editor controls
-    pub fn directory_tag_editor() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Tab/Shift+Tab", "Directories"))
-            .binding(KeyBinding::new("↑↓", "Fields"))
-            .binding(KeyBinding::new("Enter", "Edit"))
-            .binding(KeyBinding::new("→", "Action"))
-            .binding(KeyBinding::new("Esc", "Exit"))
-    }
-
-    /// Deploy conflict review controls
-    pub fn deploy_conflict_review() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("←/→", "Select"))
-            .binding(KeyBinding::new("Enter", "Confirm"))
-            .binding(KeyBinding::new("Esc", "Cancel"))
-    }
-
     /// Insights view controls
     pub fn insights_view() -> ControlsHint {
         ControlsHint::new()

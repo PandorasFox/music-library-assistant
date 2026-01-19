@@ -115,9 +115,6 @@ pub fn detect_fingerprint_issues(db: &Database, track: &Track) -> Result<Vec<Hea
         issue_key: fingerprint.clone(),
         severity,
         discovered_at: None,
-        resolved_at: None,
-        resolution_type: None,
-        resolution_session: None,
         metadata_json: None,
     };
 
@@ -258,9 +255,6 @@ pub fn detect_deployment_conflicts_for_library(
             issue_key,
             severity: HealthIssueSeverity::ManualReview,
             discovered_at: None,
-            resolved_at: None,
-            resolution_type: None,
-            resolution_session: None,
             metadata_json: Some(metadata.to_string()),
         };
 
@@ -279,20 +273,19 @@ pub fn detect_deployment_conflicts_for_library(
     Ok(new_issues)
 }
 
-/// Resolve deployment conflicts that are no longer valid.
+/// Clean up deployment conflict signals that are no longer valid.
 ///
 /// This should be called after tag edits or track deletions that might
 /// have resolved conflicts (e.g., renaming a track so it no longer
 /// collides with another).
 ///
-/// Returns the number of issues resolved.
+/// Returns the number of signals deleted.
 pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> Result<usize> {
-    use crate::corpus::db::ResolutionType;
-
     let library_names = get_configured_library_names(config);
-    let mut resolved_count = 0;
+    let mut deleted_count = 0;
 
-    // Get all unresolved deploy conflict issues
+    // Get all deploy conflict signals
+    #[allow(deprecated)]
     let issues = db.get_unresolved_health_issues(Some(HealthIssueType::DeployConflict))?;
 
     for issue in issues {
@@ -308,10 +301,10 @@ pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> 
         }
         let library_name = parts[0];
 
-        // Skip if library is no longer configured
+        // Delete signal if library is no longer configured
         if !library_names.contains(&library_name.to_string()) {
-            db.resolve_health_issue(issue_id, ResolutionType::Ignored, None)?;
-            resolved_count += 1;
+            db.delete_health_signal(issue_id)?;
+            deleted_count += 1;
             continue;
         }
 
@@ -333,13 +326,13 @@ pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> 
         let still_conflicts = target_path_map.values().any(|v| v.len() > 1);
 
         if !still_conflicts {
-            // Conflict resolved - mark issue as resolved
-            db.resolve_health_issue(issue_id, ResolutionType::Merged, None)?;
-            resolved_count += 1;
+            // Conflict no longer exists - delete the signal
+            db.delete_health_signal(issue_id)?;
+            deleted_count += 1;
         }
     }
 
-    Ok(resolved_count)
+    Ok(deleted_count)
 }
 
 // ============================================================================

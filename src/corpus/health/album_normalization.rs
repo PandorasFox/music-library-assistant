@@ -12,6 +12,7 @@ use mla_utils::metadata_magic::album::albums_equivalent;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mla_utils::metadata_magic::AlbumFormat;
 
     // Basic smoke tests to verify re-exports work
     #[test]

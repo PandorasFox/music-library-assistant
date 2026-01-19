@@ -331,6 +331,102 @@ impl Mutation {
             | Mutation::DbMigration { .. } => None,
         }
     }
+
+    /// Get directories affected by this mutation for signal recomputation.
+    ///
+    /// After a mutation completes, signals in these directories may need
+    /// to be recomputed (e.g., UnindexedFile → HealthyFile after indexing).
+    pub fn affected_directories(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+
+        match self {
+            // Tag operations don't change file presence
+            Mutation::TagEditDb { .. } => {}
+            Mutation::TagFlushToDisk { path, .. } => {
+                if let Some(parent) = path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::TagEditAndFlush { path, .. } => {
+                if let Some(parent) = path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+
+            // Indexing operations affect the file's directory
+            Mutation::IndexTrack { path, .. }
+            | Mutation::IndexFileFromPath { path, .. }
+            | Mutation::UpdateScanState { path, .. } => {
+                if let Some(parent) = path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::CleanupStaleScanState { .. } => {
+                // Affects multiple paths, but we don't track which ones
+                // Signal recomputation will happen naturally on next eyeball
+            }
+
+            // File operations affect source and destination directories
+            Mutation::Move { source, destination, .. } => {
+                if let Some(parent) = source.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+                if let Some(parent) = destination.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::Copy { source, destination } => {
+                if let Some(parent) = source.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+                if let Some(parent) = destination.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::Delete { path, .. } | Mutation::MoveToStash { path, .. } => {
+                if let Some(parent) = path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+
+            // Deployment operations happen outside corpus, don't affect corpus signals
+            Mutation::HardLink { .. } | Mutation::Unlink { .. } => {}
+
+            // Path updates affect both old and new directories
+            Mutation::UpdateTrackPath { old_path, new_path, .. } => {
+                if let Some(parent) = old_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+                if let Some(parent) = new_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            // UpdateScanStatePath only has new_path (old path not tracked)
+            Mutation::UpdateScanStatePath { new_path, .. } => {
+                if let Some(parent) = new_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+
+            // Index drops affect the file's directory
+            Mutation::DropFromIndex { path, .. } => {
+                if let Some(parent) = path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+
+            // Track updates don't change file presence
+            Mutation::UpdateTrack { .. } => {}
+
+            // Migration doesn't affect signals
+            Mutation::DbMigration { .. } => {}
+        }
+
+        // Deduplicate directories
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
 }
 
 /// Result of executing a single mutation.

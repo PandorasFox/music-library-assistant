@@ -47,52 +47,40 @@ pub enum IntakeConfirmationAction {
 impl IntakeConfirmationState {
     /// Gather intake confirmation state from the database.
     ///
-    /// Queries MissingFromIndex health issues, then walks the directories
-    /// to get actual file paths and sizes.
+    /// Queries UnindexedFile signals (created during second-level signal derivation)
+    /// to get the list of files that need indexing.
     ///
     /// Returns None if there are no unindexed files.
     pub fn gather(db: &Database, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
-        // Get all MissingFromIndex issues
+        // Get all UnindexedFile signals - these are pre-computed during Awakening
         let issues = db
-            .get_unresolved_health_issues(Some(HealthIssueType::MissingFromIndex))
+            .get_health_signals(Some(HealthIssueType::UnindexedFile))
             .ok()?;
 
         if issues.is_empty() {
             return None;
         }
 
-        // Parse metadata to get directories and file counts
+        // Each UnindexedFile signal has the file path as issue_key
         let mut all_paths: Vec<PathBuf> = Vec::new();
         let mut total_bytes: u64 = 0;
-        let mut directory_count = 0;
+        let mut directories: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
         for issue in &issues {
-            if let Some(ref json_str) = issue.metadata_json {
-                if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    if let Some(dir) = metadata.get("directory").and_then(|v| v.as_str()) {
-                        directory_count += 1;
+            let path = PathBuf::from(&issue.issue_key);
 
-                        // Walk the directory to get actual file paths and sizes
-                        let dir_path = std::path::Path::new(dir);
-                        if dir_path.exists() {
-                            if let Ok(entries) = std::fs::read_dir(dir_path) {
-                                for entry in entries.flatten() {
-                                    let path = entry.path();
-                                    if path.is_file() && is_audio_file(&path) {
-                                        // Check if this file is indexed
-                                        let path_str = path.to_string_lossy();
-                                        if db.get_track_by_path(&path_str).ok().flatten().is_none() {
-                                            if let Ok(meta) = std::fs::metadata(&path) {
-                                                total_bytes += meta.len();
-                                            }
-                                            all_paths.push(path);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+            // Verify file still exists and get size
+            if path.exists() && path.is_file() {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    total_bytes += meta.len();
                 }
+
+                // Track unique directories
+                if let Some(parent) = path.parent() {
+                    directories.insert(parent.to_path_buf());
+                }
+
+                all_paths.push(path);
             }
         }
 
@@ -104,7 +92,7 @@ impl IntakeConfirmationState {
             "IntakeConfirmation: gathered {} files ({} bytes) from {} directories",
             all_paths.len(),
             total_bytes,
-            directory_count
+            directories.len()
         ));
 
         Some(Self {
@@ -112,7 +100,7 @@ impl IntakeConfirmationState {
             total_bytes,
             paths: all_paths,
             source: source.to_string(),
-            directory_count,
+            directory_count: directories.len(),
         })
     }
 

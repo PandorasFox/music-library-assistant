@@ -163,26 +163,23 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_tag_history_session ON tag_edit_history(session_id);
 
             -- =================================================================
-            -- Corpus Health Tracking Tables
+            -- Corpus Health Signal Tables
             -- =================================================================
 
-            -- Health issues discovered in corpus
+            -- Health signals (facts about corpus state)
+            -- Signals are created by computations and deleted when stale
             CREATE TABLE IF NOT EXISTS health_issues (
                 id INTEGER PRIMARY KEY,
                 issue_type TEXT NOT NULL,
                 issue_key TEXT NOT NULL,
                 severity TEXT NOT NULL,
                 discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                resolved_at DATETIME,
-                resolution_type TEXT,
-                resolution_session TEXT,
                 metadata_json TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_health_issues_type ON health_issues(issue_type);
             CREATE INDEX IF NOT EXISTS idx_health_issues_key ON health_issues(issue_key);
             CREATE INDEX IF NOT EXISTS idx_health_issues_severity ON health_issues(severity);
-            CREATE INDEX IF NOT EXISTS idx_health_issues_unresolved
-                ON health_issues(issue_type) WHERE resolved_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_health_issues_discovered ON health_issues(discovered_at);
 
             -- Tracks involved in each health issue
             CREATE TABLE IF NOT EXISTS health_issue_tracks (

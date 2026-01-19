@@ -33,7 +33,7 @@ use ratatui::{
 use std::collections::HashMap;
 
 use crate::daemon::{DaemonStatus, EyeState, TaskDaemon};
-use super::app::EYE_CLOSED;
+use super::app::{EYE_CLOSED, EYE_CLOSING};
 
 // ============================================================================
 // Loading Types
@@ -85,6 +85,8 @@ pub struct SplashScreen {
     progress_detail: Option<String>,
     /// True once daemon's eye state becomes Awake
     complete: bool,
+    /// Current eye state (for rendering appropriate frame)
+    eye_state: EyeState,
 }
 
 impl SplashScreen {
@@ -98,6 +100,7 @@ impl SplashScreen {
             progress: Some(0.0),
             progress_detail: Some("Starting...".to_string()),
             complete: false,
+            eye_state: EyeState::Closed,
         }
     }
 
@@ -108,6 +111,7 @@ impl SplashScreen {
             progress: Some(0.0),
             progress_detail: Some("Starting...".to_string()),
             complete: false,
+            eye_state: EyeState::Closed,
         }
     }
 
@@ -140,8 +144,11 @@ impl SplashScreen {
         let status = daemon.status();
         self.update_progress(&status);
 
-        // Check if daemon eye has awakened (eyeballing complete)
-        if daemon.eye_state() == EyeState::Awake {
+        // Track eye state for rendering
+        self.eye_state = daemon.eye_state();
+
+        // Check if daemon eye has awakened (startup complete)
+        if self.eye_state == EyeState::Awake {
             self.complete = true;
         }
 
@@ -155,8 +162,8 @@ impl SplashScreen {
         if total > 0 {
             self.progress = Some(completed as f32 / total as f32);
 
-            // Show current task type if available
-            let task_desc = Self::describe_current_task(&status.task_counts, total, completed);
+            // Show current task type and phase
+            let task_desc = Self::describe_current_task(&status.task_counts, self.eye_state, total, completed);
             self.progress_detail = Some(format!(
                 "{} ({}/{})",
                 task_desc, completed, total
@@ -164,38 +171,72 @@ impl SplashScreen {
         }
     }
 
-    /// Describe the current task phase based on task_counts.
-    fn describe_current_task(task_counts: &HashMap<String, usize>, total: usize, completed: usize) -> &'static str {
-        // During eyeballing, the phases happen in order:
-        // 1. WalkCorpus (Eyeballing/Eyeballing (paranoid))
-        // 2. CompareInodes
-        // 3. VerifyMtime
-        // 4. VerifyTags (paranoid mode)
-        // 5. Create signals (MissingFromIndex, MissingFromDisk)
+    /// Describe the current task phase based on task_counts and eye state.
+    fn describe_current_task(
+        task_counts: &HashMap<String, usize>,
+        eye_state: EyeState,
+        total: usize,
+        completed: usize,
+    ) -> &'static str {
+        // Phase 1: Eyeballing (first-level computations)
+        // WalkCorpus → ScanCorpusDirectory → VerifyMtime → VerifyTags
+        //
+        // Phase 2: Awakening (second-level computations)
+        // ScheduleSecondLevelDerivations → DeriveDirectorySignals → CheckDeployConflicts
 
-        // Check which phase has incomplete work
+        // Count first-level eyeballing tasks
         let eyeball_count = task_counts.get("Eyeballing").copied().unwrap_or(0)
             + task_counts.get("Eyeballing (paranoid)").copied().unwrap_or(0);
-        let compare_count = task_counts.get("Comparing inodes").copied().unwrap_or(0);
+        let scan_dir_count = task_counts.get("Scanning directory").copied().unwrap_or(0)
+            + task_counts.get("Scanning directory (paranoid)").copied().unwrap_or(0);
         let mtime_count = task_counts.get("Verifying mtime").copied().unwrap_or(0);
         let tag_count = task_counts.get("Tag verification").copied().unwrap_or(0);
+
+        // Count second-level awakening tasks
+        let schedule_count = task_counts.get("Scheduling signal derivations").copied().unwrap_or(0);
+        let derive_count = task_counts.get("Deriving signals").copied().unwrap_or(0);
+        let conflict_count = task_counts.get("Checking deploy conflicts").copied().unwrap_or(0);
+
+        // Count indexing tasks (can happen in either phase)
         let index_count = task_counts.get("Indexing tracks").copied().unwrap_or(0);
 
-        // Determine current phase (in-progress or about to start)
-        if eyeball_count > 0 && completed < eyeball_count {
-            "Walking filesystem..."
-        } else if compare_count > 0 && completed < (eyeball_count + compare_count) {
-            "Comparing inodes..."
-        } else if mtime_count > 0 && completed < (eyeball_count + compare_count + mtime_count) {
-            "Checking timestamps..."
-        } else if tag_count > 0 && completed < (eyeball_count + compare_count + mtime_count + tag_count) {
-            "Verifying tags..."
-        } else if index_count > 0 {
-            "Indexing files..."
-        } else if completed >= total {
-            "Finishing up..."
-        } else {
-            "Processing..."
+        // Show phase-appropriate message
+        match eye_state {
+            EyeState::Closed => {
+                // First-level eyeballing
+                if eyeball_count > 0 && completed < eyeball_count {
+                    "Walking filesystem..."
+                } else if scan_dir_count > 0 && completed < (eyeball_count + scan_dir_count) {
+                    "Scanning directories..."
+                } else if mtime_count > 0 && completed < (eyeball_count + scan_dir_count + mtime_count) {
+                    "Checking timestamps..."
+                } else if tag_count > 0 {
+                    "Verifying tags..."
+                } else if completed >= total {
+                    "Eyeballing complete..."
+                } else {
+                    "Scanning corpus..."
+                }
+            }
+            EyeState::Awakening => {
+                // Second-level signal derivations
+                if schedule_count > 0 && derive_count == 0 {
+                    "Scheduling signal checks..."
+                } else if derive_count > 0 && completed < derive_count {
+                    "Deriving signals..."
+                } else if conflict_count > 0 {
+                    "Checking conflicts..."
+                } else if index_count > 0 {
+                    "Indexing files..."
+                } else if completed >= total {
+                    "Awakening..."
+                } else {
+                    "Computing signals..."
+                }
+            }
+            EyeState::Awake => {
+                "Ready!"
+            }
         }
     }
 }
@@ -240,7 +281,8 @@ pub fn render(f: &mut Frame, area: Rect, splash: &SplashScreen) {
         .alignment(Alignment::Center);
     f.render_widget(message, chunks[1]);
 
-    // Render eye (closed) centered horizontally
+    // Render eye centered horizontally
+    // Use half-open frame during Awakening, closed otherwise
     let eye_area = Rect {
         x: area.x + h_margin,
         y: chunks[3].y,
@@ -248,7 +290,12 @@ pub fn render(f: &mut Frame, area: Rect, splash: &SplashScreen) {
         height: chunks[3].height,
     };
 
-    let eye_lines: Vec<Line> = EYE_CLOSED
+    let eye_art = match splash.eye_state {
+        EyeState::Awakening => EYE_CLOSING, // Half-open frame
+        _ => EYE_CLOSED,
+    };
+
+    let eye_lines: Vec<Line> = eye_art
         .lines()
         .map(|line| Line::from(line))
         .collect();

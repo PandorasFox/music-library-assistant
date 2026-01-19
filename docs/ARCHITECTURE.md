@@ -2,430 +2,79 @@
 
 This document describes the major subsystems of MLA and how they interact. For the conceptual foundations and design principles, see [PHILOSOPHY.md](PHILOSOPHY.md).
 
----
-
-## System Overview
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                              FILESYSTEM                        │
-│  ┌───────────────┐    ┌───────────────┐    ┌───────────────┐   │
-│  │    Corpus     │    │   Libraries   │    │     Inbox     │   │
-│  │   (source)    │    │  (hard-links) │    │  (incoming)   │   │
-│  └───────┬───────┘    └───────────────┘    └───────────────┘   │
-└──────────┼─────────────────────────────────────────────────────┘
-           │                                        
-           ▼                                        
-    ┌─────────────┐                                 
-    │  Heartbeat  │                                 
-    │   (poll)    │                                 
-    └──────┬──────┘                                 
-           │ compare                                
-           └────────────────────┐                    
-┌─────────────────────────────────────────────────────────────────┐
-│                              DATABASE                           │
-│  ┌───────────────┐    ┌───────────────┐    ┌───────────────┐    │
-│  │     Index     │    │   Insights    │    │   Audit Log   │    │
-│  │   (tracks,    │    │   (signals)   │    │  (decisions,  │    │
-│  │  scan_state)  │    │               │    │   mutations)  │    │
-│  └───────────────┘    └───────┬───────┘    └───────▲───────┘    │
-└───────────────────────────────┼────────────────────┼────────────┘
-                                │ surface            │ log
-                                ▼                    │
-                    ┌───────────────────────┐        │
-                    │         USER          │        │
-                    │    (main menu UI)     │        │
-                    └───────────┬───────────┘        │
-                                │ select signal      │
-                                ▼                    │
-                    ┌───────────────────────┐        │
-                    │   Operation Flow      │        │
-                    │   (by signal type)    │        │
-                    └───────────┬───────────┘        │
-                                │                    │
-                                ▼                    │
-                    ┌────────────────────────┐       │
-                    │      Decisions         │       │
-                    │ (accumulate; generates │       │
-                    │     mutations)         │       │
-                    └───────────┬────────────┘       │
-                                │                    │
-                                ▼                    │
-                    ┌───────────────────────┐        │
-                    │       Review          │        │
-                    │  (preview mutations)  │        │
-                    └─────┬─────────┬───────┘        │
-                          │         │                │
-                 discard  │         │ confirm        │
-                          ▼         ▼                │
-                        ┌───┐   ┌───────────────┐    │
-                        │ X │   │  Background   │────┘
-                        └───┘   │   Executor    │
-                                └───────┬───────┘
-                                        │
-           ┌────────────────────────────┼────────────────────────────┐
-           │                            │                            │
-           ▼                            ▼                            ▼
-    ┌─────────────┐              ┌─────────────┐              ┌─────────────┐
-    │   Corpus    │              │    Index    │              │  Insights   │
-    │  (files)    │              │ (database)  │              │  (signals)  │
-    └─────────────┘              └─────────────┘              └─────────────┘
-```
-
----
-
-## The Core Loop
-
-After initial corpus indexing, MLA operates in a continuous cycle:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                                                                     │
-│   Heartbeat ──► Signals ──► Insights ──► Operations ──► Mutations   │
-│                   ▲                                          │      │
-│                   │                                          │      │
-│                   └──────────────────────────────────────────┘      │
-│      (mutations update corpus state and therefore signals)          │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-1. **Heartbeat** polls the corpus directories, comparing against the index
-2. **Signals** are aggregated and surfaced as insights
-3. **Insights** surface signals in bulk fashion to the operator
-4. **Operations** are flows the user launches, with intent to resolve specific signals
-5. **Decisions** are presented to the operator as simple but sweeping choices in flows, and can generate many associated mutations
-6. **Review** presents the batch for confirmation or discard
-7. **Background Executor** applies confirmed mutations to corpus, index, and insights, and provides a single, well-reasoned entrypoint to applying small, easy-to-reason-about changes in bulk scale.
-8. **Audit Log** records decisions and mutations for potential future reversion
-
----
-
-## Subsystem Details
-
-### 1. Heartbeat (Corpus Survey)
+## Core Event Loop: ratatui
 
-The heartbeat is MLA's background pulse. It polls the corpus directories and compares against the index.
+Ratatui's event loop should:
+- tick the mla daemon subsystem
+- tick the UI modal that is currently active
+- render
+- process inputs
 
-**Trigger**: At startup, and periodically during idle (triggered probabilistically via d20 roll on eye blink animation).
+(exact ordering on those last three might need to be re-evaluated).
 
-**Responsibilities**:
-- Walk corpus directory trees
-- Compare file state against index (inode, mtime, presence)
-- Detect new files, missing files, relocations, out-of-band changes
-- updates health signals based on changes in filesystem state, if any, as signals are computed as a function of (state of filesystem, state of indices) or (state of indices) largely
+General library, corpus, and operational state do not exist in UI code. UI code is for user-interaction-logic only.
 
-**Key Constraint**: The heartbeat *detects* but does not *resolve*. It generates signals.
+## Task Daemon
 
-**Implementation**: `src/corpus/health/heartbeat.rs`
+The task daemon is where all operational logic flows through. To begin:
 
----
+- it is responsible for accepting, queueing, and executing Tasks
+- it is responsible for keeping the corpus+index in a read-only state until startup has been finished
+- it is responsible for accumulating state (user Decisions with corpus Mutations) in a transactional format to simplify the UI modals - UI data state can be offloaded to Daemon once finalized, but before being committed
 
-### 2. Corpus Index
+The types of tasks are:
 
-The central database of all indexed audio files.
+- Mutations
+  - These are tasks that can mutate the files in corpus or track/tag indices we maintain. They cannot be scheduled before the corpus health has finished computing. They require a DecisionWitness (only generable at an enter keypress handler callsite) to be entered into a transaction. Transactions require an additional DecisionWitnessed Decision to be committed, or discarded, giving us a two-stage review model for all destructive operations.
+- Computations
+  - Downstream computations. These emit "signals" to the health database, which can be altered while the corpus/index are in read-only states, because signals' only inputs are corpus state, index state, and other signals themselves.
+  - mutations can emit computations as side effects. computations can emit other computations as side effects.
+  - can be scheduled and executed at any time (and without user decision) as they are purely observational computations (that we record the results of). Ideally, whenever we start up, we basically just confirm that our corpus state on disk has not changed since our last run, and if it has, we generate some signals indicating that the user needs to acknowledge or resolve.
+- Migrations
+  - Special tasks that can only be executed in the very very initial stage of the Task Daemon, before we have even scheduled our first computation to start observing the corpus. They are purely and explicitly for kicking off startup DB migrations, and require a DecisionWitnessed Decision, as they might take some time & the user needs to approve that the timely migration might take place.
 
-**Tables**:
-| Table | Purpose |
-|-------|---------|
-| `tracks` | Audio file metadata, fingerprints, paths |
-| `scan_state` | Inode/mtime tracking for incremental scans |
-| `deployments` | Tracks → library deployment state |
+## Signals
 
-**Key Principle**: The index is the source of truth for what MLA knows about the corpus. Files on disk may diverge (and that divergence becomes a signal as soon as it is detected).
+Signals are the computed health state of the corpus (as well as deployed libraries, as deployment state is actually a secret fourth piece of state input to computations, oops. Maybe we should just genericize this to 'filesystem state' some time).
 
-**Implementation**: `src/corpus/db/`
+Anyways, signals can represent a variety of things:
 
----
+- files that are present in corpus
+- files that were present in corpus, but are still in index (missing now)
+- files that are present in corpus, but have been modified since we last indexed them
+- files with fingerprint duplicates
+- files with identical overlaps
+- files that can be deployed, but aren't
+- files that are hard-linked into a library, but shouldn't be
+- and more....
 
-### 3. Insights (Health Signals)
+Basically, signals can also reference other signals. It is up to the UI logic (basically, human-driven dashboard queries) to present meaningful signals to the user that are actionable, with a handful of dynamic operational tools that take signal sets, clump together files based on common signals and tags/fingerprints/etc (other signals, potentially!), and then present the user with succinct Decisions.
 
-Signals are persistent facts about corpus health, stored in the database and surfaced to the user in aggregate as insights. Insights are basically just summaries about different signals, but we do want to thoughtfully combine some different signals at our disposal, such as which fingerprint dupe signals coexist alongside QualityVariant signals - those should be easy to surface in a flow and resolve!
+Signals are purely informational. Signals are stateless and should be consistently recalculable; however, they are expensive to fully recalculate, so we should make efforts to trigger efficient recomputes when underlying metrics update.
 
-**Signal Types**:
+## The Corpus and Index
 
-| Signal | Description | Severity |
-|--------|-------------|----------|
-| `FingerprintDuplicate` | Same audio fingerprint across files | Medium |
-| `TagCanonical` | Tag variants needing canonicalization | Low |
-| `MissingTag` | Required tags missing (e.g., album_artist) | Low |
-| `QualityVariant` | Same content at different qualities, concordent with fingerprintduplicate usually | Low |
-| `DeployConflict` | Multiple files would deploy to same path | Medium |
-| `OutOfBandTagChange` | Disk tags differ from indexed tags | Medium |
-| `MissingFromIndex` | Files on disk not in index | Medium |
-| `FileRelocated` | File moved (same inode, new path) | Low |
-| `DuplicateInode` | Multiple index entries share one inode | High |
-| `MissingFromDisk` | Indexed file no longer exists | High |
-| `OutOfBandFileChange` | File replaced externally | High |
+The corpus is the files on disk. They are sacred; MLA shall not mutate them without a corresponding Enter keypress from the user. The Index is the Librarian (user)'s record of the corpus, and should also be treated as sacred. Some initial operations - such as indexing all files upon initial startup - might seem a bit superfluous, but it's good to set the example early: we always need the user to press enter to add a decision to a transaction, then enter again to finalize a transaction.
 
-**Lifecycle**:
-1. Pushed by heartbeat or mutation side-effects
-2. Surfaced to user via insights menu
-3. Cleared when resolved via operation flows
+## The Mutation Engine
 
-**Key Principle**: Signals are computed facts, not actions. They describe *what is*, not *what to do*.
+One of the concepts underlying all this is that Mutations are expressed as basic algebraic operations that we can accumulate, and 'sum' to calculate the expected end state after they all execute and perform their mutations.
+This is what enables the transactions flow and the confirmation review processes.
 
-**Implementation**: `src/corpus/health/detection.rs`, `src/corpus/db/types.rs`
+We combine this with rust's type system (namely, Sealed Traits, to only allow for some interfaces to be invoked from certain callsites or modules) so that we have compile-time guarantees that an enter keypress has happened when we're adding a decision to a transaction/confirming a decision. We additionally have other sets of compile-time guarantees that the actual corpus/index mutating function implementations are only invoked from the Task execution callsite (in their new thread).
 
----
+The combination of all these is what enables the Task Daemon to guarantee all of our operational sanity requirements.
 
-### 4. Operation Flows (Signal Resolution)
+## The corpus browser/search and tag editor
 
-Operation flows are the primary way users resolve signals based on Insights. 
+These are two fundamental tools for any Librarian, as one-off corpus introspection needs nice tools. Additionally, we need them for our own development cycle.
 
-**The key design principle**:
+Because the tag editor also *must* use the Task Daemon for dispatching its edits etc, we both *get to leverage* the transaction UX for our UI state machine, and *have to validate* the mutations under a lens, as well. Thus, the tag editor and browsers/searchers are invaluable tools for validating functionality and correctness of mutations and computations in a small and verifiable context before applying them in bulk.
 
-> Present as FEW choices as possible, with as LARGE an impact as possible.
+Additionally, all the UI components we make for the tag editor are necessary for our other UI modals, so the widgets and stuff there are just handy as well.
 
-**Examples**:
-- Fingerprint quality dedup: "Which of these files are identical, tagged identically, and are outranked by a better bitrate dupe?" -> potentially affects thousands of tracks at once
-- Artist canonicalization: "Which spelling of 'DragonForce' should be canonical?" → affects dozens of tracks
-- Duplicate resolution: "Which of these directories outranks the others?" → resolves hundreds of dupes
-- Deploy conflicts: "Which track should occupy this library slot?" → one or two decisions per conflict, lots of manual tag editing, last flow to do generally
+## Insights
 
-**Flow Structure**:
-```
-Insight into combination of signals
-    │
-    ▼
-Operation Flow (by Insight)
-    │
-    ├─► Decision 1 ──► accumulates mutations
-    ├─► Decision 2 ──► accumulates mutations
-    └─► Decision N ──► accumulates mutations
-            │
-            ▼
-        Review (preview all accumulated mutations)
-            │
-            ├─► Discard ──► [X] terminate
-            │
-            └─► Confirm ──► Background Executor
-                                │
-                                ├─► modify corpus files
-                                ├─► modify inbox files
-                                ├─► update index
-                                ├─► update/clear signals
-                                └─► write audit log
-```
+Ultimately, all these systems exist to serve one thing: the Corpus Insights dashboard that presents signals to the user in a meaningful manner, to let them jump into precise guided Flows to resovle sets of signals in bulk.
 
-**Key Principle**: Operations produce mutations. They never directly modify files.
-
-**Implementation**: `src/flows/`, `src/ui/*_flow/`
-
----
-
-### 5. Algebraic Mutations
-
-**ALL CORPUS CHANGES MUST GO THROUGH THE MUTATIONS SYSTEM.**
-
-Mutations are algebraic expressions of change. They are:
-- **Composable**: Mutations can spawn child mutations (DAG structure)
-- **Accumulable**: Many mutations queue up during a flow before execution
-- **Previewable**: Operator sees summary before committing
-- **Attributable**: Tied to high-level Decisions for audit trail
-
-**Mutation Categories**:
-
-| Category | Mutations |
-|----------|-----------|
-| Tag editing | `TagEditDb`, `TagEditFile`, `TagEdit` (composite) |
-| File operations | `MoveFile`, `DeleteFile`, `StashFile` |
-| Index operations | `DropFromIndex`, `UpdateTrack`, `UpdateTrackPath` |
-| Deployment | `Deploy`, `Undeploy`, `RefreshDeployment` |
-| Scan state | `UpdateScanStatePath`, `RemoveScanState` |
-
-**Composition Example** (DAG):
-```
-TagEdit(file, field, value)
-    ├─► TagEditDb(file, field, value)   // Update index
-    └─► TagEditFile(file, field, value) // Flush to disk
-```
-
-This composition allows granular reuse. For example, resolving `OutOfBandTagChange` might use `TagEditDb` alone (to accept disk reality) or `TagEditFile` alone (to restore indexed values).
-
-**Key Constraint**: Mutations execute via the background task system. They can always occur in large numbers and must not block the UI.
-
-**Implementation**: `src/corpus/mutations/`
-
----
-
-### 6. Audit Log (Future)
-
-The audit log records decisions and their resulting mutations, enabling:
-- Traceability: "Why was this tag changed?"
-- Potential reversion: Undo decisions by reversing their mutations
-- Export: Plain-text dump of decision history for archival
-
-**Status**: Planned. Currently mutations execute but are not audited beyond the session.
-
----
-
-### 7. Hard-Link Deployments
-
-Deployment is a signal resolution flow that deploys corpus files to library directories via hard links.
-
-This one is pretty simple, honestly.
-
-**Deployment Path**: `{library_root}/{album_artist}/{album}/{track}` (configurable)
-
-**Key Properties**:
-- Hard links only (no duplication of data)
-- Full tag collisions are NOT deployed (keeps library duplicate-free)
-- Deployment conflicts are pre-computed signals
-- Stale files (tags changed after deployment) are tracked
-- Orphan files (shouldn't exist) are stashed during next deploy
-
-**Implementation**: `src/flows/deploy.rs`, `src/corpus/health/library.rs`
-
----
-
-### 8. Intake Flow (Planned)
-
-The intake flow processes incoming files from a configured inbox directory.
-
-**Design**: The inbox is treated as a special directory processed through the usual file-moving mechanisms (like the stash). Files go through:
-- Unpacking (if archives)
-- Normalization against existing index
-- Deduplication checks
-- Atomic addition to corpus
-
-**Relationship to Heartbeat**: Once intake is operational, heartbeat becomes primarily for detecting missing files, out-of-band changes, and relocations within the corpus itself.
-
-**Status**: Planned, not yet implemented.
-
----
-
-### 9. Corpus Browser
-
-A standalone interface for browsing the corpus and editing tags.
-
-**Features**:
-- Directory tree navigation with track counts
-- Metadata preview (bitrate, duration, sample rate, tags)
-- Multi-track tag editor
-
-**Integration with Mutations**: Tag edits from the browser generate mutations that flow through the standard accumulate → review → confirm pipeline.
-
-**Key Principle**: The browser is a tool, not a flow. It provides direct access without the guided decision structure of operations.
-
-**Implementation**: `src/ui/corpus_browser/`, `src/ui/tag_editor/`
-
----
-
-### 10. Hello World (Setup Witch)
-
-Onboarding flow for new users.
-
-**Current**: Auto-detect empty database → start corpus scan
-
-**Planned**:
-- Detect missing config file
-- Interactive wizard (witch) for initial configuration
-- Initial library triage and recommended resolution actions
-
-**Priority**: Very low. Other systems take precedence. Initial insights can be freely offered once Insights are fleshed out.
-
----
-
-## Key Invariants
-
-1. **Mutations are the only write path**: No system directly modifies corpus files. All changes go through mutations.
-
-2. **Signals are cached facts**: They exist in the database, are pushed by heartbeat/mutations, and describe corpus state without prescribing action.
-
-3. **Operations produce, never apply**: Operation flows generate mutations. The background executor applies them.
-
-4. **Confirm before commit**: Accumulated mutations are always previewed before execution. No silent changes.
-
-5. **Heartbeat detects, doesn't resolve**: The heartbeat pushes signals. Resolution is a separate user-driven process via operation flows.
-
-6. **Background execution for bulk work**: Mutations can always occur in large numbers. The background task system handles execution without blocking the UI.
-
----
-
-## Module Organization
-
-MLA's source code is organized into three primary domains:
-
-```
-src/
-├── main.rs          # Entry point
-├── config.rs        # Configuration loading and path utilities
-│
-├── corpus/          # Corpus domain - indexing, health, analysis
-│   ├── db/          # Database layer
-│   │   ├── types.rs     # Track, HealthIssue, DeploymentStats
-│   │   ├── queries/     # All database operations
-│   │   ├── changes.rs   # PendingChange, ChangeType, ChangeStatus
-│   │   └── decisions.rs # Decision flow types
-│   ├── metadata.rs      # Audio file metadata and fingerprint extraction
-│   ├── health/          # Health detection and signals
-│   ├── mutations/       # Algebraic mutation types and executors
-│   ├── deduplication/   # Duplicate detection algorithms
-│   └── reports/         # Report generation
-│
-├── flows/           # Operation flows - UI-driving process logic
-│   ├── scanner.rs   # Directory walking and indexing
-│   ├── progress.rs  # Scan progress tracking types
-│   ├── changes.rs   # Change execution engine
-│   ├── deploy.rs    # Library deployment via hard links
-│   ├── operation.rs # Background operation management
-│   └── reports.rs   # Report execution
-│
-└── ui/              # User interface domain
-    ├── mod.rs       # App state machine and mode dispatch
-    ├── render.rs    # TUI rendering
-    ├── app.rs       # Application state (eye animation, operations)
-    ├── main_menu.rs # Category/command navigation
-    ├── dialogue.rs  # Conversational decision flows
-    ├── helpers.rs   # Shared rendering utilities
-    ├── widgets/     # Reusable UI components
-    ├── tag_editor/  # Multi-track metadata editing
-    ├── corpus_browser/ # Directory tree browsing
-    ├── canon_flow/     # Artist canonicalization UI
-    ├── album_flow/     # Album canonicalization UI
-    ├── album_artist_flow/ # Album artist resolution UI
-    ├── dedup_flow/     # Fingerprint duplicate resolution UI
-    └── deploy_flow/    # Deployment preview UI
-```
-
-### Domain Responsibilities
-
-| Domain | Purpose |
-|--------|---------|
-| **corpus** | Indexing, analysis, health tracking, and mutation definitions. The "model" layer. |
-| **flows** | Process-driving logic for operations. Background execution, scanning, deployment logic. |
-| **ui** | User interaction. Rendering, input handling, and flow state machines. |
-
----
-
-## Extension Points
-
-### Adding a New Health Signal
-
-1. Add variant to `HealthIssueType` enum in `corpus/db/types.rs`
-2. Add string mapping in `as_str()` and `from_str()`
-3. Create detection function in `corpus/health/detection.rs`
-4. Call detection at appropriate point (heartbeat or mutation side-effect)
-
-### Adding a New Mutation
-
-1. Add variant to `Mutation` enum in `corpus/mutations/types.rs`
-2. Implement executor in `corpus/mutations/executor.rs`
-3. If composite, define child mutations and DAG structure
-4. Wire into `MutationDispatcher.execute_sync()`
-
-### Adding a New Resolution Flow
-
-1. Create flow module in `ui/` (e.g., `ui/my_flow/`)
-2. Define state types, actions, and rendering
-3. Add `UiMode` variant for each flow phase
-4. Add state field to `App` struct
-5. Wire up mode dispatch in `handle_key()` and `render()`
-6. Add menu command to trigger flow from insights
-
-### Adding a New Report
-
-1. Add report function in `flows/reports.rs`
-2. Add `ReportType` variant in menu
-3. Wire up in `generate_report()` handler
+This part will require planning for each individual flow on their own to make them each as powerful as possible while not duplicating unneccesary amounts of UI code. It is *the* reason everything else in MLA is so engineered.

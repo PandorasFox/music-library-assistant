@@ -13,50 +13,6 @@ Tab and Shift+Tab should always be consistently paired for forward/backward navi
 
 These keys should never be used for unrelated actions. If Tab advances, Shift+Tab must go back.
 
-### Multi-Track Navigation Pattern
-
-For editors handling multiple tracks organized into groups (e.g., deploy conflicts, duplicate resolution):
-
-**Within-Group Navigation**
-- **Shift+Up**: Move to previous track in current group
-- **Shift+Down**: Move to next track in current group
-- **Up/Down**: Navigate fields within current track
-
-**Group-to-Group Navigation**
-- **Tab**: Persist current group state, advance to next group
-- **Shift+Tab**: Persist current group state, go to previous group
-- **Advancing past last group**: Proceeds to Review screen
-
-This pattern separates track navigation (Shift+arrows) from group workflow navigation (Tab), allowing intuitive movement within a group while Tab remains the "proceed forward" action.
-
-**Rationale**: In multi-group workflows like deploy conflict resolution, the operator often needs to examine and edit multiple tracks within a single conflict group before deciding to proceed. Separating track selection (Shift+arrows) from group progression (Tab) prevents accidental advancement and keeps Tab's semantic meaning consistent: "I'm done with this group, move forward."
-
-## Operation Flow Pattern
-
-All corpus-mutating operation flows should follow the **mutation-accumulating pattern**:
-
-1. **Interactive Phase**: Present items/groups for operator decisions
-2. **Mutation Accumulation**: Each decision generates pending mutations (PendingChange records) that are accumulated throughout the flow
-3. **Review Screen**: After all decisions are made, show a summary of all accumulated mutations
-4. **Commit/Discard**: Allow operator to commit all pending mutations at once, or discard the entire session
-
-This pattern ensures:
-- Operator can review all changes before any filesystem mutations occur
-- All changes in a session can be atomically committed or discarded
-- Session state is preserved when navigating between groups (Tab/Shift+Tab)
-
-### Decision Persistence Rule
-
-**Any time a modal/group is exited, active decisions MUST be persisted first.**
-
-This applies to all navigation actions:
-- Tab (advance to next)
-- Shift+Tab (go back to previous)
-- Esc (go to review)
-- Any other action that leaves the current editing context
-
-Decisions should never be discarded by navigation. The accumulation pattern means we always move forward toward the review stage, preserving all work done along the way. When revisiting a previous group, its saved decision should be reloaded into the UI. When leaving again (in any direction), any modifications should be persisted as an update-in-place.
-
 ### Symmetric Navigation
 
 **Forward and backward navigation should be functionally identical**, with one exception:
@@ -69,17 +25,10 @@ This symmetry accommodates non-linear workflows. Librarians may need to revisit 
 
 **Key principle**: Librarians trust us to hold their state. Navigation should never lose work.
 
-### Example: Artist Canonicalization Flow
-
-1. Present artist name clusters one at a time
-2. Operator selects variants to squash and chooses canonical name
-3. Each "Squash!" decision generates TagEdit mutations for affected tracks
-4. Tab advances to next cluster (preserving decision), Shift+Tab goes back
-5. Esc opens review screen showing all decisions and affected track counts
-6. Commit writes to database and starts background tag-flush operation
-
 ## Pane Focus Indicators
 
 - Focused pane should have highlighted border (typically yellow)
 - Non-focused panes should have default border color
 - Cursor/selection within a pane should be visually distinct
+
+TODO: need to revisit all colors once we're more done on UI work.

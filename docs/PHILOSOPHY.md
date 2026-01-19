@@ -149,25 +149,13 @@ Applying "Remove duplicate lower-bitrate versions"
 
 Users review patterns, not individual files. The system handles the tedious enumeration.
 
-### Failure Handling
-
-Atomic operations fail completely rather than partially:
-
-- If file 400 of 847 fails, files 1-399 are rolled back
-- Failures are logged with full context for diagnosis
-- The user can fix the issue and retry the entire batch
-
 
 ## Design Principles Summary
 
 1. **Operator-driven**: MLA never mutates autonomously; all Mutations trace to operator Decisions
 2. **Read-only by default**: Observation never mutates
 3. **Explicit confirmation**: No silent changes to corpus
-4. **Reversible operations**: Every change can be undone
-5. **Batch over individual**: Design patterns, apply in bulk
-6. **Conversation over dashboard**: One question at a time
-7. **Hard links over copies**: Single source of truth
-8. **Lost-files over deletion**: Preserve until explicitly discarded
+4. **Consistency, Safety, Predictablity, Observability**: We value consistent use of our handful of systems highly.
 
 ## Anti-Patterns to Avoid
 
@@ -177,4 +165,3 @@ Atomic operations fail completely rather than partially:
 - **Modal complexity**: Don't nest modes deeply, keep paths flat
 - **Clever inference**: Don't guess operator intent, ask
 - **Hidden state**: Don't accumulate changes invisibly
-- **Format worship**: Don't assume FLAC > MP3 without context

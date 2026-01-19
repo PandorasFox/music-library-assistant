@@ -235,6 +235,17 @@ impl UnifiedTagEditorState {
         Self::new(TagEditorMode::Individual, tracks, source, group_context)
     }
 
+    /// Create a new unified state for aggregated bulk editing (convenience wrapper).
+    ///
+    /// Uses Aggregated mode - shows unified view, changes apply to all tracks at once.
+    /// No sibling navigation - all tracks are edited as one unit.
+    pub fn aggregated_bulk(
+        tracks: Vec<Track>,
+        source: TagEditorSource,
+    ) -> Self {
+        Self::new(TagEditorMode::Aggregated, tracks, source, None)
+    }
+
     /// Create a new unified state for directory editing with aggregated tags (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all tracks.
@@ -273,6 +284,28 @@ impl UnifiedTagEditorState {
         self.mode == TagEditorMode::Individual
     }
 
+    /// Check if there are meaningful siblings to navigate to.
+    ///
+    /// Returns true if:
+    /// - DirectoryEdit mode with multiple sibling directories
+    /// - Individual mode with multiple tracks
+    ///
+    /// Returns false if:
+    /// - Aggregated mode (all tracks edited as one unit, no sibling concept)
+    /// - Only one track/directory
+    pub fn has_siblings(&self) -> bool {
+        if self.is_directory_edit() {
+            // Directory edit: siblings are other directories at the same level
+            self.sibling_directories.len() > 1
+        } else if self.is_individual_mode() {
+            // Individual mode: siblings are other tracks in the batch
+            self.total_items > 1
+        } else {
+            // Aggregated mode: no sibling concept, all tracks are one unit
+            false
+        }
+    }
+
     // TODO: bulk_from_directory() - starts async gathering
 
     // ========================================================================
@@ -303,35 +336,111 @@ impl UnifiedTagEditorState {
 
     /// Check if there are any unsaved changes (all items)
     pub fn has_changes(&self) -> bool {
-        !compute_changes(&self.original_tag_fields, &self.tag_fields).is_empty()
+        if self.is_aggregated_mode() {
+            self.has_aggregated_changes()
+        } else {
+            !compute_changes(&self.original_tag_fields, &self.tag_fields).is_empty()
+        }
     }
 
     /// Check if there are any unsaved changes for the current item only
     pub fn has_changes_for_current_item(&self) -> bool {
-        compute_changes(&self.original_tag_fields, &self.tag_fields)
-            .iter()
-            .any(|c| c.track_idx == self.current_item_idx)
+        if self.is_aggregated_mode() {
+            // In aggregated mode, changes apply to all tracks
+            self.has_aggregated_changes()
+        } else {
+            compute_changes(&self.original_tag_fields, &self.tag_fields)
+                .iter()
+                .any(|c| c.track_idx == self.current_item_idx)
+        }
+    }
+
+    /// Check if any aggregated fields have been edited
+    fn has_aggregated_changes(&self) -> bool {
+        if let Some(ref agg_fields) = self.aggregated_fields {
+            agg_fields.iter().any(|f| matches!(f.value, AggregatedValue::Edited(_)))
+        } else {
+            false
+        }
     }
 
     /// Get changes for preview (all items)
     pub fn get_changes_for_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
-        let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
-        group_common_changes(&changes)
+        if self.is_aggregated_mode() {
+            let changes = self.compute_aggregated_changes();
+            group_common_changes(&changes)
+        } else {
+            let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+            group_common_changes(&changes)
+        }
     }
 
     /// Get changes for preview (current item only)
     pub fn get_changes_for_current_item_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
-        let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
-        let current_changes: Vec<_> = all_changes
-            .into_iter()
-            .filter(|c| c.track_idx == self.current_item_idx)
-            .collect();
-        group_common_changes(&current_changes)
+        if self.is_aggregated_mode() {
+            // In aggregated mode, changes apply to all tracks - show them all
+            let changes = self.compute_aggregated_changes();
+            group_common_changes(&changes)
+        } else {
+            let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+            let current_changes: Vec<_> = all_changes
+                .into_iter()
+                .filter(|c| c.track_idx == self.current_item_idx)
+                .collect();
+            group_common_changes(&current_changes)
+        }
+    }
+
+    /// Compute changes from aggregated fields, applying to all tracks
+    fn compute_aggregated_changes(&self) -> Vec<TagChange> {
+        let agg_fields = match &self.aggregated_fields {
+            Some(f) => f,
+            None => return Vec::new(),
+        };
+
+        let num_tracks = self.tag_fields.len();
+        let mut changes = Vec::new();
+
+        for field in agg_fields {
+            if let AggregatedValue::Edited(new_value) = &field.value {
+                // This field was edited - create a change for each track
+                for track_idx in 0..num_tracks {
+                    // Get the original value for this track
+                    let old_value = self.original_tag_fields
+                        .get(track_idx)
+                        .and_then(|fields| {
+                            fields.iter()
+                                .find(|f| f.name.eq_ignore_ascii_case(&field.name))
+                                .map(|f| f.value.clone())
+                        })
+                        .unwrap_or_default();
+
+                    // Only add change if value actually differs
+                    if old_value != *new_value {
+                        changes.push(TagChange {
+                            track_idx,
+                            field_name: field.name.clone(),
+                            old_value,
+                            new_value: new_value.clone(),
+                            old_name: None,
+                            deleted: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        changes
     }
 
     /// Generate mutations from current changes (all items)
     pub fn generate_mutations(&self) -> Vec<Mutation> {
-        let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+        let changes = if self.is_aggregated_mode() {
+            self.compute_aggregated_changes()
+        } else {
+            compute_changes(&self.original_tag_fields, &self.tag_fields)
+        };
+
         let tracks = match &self.context {
             TagEditContext::SingleFile { track, .. } => vec![track.clone()],
             TagEditContext::BulkEdit { tracks, .. } => tracks.clone(),
@@ -343,6 +452,11 @@ impl UnifiedTagEditorState {
     /// Generate mutations for the current item only.
     /// This is what should be used when staging a decision for one track.
     pub fn generate_mutations_for_current_item(&self) -> Vec<Mutation> {
+        if self.is_aggregated_mode() {
+            // In aggregated mode, all changes apply to all tracks
+            return self.generate_mutations();
+        }
+
         let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
 
         // Filter to only changes for current_item_idx
@@ -541,12 +655,22 @@ impl UnifiedTagEditorState {
             Some(UnifiedTagEditorModal::ChangePreview { scroll, .. }) => {
                 match key.code {
                     KeyCode::Enter => {
-                        // Confirm changes -> stage decision for current item AND continue to next
+                        // Confirm changes -> stage decision for current item
                         let mutations = self.generate_mutations_for_current_item();
                         self.modal = None;
-                        UnifiedTagEditorAction::StageDecisionAndNext {
-                            index: self.current_item_idx,
-                            mutations,
+
+                        // If there are siblings to navigate to, go to the next one.
+                        // Otherwise (aggregated mode or single item), go directly to review.
+                        if self.has_siblings() {
+                            UnifiedTagEditorAction::StageDecisionAndNext {
+                                index: self.current_item_idx,
+                                mutations,
+                            }
+                        } else {
+                            UnifiedTagEditorAction::StageDecisionAndReview {
+                                index: self.current_item_idx,
+                                mutations,
+                            }
                         }
                     }
                     KeyCode::Esc => {
@@ -761,7 +885,11 @@ impl UnifiedTagEditorState {
                 if self.field_edit_state != FieldEditState::NonEditable {
                     self.commit_field_buffer();
                 }
-                let max_fields = self.tag_fields.get(self.current_item_idx).map(|f| f.len()).unwrap_or(0);
+                let max_fields = if self.is_aggregated_mode() {
+                    self.aggregated_fields.as_ref().map(|f| f.len()).unwrap_or(0)
+                } else {
+                    self.tag_fields.get(self.current_item_idx).map(|f| f.len()).unwrap_or(0)
+                };
                 if self.current_field_idx < max_fields.saturating_sub(1) {
                     self.current_field_idx += 1;
                     let visible_end = self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
@@ -915,31 +1043,104 @@ impl UnifiedTagEditorState {
     // ========================================================================
 
     fn load_field_buffer(&mut self) {
-        if let Some(fields) = self.tag_fields.get(self.current_item_idx) {
-            if let Some(field) = fields.get(self.current_field_idx) {
-                self.name_buffer = field.name.clone();
-                self.value_buffer = field.value.clone();
+        if self.is_aggregated_mode() {
+            // Aggregated mode - load from aggregated_fields
+            if let Some(ref agg_fields) = self.aggregated_fields {
+                if let Some(field) = agg_fields.get(self.current_field_idx) {
+                    self.name_buffer = field.name.clone();
+                    self.value_buffer = match &field.value {
+                        AggregatedValue::Consistent(v) => v.clone(),
+                        AggregatedValue::Edited(v) => v.clone(),
+                        AggregatedValue::Various | AggregatedValue::VariousConfirming => String::new(),
+                    };
+                }
+            }
+        } else {
+            // Individual mode - load from tag_fields
+            if let Some(fields) = self.tag_fields.get(self.current_item_idx) {
+                if let Some(field) = fields.get(self.current_field_idx) {
+                    self.name_buffer = field.name.clone();
+                    self.value_buffer = field.value.clone();
+                }
             }
         }
     }
 
     fn commit_field_buffer(&mut self) {
-        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
-            if let Some(field) = fields.get_mut(self.current_field_idx) {
-                match self.field_edit_state {
-                    FieldEditState::EditingName => {
-                        field.name = self.name_buffer.clone();
+        if self.is_aggregated_mode() {
+            // Aggregated mode - update aggregated_fields
+            if let Some(ref mut agg_fields) = self.aggregated_fields {
+                if let Some(field) = agg_fields.get_mut(self.current_field_idx) {
+                    match self.field_edit_state {
+                        FieldEditState::EditingName => {
+                            field.name = self.name_buffer.clone();
+                        }
+                        FieldEditState::EditingValue => {
+                            // Mark as Edited with new value
+                            field.value = AggregatedValue::Edited(self.value_buffer.clone());
+                        }
+                        FieldEditState::NonEditable => {}
                     }
-                    FieldEditState::EditingValue => {
-                        field.value = self.value_buffer.clone();
+                }
+            }
+        } else {
+            // Individual mode - update tag_fields
+            if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+                if let Some(field) = fields.get_mut(self.current_field_idx) {
+                    match self.field_edit_state {
+                        FieldEditState::EditingName => {
+                            field.name = self.name_buffer.clone();
+                        }
+                        FieldEditState::EditingValue => {
+                            field.value = self.value_buffer.clone();
+                        }
+                        FieldEditState::NonEditable => {}
                     }
-                    FieldEditState::NonEditable => {}
                 }
             }
         }
     }
 
     fn handle_field_enter(&mut self) {
+        if self.is_aggregated_mode() {
+            self.handle_aggregated_field_enter();
+        } else {
+            self.handle_individual_field_enter();
+        }
+    }
+
+    fn handle_aggregated_field_enter(&mut self) {
+        let field = match self.aggregated_fields.as_ref().and_then(|f| f.get(self.current_field_idx)) {
+            Some(f) => f.clone(),
+            None => return,
+        };
+
+        if self.field_edit_state == FieldEditState::NonEditable {
+            // Check if this is a Various value that needs confirmation
+            if matches!(field.value, AggregatedValue::Various) {
+                // First Enter - mark as confirming
+                if let Some(ref mut agg_fields) = self.aggregated_fields {
+                    if let Some(f) = agg_fields.get_mut(self.current_field_idx) {
+                        f.value = AggregatedValue::VariousConfirming;
+                    }
+                }
+            } else if matches!(field.value, AggregatedValue::VariousConfirming) {
+                // Second Enter - now enter edit mode
+                self.field_edit_state = FieldEditState::EditingValue;
+                self.load_field_buffer();
+            } else {
+                // Consistent or Edited value - enter edit mode directly
+                self.field_edit_state = FieldEditState::EditingValue;
+                self.load_field_buffer();
+            }
+        } else {
+            // Already editing - commit and exit edit mode
+            self.commit_field_buffer();
+            self.field_edit_state = FieldEditState::NonEditable;
+        }
+    }
+
+    fn handle_individual_field_enter(&mut self) {
         let fields = match self.tag_fields.get(self.current_item_idx) {
             Some(f) => f,
             None => return,
@@ -1171,7 +1372,7 @@ impl UnifiedTagEditorState {
     }
 
     fn render_info_pane(&self, f: &mut Frame, area: Rect) {
-        let (path, file_type, file_size, duration_ms, bitrate, sample_rate, source) = match &self.context {
+        let (path, file_type, file_size, duration_ms, bitrate, sample_rate) = match &self.context {
             TagEditContext::SingleFile { track, .. } => (
                 track.path.clone(),
                 track.file_type.clone(),
@@ -1179,7 +1380,6 @@ impl UnifiedTagEditorState {
                 track.duration_ms,
                 track.bitrate_kbps,
                 track.sample_rate,
-                track.source.clone(),
             ),
             TagEditContext::BulkEdit { tracks, .. } => {
                 if let Some(track) = tracks.get(self.current_item_idx) {
@@ -1190,7 +1390,6 @@ impl UnifiedTagEditorState {
                         track.duration_ms,
                         track.bitrate_kbps,
                         track.sample_rate,
-                        track.source.clone(),
                     )
                 } else {
                     return;
@@ -1231,7 +1430,6 @@ impl UnifiedTagEditorState {
                 bitrate_str,
                 sample_rate_str
             )),
-            Line::from(format!("Source: {}", source)),
         ];
 
         // Add MP3 warning if applicable
@@ -1293,8 +1491,18 @@ impl UnifiedTagEditorState {
                 })
                 .collect();
             (lines, "Directories")
+        } else if self.is_aggregated_mode() {
+            // Aggregated mode - show single summary entry (no individual track navigation)
+            let count = self.total_items;
+            let summary = format!(">> {} tracks", count);
+            let lines = vec![
+                Line::from(summary).style(Style::default().bg(Color::DarkGray)),
+                Line::from(""),
+                Line::from("(bulk edit)").style(Style::default().fg(Color::DarkGray)),
+            ];
+            (lines, "Selection")
         } else {
-            // Standard track-based rendering
+            // Standard track-based rendering (Individual mode)
             // Note: Track no longer has artist/title - use filename from path
             let items: Vec<Line> = match &self.context {
                 TagEditContext::SingleFile { track, group_context, .. } => {
@@ -1320,7 +1528,7 @@ impl UnifiedTagEditorState {
                     lines
                 }
                 TagEditContext::BulkEdit { tracks, .. } => {
-                    // Bulk mode - show all tracks by filename
+                    // Bulk mode with Individual editing - show all tracks by filename
                     tracks
                         .iter()
                         .enumerate()

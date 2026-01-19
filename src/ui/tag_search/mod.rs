@@ -29,24 +29,37 @@ pub use types::{SearchCondition, TagSearchAction, TagSearchMode};
 impl TagSearchState {
     /// Handle a key event. Returns an action that may require db access.
     pub fn handle_key(&mut self, key: KeyEvent) -> TagSearchAction {
+        // Handle modal first if active
+        if self.modal.is_some() {
+            return self.handle_modal_key(key);
+        }
+
         match self.mode {
             TagSearchMode::QueryBuilder => self.handle_query_builder_key(key),
             TagSearchMode::Results => self.handle_results_mode_key(key),
         }
     }
 
+    fn handle_modal_key(&mut self, key: KeyEvent) -> TagSearchAction {
+        // GatheringTags modal is non-interactive - handled by tick
+        if matches!(self.modal, Some(types::TagSearchModal::GatheringTags)) {
+            return TagSearchAction::None;
+        }
+
+        match key.code {
+            // Enter or Escape dismisses the modal
+            KeyCode::Enter | KeyCode::Esc => {
+                self.modal = None;
+                TagSearchAction::None
+            }
+            _ => TagSearchAction::None,
+        }
+    }
+
     fn handle_query_builder_key(&mut self, key: KeyEvent) -> TagSearchAction {
         match key.code {
-            // Tab/Shift-Tab for lateral view cycling
-            KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                if self.active_field_focus() == QueryFieldFocus::TagName {
-                    // Tab-complete tag name
-                    self.apply_tag_name_suggestion();
-                    TagSearchAction::None
-                } else {
-                    TagSearchAction::CycleNext
-                }
-            }
+            // Tab/Shift-Tab for lateral view cycling (no tab-completion to avoid conflict)
+            KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => TagSearchAction::CycleNext,
             KeyCode::Tab | KeyCode::BackTab => TagSearchAction::CyclePrev,
 
             // Escape
@@ -80,6 +93,9 @@ impl TagSearchState {
                     TagSearchAction::None
                 } else if self.is_on_operator_field() {
                     self.cycle_operator();
+                    TagSearchAction::None
+                } else if self.is_on_comparison_field() {
+                    self.cycle_comparison();
                     TagSearchAction::None
                 } else {
                     // Move to next field
@@ -128,20 +144,23 @@ impl TagSearchState {
                 TagSearchAction::None
             }
 
-            // Enter = edit single track
-            KeyCode::Enter => {
-                if let Some(twt) = self.selected_result() {
-                    TagSearchAction::EditTrack(twt.track.clone())
+            // B = bulk edit all results (show gathering modal first)
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                let tracks = self.all_result_tracks();
+                if !tracks.is_empty() {
+                    // Show gathering modal and store pending tracks
+                    self.modal = Some(types::TagSearchModal::GatheringTags);
+                    self.pending_bulk_edit = Some(tracks);
+                    TagSearchAction::None
                 } else {
                     TagSearchAction::None
                 }
             }
 
-            // Shift+Enter = edit all results
-            KeyCode::Char('E') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                let tracks = self.all_result_tracks();
-                if !tracks.is_empty() {
-                    TagSearchAction::EditAllTracks(tracks)
+            // Enter = edit single track
+            KeyCode::Enter => {
+                if let Some(twt) = self.selected_result() {
+                    TagSearchAction::EditTrack(twt.track.clone())
                 } else {
                     TagSearchAction::None
                 }
@@ -170,6 +189,47 @@ impl TagSearchState {
         match self.mode {
             TagSearchMode::QueryBuilder => self.render_query_builder(f, chunks[1]),
             TagSearchMode::Results => self.render_results(f, chunks[1]),
+        }
+
+        // Render modal overlay if active
+        if let Some(ref modal) = self.modal {
+            self.render_modal(f, area, modal);
+        }
+    }
+
+    fn render_modal(&self, f: &mut Frame, area: Rect, modal: &types::TagSearchModal) {
+        use crate::ui::widgets::Modal;
+
+        match modal {
+            types::TagSearchModal::NoResults => {
+                Modal::new()
+                    .title("Search Results")
+                    .size(40, 25)
+                    .content(vec![
+                        Line::raw(""),
+                        Line::styled("No results found", Style::default().fg(Color::White)),
+                        Line::raw(""),
+                        Line::styled("[ OK ]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    ])
+                    .centered()
+                    .render(f, area);
+            }
+            types::TagSearchModal::GatheringTags => {
+                let track_count = self.pending_bulk_edit.as_ref().map(|t| t.len()).unwrap_or(0);
+                Modal::new()
+                    .title("Bulk Edit")
+                    .size(45, 20)
+                    .content(vec![
+                        Line::raw(""),
+                        Line::styled(
+                            format!("Gathering tags for {} files...", track_count),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        Line::raw(""),
+                    ])
+                    .centered()
+                    .render(f, area);
+            }
         }
     }
 
@@ -235,12 +295,12 @@ impl TagSearchState {
             } else {
                 Style::default().fg(Color::Yellow)
             };
-            spans.push(Span::styled(format!("{} ", condition.operator.label()), op_style));
+            spans.push(Span::styled(format!("{:<4}", condition.operator.label()), op_style));
         } else {
-            spans.push(Span::raw("   ")); // Align with operators
+            spans.push(Span::raw("    ")); // Align with operators (4 chars: "AND ")
         }
 
-        // Tag name
+        // Tag name field
         let name_focused = is_focused && self.field_focus == QueryFieldFocus::TagName;
         let name_style = if name_focused {
             Style::default().bg(Color::DarkGray).fg(Color::White)
@@ -252,10 +312,26 @@ impl TagSearchState {
         } else {
             condition.tag_name.clone()
         };
-        spans.push(Span::styled(format!("{:<15}", name_display), name_style));
-        spans.push(Span::raw(": "));
+        // Show cursor for focused text input
+        let name_with_cursor = if name_focused {
+            format!("{}_", name_display)
+        } else {
+            name_display
+        };
+        spans.push(Span::styled(format!("{:<16}", name_with_cursor), name_style));
+        spans.push(Span::raw(" "));
 
-        // Value
+        // Comparison operator
+        let comp_focused = is_focused && self.field_focus == QueryFieldFocus::Comparison;
+        let comp_style = if comp_focused {
+            Style::default().bg(Color::Magenta).fg(Color::Black)
+        } else {
+            Style::default().fg(Color::Magenta)
+        };
+        spans.push(Span::styled(format!("{:<8}", condition.comparison.label()), comp_style));
+        spans.push(Span::raw(" "));
+
+        // Value field
         let value_focused = is_focused && self.field_focus == QueryFieldFocus::Value;
         let value_style = if value_focused {
             Style::default().bg(Color::DarkGray).fg(Color::White)
@@ -267,7 +343,13 @@ impl TagSearchState {
         } else {
             condition.value.clone()
         };
-        spans.push(Span::styled(value_display, value_style));
+        // Show cursor for focused text input
+        let value_with_cursor = if value_focused {
+            format!("{}_", value_display)
+        } else {
+            value_display
+        };
+        spans.push(Span::styled(value_with_cursor, value_style));
 
         f.render_widget(Paragraph::new(Line::from(spans)), area);
     }
@@ -351,7 +433,7 @@ impl TagSearchState {
                 ]),
                 Line::raw(""),
                 Line::styled(
-                    "Enter: Edit track | Shift+E: Edit all",
+                    "Enter: Edit track | B: Bulk edit all",
                     Style::default().fg(Color::DarkGray),
                 ),
             ]
@@ -369,6 +451,7 @@ pub enum QueryFieldFocus {
     Operator,
     #[default]
     TagName,
+    Comparison,
     Value,
     AddCondition,
     SearchButton,

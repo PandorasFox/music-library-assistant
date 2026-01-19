@@ -271,7 +271,7 @@ impl App {
                             if state.selected_no {
                                 // "No" selected - return to Insights view
                                 self.exit_confirm_modal_state = None;
-                                self.mode = UiMode::Insights;
+                                self.start_insights_view();
                             } else {
                                 // "Yes" selected - actually quit
                                 self.should_quit = true;
@@ -280,7 +280,7 @@ impl App {
                         KeyCode::Esc => {
                             // Esc returns to Insights view
                             self.exit_confirm_modal_state = None;
-                            self.mode = UiMode::Insights;
+                            self.start_insights_view();
                         }
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             // 'y' confirms exit
@@ -289,7 +289,7 @@ impl App {
                         KeyCode::Char('n') | KeyCode::Char('N') => {
                             // 'n' cancels - return to Insights view
                             self.exit_confirm_modal_state = None;
-                            self.mode = UiMode::Insights;
+                            self.start_insights_view();
                         }
                         _ => {}
                     }
@@ -435,7 +435,6 @@ impl App {
 
                 // Clean up and transition to Insights
                 self.intake_confirmation = None;
-                self.mode = UiMode::Insights;
                 self.start_insights_view();
             }
             startup::IntakeConfirmationAction::Skipped => {
@@ -444,7 +443,6 @@ impl App {
                 let _ = config::log_message("IntakeConfirmation: user skipped indexing");
 
                 self.intake_confirmation = None;
-                self.mode = UiMode::Insights;
                 self.start_insights_view();
             }
         }
@@ -493,13 +491,19 @@ impl App {
         );
     }
 
-    /// Start unified tag editor for multiple tracks from tag search results
+    /// Start unified tag editor for aggregated bulk editing from tag search results
     fn start_unified_tag_editor_for_tracks(&mut self, tracks: Vec<crate::corpus::db::Track>) {
-        self.open_unified_tag_editor_bulk(
+        // Start transaction
+        if let Some(daemon) = self.task_daemon.as_mut() {
+            let _ = daemon.start_transaction("Tag search bulk edit");
+        }
+
+        // Use aggregated mode - all tracks edited as one unit
+        self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::aggregated_bulk(
             tracks,
             tag_editor::TagEditorSource::TagSearch,
-            None,
-        );
+        ));
+        self.mode = UiMode::UnifiedTagEditor;
     }
 
     fn start_deployment_preview(&mut self) {
@@ -566,7 +570,7 @@ impl App {
                 }
                 drop_flow::DropMissingAction::Cancel => {
                     self.drop_missing_state = None;
-                    self.mode = UiMode::Insights;
+                    self.start_insights_view();
                     self.status_message = Some("Drop cancelled".to_string());
                 }
             }
@@ -578,8 +582,8 @@ impl App {
         let missing_tracks = match &self.drop_missing_state {
             Some(state) => state.missing_tracks.clone(),
             None => {
+                self.start_insights_view();
                 self.status_message = Some("No missing tracks to drop".to_string());
-                self.mode = UiMode::Insights;
                 return;
             }
         };
@@ -609,7 +613,7 @@ impl App {
         }
 
         self.drop_missing_state = None;
-        self.mode = UiMode::Insights;
+        self.start_insights_view();
     }
 
     /// Start tag editor for deploy conflict resolution.
@@ -663,7 +667,7 @@ impl App {
             tree_browser::TreeBrowserAction::None => {}
             tree_browser::TreeBrowserAction::Cancel => {
                 self.tree_browser = None;
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
             }
             tree_browser::TreeBrowserAction::EditDirectory(path) => {
                 // Load tracks from directory and open unified tag editor
@@ -690,7 +694,7 @@ impl App {
                     paths.len()
                 ));
                 self.tree_browser = None;
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
             }
         }
     }
@@ -710,7 +714,7 @@ impl App {
                         e
                     ));
                     self.tree_browser = None;
-                    self.mode = UiMode::Insights;
+                    self.start_insights_view();
                     return;
                 }
             }
@@ -724,7 +728,7 @@ impl App {
                         path.display()
                     ));
                     self.tree_browser = None;
-                    self.mode = UiMode::Insights;
+                    self.start_insights_view();
                     return;
                 }
             };
@@ -739,7 +743,7 @@ impl App {
                         e
                     ));
                     self.tree_browser = None;
-                    self.mode = UiMode::Insights;
+                    self.start_insights_view();
                     return;
                 }
             };
@@ -777,7 +781,7 @@ impl App {
                             path.display()
                         ));
                         self.tree_browser = None;
-                        self.mode = UiMode::Insights;
+                        self.start_insights_view();
                         return;
                     }
                     Err(e) => {
@@ -787,7 +791,7 @@ impl App {
                             e
                         ));
                         self.tree_browser = None;
-                        self.mode = UiMode::Insights;
+                        self.start_insights_view();
                         return;
                     }
                 }
@@ -802,7 +806,7 @@ impl App {
                 path.display()
             ));
             self.tree_browser = None;
-            self.mode = UiMode::Insights;
+            self.start_insights_view();
             return;
         }
 
@@ -837,7 +841,7 @@ impl App {
             tag_editor::TagEditorAction::None => {}
             tag_editor::TagEditorAction::Exit => {
                 self.tag_editor = None;
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
             }
             tag_editor::TagEditorAction::SaveAll => {
                 self.save_tag_editor_changes(false);
@@ -970,9 +974,9 @@ impl App {
         // For workflow mode with advance_to_next: allow proceeding even with no changes
         // (user might just want to skip a group without editing)
         if changes.is_empty() && !advance_to_next {
-            self.status_message = Some("No changes to save".to_string());
             self.tag_editor = None;
-            self.mode = UiMode::Insights;
+            self.start_insights_view();
+            self.status_message = Some("No changes to save".to_string());
             return;
         }
 
@@ -1144,14 +1148,14 @@ impl App {
                     } else {
                         // No more groups
                         self.tag_editor = None;
-                        self.mode = UiMode::Insights;
+                        self.start_insights_view();
                         self.status_message = Some("All conflicts processed.".to_string());
                     }
                 }
             }
         } else {
             self.tag_editor = None;
-            self.mode = UiMode::Insights;
+            self.start_insights_view();
         }
     }
 
@@ -1310,25 +1314,68 @@ impl App {
                 self.navigate_to_next_sibling();
             }
 
+            UnifiedTagEditorAction::StageDecisionAndReview { index, mutations } => {
+                // Stage the decision AND immediately show transaction review
+                // Used for aggregated mode or single-item contexts where "next sibling" is meaningless
+                let witness = crate::daemon::confirm_decision();
+                if let Some(daemon) = self.task_daemon.as_mut() {
+                    let label = self.unified_tag_editor
+                        .as_ref()
+                        .map(|e| e.current_item_label())
+                        .unwrap_or_else(|| "Tag edit".to_string());
+                    let _ = daemon.add_decision(index, &witness, label, mutations.clone());
+                }
+                // Track staged mutations
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    editor.set_staged_mutations(mutations);
+                }
+                self.status_message = Some(format!("Decision staged (item {})", index + 1));
+
+                // Immediately show transaction review modal
+                let decisions: Vec<(usize, String, usize)> = if let Some(daemon) = self.task_daemon.as_ref() {
+                    daemon.decision_indices()
+                        .iter()
+                        .filter_map(|&idx| {
+                            daemon.get_decision(idx).map(|d| {
+                                (idx, d.label.clone(), d.mutations.len())
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    editor.modal = Some(tag_editor::UnifiedTagEditorModal::TransactionReview {
+                        decisions,
+                        scroll: 0,
+                        selected_button: tag_editor::TransactionReviewButton::CommitAll,
+                    });
+                }
+            }
+
             UnifiedTagEditorAction::CommitTransaction => {
                 // Commit all staged decisions
                 let witness = crate::daemon::confirm_decision();
-                if let Some(daemon) = self.task_daemon.as_mut() {
+                let commit_message = if let Some(daemon) = self.task_daemon.as_mut() {
                     match daemon.confirm_transaction(&witness) {
                         Ok(summary) => {
-                            self.status_message = Some(format!(
+                            format!(
                                 "Committed {} decisions ({} mutations)",
                                 summary.decision_count,
                                 summary.mutation_count
-                            ));
+                            )
                         }
                         Err(e) => {
-                            self.status_message = Some(format!("Commit failed: {}", e));
+                            format!("Commit failed: {}", e)
                         }
                     }
-                }
+                } else {
+                    "No daemon available".to_string()
+                };
                 self.unified_tag_editor = None;
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
+                self.status_message = Some(commit_message);
             }
 
             UnifiedTagEditorAction::DiscardTransaction => {
@@ -1338,7 +1385,7 @@ impl App {
                     let _ = daemon.discard_transaction(&witness);
                 }
                 self.unified_tag_editor = None;
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
                 self.status_message = Some("Edits discarded".to_string());
             }
 
@@ -1520,9 +1567,9 @@ impl App {
                     ));
 
                     if all_decisions.is_empty() {
-                        self.status_message = Some("No deployment changes needed".to_string());
                         self.deployment_preview = None;
-                        self.mode = UiMode::Insights;
+                        self.start_insights_view();
+                        self.status_message = Some("No deployment changes needed".to_string());
                         return;
                     }
 
@@ -1592,12 +1639,12 @@ impl App {
                 }
                 // Return to main menu immediately - deployment runs in background
                 self.deployment_preview = None;
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
             }
             deploy_flow::DeploymentPreviewAction::Cancel => {
                 let _ = config::log_message("Deployment preview cancelled");
                 self.deployment_preview = None;
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
                 self.status_message = Some("Deployment cancelled".to_string());
             }
             deploy_flow::DeploymentPreviewAction::CycleNext => {
@@ -1696,11 +1743,20 @@ impl App {
                 self.intake_confirmation = Some(intake_state);
                 self.mode = UiMode::IntakeConfirmation;
             } else {
-                self.mode = UiMode::Insights;
                 self.start_insights_view();
             }
         } else {
             self.splash_screen = Some(splash);
+        }
+    }
+
+    /// Tick tag search - checks for pending bulk edit after modal has rendered.
+    fn tick_tag_search(&mut self) {
+        if let Some(ref mut search) = self.tag_search {
+            if let Some(tracks) = search.take_pending_bulk_edit() {
+                self.tag_search = None;
+                self.start_unified_tag_editor_for_tracks(tracks);
+            }
         }
     }
 
@@ -1762,10 +1818,10 @@ impl App {
             .collect();
 
         if all_decisions.is_empty() {
-            self.status_message = Some("No changes to commit".to_string());
             self.deploy_conflict_review = None;
             self.deploy_conflict_accumulated.clear();
-            self.mode = UiMode::Insights;
+            self.start_insights_view();
+            self.status_message = Some("No changes to commit".to_string());
             return;
         }
 
@@ -1777,10 +1833,10 @@ impl App {
         let report = match crate::flows::changes::execute_decisions(db, &all_decisions, false) {
             Ok(r) => r,
             Err(e) => {
-                self.status_message = Some(format!("Execution error: {}", e));
                 self.deploy_conflict_review = None;
                 self.deploy_conflict_accumulated.clear();
-                self.mode = UiMode::Insights;
+                self.start_insights_view();
+                self.status_message = Some(format!("Execution error: {}", e));
                 return;
             }
         };
@@ -1809,23 +1865,25 @@ impl App {
             String::new()
         };
 
-        self.status_message = Some(format!("{}{}", base_msg, resolved_msg));
+        let status_msg = format!("{}{}", base_msg, resolved_msg);
 
         // Clear state
         self.deploy_conflict_review = None;
         self.deploy_conflict_accumulated.clear();
-        self.mode = UiMode::Insights;
+        self.start_insights_view();
+        self.status_message = Some(status_msg);
     }
 
     fn discard_deploy_conflict_changes(&mut self) {
         let groups_count = self.deploy_conflict_accumulated.len();
-        self.status_message = Some(format!(
+        let status_msg = format!(
             "Discarded changes from {} conflict group(s)",
             groups_count
-        ));
+        );
         self.deploy_conflict_review = None;
         self.deploy_conflict_accumulated.clear();
-        self.mode = UiMode::Insights;
+        self.start_insights_view();
+        self.status_message = Some(status_msg);
     }
 }
 
@@ -2267,6 +2325,9 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         terminal.draw(|f| render(f, app))?;
+
+        // Tick tag search for pending bulk edit (after modal has rendered)
+        app.tick_tag_search();
 
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {

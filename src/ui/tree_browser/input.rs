@@ -20,7 +20,42 @@ pub fn handle_key(
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
 ) -> TreeBrowserAction {
-    // Common navigation keys
+    // Check if variant wants to capture navigation keys (e.g., search active)
+    let variant_captures_nav = variant.wants_navigation_keys();
+
+    // Handle Escape first - variant gets priority
+    if key.code == KeyCode::Esc {
+        if variant.handle_escape(nav) {
+            return TreeBrowserAction::None;
+        }
+        return TreeBrowserAction::Cancel;
+    }
+
+    // Tab for lateral ring cycling (always available)
+    match key.code {
+        KeyCode::Tab => {
+            if config.in_lateral_ring {
+                return if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    TreeBrowserAction::CyclePrev
+                } else {
+                    TreeBrowserAction::CycleNext
+                };
+            }
+        }
+        KeyCode::BackTab => {
+            if config.in_lateral_ring {
+                return TreeBrowserAction::CyclePrev;
+            }
+        }
+        _ => {}
+    }
+
+    // If variant wants navigation keys, delegate everything to it
+    if variant_captures_nav {
+        return variant.handle_key(key, nav);
+    }
+
+    // Common navigation keys (only when variant doesn't capture)
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             nav.move_up();
@@ -39,27 +74,6 @@ pub fn handle_key(
         KeyCode::Left | KeyCode::Char('h') => {
             nav.collapse_or_parent();
             return TreeBrowserAction::None;
-        }
-        KeyCode::Esc => {
-            // Let variant handle first (e.g., cancel search)
-            if variant.handle_escape(nav) {
-                return TreeBrowserAction::None;
-            }
-            return TreeBrowserAction::Cancel;
-        }
-        KeyCode::Tab => {
-            if config.in_lateral_ring {
-                return if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    TreeBrowserAction::CyclePrev
-                } else {
-                    TreeBrowserAction::CycleNext
-                };
-            }
-        }
-        KeyCode::BackTab => {
-            if config.in_lateral_ring {
-                return TreeBrowserAction::CyclePrev;
-            }
         }
         _ => {}
     }

@@ -50,6 +50,15 @@ impl BrowserVariant {
         }
     }
 
+    /// Check if variant wants to capture navigation keys (arrows, hjkl).
+    /// When true, navigation keys are delegated to the variant instead of tree browser.
+    pub fn wants_navigation_keys(&self) -> bool {
+        match self {
+            BrowserVariant::CorpusBrowser(v) => v.wants_navigation_keys(),
+            BrowserVariant::DirectorySelector(_) => false,
+        }
+    }
+
     /// Handle variant-specific key input.
     pub fn handle_key(&mut self, key: KeyEvent, nav: &mut TreeNavigator) -> TreeBrowserAction {
         match self {

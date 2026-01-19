@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::corpus::db::{Database, Track};
 use crate::flows::deploy::compute_deployment_path_with_tags;
 
-use super::types::{LogicalOperator, SearchCondition, TagSearchMode, SEARCHABLE_TAGS};
+use super::types::{LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS};
 use super::QueryFieldFocus;
 
 /// A track with its associated tags (for display and filtering).
@@ -47,6 +47,12 @@ pub struct TagSearchState {
 
     /// Results scroll offset.
     pub results_scroll: usize,
+
+    /// Active modal dialog (if any).
+    pub modal: Option<TagSearchModal>,
+
+    /// Pending bulk edit tracks (set when showing "gathering" modal).
+    pub pending_bulk_edit: Option<Vec<Track>>,
 }
 
 impl Default for TagSearchState {
@@ -66,6 +72,8 @@ impl TagSearchState {
             results: Vec::new(),
             results_selected: 0,
             results_scroll: 0,
+            modal: None,
+            pending_bulk_edit: None,
         }
     }
 
@@ -89,6 +97,11 @@ impl TagSearchState {
         self.field_focus == QueryFieldFocus::Operator && self.focused_condition > 0
     }
 
+    /// Check if focus is on a comparison field.
+    pub fn is_on_comparison_field(&self) -> bool {
+        self.field_focus == QueryFieldFocus::Comparison
+    }
+
     /// Move focus up.
     pub fn move_focus_up(&mut self) {
         match self.field_focus {
@@ -101,7 +114,7 @@ impl TagSearchState {
                     self.field_focus = QueryFieldFocus::TagName;
                 }
             }
-            QueryFieldFocus::Operator | QueryFieldFocus::TagName | QueryFieldFocus::Value => {
+            QueryFieldFocus::Operator | QueryFieldFocus::TagName | QueryFieldFocus::Comparison | QueryFieldFocus::Value => {
                 if self.focused_condition > 0 {
                     self.focused_condition -= 1;
                 }
@@ -112,7 +125,7 @@ impl TagSearchState {
     /// Move focus down.
     pub fn move_focus_down(&mut self) {
         match self.field_focus {
-            QueryFieldFocus::Operator | QueryFieldFocus::TagName | QueryFieldFocus::Value => {
+            QueryFieldFocus::Operator | QueryFieldFocus::TagName | QueryFieldFocus::Comparison | QueryFieldFocus::Value => {
                 if self.focused_condition + 1 < self.conditions.len() {
                     self.focused_condition += 1;
                 } else {
@@ -132,6 +145,9 @@ impl TagSearchState {
     pub fn move_focus_left(&mut self) {
         match self.field_focus {
             QueryFieldFocus::Value => {
+                self.field_focus = QueryFieldFocus::Comparison;
+            }
+            QueryFieldFocus::Comparison => {
                 self.field_focus = QueryFieldFocus::TagName;
             }
             QueryFieldFocus::TagName => {
@@ -150,9 +166,19 @@ impl TagSearchState {
                 self.field_focus = QueryFieldFocus::TagName;
             }
             QueryFieldFocus::TagName => {
+                self.field_focus = QueryFieldFocus::Comparison;
+            }
+            QueryFieldFocus::Comparison => {
                 self.field_focus = QueryFieldFocus::Value;
             }
             _ => {}
+        }
+    }
+
+    /// Cycle the comparison operator for the current condition.
+    pub fn cycle_comparison(&mut self) {
+        if let Some(condition) = self.conditions.get_mut(self.focused_condition) {
+            condition.comparison = condition.comparison.next();
         }
     }
 
@@ -219,6 +245,17 @@ impl TagSearchState {
         }
     }
 
+    /// Check if there's a pending bulk edit and take it.
+    /// Returns the tracks if pending, clearing the pending state.
+    pub fn take_pending_bulk_edit(&mut self) -> Option<Vec<Track>> {
+        if self.pending_bulk_edit.is_some() {
+            self.modal = None;
+            self.pending_bulk_edit.take()
+        } else {
+            None
+        }
+    }
+
     /// Execute the search query.
     pub fn execute_search(&mut self, db: &Database) {
         // Build and execute the query
@@ -235,7 +272,10 @@ impl TagSearchState {
         self.results_selected = 0;
         self.results_scroll = 0;
 
-        if !self.results.is_empty() {
+        if self.results.is_empty() {
+            // Show "no results" modal
+            self.modal = Some(TagSearchModal::NoResults);
+        } else {
             self.mode = TagSearchMode::Results;
         }
     }
@@ -270,7 +310,6 @@ impl TagSearchState {
                 LogicalOperator::And => result && cond_result,
                 LogicalOperator::Or => result || cond_result,
                 LogicalOperator::Xor => result ^ cond_result,
-                LogicalOperator::Not => result && !cond_result,
             };
         }
 
@@ -279,6 +318,8 @@ impl TagSearchState {
 
     /// Evaluate a single condition against a track with tags.
     fn evaluate_single_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+        use super::types::ComparisonOperator;
+
         if condition.tag_name.is_empty() || condition.value.is_empty() {
             return true; // Empty conditions match everything
         }
@@ -289,9 +330,73 @@ impl TagSearchState {
         // Get the tag value from the track's tags
         let field_value = twt.tags.get(&tag_name).map(|s| s.as_str());
 
-        field_value
-            .map(|v| v.to_lowercase().contains(&query))
-            .unwrap_or(false)
+        match condition.comparison {
+            ComparisonOperator::Is => {
+                // Exact match (case-insensitive)
+                field_value
+                    .map(|v| v.to_lowercase() == query)
+                    .unwrap_or(false)
+            }
+            ComparisonOperator::Not => {
+                // Negated exact match (case-insensitive)
+                field_value
+                    .map(|v| v.to_lowercase() != query)
+                    .unwrap_or(true) // Missing field != query
+            }
+            ComparisonOperator::Contains => {
+                // Substring match (case-insensitive)
+                field_value
+                    .map(|v| v.to_lowercase().contains(&query))
+                    .unwrap_or(false)
+            }
+            ComparisonOperator::Like => {
+                // SQL LIKE pattern (% = any chars, _ = single char)
+                field_value
+                    .map(|v| {
+                        let v_lower = v.to_lowercase();
+                        Self::match_like_pattern(&v_lower, &query)
+                    })
+                    .unwrap_or(false)
+            }
+        }
+    }
+
+    /// Match a SQL LIKE pattern (% = any chars, _ = single char).
+    fn match_like_pattern(value: &str, pattern: &str) -> bool {
+        Self::simple_like_match(value, pattern)
+    }
+
+    /// Simple LIKE pattern matching without regex.
+    fn simple_like_match(value: &str, pattern: &str) -> bool {
+        let v_chars: Vec<char> = value.chars().collect();
+        let p_chars: Vec<char> = pattern.chars().collect();
+
+        Self::like_match_recursive(&v_chars, &p_chars)
+    }
+
+    fn like_match_recursive(value: &[char], pattern: &[char]) -> bool {
+        if pattern.is_empty() {
+            return value.is_empty();
+        }
+
+        match pattern[0] {
+            '%' => {
+                // % matches zero or more characters
+                // Try matching zero chars, or skip one char in value and try again
+                Self::like_match_recursive(value, &pattern[1..])
+                    || (!value.is_empty() && Self::like_match_recursive(&value[1..], pattern))
+            }
+            '_' => {
+                // _ matches exactly one character
+                !value.is_empty() && Self::like_match_recursive(&value[1..], &pattern[1..])
+            }
+            c => {
+                // Literal character match
+                !value.is_empty()
+                    && value[0] == c
+                    && Self::like_match_recursive(&value[1..], &pattern[1..])
+            }
+        }
     }
 
     /// Select previous result.

@@ -11,7 +11,6 @@ pub enum LogicalOperator {
     And,
     Or,
     Xor,
-    Not,
 }
 
 impl LogicalOperator {
@@ -21,7 +20,6 @@ impl LogicalOperator {
             LogicalOperator::And => "AND",
             LogicalOperator::Or => "OR",
             LogicalOperator::Xor => "XOR",
-            LogicalOperator::Not => "NOT",
         }
     }
 
@@ -30,20 +28,57 @@ impl LogicalOperator {
         match self {
             LogicalOperator::And => LogicalOperator::Or,
             LogicalOperator::Or => LogicalOperator::Xor,
-            LogicalOperator::Xor => LogicalOperator::Not,
-            LogicalOperator::Not => LogicalOperator::And,
+            LogicalOperator::Xor => LogicalOperator::And,
         }
     }
 }
 
-/// A single search condition (tag name + value).
+/// Comparison operators for tag value matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ComparisonOperator {
+    /// Exact match (case-insensitive) - default
+    #[default]
+    Is,
+    /// Negated exact match
+    Not,
+    /// Substring match (case-insensitive)
+    Contains,
+    /// SQL LIKE pattern (% and _ wildcards)
+    Like,
+}
+
+impl ComparisonOperator {
+    /// Display label for the operator.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ComparisonOperator::Is => "IS",
+            ComparisonOperator::Not => "NOT",
+            ComparisonOperator::Contains => "CONTAINS",
+            ComparisonOperator::Like => "LIKE",
+        }
+    }
+
+    /// Cycle to the next operator.
+    pub fn next(&self) -> Self {
+        match self {
+            ComparisonOperator::Is => ComparisonOperator::Not,
+            ComparisonOperator::Not => ComparisonOperator::Contains,
+            ComparisonOperator::Contains => ComparisonOperator::Like,
+            ComparisonOperator::Like => ComparisonOperator::Is,
+        }
+    }
+}
+
+/// A single search condition (tag name + comparison + value).
 #[derive(Debug, Clone, Default)]
 pub struct SearchCondition {
     /// Logical operator connecting to previous condition (ignored for first).
     pub operator: LogicalOperator,
     /// Tag name to search (e.g., "artist", "album", "genre").
     pub tag_name: String,
-    /// Value to search for (case-insensitive substring match).
+    /// How to compare the tag value.
+    pub comparison: ComparisonOperator,
+    /// Value to search for.
     pub value: String,
 }
 
@@ -78,6 +113,15 @@ pub enum TagSearchAction {
     EditTrack(Track),
     /// Open tag editor for all results (track list navigation).
     EditAllTracks(Vec<Track>),
+}
+
+/// Modal dialogs for tag search.
+#[derive(Debug, Clone)]
+pub enum TagSearchModal {
+    /// No results found after search
+    NoResults,
+    /// Gathering tags for bulk edit (shown briefly before editor opens)
+    GatheringTags,
 }
 
 /// Searchable tag field names.

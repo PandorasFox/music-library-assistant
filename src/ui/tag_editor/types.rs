@@ -100,6 +100,8 @@ pub enum UnifiedTagEditorAction {
     StageDecision { index: usize, mutations: Vec<Mutation> },
     /// Stage decision AND navigate to next sibling (combines stage + navigation)
     StageDecisionAndNext { index: usize, mutations: Vec<Mutation> },
+    /// Stage decision AND show transaction review (for aggregated mode or single-sibling contexts)
+    StageDecisionAndReview { index: usize, mutations: Vec<Mutation> },
     /// Commit all staged decisions and exit
     CommitTransaction,
     /// Discard all staged decisions and exit

@@ -30,8 +30,7 @@ pub struct RenderContext<'a> {
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
-    pub splash_screen: Option<&'a super::splash_screen::SplashScreen>,
-    pub content_analysis: Option<&'a super::startup::ContentAnalysisProgress>,
+    pub progress_screen: Option<&'a super::progress_screen::ProgressScreen>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
     pub tag_search: Option<&'a tag_search::TagSearchState>,
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
@@ -44,37 +43,26 @@ pub struct RenderContext<'a> {
 
 /// Main render entry point - dispatches to sub-renderers based on mode.
 pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
-    // Loading splash takes the whole screen
-    if ctx.mode == super::UiMode::LoadingSplash {
-        if let Some(splash) = ctx.splash_screen {
-            let start = Instant::now();
-            super::splash_screen::render(f, f.area(), splash, ctx.config);
-            let elapsed = start.elapsed();
-            if elapsed.as_millis() > 16 {
-                let _ = config::log_message(&format!(
-                    "[RENDER DEBUG] splash_screen::render took {}ms",
-                    elapsed.as_millis()
-                ));
-            }
-        }
-        return;
-    }
-
-    // Content analysis progress takes the whole screen (with awake eye)
-    if ctx.mode == super::UiMode::ContentAnalysis {
-        if let Some(progress) = ctx.content_analysis {
-            // Get current eye frame for animated display
-            let eye_frame = match ctx.eye.current_frame() {
-                EyeFrame::Open => EYE_OPEN,
-                EyeFrame::Closing => EYE_CLOSING,
-                EyeFrame::Closed => EYE_CLOSED,
+    // Progress screen takes the whole screen (startup, content analysis, signal refresh)
+    if ctx.mode == super::UiMode::Progress {
+        if let Some(progress) = ctx.progress_screen {
+            // For non-eyeballing phases, provide animated eye frame
+            let eye_frame = if progress.uses_closed_eye() {
+                None // Uses its own closed/awakening eye
+            } else {
+                // Awake phase - use animated eye
+                Some(match ctx.eye.current_frame() {
+                    EyeFrame::Open => EYE_OPEN,
+                    EyeFrame::Closing => EYE_CLOSING,
+                    EyeFrame::Closed => EYE_CLOSED,
+                })
             };
             let start = Instant::now();
-            super::startup::content_analysis::render(f, f.area(), progress, eye_frame);
+            super::progress_screen::render(f, f.area(), progress, eye_frame);
             let elapsed = start.elapsed();
             if elapsed.as_millis() > 16 {
                 let _ = config::log_message(&format!(
-                    "[RENDER DEBUG] content_analysis::render took {}ms",
+                    "[RENDER DEBUG] progress_screen::render took {}ms",
                     elapsed.as_millis()
                 ));
             }
@@ -156,13 +144,12 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
 fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
     // Get mode-specific suffix (if any)
     let suffix = match ctx.mode {
-        super::UiMode::ContentAnalysis => None, // Never reached - handled separately
+        super::UiMode::Progress => None, // Never reached - handled separately
         super::UiMode::DirBrowser => Some("Directory Browser"),
         super::UiMode::DeploymentPreview => Some("Deployment Preview"),
         super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
         super::UiMode::CorpusBrowser => Some("Corpus Browser"),
         super::UiMode::Insights => Some("Corpus Insights"),
-        super::UiMode::LoadingSplash => None, // Never reached - handled separately
         super::UiMode::IntakeConfirmation => Some("Intake Confirmation"),
         super::UiMode::TagSearch => Some("Tag Search"),
         super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
@@ -186,9 +173,9 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
     let view_name: &str;
 
     match ctx.mode {
-        super::UiMode::ContentAnalysis => {
+        super::UiMode::Progress => {
             // Never reached - handled separately in render() before this function
-            view_name = "content_analysis";
+            view_name = "progress";
         }
         super::UiMode::DirBrowser => {
             view_name = "dir_browser";
@@ -227,10 +214,6 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 state.render(f, area);
             }
         }
-        super::UiMode::LoadingSplash => {
-            // Never reached - handled separately in render() before this function
-            view_name = "loading_splash";
-        }
         super::UiMode::IntakeConfirmation => {
             view_name = "intake_confirmation";
             if let Some(ref state) = ctx.intake_confirmation {
@@ -254,8 +237,6 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         ));
     }
 }
-
-// render_loading_splash has been moved to splash_screen::render()
 
 /// Render loading state for Insights view while initializing
 fn render_insights_loading(f: &mut Frame, area: ratatui::layout::Rect) {
@@ -693,14 +674,13 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
 
     // Get mode-specific controls hint
     let controls = match ctx.mode {
-        super::UiMode::ContentAnalysis => control_presets::empty(), // No controls during analysis
+        super::UiMode::Progress => control_presets::empty(), // No controls during loading/analysis
         super::UiMode::DirBrowser => control_presets::dir_browser(),
         super::UiMode::DeploymentPreview => control_presets::deployment_preview(),
         super::UiMode::ExitConfirmModal => control_presets::exit_confirm_modal(),
         super::UiMode::CorpusBrowser => control_presets::corpus_browser(),
         super::UiMode::Insights => control_presets::insights_view(),
         super::UiMode::TagSearch => control_presets::tag_search(),
-        super::UiMode::LoadingSplash => control_presets::empty(),
         super::UiMode::IntakeConfirmation => control_presets::empty(), // Modal handles its own hints
         super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
     };

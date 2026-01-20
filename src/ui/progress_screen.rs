@@ -168,6 +168,11 @@ impl ProgressScreen {
         self.phase
     }
 
+    /// Whether this screen uses a closed/awakening eye (vs animated awake eye).
+    pub fn uses_closed_eye(&self) -> bool {
+        self.phase.uses_closed_eye()
+    }
+
     /// Check if progress is complete.
     pub fn is_complete(&self) -> bool {
         self.complete

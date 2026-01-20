@@ -33,7 +33,6 @@ pub mod helpers;
 pub mod insights_view;
 pub mod progress_screen;
 pub mod render;
-pub mod splash_screen;
 pub mod startup;
 pub mod tag_editor;
 pub mod tag_search;
@@ -82,16 +81,14 @@ pub(crate) struct App {
     pub(super) unified_tag_editor: Option<tag_editor::UnifiedTagEditorState>,
     // Exit confirmation modal
     pub(super) exit_confirm_modal_state: Option<ExitConfirmModalState>,
-    // Startup splash screen
-    pub(super) splash_screen: Option<splash_screen::SplashScreen>,
+    // Unified progress screen (startup eyeballing, content analysis, signal refresh)
+    pub(super) progress_screen: Option<progress_screen::ProgressScreen>,
     // Insights view (lateral view ring)
     pub(super) insights_view: Option<insights_view::InsightsViewState>,
     // Tag search (lateral view ring)
     pub(super) tag_search: Option<tag_search::TagSearchState>,
     // Intake confirmation modal
     pub(super) intake_confirmation: Option<startup::IntakeConfirmationState>,
-    // Content analysis progress screen
-    pub(super) content_analysis: Option<startup::ContentAnalysisProgress>,
 
     // Task daemon for mutation execution
     pub(super) task_daemon: Option<crate::daemon::TaskDaemon>,
@@ -117,11 +114,10 @@ impl App {
             deployment_preview: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
-            splash_screen: None,
+            progress_screen: None,
             insights_view: None,
             tag_search: None,
             intake_confirmation: None,
-            content_analysis: None,
             task_daemon: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
@@ -131,8 +127,8 @@ impl App {
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         match self.mode {
-            UiMode::ContentAnalysis => {
-                // Content analysis ignores keys - can't interact during computation
+            UiMode::Progress => {
+                // Progress screen ignores keys - can't interact during loading/computation
             }
             UiMode::DirBrowser => {
                 if let Some(ref mut browser) = self.tree_browser {
@@ -192,10 +188,6 @@ impl App {
                     let action = view.handle_key(key);
                     self.handle_insights_action(action);
                 }
-            }
-            UiMode::LoadingSplash => {
-                // Loading splash ignores most keys - can't interact during loading
-                // Could potentially allow Esc to cancel certain operations in the future
             }
             UiMode::IntakeConfirmation => {
                 if let Some(ref state) = self.intake_confirmation {
@@ -300,8 +292,8 @@ impl App {
         self.daemon().queue_content_analysis();
 
         // Create progress screen and transition
-        self.content_analysis = Some(startup::ContentAnalysisProgress::new());
-        self.mode = UiMode::ContentAnalysis;
+        self.progress_screen = Some(progress_screen::ProgressScreen::new_content_analysis());
+        self.mode = UiMode::Progress;
     }
 
     pub(super) fn start_tag_search(&mut self) {
@@ -385,8 +377,7 @@ fn render(f: &mut Frame, app: &mut App) {
         tree_browser: app.tree_browser.as_mut(),
         deployment_preview: app.deployment_preview.as_mut(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
-        splash_screen: app.splash_screen.as_ref(),
-        content_analysis: app.content_analysis.as_ref(),
+        progress_screen: app.progress_screen.as_ref(),
         insights_view: app.insights_view.as_mut(),
         tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
@@ -423,8 +414,7 @@ pub fn run_menu(config: Config) -> Result<()> {
     let mut app = App::new(config);
 
     // Eyeballing ALWAYS runs at startup (only paranoid mode is configurable)
-    // Create splash screen and queue initial eyeballing via daemon
-    let splash = splash_screen::SplashScreen::new();
+    // Create progress screen and queue initial eyeballing via daemon
     let corpus_root = app.config.corpus_root.clone();
     let legacy_library = app.config.legacy_library.clone();
     let paranoid = app.config.opinions.startup.paranoid_tag_verification;
@@ -436,8 +426,8 @@ pub fn run_menu(config: Config) -> Result<()> {
         app.daemon().start_lazy_eyeball(&corpus_root, legacy_library.as_deref());
     }
 
-    app.splash_screen = Some(splash);
-    app.mode = UiMode::LoadingSplash;
+    app.progress_screen = Some(progress_screen::ProgressScreen::new_eyeballing());
+    app.mode = UiMode::Progress;
 
     let res = run_app(&mut terminal, &mut app);
 
@@ -504,19 +494,14 @@ fn run_app<B: ratatui::backend::Backend>(
             view.update(status.as_ref());
         }
 
-        // Tick splash screen if active (startup eyeballing)
-        if app.splash_screen.is_some() {
-            app.tick_splash_screen();
+        // Tick progress screen if active (startup eyeballing, content analysis, etc.)
+        if app.progress_screen.is_some() {
+            app.tick_progress_screen();
         }
 
         // Tick intake confirmation if processing
         if app.intake_confirmation.as_ref().map(|s| s.is_processing()).unwrap_or(false) {
             app.tick_intake_confirmation();
-        }
-
-        // Tick content analysis if active (post-intake computation)
-        if app.content_analysis.is_some() {
-            app.tick_content_analysis();
         }
 
         // Refresh UI cache periodically (avoids per-frame DB queries in render code)

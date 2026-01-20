@@ -1,95 +1,79 @@
 //! Per-Frame Update Logic
 //!
 //! Tick functions run each frame for views that need continuous updates
-//! (splash screen, content analysis, intake confirmation, tag search).
+//! (progress screen, intake confirmation, tag search).
 
 use crate::config;
-use crate::ui::{startup, types::UiMode};
+use crate::ui::{progress_screen::ProgressPhase, startup, types::UiMode};
 use super::App;
 
 impl App {
-    /// Tick the splash screen and check for completion.
+    /// Tick the progress screen and check for completion.
     ///
-    /// Called each frame while splash_screen is Some. When daemon eye state
-    /// becomes Awake (eyeballing complete), checks for unindexed files and
-    /// proceeds to intake confirmation or content analysis.
-    pub(super) fn tick_splash_screen(&mut self) {
-        // Take splash_screen temporarily to avoid borrow conflicts
-        let mut splash = match self.splash_screen.take() {
-            Some(s) => s,
-            None => return,
-        };
-
-        // Tick splash screen - it checks daemon.eye_state() for completion
-        let completed = splash.tick(self.daemon());
-        if completed {
-            let status = self.daemon().status();
-            let _ = config::log_message(&format!(
-                "Startup eyeballing complete: {} processed",
-                status.total_processed
-            ));
-        }
-
-        // Update stats on splash screen (for optional display)
-        self.update_progress_stats(&mut splash);
-
-        // Put it back or transition
-        if splash.is_complete() {
-            // Don't put it back - check for unindexed files before transitioning
-            let transition_start = std::time::Instant::now();
-            if let Some(intake_state) = self.check_for_unindexed_files() {
-                let check_duration = transition_start.elapsed();
-                let _ = config::log_message(&format!(
-                    "[TRANSITION] check_for_unindexed_files took {}ms, found {} files",
-                    check_duration.as_millis(),
-                    intake_state.file_count
-                ));
-                self.intake_confirmation = Some(intake_state);
-                self.mode = UiMode::IntakeConfirmation;
-            } else {
-                let check_duration = transition_start.elapsed();
-                let _ = config::log_message(&format!(
-                    "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files",
-                    check_duration.as_millis()
-                ));
-                // No unindexed files - skip intake, proceed to content analysis
-                let analysis_start = std::time::Instant::now();
-                self.start_content_analysis();
-                let _ = config::log_message(&format!(
-                    "[TRANSITION] start_content_analysis took {}ms",
-                    analysis_start.elapsed().as_millis()
-                ));
-            }
-        } else {
-            self.splash_screen = Some(splash);
-        }
-    }
-
-    /// Tick content analysis progress and check for completion.
-    ///
-    /// Called each frame while content_analysis is Some. When all content
-    /// analysis computations complete, transitions to Insights view.
-    pub(super) fn tick_content_analysis(&mut self) {
-        // Take content_analysis temporarily to avoid borrow conflicts
-        let mut progress = match self.content_analysis.take() {
+    /// Called each frame while progress_screen is Some. Handles all progress phases:
+    /// - Eyeballing: checks for unindexed files, proceeds to intake or content analysis
+    /// - ContentAnalysis: transitions to Insights view on completion
+    /// - SignalRefresh: transitions to Insights view on completion
+    pub(super) fn tick_progress_screen(&mut self) {
+        // Take progress_screen temporarily to avoid borrow conflicts
+        let mut progress = match self.progress_screen.take() {
             Some(p) => p,
             None => return,
         };
+
+        let phase = progress.phase();
 
         // Tick progress screen - it checks daemon state for completion
         let completed = progress.tick(self.daemon());
         if completed {
             let status = self.daemon().status();
             let _ = config::log_message(&format!(
-                "Metadata analysis complete: {} processed",
-                status.total_processed
+                "{:?} phase complete: {} processed",
+                phase, status.total_processed
             ));
-            // Transition to Insights view
-            self.start_insights_view();
+        }
+
+        // Update stats on progress screen (for optional display)
+        self.update_progress_stats(&mut progress);
+
+        // Put it back or transition based on phase
+        if progress.is_complete() {
+            // Don't put it back - handle transition based on phase
+            match phase {
+                ProgressPhase::Eyeballing => {
+                    // Check for unindexed files before deciding next phase
+                    let transition_start = std::time::Instant::now();
+                    if let Some(intake_state) = self.check_for_unindexed_files() {
+                        let check_duration = transition_start.elapsed();
+                        let _ = config::log_message(&format!(
+                            "[TRANSITION] check_for_unindexed_files took {}ms, found {} files",
+                            check_duration.as_millis(),
+                            intake_state.file_count
+                        ));
+                        self.intake_confirmation = Some(intake_state);
+                        self.mode = UiMode::IntakeConfirmation;
+                    } else {
+                        let check_duration = transition_start.elapsed();
+                        let _ = config::log_message(&format!(
+                            "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files",
+                            check_duration.as_millis()
+                        ));
+                        // No unindexed files - skip intake, proceed to content analysis
+                        let analysis_start = std::time::Instant::now();
+                        self.start_content_analysis();
+                        let _ = config::log_message(&format!(
+                            "[TRANSITION] start_content_analysis took {}ms",
+                            analysis_start.elapsed().as_millis()
+                        ));
+                    }
+                }
+                ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
+                    // Transition to Insights view
+                    self.start_insights_view();
+                }
+            }
         } else {
-            // Update stats on progress screen (for optional display)
-            self.update_progress_stats(&mut progress);
-            self.content_analysis = Some(progress);
+            self.progress_screen = Some(progress);
         }
     }
 

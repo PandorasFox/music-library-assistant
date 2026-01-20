@@ -19,27 +19,15 @@ pub(crate) trait ProgressStatsUpdater {
     fn set_worker_stats(&mut self, stats: Option<WorkerStats>);
 }
 
-impl ProgressStatsUpdater for crate::ui::splash_screen::SplashScreen {
+impl ProgressStatsUpdater for crate::ui::progress_screen::ProgressScreen {
     fn set_db_queue_depth(&mut self, depth: u64) {
-        crate::ui::splash_screen::SplashScreen::set_db_queue_depth(self, depth);
+        crate::ui::progress_screen::ProgressScreen::set_db_queue_depth(self, depth);
     }
     fn set_db_stats(&mut self, stats: Option<DbThreadStats>) {
-        crate::ui::splash_screen::SplashScreen::set_db_stats(self, stats);
+        crate::ui::progress_screen::ProgressScreen::set_db_stats(self, stats);
     }
     fn set_worker_stats(&mut self, stats: Option<WorkerStats>) {
-        crate::ui::splash_screen::SplashScreen::set_worker_stats(self, stats);
-    }
-}
-
-impl ProgressStatsUpdater for crate::ui::startup::ContentAnalysisProgress {
-    fn set_db_queue_depth(&mut self, depth: u64) {
-        crate::ui::startup::ContentAnalysisProgress::set_db_queue_depth(self, depth);
-    }
-    fn set_db_stats(&mut self, stats: Option<DbThreadStats>) {
-        crate::ui::startup::ContentAnalysisProgress::set_db_stats(self, stats);
-    }
-    fn set_worker_stats(&mut self, stats: Option<WorkerStats>) {
-        crate::ui::startup::ContentAnalysisProgress::set_worker_stats(self, stats);
+        crate::ui::progress_screen::ProgressScreen::set_worker_stats(self, stats);
     }
 }
 
@@ -55,28 +43,15 @@ impl ProgressStatsUpdater for crate::ui::startup::IntakeConfirmationState {
     }
 }
 
-impl ProgressStatsUpdater for crate::ui::progress_screen::ProgressScreen {
-    fn set_db_queue_depth(&mut self, depth: u64) {
-        crate::ui::progress_screen::ProgressScreen::set_db_queue_depth(self, depth);
-    }
-    fn set_db_stats(&mut self, stats: Option<DbThreadStats>) {
-        crate::ui::progress_screen::ProgressScreen::set_db_stats(self, stats);
-    }
-    fn set_worker_stats(&mut self, stats: Option<WorkerStats>) {
-        crate::ui::progress_screen::ProgressScreen::set_worker_stats(self, stats);
-    }
-}
-
 // ============================================================================
 // UI Mode Enum
 // ============================================================================
 
 /// Current UI mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum UiMode {
-    /// Content analysis progress screen - post-intake health signal computation
-    ContentAnalysis,
+    /// Unified progress screen - startup eyeballing, content analysis, signal refresh
+    Progress,
     DirBrowser,
     DeploymentPreview,
     /// Exit confirmation modal (when operations are in progress)
@@ -87,8 +62,6 @@ pub(crate) enum UiMode {
     Insights,
     /// Intake confirmation - prompt to index unindexed files
     IntakeConfirmation,
-    /// Loading splash screen - centered eye with status message
-    LoadingSplash,
     /// Tag search with query builder and results (part of lateral view ring)
     TagSearch,
     /// Unified tag editor with transaction support (replaces TagEditor and DirectoryTagEditor)

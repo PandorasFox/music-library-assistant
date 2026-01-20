@@ -98,8 +98,8 @@ pub enum Insight {
         dupe_groups: usize,
         /// Total tracks involved
         total_tracks: usize,
-        /// Groups with clear quality winner (auto-resolvable)
-        auto_resolvable: usize,
+        /// Groups with a clear quality winner (e.g., FLAC vs MP3)
+        clear_winner: usize,
     },
 
     // =========================================================================
@@ -290,12 +290,12 @@ impl Insight {
         match self {
             Insight::QualityDuplicates {
                 dupe_groups,
-                auto_resolvable,
+                clear_winner,
                 ..
             } => {
                 format!(
-                    "Quality Duplicates: {} groups ({} auto-resolvable)",
-                    dupe_groups, auto_resolvable
+                    "Quality Duplicates: {} groups ({} with clear winner)",
+                    dupe_groups, clear_winner
                 )
             }
 
@@ -396,7 +396,7 @@ mod tests {
         let quality = Insight::QualityDuplicates {
             dupe_groups: 10,
             total_tracks: 20,
-            auto_resolvable: 5,
+            clear_winner: 5,
         };
         let health = Insight::CorpusHealth {
             total_tracks: 1000,

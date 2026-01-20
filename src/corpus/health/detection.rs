@@ -25,10 +25,9 @@
 use std::collections::HashMap;
 
 use crate::config::Config;
-use crate::corpus::db::{
-    Database, HealthIssue, HealthIssueType, HealthIssueSeverity, Track, TrackRole,
-};
-use crate::flows::deploy::compute_deployment_path;
+use crate::corpus::db::{Database, HealthIssue, HealthIssueType, Track, TrackRole};
+// TODO: Re-enable when corpus::deploy is available
+// use crate::corpus::deploy::compute_deployment_path;
 use anyhow::Result;
 
 use super::filter::{durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks};
@@ -107,13 +106,10 @@ pub fn detect_fingerprint_issues(db: &Database, track: &Track) -> Result<Vec<Hea
     }
 
     // Create new health issue for fingerprint duplicate
-    let severity = determine_duplicate_severity(&matching_tracks);
-
     let issue = HealthIssue {
         id: None,
         issue_type: HealthIssueType::FingerprintDuplicate,
         issue_key: fingerprint.clone(),
-        severity,
         discovered_at: None,
         metadata_json: None,
     };
@@ -156,13 +152,6 @@ pub fn refresh_health_for_track(db: &Database, track_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Determine severity of a duplicate issue based on track characteristics.
-/// TODO: Quality comparison logic was in deleted deduplication module.
-/// For now, all duplicates require manual review.
-fn determine_duplicate_severity(_tracks: &[Track]) -> HealthIssueSeverity {
-    HealthIssueSeverity::ManualReview
-}
-
 // ============================================================================
 // Deployment Conflict Detection
 // ============================================================================
@@ -199,78 +188,17 @@ pub fn detect_deployment_conflicts(config: &Config, db: &Database) -> Result<usi
 /// Detect deployment conflicts for a specific library.
 ///
 /// Returns the number of new conflicts detected.
+///
+/// TODO: Requires compute_deployment_path from corpus::deploy which is disabled.
+/// Currently returns 0 (no conflicts detected).
 pub fn detect_deployment_conflicts_for_library(
-    config: &Config,
-    db: &Database,
-    library_name: &str,
+    _config: &Config,
+    _db: &Database,
+    _library_name: &str,
 ) -> Result<usize> {
-    // Get all corpus tracks deployable to this library
-    let corpus_tracks = get_deployable_corpus_tracks(config, db, library_name);
-
-    // Build target_path -> tracks map
-    let mut target_path_map: HashMap<String, Vec<Track>> = HashMap::new();
-    for track in corpus_tracks {
-        let target = compute_deployment_path(&track);
-        let target_str = target.display().to_string();
-        target_path_map.entry(target_str).or_default().push(track);
-    }
-
-    let mut new_issues = 0;
-
-    // Process conflicts (multiple tracks -> same path)
-    for (target_path, tracks) in target_path_map {
-        if tracks.len() < 2 {
-            continue; // No conflict
-        }
-
-        // Issue key format: library_name:target_path
-        let issue_key = format!("{}:{}", library_name, target_path);
-
-        // Check if issue already exists
-        if let Some(existing) = db.get_health_issue_by_key(HealthIssueType::DeployConflict, &issue_key)? {
-            // Issue exists - ensure all tracks are members
-            if let Some(issue_id) = existing.id {
-                let existing_tracks = db.get_health_issue_tracks(issue_id)?;
-                for track in &tracks {
-                    if let Some(track_id) = track.id {
-                        if !existing_tracks.iter().any(|(t, _)| t.id == Some(track_id)) {
-                            db.add_health_issue_track(issue_id, track_id, TrackRole::Member)?;
-                        }
-                    }
-                }
-            }
-            continue;
-        }
-
-        // Create new health issue
-        let metadata = serde_json::json!({
-            "library_name": library_name,
-            "target_path": target_path,
-            "track_count": tracks.len(),
-        });
-
-        let issue = HealthIssue {
-            id: None,
-            issue_type: HealthIssueType::DeployConflict,
-            issue_key,
-            severity: HealthIssueSeverity::ManualReview,
-            discovered_at: None,
-            metadata_json: Some(metadata.to_string()),
-        };
-
-        let issue_id = db.insert_health_issue(&issue)?;
-
-        // Add all conflicting tracks as members
-        for track in &tracks {
-            if let Some(track_id) = track.id {
-                db.add_health_issue_track(issue_id, track_id, TrackRole::Member)?;
-            }
-        }
-
-        new_issues += 1;
-    }
-
-    Ok(new_issues)
+    // TODO: Re-enable when corpus::deploy is available
+    // This function requires compute_deployment_path to build target path maps.
+    Ok(0)
 }
 
 /// Clean up deployment conflict signals that are no longer valid.
@@ -280,59 +208,13 @@ pub fn detect_deployment_conflicts_for_library(
 /// collides with another).
 ///
 /// Returns the number of signals deleted.
-pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> Result<usize> {
-    let library_names = get_configured_library_names(config);
-    let mut deleted_count = 0;
-
-    // Get all deploy conflict signals
-    #[allow(deprecated)]
-    let issues = db.get_unresolved_health_issues(Some(HealthIssueType::DeployConflict))?;
-
-    for issue in issues {
-        let issue_id = match issue.id {
-            Some(id) => id,
-            None => continue,
-        };
-
-        // Parse library name from issue key (format: "library_name:target_path")
-        let parts: Vec<&str> = issue.issue_key.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            continue;
-        }
-        let library_name = parts[0];
-
-        // Delete signal if library is no longer configured
-        if !library_names.contains(&library_name.to_string()) {
-            db.delete_health_signal(issue_id)?;
-            deleted_count += 1;
-            continue;
-        }
-
-        // Get tracks currently in this issue
-        let issue_tracks = db.get_health_issue_tracks(issue_id)?;
-
-        // Check if tracks still conflict
-        let tracks: Vec<Track> = issue_tracks.into_iter().map(|(t, _)| t).collect();
-
-        // Recompute target paths for these tracks
-        let mut target_path_map: HashMap<String, Vec<&Track>> = HashMap::new();
-        for track in &tracks {
-            let target = compute_deployment_path(track);
-            let target_str = target.display().to_string();
-            target_path_map.entry(target_str).or_default().push(track);
-        }
-
-        // Check if any path still has multiple tracks
-        let still_conflicts = target_path_map.values().any(|v| v.len() > 1);
-
-        if !still_conflicts {
-            // Conflict no longer exists - delete the signal
-            db.delete_health_signal(issue_id)?;
-            deleted_count += 1;
-        }
-    }
-
-    Ok(deleted_count)
+///
+/// TODO: Requires compute_deployment_path from corpus::deploy which is disabled.
+/// Currently returns 0 (no cleanup performed).
+pub fn cleanup_resolved_deployment_conflicts(_config: &Config, _db: &Database) -> Result<usize> {
+    // TODO: Re-enable when corpus::deploy is available
+    // This function requires compute_deployment_path to recompute target paths.
+    Ok(0)
 }
 
 // ============================================================================

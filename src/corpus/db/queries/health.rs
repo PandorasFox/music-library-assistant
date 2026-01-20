@@ -3,14 +3,23 @@
 //! Signals are facts about corpus state. They are created by computations and
 //! deleted when they become stale. There is no "resolution" concept - signals
 //! simply exist or don't exist based on current corpus state.
+//!
+//! ## Witnessed Operations
+//!
+//! Signal-altering operations require a `ComputationWitness` to ensure they're
+//! only called from computation execution contexts. Use:
+//! - `ensure_signal` - idempotent create (no-op if exists)
+//! - `clear_signal` - idempotent delete (no-op if doesn't exist)
+//! - `replace_signal` - delete existing + insert new (for summary signals)
 
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
 
 use super::Database;
+use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
-    CorpusSummary, HealthIssue, HealthIssueSeverity, HealthIssueType, HealthSummary,
-    KnownVariant, Track, TrackRole, VariantType,
+    CorpusSummary, HealthIssue, HealthIssueType, HealthSummary, KnownVariant, Track, TrackRole,
+    VariantType,
 };
 
 impl Database {
@@ -29,7 +38,17 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
 
-        let health_summary = self.get_health_summary().unwrap_or_default();
+        // Get total health issue count (excluding deploy_conflicts which are shown separately)
+        let total_health_issues: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type != 'deploy_conflict'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let mut health_summary = self.get_health_summary().unwrap_or_default();
+        // Set total count from direct query
+        health_summary.total_issues = total_health_issues;
+
         let deployment_stats = self.get_deployment_stats().ok().flatten();
         let pending_changes = std::collections::HashMap::new(); // Decisions now in-memory only
 
@@ -65,13 +84,12 @@ impl Database {
             .execute(
                 r#"
                 INSERT INTO health_issues
-                (issue_type, issue_key, severity, discovered_at, metadata_json)
-                VALUES (?1, ?2, ?3, COALESCE(?4, CURRENT_TIMESTAMP), ?5)
+                (issue_type, issue_key, discovered_at, metadata_json)
+                VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
                 "#,
                 params![
                     issue.issue_type.as_str(),
                     &issue.issue_key,
-                    issue.severity.as_str(),
                     &issue.discovered_at,
                     &issue.metadata_json,
                 ],
@@ -88,13 +106,13 @@ impl Database {
     ) -> Result<Vec<HealthIssue>> {
         let sql = match issue_type {
             Some(_) => {
-                r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
                    FROM health_issues
                    WHERE issue_type = ?1
                    ORDER BY discovered_at DESC"#
             }
             None => {
-                r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
                    FROM health_issues
                    ORDER BY discovered_at DESC"#
             }
@@ -132,7 +150,7 @@ impl Database {
     ) -> Result<Option<HealthIssue>> {
         self.conn
             .query_row(
-                r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
                    FROM health_issues
                    WHERE issue_type = ?1 AND issue_key = ?2"#,
                 params![issue_type.as_str(), issue_key],
@@ -173,6 +191,137 @@ impl Database {
                 params![path],
             )
             .context("Failed to delete signals for path")?;
+        Ok(deleted)
+    }
+
+    // ========================================================================
+    // Witnessed Signal Operations (require ComputationWitness)
+    // ========================================================================
+
+    /// Ensure a signal exists (idempotent create).
+    ///
+    /// Creates the signal if it doesn't exist; does nothing if it already exists.
+    /// Returns `true` if a new signal was created, `false` if it already existed.
+    ///
+    /// Requires `ComputationWitness` to ensure this is called from computation context.
+    pub fn ensure_signal(
+        &self,
+        issue_type: HealthIssueType,
+        issue_key: &str,
+        metadata_json: Option<&str>,
+        _witness: &ComputationWitness,
+    ) -> Result<bool> {
+        // Check if signal already exists
+        let exists = self
+            .get_health_issue_by_key(issue_type, issue_key)?
+            .is_some();
+
+        if exists {
+            return Ok(false);
+        }
+
+        // Create new signal
+        self.conn
+            .execute(
+                r#"
+                INSERT INTO health_issues
+                (issue_type, issue_key, discovered_at, metadata_json)
+                VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
+                "#,
+                params![
+                    issue_type.as_str(),
+                    issue_key,
+                    metadata_json,
+                ],
+            )
+            .context("Failed to ensure signal")?;
+
+        Ok(true)
+    }
+
+    /// Clear a signal if it exists (idempotent delete).
+    ///
+    /// Deletes the signal if it exists; does nothing if it doesn't exist.
+    /// Returns `true` if a signal was deleted, `false` if none existed.
+    ///
+    /// Requires `ComputationWitness` to ensure this is called from computation context.
+    pub fn clear_signal(
+        &self,
+        issue_type: HealthIssueType,
+        issue_key: &str,
+        _witness: &ComputationWitness,
+    ) -> Result<bool> {
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                params![issue_type.as_str(), issue_key],
+            )
+            .context("Failed to clear signal")?;
+
+        Ok(deleted > 0)
+    }
+
+    /// Replace a signal (delete existing + insert new).
+    ///
+    /// Used for signals like LibraryHealthSummary where we want to update
+    /// with fresh data rather than accumulate.
+    ///
+    /// Requires `ComputationWitness` to ensure this is called from computation context.
+    pub fn replace_signal(
+        &self,
+        issue: &HealthIssue,
+        _witness: &ComputationWitness,
+    ) -> Result<i64> {
+        // Delete existing signal with same type and key
+        self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                params![issue.issue_type.as_str(), &issue.issue_key],
+            )
+            .context("Failed to delete existing signal")?;
+
+        // Insert new signal
+        self.conn
+            .execute(
+                r#"
+                INSERT INTO health_issues
+                (issue_type, issue_key, discovered_at, metadata_json)
+                VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
+                "#,
+                params![
+                    issue.issue_type.as_str(),
+                    &issue.issue_key,
+                    &issue.discovered_at,
+                    &issue.metadata_json,
+                ],
+            )
+            .context("Failed to replace signal")?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Clear all signals of a specific type for a directory.
+    ///
+    /// Used before recomputing signals for a directory to ensure stale signals
+    /// are removed.
+    ///
+    /// Requires `ComputationWitness` to ensure this is called from computation context.
+    pub fn clear_signals_in_directory(
+        &self,
+        directory: &std::path::Path,
+        issue_type: HealthIssueType,
+        _witness: &ComputationWitness,
+    ) -> Result<usize> {
+        let dir_str = directory.to_string_lossy();
+        let pattern = format!("{}%", dir_str);
+
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2",
+                params![issue_type.as_str(), pattern],
+            )
+            .context("Failed to clear signals in directory")?;
+
         Ok(deleted)
     }
 
@@ -239,7 +388,7 @@ impl Database {
         let pattern = format!("{}%", dir_str);
 
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
                FROM health_issues
                WHERE issue_type = ?1 AND issue_key LIKE ?2"#
         )?;
@@ -265,7 +414,7 @@ impl Database {
         since: &str,
     ) -> Result<Vec<HealthIssue>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
+            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
                FROM health_issues
                WHERE issue_type = ?1 AND discovered_at > ?2
                ORDER BY discovered_at DESC"#
@@ -331,7 +480,7 @@ impl Database {
     /// Get health signals for a specific track.
     pub fn get_health_issues_for_track(&self, track_id: i64) -> Result<Vec<HealthIssue>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT hi.id, hi.issue_type, hi.issue_key, hi.severity, hi.discovered_at, hi.metadata_json
+            r#"SELECT hi.id, hi.issue_type, hi.issue_key, hi.discovered_at, hi.metadata_json
                FROM health_issues hi
                JOIN health_issue_tracks hit ON hi.id = hit.issue_id
                WHERE hit.track_id = ?1"#,
@@ -352,20 +501,19 @@ impl Database {
 
         // Count by issue type
         let mut stmt = self.conn.prepare(
-            r#"SELECT issue_type, severity, COUNT(*)
+            r#"SELECT issue_type, COUNT(*)
                FROM health_issues
-               GROUP BY issue_type, severity"#,
+               GROUP BY issue_type"#,
         )?;
 
         let rows = stmt.query_map(params![], |row| {
             let issue_type: String = row.get(0)?;
-            let severity: String = row.get(1)?;
-            let count: i64 = row.get(2)?;
-            Ok((issue_type, severity, count as usize))
+            let count: i64 = row.get(1)?;
+            Ok((issue_type, count as usize))
         })?;
 
         for row in rows {
-            let (issue_type, severity, count) = row?;
+            let (issue_type, count) = row?;
 
             match issue_type.as_str() {
                 "fingerprint_dup" => summary.fingerprint_duplicates += count,
@@ -374,12 +522,6 @@ impl Database {
                 "canon" | "tag_canon" | "genre_canon" => summary.canonicalization_issues += count,
                 "missing_tag" => summary.missing_tag_issues += count,
                 "quality" => summary.quality_variants += count,
-                _ => {}
-            }
-
-            match severity.as_str() {
-                "auto_resolvable" => summary.auto_resolvable += count,
-                "manual_review" => summary.manual_review += count,
                 _ => {}
             }
         }
@@ -482,20 +624,17 @@ impl Database {
     // ========================================================================
 
     /// Convert a row to HealthIssue.
-    /// Expected columns: id, issue_type, issue_key, severity, discovered_at, metadata_json
+    /// Expected columns: id, issue_type, issue_key, discovered_at, metadata_json
     pub(super) fn row_to_health_issue(row: &rusqlite::Row) -> rusqlite::Result<HealthIssue> {
         let issue_type_str: String = row.get(1)?;
-        let severity_str: String = row.get(3)?;
 
         Ok(HealthIssue {
             id: Some(row.get(0)?),
             issue_type: HealthIssueType::from_str(&issue_type_str)
                 .unwrap_or(HealthIssueType::FingerprintDuplicate),
             issue_key: row.get(2)?,
-            severity: HealthIssueSeverity::from_str(&severity_str)
-                .unwrap_or(HealthIssueSeverity::ManualReview),
-            discovered_at: row.get(4)?,
-            metadata_json: row.get(5)?,
+            discovered_at: row.get(3)?,
+            metadata_json: row.get(4)?,
         })
     }
 

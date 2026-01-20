@@ -172,13 +172,11 @@ impl Database {
                 id INTEGER PRIMARY KEY,
                 issue_type TEXT NOT NULL,
                 issue_key TEXT NOT NULL,
-                severity TEXT NOT NULL,
                 discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 metadata_json TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_health_issues_type ON health_issues(issue_type);
             CREATE INDEX IF NOT EXISTS idx_health_issues_key ON health_issues(issue_key);
-            CREATE INDEX IF NOT EXISTS idx_health_issues_severity ON health_issues(severity);
             CREATE INDEX IF NOT EXISTS idx_health_issues_discovered ON health_issues(discovered_at);
 
             -- Tracks involved in each health issue
@@ -280,10 +278,9 @@ impl Database {
         match version {
             Some(v) => v.parse::<u32>().context("Invalid schema version in database"),
             None => {
-                // No version recorded - this is a pre-versioning database
-                // Set baseline version and return it
-                self.set_schema_version(2)?;
-                Ok(2)
+                // No version recorded - set baseline version
+                self.set_schema_version(1)?;
+                Ok(1)
             }
         }
     }

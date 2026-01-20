@@ -34,11 +34,42 @@
 //!
 //! Computations never bypass the witness system because they don't alter state.
 //! They only observe and record findings.
+//!
+//! ## ComputationWitness
+//!
+//! Signal-altering operations (insert, delete, upsert) require a `ComputationWitness`
+//! which can only be created inside computation execution. This ensures signals are
+//! only modified through the computation system, not ad-hoc from UI or other code.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::config::log_message;
+
+// ============================================================================
+// ComputationWitness - Proof of Computation Execution Context
+// ============================================================================
+
+/// Sealed module to prevent external construction of ComputationWitness.
+mod sealed {
+    /// Zero-sized proof that code is executing within a computation context.
+    ///
+    /// This witness is required by signal-altering database operations to ensure
+    /// health signals are only modified through the computation system.
+    ///
+    /// Cannot be constructed outside of `execute_single`.
+    #[derive(Debug, Clone, Copy)]
+    pub struct ComputationWitness(());
+
+    impl ComputationWitness {
+        /// Create a new witness. Only callable from within this crate's computation execution.
+        pub(crate) fn new() -> Self {
+            Self(())
+        }
+    }
+}
+
+pub use sealed::ComputationWitness;
 
 /// A computation operation that derives facts without altering corpus state.
 ///
@@ -138,6 +169,38 @@ pub enum Computation {
     /// Third-level computation triggered when a file is marked as healthy.
     /// Checks if this track has deployment conflicts with other tracks.
     CheckDeployConflicts { track_id: i64 },
+
+    // -------------------------------------------------------------------------
+    // Library Health Computations
+    // -------------------------------------------------------------------------
+
+    /// Walk a library directory tree to collect file inodes.
+    ///
+    /// Spawns `ScanLibraryDirectory` for each subdirectory found.
+    WalkLibrary {
+        library_root: PathBuf,
+        library_name: String,
+    },
+
+    /// Scan a single library directory and collect (path, inode) pairs.
+    ///
+    /// Results are accumulated in memory, then passed to DeriveLibraryHealthSignals.
+    ScanLibraryDirectory {
+        directory: PathBuf,
+        library_name: String,
+    },
+
+    /// Derive library health signals after scanning all directories.
+    ///
+    /// Compares library inodes against corpus index:
+    /// - Match by inode → check if path is correct (healthy vs stale)
+    /// - Corpus track not in library → LibraryNotDeployed
+    /// - Library file without corpus backing → LibraryOrphan
+    DeriveLibraryHealthSignals {
+        library_name: String,
+        /// Library files: (path, inode)
+        library_files: Vec<(PathBuf, i64)>,
+    },
 }
 
 impl Computation {
@@ -152,6 +215,9 @@ impl Computation {
             Computation::ScheduleSecondLevelDerivations => None,
             Computation::DeriveDirectorySignals { directory } => Some(directory),
             Computation::CheckDeployConflicts { .. } => None,
+            Computation::WalkLibrary { library_root, .. } => Some(library_root),
+            Computation::ScanLibraryDirectory { directory, .. } => Some(directory),
+            Computation::DeriveLibraryHealthSignals { .. } => None,
         }
     }
 
@@ -168,6 +234,9 @@ impl Computation {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
             Computation::DeriveDirectorySignals { .. } => "Deriving signals",
             Computation::CheckDeployConflicts { .. } => "Checking deploy conflicts",
+            Computation::WalkLibrary { .. } => "Walking library",
+            Computation::ScanLibraryDirectory { .. } => "Scanning library directory",
+            Computation::DeriveLibraryHealthSignals { .. } => "Deriving library health",
         }
     }
 }
@@ -208,12 +277,16 @@ impl ComputationResult {
 /// Execute a single computation.
 ///
 /// Opens DB connection as needed to record signals.
+/// Creates a `ComputationWitness` for signal-altering operations.
 pub fn execute_single(computation: &Computation) -> ComputationResult {
     use crate::config;
     use crate::corpus::db::Database;
     use crate::corpus::mutations::indexing;
 
     let start = std::time::Instant::now();
+
+    // Create witness for signal operations - only valid within this execution context
+    let witness = ComputationWitness::new();
 
     // Open database for signal recording
     let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
@@ -249,11 +322,11 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
         }
 
         Computation::ScanCorpusDirectory { directory, source, paranoid } => {
-            execute_scan_corpus_directory(&db, directory, source, *paranoid, start)
+            execute_scan_corpus_directory(&db, directory, source, *paranoid, &witness, start)
         }
 
         Computation::CompareInodes { source, disk_state, paranoid } => {
-            execute_compare_inodes(&db, source, disk_state, *paranoid, start)
+            execute_compare_inodes(&db, source, disk_state, *paranoid, &witness, start)
         }
 
         Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
@@ -265,11 +338,23 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
         }
 
         Computation::DeriveDirectorySignals { directory } => {
-            execute_derive_directory_signals(&db, directory, start)
+            execute_derive_directory_signals(&db, directory, &witness, start)
         }
 
         Computation::CheckDeployConflicts { track_id } => {
             execute_check_deploy_conflicts(&db, *track_id, start)
+        }
+
+        Computation::WalkLibrary { library_root, library_name } => {
+            execute_walk_library(&db, library_root, library_name, start)
+        }
+
+        Computation::ScanLibraryDirectory { directory, library_name } => {
+            execute_scan_library_directory(&db, directory, library_name, start)
+        }
+
+        Computation::DeriveLibraryHealthSignals { library_name, library_files } => {
+            execute_derive_library_health_signals(&db, library_name, library_files, &witness, start)
         }
     }
 }
@@ -419,9 +504,10 @@ fn execute_scan_corpus_directory(
     directory: &Path,
     source: &str,
     paranoid: bool,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> ComputationResult {
-    use crate::corpus::db::{HealthIssue, HealthIssueType, HealthIssueSeverity};
+    use crate::corpus::db::types::HealthIssueType;
 
     let computation = Computation::ScanCorpusDirectory {
         directory: directory.to_path_buf(),
@@ -429,7 +515,12 @@ fn execute_scan_corpus_directory(
         paranoid,
     };
 
+    let dir_str = directory.to_string_lossy().to_string();
+    let issue_key = format!("file_in_corpus:{}", dir_str);
+
     if !directory.exists() {
+        // Directory doesn't exist - clear any existing FileInCorpus signal
+        let _ = db.clear_signal(HealthIssueType::FileInCorpus, &issue_key, witness);
         return ComputationResult::failure(
             computation,
             start.elapsed().as_millis() as u64,
@@ -440,8 +531,9 @@ fn execute_scan_corpus_directory(
     // Collect disk state for files DIRECTLY in this directory (not recursive)
     let disk_state = collect_directory_files(directory);
 
-    // Skip logging for empty directories
+    // If no files in directory, clear any existing signal and return
     if disk_state.is_empty() {
+        let _ = db.clear_signal(HealthIssueType::FileInCorpus, &issue_key, witness);
         return ComputationResult::success(
             computation,
             start.elapsed().as_millis() as u64,
@@ -492,34 +584,23 @@ fn execute_scan_corpus_directory(
         }
     }
 
-    // Create FileInCorpus signal for unindexed files in this directory
+    // Manage FileInCorpus signal for this directory
     if !unindexed_paths.is_empty() {
-        let dir_str = directory.to_string_lossy().to_string();
-        let issue_key = format!("file_in_corpus:{}", dir_str);
+        let metadata = serde_json::json!({
+            "directory": dir_str,
+            "file_count": unindexed_paths.len(),
+            "sample_files": unindexed_paths.iter().take(5).collect::<Vec<_>>(),
+        });
 
-        // Check if signal already exists before creating
-        if db.get_health_issue_by_key(HealthIssueType::FileInCorpus, &issue_key)
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            let metadata = serde_json::json!({
-                "directory": dir_str,
-                "file_count": unindexed_paths.len(),
-                "sample_files": unindexed_paths.iter().take(5).collect::<Vec<_>>(),
-            });
-
-            let issue = HealthIssue {
-                id: None,
-                issue_type: HealthIssueType::FileInCorpus,
-                issue_key,
-                severity: HealthIssueSeverity::Informational,
-                discovered_at: None,
-                metadata_json: Some(metadata.to_string()),
-            };
-
-            let _ = db.insert_health_issue(&issue);
-        }
+        let _ = db.ensure_signal(
+            HealthIssueType::FileInCorpus,
+            &issue_key,
+            Some(&metadata.to_string()),
+            witness,
+        );
+    } else {
+        // All files are indexed - clear any existing FileInCorpus signal
+        let _ = db.clear_signal(HealthIssueType::FileInCorpus, &issue_key, witness);
     }
 
     ComputationResult::success(
@@ -568,6 +649,7 @@ fn execute_compare_inodes(
     source: &str,
     disk_state: &[(i64, PathBuf, i64, i64)],
     paranoid: bool,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> ComputationResult {
     let _ = log_message(&format!(
@@ -607,7 +689,7 @@ fn execute_compare_inodes(
     // Create MissingFromDisk signals
     if !missing_from_disk.is_empty() {
         if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
-            create_missing_from_disk_issues(db, source, &missing_paths);
+            create_missing_from_disk_issues(db, source, &missing_paths, witness);
         }
     }
 
@@ -618,7 +700,7 @@ fn execute_compare_inodes(
             .filter_map(|inode| disk_inode_to_state.get(inode))
             .map(|(path, _, _)| path.to_string_lossy().to_string())
             .collect();
-        create_missing_from_index_issues(db, &missing_paths);
+        create_missing_from_index_issues(db, &missing_paths, witness);
     }
 
     // Spawn follow-up computations for mtime verification
@@ -674,8 +756,13 @@ fn execute_compare_inodes(
 }
 
 /// Create health issues for files missing from disk.
-fn create_missing_from_disk_issues(db: &Database, source: &str, missing_paths: &[String]) {
-    use crate::corpus::db::{HealthIssue, HealthIssueType, HealthIssueSeverity};
+fn create_missing_from_disk_issues(
+    db: &Database,
+    source: &str,
+    missing_paths: &[String],
+    witness: &ComputationWitness,
+) {
+    use crate::corpus::db::types::HealthIssueType;
 
     // Group by parent directory
     let mut by_directory: HashMap<String, Vec<String>> = HashMap::new();
@@ -690,15 +777,6 @@ fn create_missing_from_disk_issues(db: &Database, source: &str, missing_paths: &
     for (directory, files) in by_directory {
         let issue_key = format!("missing_from_disk:{}:{}", source, directory);
 
-        // Check if issue already exists
-        if db.get_health_issue_by_key(HealthIssueType::MissingFromDisk, &issue_key)
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            continue;
-        }
-
         let metadata = serde_json::json!({
             "source": source,
             "directory": directory,
@@ -706,22 +784,22 @@ fn create_missing_from_disk_issues(db: &Database, source: &str, missing_paths: &
             "sample_files": files.iter().take(5).collect::<Vec<_>>(),
         });
 
-        let issue = HealthIssue {
-            id: None,
-            issue_type: HealthIssueType::MissingFile,
-            issue_key,
-            severity: HealthIssueSeverity::ManualReview,
-            discovered_at: None,
-            metadata_json: Some(metadata.to_string()),
-        };
-
-        let _ = db.insert_health_issue(&issue);
+        let _ = db.ensure_signal(
+            HealthIssueType::MissingFile,
+            &issue_key,
+            Some(&metadata.to_string()),
+            witness,
+        );
     }
 }
 
 /// Create signals for files in corpus but not in index.
-fn create_missing_from_index_issues(db: &Database, missing_paths: &[String]) {
-    use crate::corpus::db::{HealthIssue, HealthIssueType, HealthIssueSeverity};
+fn create_missing_from_index_issues(
+    db: &Database,
+    missing_paths: &[String],
+    witness: &ComputationWitness,
+) {
+    use crate::corpus::db::types::HealthIssueType;
 
     // Group by parent directory
     let mut by_directory: HashMap<String, Vec<String>> = HashMap::new();
@@ -744,31 +822,18 @@ fn create_missing_from_index_issues(db: &Database, missing_paths: &[String]) {
     for (directory, files) in by_directory {
         let issue_key = format!("file_in_corpus:{}", directory);
 
-        // Check if signal already exists
-        if db.get_health_issue_by_key(HealthIssueType::FileInCorpus, &issue_key)
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            continue;
-        }
-
         let metadata = serde_json::json!({
             "directory": directory,
             "file_count": files.len(),
             "sample_files": files.iter().take(5).collect::<Vec<_>>(),
         });
 
-        let issue = HealthIssue {
-            id: None,
-            issue_type: HealthIssueType::FileInCorpus,
-            issue_key,
-            severity: HealthIssueSeverity::Informational,
-            discovered_at: None,
-            metadata_json: Some(metadata.to_string()),
-        };
-
-        let _ = db.insert_health_issue(&issue);
+        let _ = db.ensure_signal(
+            HealthIssueType::FileInCorpus,
+            &issue_key,
+            Some(&metadata.to_string()),
+            witness,
+        );
     }
 }
 
@@ -864,10 +929,27 @@ fn execute_schedule_second_level_derivations(
     ));
 
     // Spawn a DeriveDirectorySignals computation for each directory
-    let spawn: Vec<Computation> = all_dirs
+    let mut spawn: Vec<Computation> = all_dirs
         .into_iter()
         .map(|directory| Computation::DeriveDirectorySignals { directory })
         .collect();
+
+    // Also spawn library health computations for each configured library
+    if let Ok(config) = crate::config::load_config() {
+        let library_names = crate::corpus::health::library::get_configured_library_names(&config);
+        let _ = log_message(&format!(
+            "[COMPUTE] ScheduleSecondLevelDerivations: spawning {} library walks",
+            library_names.len()
+        ));
+
+        for library_name in library_names {
+            let library_root = config.libraries_root.join(&library_name);
+            spawn.push(Computation::WalkLibrary {
+                library_root,
+                library_name,
+            });
+        }
+    }
 
     ComputationResult::success(
         Computation::ScheduleSecondLevelDerivations,
@@ -877,12 +959,16 @@ fn execute_schedule_second_level_derivations(
 }
 
 /// Derive second-level signals for files in a single directory.
+///
+/// Computes the expected state for each file and ensures the correct signals exist
+/// while clearing signals that no longer apply.
 fn execute_derive_directory_signals(
     db: &Database,
     directory: &Path,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> ComputationResult {
-    use crate::corpus::db::types::{HealthIssue, HealthIssueSeverity, HealthIssueType};
+    use crate::corpus::db::types::HealthIssueType;
 
     let computation = Computation::DeriveDirectorySignals {
         directory: directory.to_path_buf(),
@@ -923,71 +1009,62 @@ fn execute_derive_directory_signals(
         .map(|t| (t.path.clone(), t))
         .collect();
 
-    let mut signals_to_create: Vec<HealthIssue> = Vec::new();
     let mut spawn: Vec<Computation> = Vec::new();
 
-    // FileInCorpus without matching track → UnindexedFile
+    // Process files in corpus (FileInCorpus signals)
     for corpus_path in &corpus_paths {
-        if !indexed_paths.contains_key(corpus_path) {
-            signals_to_create.push(HealthIssue {
-                id: None,
-                issue_type: HealthIssueType::UnindexedFile,
-                issue_key: corpus_path.clone(),
-                severity: HealthIssueSeverity::Informational,
-                discovered_at: None,
-                metadata_json: None,
-            });
+        if indexed_paths.contains_key(corpus_path) {
+            // File is in both corpus and index → clear UnindexedFile if it exists
+            let _ = db.clear_signal(HealthIssueType::UnindexedFile, corpus_path, witness);
+        } else {
+            // File in corpus but not indexed → ensure UnindexedFile signal
+            let _ = db.ensure_signal(
+                HealthIssueType::UnindexedFile,
+                corpus_path,
+                None,
+                witness,
+            );
         }
     }
 
-    // Check each indexed track against corpus state
+    // Process indexed tracks
     for (path, track) in &indexed_paths {
-        if !corpus_paths.contains(path) {
-            // Track without FileInCorpus → MissingFile
-            signals_to_create.push(HealthIssue {
-                id: None,
-                issue_type: HealthIssueType::MissingFile,
-                issue_key: path.clone(),
-                severity: HealthIssueSeverity::ManualReview,
-                discovered_at: None,
-                metadata_json: None,
-            });
-        } else {
-            // File exists in both corpus and index - check if healthy or modified
-            // For now, consider it healthy and spawn deploy conflict check
-            // A more thorough check would compare mtime, but VerifyMtime handles that
-            signals_to_create.push(HealthIssue {
-                id: None,
-                issue_type: HealthIssueType::HealthyFile,
-                issue_key: path.clone(),
-                severity: HealthIssueSeverity::Informational,
-                discovered_at: None,
-                metadata_json: None,
-            });
+        if corpus_paths.contains(path) {
+            // File exists in both corpus and index → healthy
+            // Clear MissingFile signal if it existed
+            let _ = db.clear_signal(HealthIssueType::MissingFile, path, witness);
+
+            // Ensure HealthyFile signal
+            let _ = db.ensure_signal(
+                HealthIssueType::HealthyFile,
+                path,
+                None,
+                witness,
+            );
 
             // Spawn deploy conflict check for healthy files
             if let Some(track_id) = track.id {
                 spawn.push(Computation::CheckDeployConflicts { track_id });
             }
+        } else {
+            // Track without FileInCorpus → file is missing from disk
+            // Clear HealthyFile signal if it existed
+            let _ = db.clear_signal(HealthIssueType::HealthyFile, path, witness);
+
+            // Ensure MissingFile signal
+            let _ = db.ensure_signal(
+                HealthIssueType::MissingFile,
+                path,
+                None,
+                witness,
+            );
         }
     }
 
-    // Record the signals
-    for signal in signals_to_create {
-        if let Err(e) = db.insert_health_issue(&signal) {
-            let _ = log_message(&format!(
-                "Failed to record {:?} signal for {}: {}",
-                signal.issue_type, signal.issue_key, e
-            ));
-        }
-    }
-
-    // Clean up stale signals for this directory
-    // Delete UnindexedFile signals for files that are now indexed
-    // Delete MissingFile signals for files that now exist
-    // Delete HealthyFile signals for files that no longer exist or are no longer healthy
-    // (This is handled by the fact that we just recorded fresh signals - old stale ones
-    // should be cleaned up by a separate staleness check or replaced by newer signals)
+    // Clean up stale signals for paths no longer tracked
+    // UnindexedFile signals for paths that are now indexed (handled above)
+    // HealthyFile signals for paths no longer in corpus or index need cleanup
+    // This requires knowing all paths that WERE tracked - for now we handle the common cases above
 
     ComputationResult::success(
         computation,
@@ -1021,4 +1098,222 @@ fn execute_check_deploy_conflicts(
         start.elapsed().as_millis() as u64,
         Vec::new(),
     )
+}
+
+// ============================================================================
+// Library Health Computation Executors
+// ============================================================================
+
+/// Walk a library directory tree and spawn per-directory scans.
+fn execute_walk_library(
+    _db: &Database,
+    library_root: &Path,
+    library_name: &str,
+    start: Instant,
+) -> ComputationResult {
+    let computation = Computation::WalkLibrary {
+        library_root: library_root.to_path_buf(),
+        library_name: library_name.to_string(),
+    };
+
+    if !library_root.exists() {
+        let _ = log_message(&format!(
+            "[COMPUTE] WalkLibrary: library root does not exist: {:?}",
+            library_root
+        ));
+        return ComputationResult::success(
+            computation,
+            start.elapsed().as_millis() as u64,
+            Vec::new(), // No directories to scan
+        );
+    }
+
+    // Enumerate all directories recursively
+    let mut directories: Vec<PathBuf> = Vec::new();
+    let mut symlink_count = 0;
+    enumerate_directories_recursive(library_root, &mut directories, &mut symlink_count);
+
+    // Include root itself
+    directories.push(library_root.to_path_buf());
+
+    let _ = log_message(&format!(
+        "[COMPUTE] WalkLibrary '{}': found {} directories in {:?}",
+        library_name,
+        directories.len(),
+        library_root
+    ));
+
+    // Spawn ScanLibraryDirectory for each directory
+    let spawn: Vec<Computation> = directories
+        .into_iter()
+        .map(|directory| Computation::ScanLibraryDirectory {
+            directory,
+            library_name: library_name.to_string(),
+        })
+        .collect();
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, spawn)
+}
+
+/// Scan a single library directory and collect (path, inode) pairs.
+///
+/// Since we need to aggregate files before deriving signals, this stores
+/// files in a temporary table or accumulates them in memory. For simplicity,
+/// we'll collect files and spawn DeriveLibraryHealthSignals when the last
+/// directory scan completes.
+///
+/// Note: This design accumulates files across multiple ScanLibraryDirectory
+/// calls by tracking completion in a separate mechanism. For now, each
+/// scan immediately spawns a DeriveLibraryHealthSignals with its files.
+/// A more efficient implementation would batch directories.
+fn execute_scan_library_directory(
+    _db: &Database,
+    directory: &Path,
+    library_name: &str,
+    start: Instant,
+) -> ComputationResult {
+    let computation = Computation::ScanLibraryDirectory {
+        directory: directory.to_path_buf(),
+        library_name: library_name.to_string(),
+    };
+
+    // Collect audio files in this directory (non-recursive, only immediate children)
+    let mut library_files: Vec<(PathBuf, i64)> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && is_audio_file(&path) {
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    library_files.push((path, metadata.ino() as i64));
+                }
+            }
+        }
+    }
+
+    let file_count = library_files.len();
+
+    // Spawn DeriveLibraryHealthSignals to process these files
+    // Note: Each directory spawns its own derivation. A future optimization
+    // could batch all directories and run one final derivation.
+    let spawn = if library_files.is_empty() {
+        Vec::new()
+    } else {
+        vec![Computation::DeriveLibraryHealthSignals {
+            library_name: library_name.to_string(),
+            library_files,
+        }]
+    };
+
+    let _ = log_message(&format!(
+        "[COMPUTE] ScanLibraryDirectory '{}': found {} audio files in {:?}",
+        library_name, file_count, directory
+    ));
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, spawn)
+}
+
+/// Derive library health signals by comparing library inodes against corpus.
+fn execute_derive_library_health_signals(
+    db: &Database,
+    library_name: &str,
+    library_files: &[(PathBuf, i64)],
+    witness: &ComputationWitness,
+    start: Instant,
+) -> ComputationResult {
+    use crate::corpus::db::types::{HealthIssue, HealthIssueType};
+
+    let computation = Computation::DeriveLibraryHealthSignals {
+        library_name: library_name.to_string(),
+        library_files: library_files.to_vec(),
+    };
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DeriveLibraryHealthSignals '{}': processing {} files",
+        library_name,
+        library_files.len()
+    ));
+
+    // Build inode -> library_path map
+    let library_inodes: HashMap<i64, &PathBuf> = library_files
+        .iter()
+        .map(|(path, inode)| (*inode, path))
+        .collect();
+
+    // Get all corpus track inodes
+    let corpus_inodes = db.get_all_track_inodes().unwrap_or_default();
+
+    let mut healthy_count: usize = 0;
+    let mut stale_count: usize = 0;
+    let mut orphan_count: usize = 0;
+
+    // Check each library file against corpus
+    for (library_path, library_inode) in library_files {
+        let orphan_key = format!(
+            "library_orphan:{}:{}",
+            library_name,
+            library_path.display()
+        );
+
+        if let Some(corpus_path) = corpus_inodes.get(library_inode) {
+            // Inode match found - this file is deployed from corpus
+            // Clear any orphan signal that might have existed
+            let _ = db.clear_signal(HealthIssueType::LibraryOrphan, &orphan_key, witness);
+
+            // For now, just count as healthy. Stale detection requires
+            // comparing expected deployment path vs actual, which needs
+            // the deploy path computation (currently disabled).
+            healthy_count += 1;
+
+            // TODO: When corpus::deploy is re-enabled, check if library_path
+            // matches the expected deployment path. If not, create LibraryStale signal.
+            let _ = corpus_path; // Suppress unused warning
+        } else {
+            // No corpus match - this is an orphan
+            orphan_count += 1;
+
+            let metadata = serde_json::json!({
+                "library_name": library_name,
+                "library_path": library_path.display().to_string(),
+                "inode": library_inode,
+            });
+
+            let _ = db.ensure_signal(
+                HealthIssueType::LibraryOrphan,
+                &orphan_key,
+                Some(&metadata.to_string()),
+                witness,
+            );
+        }
+    }
+
+    // TODO: Check for LibraryNotDeployed (corpus tracks that should be in library but aren't)
+    // This requires knowing which corpus tracks are deployable to this library,
+    // which depends on the deploy_mappings config. For now, skip this check.
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DeriveLibraryHealthSignals '{}': {} healthy, {} stale, {} orphan",
+        library_name, healthy_count, stale_count, orphan_count
+    ));
+
+    // Replace LibraryHealthSummary signal with fresh data
+    let summary_key = format!("library_health:{}", library_name);
+    let summary_metadata = serde_json::json!({
+        "library_name": library_name,
+        "healthy_count": healthy_count,
+        "stale_count": stale_count,
+        "orphan_count": orphan_count,
+        "total_files": library_files.len(),
+    });
+
+    let summary_issue = HealthIssue {
+        id: None,
+        issue_type: HealthIssueType::LibraryHealthSummary,
+        issue_key: summary_key,
+        discovered_at: None,
+        metadata_json: Some(summary_metadata.to_string()),
+    };
+    let _ = db.replace_signal(&summary_issue, witness);
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

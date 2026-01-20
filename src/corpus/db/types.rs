@@ -91,6 +91,23 @@ pub enum HealthIssueType {
     DeployConflict,
 
     // =========================================================================
+    // Library deployment health signals
+    // =========================================================================
+    /// Library file exists and matches corpus inode (healthy deployment)
+    /// Aggregated count per library - no per-file signals for healthy files.
+    /// issue_key: "library_health:{library_name}"
+    LibraryHealthSummary,
+    /// Library file exists but deployed at wrong path (tags changed since deploy)
+    /// issue_key: "library_stale:{library_name}:{library_path}"
+    LibraryStale,
+    /// Corpus track should be deployed to library but isn't
+    /// issue_key: "library_not_deployed:{library_name}:{corpus_path}"
+    LibraryNotDeployed,
+    /// Library file exists without corpus backing (orphan)
+    /// issue_key: "library_orphan:{library_name}:{library_path}"
+    LibraryOrphan,
+
+    // =========================================================================
     // Content-level signals (tag and fingerprint analysis)
     // =========================================================================
     /// Same fingerprint across multiple files
@@ -143,6 +160,12 @@ impl HealthIssueType {
             // Third-level signals
             Self::DeployConflict => "deploy_conflict",
 
+            // Library deployment health signals
+            Self::LibraryHealthSummary => "library_health_summary",
+            Self::LibraryStale => "library_stale",
+            Self::LibraryNotDeployed => "library_not_deployed",
+            Self::LibraryOrphan => "library_orphan",
+
             // Content-level signals
             Self::FingerprintDuplicate => "fingerprint_dup",
             Self::MetadataDuplicate => "metadata_dup",
@@ -176,6 +199,12 @@ impl HealthIssueType {
             // Third-level signals
             "deploy_conflict" => Some(Self::DeployConflict),
 
+            // Library deployment health signals
+            "library_health_summary" => Some(Self::LibraryHealthSummary),
+            "library_stale" => Some(Self::LibraryStale),
+            "library_not_deployed" => Some(Self::LibraryNotDeployed),
+            "library_orphan" => Some(Self::LibraryOrphan),
+
             // Content-level signals
             "fingerprint_dup" => Some(Self::FingerprintDuplicate),
             "metadata_dup" => Some(Self::MetadataDuplicate),
@@ -198,35 +227,6 @@ impl HealthIssueType {
     }
 }
 
-/// Severity of a health issue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealthIssueSeverity {
-    /// Can be resolved automatically by quality comparison
-    AutoResolvable,
-    /// Requires manual review
-    ManualReview,
-    /// Informational only (e.g., canonicalization suggestions)
-    Informational,
-}
-
-impl HealthIssueSeverity {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::AutoResolvable => "auto_resolvable",
-            Self::ManualReview => "manual_review",
-            Self::Informational => "informational",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "auto_resolvable" => Some(Self::AutoResolvable),
-            "manual_review" => Some(Self::ManualReview),
-            "informational" => Some(Self::Informational),
-            _ => None,
-        }
-    }
-}
 
 /// A health signal detected in the corpus.
 ///
@@ -237,7 +237,6 @@ pub struct HealthIssue {
     pub id: Option<i64>,
     pub issue_type: HealthIssueType,
     pub issue_key: String, // Path, fingerprint, normalized metadata key, etc.
-    pub severity: HealthIssueSeverity,
     pub discovered_at: Option<String>,
     pub metadata_json: Option<String>,
 }
@@ -342,13 +341,14 @@ pub struct TagCanonicalization {
 /// Summary of corpus health.
 #[derive(Debug, Clone, Default)]
 pub struct HealthSummary {
+    /// Total health issues (excluding deploy_conflicts)
+    pub total_issues: usize,
+    // Content-level breakdowns (may not sum to total_issues due to other issue types)
     pub fingerprint_duplicates: usize,
     pub metadata_duplicates: usize,
     pub canonicalization_issues: usize,
     pub missing_tag_issues: usize,
     pub quality_variants: usize,
-    pub auto_resolvable: usize,
-    pub manual_review: usize,
     pub known_variants: usize,
 }
 

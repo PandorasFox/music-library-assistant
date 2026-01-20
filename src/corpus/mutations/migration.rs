@@ -23,6 +23,7 @@
 use anyhow::{Context, Result};
 
 use crate::corpus::db::Database;
+use crate::daemon::MigrationWitness;
 
 /// A single database migration.
 pub struct Migration {
@@ -45,128 +46,13 @@ pub struct MigrationRegistry {
 
 impl MigrationRegistry {
     /// Create a new migration registry with all known migrations.
+    ///
+    /// Schema is currently at v1 with no migrations needed.
+    /// Future migrations would be added here when breaking changes are made.
     pub fn new() -> Self {
-        let mut registry = Self {
+        Self {
             migrations: Vec::new(),
-        };
-
-        // Version 2 -> 3: Add track_tags table for arbitrary tag storage
-        registry.register(Migration {
-            from_version: 2,
-            to_version: 3,
-            description: "Add track_tags table for arbitrary tag storage",
-            apply: |db| {
-                db.execute_batch(
-                    r#"
-                    -- Create track_tags table for arbitrary tag storage
-                    CREATE TABLE IF NOT EXISTS track_tags (
-                        id INTEGER PRIMARY KEY,
-                        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-                        tag_name TEXT NOT NULL,
-                        tag_value TEXT NOT NULL,
-                        source TEXT NOT NULL DEFAULT 'disk',
-                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                        UNIQUE(track_id, tag_name)
-                    );
-
-                    CREATE INDEX IF NOT EXISTS idx_track_tags_track ON track_tags(track_id);
-                    CREATE INDEX IF NOT EXISTS idx_track_tags_name ON track_tags(tag_name);
-
-                    -- Migrate existing tag columns to track_tags
-                    INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
-                    SELECT id, 'title', title, 'disk' FROM tracks WHERE title IS NOT NULL AND title != '';
-
-                    INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
-                    SELECT id, 'artist', artist, 'disk' FROM tracks WHERE artist IS NOT NULL AND artist != '';
-
-                    INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
-                    SELECT id, 'album', album, 'disk' FROM tracks WHERE album IS NOT NULL AND album != '';
-
-                    INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
-                    SELECT id, 'album_artist', album_artist, 'disk' FROM tracks WHERE album_artist IS NOT NULL AND album_artist != '';
-
-                    INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
-                    SELECT id, 'genre', genre, 'disk' FROM tracks WHERE genre IS NOT NULL AND genre != '';
-
-                    INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
-                    SELECT id, 'isrc', isrc, 'disk' FROM tracks WHERE isrc IS NOT NULL AND isrc != '';
-
-                    INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value, source)
-                    SELECT id, 'track_number', CAST(track_number AS TEXT), 'disk' FROM tracks WHERE track_number IS NOT NULL;
-                    "#,
-                )?;
-
-                // Update schema version using the proper table
-                db.set_schema_version(3)
-            },
-        });
-
-        // Version 3 -> 4: Drop legacy duplicate tracking tables
-        // The duplicate_groups system has been replaced by DeployConflict health issues
-        registry.register(Migration {
-            from_version: 3,
-            to_version: 4,
-            description: "Remove legacy duplicate_groups tables (replaced by health_issues)",
-            apply: |db| {
-                db.execute_batch(
-                    r#"
-                    DROP TABLE IF EXISTS duplicate_group_members;
-                    DROP TABLE IF EXISTS duplicate_groups;
-                    "#,
-                )?;
-                db.set_schema_version(4)
-            },
-        });
-
-        // Version 4 -> 5: Remove resolution columns from health_issues
-        // Signals are now facts that are deleted when stale, not "resolved"
-        registry.register(Migration {
-            from_version: 4,
-            to_version: 5,
-            description: "Remove resolution columns from health_issues (signals are deleted, not resolved)",
-            apply: |db| {
-                // SQLite doesn't support DROP COLUMN in older versions, so we recreate the table
-                db.execute_batch(
-                    r#"
-                    -- Create new table without resolution columns
-                    CREATE TABLE health_issues_new (
-                        id INTEGER PRIMARY KEY,
-                        issue_type TEXT NOT NULL,
-                        issue_key TEXT NOT NULL,
-                        severity TEXT NOT NULL,
-                        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        metadata_json TEXT
-                    );
-
-                    -- Copy data from old table
-                    INSERT INTO health_issues_new (id, issue_type, issue_key, severity, discovered_at, metadata_json)
-                    SELECT id, issue_type, issue_key, severity, discovered_at, metadata_json
-                    FROM health_issues
-                    WHERE resolved_at IS NULL;
-
-                    -- Drop old table and rename new one
-                    DROP TABLE health_issues;
-                    ALTER TABLE health_issues_new RENAME TO health_issues;
-
-                    -- Recreate indexes
-                    CREATE INDEX IF NOT EXISTS idx_health_issues_type ON health_issues(issue_type);
-                    CREATE INDEX IF NOT EXISTS idx_health_issues_key ON health_issues(issue_key);
-                    CREATE INDEX IF NOT EXISTS idx_health_issues_severity ON health_issues(severity);
-                    CREATE INDEX IF NOT EXISTS idx_health_issues_discovered ON health_issues(discovered_at);
-
-                    -- Migrate signal type names
-                    UPDATE health_issues SET issue_type = 'missing_file' WHERE issue_type = 'missing_from_disk';
-                    UPDATE health_issues SET issue_type = 'file_in_corpus' WHERE issue_type = 'missing_from_index';
-                    UPDATE health_issues SET issue_type = 'moved_file' WHERE issue_type = 'file_relocated';
-                    UPDATE health_issues SET issue_type = 'corpus_file_modified_oob' WHERE issue_type = 'oob_file_change';
-                    "#,
-                )?;
-                db.set_schema_version(5)
-            },
-        });
-
-        registry
+        }
     }
 
     /// Register a migration.
@@ -179,12 +65,12 @@ impl MigrationRegistry {
         self.migrations
             .last()
             .map(|m| m.to_version)
-            .unwrap_or(2) // Base version if no migrations
+            .unwrap_or(1) // Base version if no migrations
     }
 
     /// Check if migrations are needed for the given database.
     pub fn needs_migration(&self, db: &Database) -> bool {
-        let current = db.get_schema_version().unwrap_or(2);
+        let current = db.get_schema_version().unwrap_or(1);
         current < self.latest_version()
     }
 
@@ -198,7 +84,7 @@ impl MigrationRegistry {
 
     /// Get descriptions of pending migrations.
     pub fn pending_descriptions(&self, db: &Database) -> Vec<String> {
-        let current = db.get_schema_version().unwrap_or(2);
+        let current = db.get_schema_version().unwrap_or(1);
         self.pending_migrations(current)
             .iter()
             .map(|m| format!("v{} → v{}: {}", m.from_version, m.to_version, m.description))
@@ -206,7 +92,16 @@ impl MigrationRegistry {
     }
 
     /// Apply a specific migration by ID.
-    pub fn apply_migration(&self, db: &Database, migration_id: u32) -> Result<()> {
+    ///
+    /// Requires a `MigrationWitness` to prove this is being called from the daemon
+    /// execution context, ensuring migrations cannot be accidentally applied from
+    /// arbitrary code paths.
+    pub fn apply_migration(
+        &self,
+        db: &Database,
+        migration_id: u32,
+        _witness: &MigrationWitness,
+    ) -> Result<()> {
         let migration = self
             .migrations
             .iter()
@@ -219,8 +114,12 @@ impl MigrationRegistry {
     /// Apply all pending migrations.
     ///
     /// Returns the number of migrations applied.
-    pub fn apply_all_pending(&self, db: &Database) -> Result<usize> {
-        let current = db.get_schema_version().unwrap_or(2);
+    ///
+    /// Requires a `MigrationWitness` to prove this is being called from an
+    /// authorized migration context (either daemon execution or startup with
+    /// user approval).
+    pub fn apply_all_pending(&self, db: &Database, _witness: &MigrationWitness) -> Result<usize> {
+        let current = db.get_schema_version().unwrap_or(1);
         let pending = self.pending_migrations(current);
         let count = pending.len();
 
@@ -248,18 +147,14 @@ mod tests {
     fn test_migration_registry() {
         let registry = MigrationRegistry::new();
 
-        // Should have migrations up to v5
-        assert!(registry.latest_version() >= 5);
+        // Schema is at v1 with no migrations
+        assert_eq!(registry.latest_version(), 1);
 
-        // Pending from version 2 should include v2->v3, v3->v4, and v4->v5
-        let pending = registry.pending_migrations(2);
-        assert!(!pending.is_empty());
-        assert!(pending.iter().any(|m| m.to_version == 3));
-        assert!(pending.iter().any(|m| m.to_version == 4));
-        assert!(pending.iter().any(|m| m.to_version == 5));
+        // No pending migrations from v1
+        let pending = registry.pending_migrations(1);
+        assert!(pending.is_empty());
 
-        // Pending from version 5 should be empty
-        let pending_from_5 = registry.pending_migrations(5);
-        assert!(pending_from_5.is_empty());
+        // needs_migration should return false for v1 database
+        // (can't test without actual DB, but pending_migrations covers the logic)
     }
 }

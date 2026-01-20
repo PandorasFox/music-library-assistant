@@ -1,11 +1,6 @@
-//! Eyeballing computations - corpus scanning and file verification.
+//! Asleep-phase computation executors.
 //!
-//! The eyeballing system walks the corpus directory tree, comparing disk state
-//! against the database index. It identifies:
-//! - Files present on disk but not indexed (UnindexedFile)
-//! - Files indexed but missing from disk (MissingFile)
-//! - Files with modified timestamps (CorpusFileModifiedOutOfBand)
-//! - Tag mismatches between disk and index (OutOfBandTagChange)
+//! These functions implement the actual logic for Asleep computations.
 
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
@@ -13,32 +8,29 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::config::log_message;
+use crate::corpus::computations::helpers::{
+    enumerate_all_directories, extract_mtime, is_audio_file,
+    ensure_file_signal_if_missing,
+};
+use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::FileSignalType;
 use crate::corpus::db::Database;
 use crate::db_thread;
 
-use super::helpers::{
-    enumerate_all_directories, extract_mtime, get_signal_sender_or_fail,
-    is_audio_file, ensure_file_signal_if_missing,
-};
-use super::types::{Computation, ComputationResult, ComputationWitness};
+use super::{Computation, Result};
 
 // ============================================================================
 // Phase 1: Walk Corpus
 // ============================================================================
 
 /// Phase 1: Enumerate ALL corpus directories and spawn per-directory scans.
-///
-/// Recursively walks the entire corpus tree to find all directories,
-/// then spawns `ScanCorpusDirectory` for each. This provides granular
-/// progress feedback during startup (one computation per directory).
-pub(super) fn execute_walk_corpus(
+pub fn execute_walk_corpus(
     _db: &Database,
     root: &Path,
     source: &str,
     paranoid: bool,
     start: Instant,
-) -> ComputationResult {
+) -> Result {
     let computation = Computation::WalkCorpus {
         root: root.to_path_buf(),
         source: source.to_string(),
@@ -46,7 +38,7 @@ pub(super) fn execute_walk_corpus(
     };
 
     if !root.exists() {
-        return ComputationResult::failure(
+        return Result::failure(
             computation,
             start.elapsed().as_millis() as u64,
             format!("Root directory does not exist: {:?}", root),
@@ -78,7 +70,7 @@ pub(super) fn execute_walk_corpus(
         })
         .collect();
 
-    ComputationResult::success(
+    Result::success(
         computation,
         start.elapsed().as_millis() as u64,
         spawn,
@@ -90,18 +82,14 @@ pub(super) fn execute_walk_corpus(
 // ============================================================================
 
 /// Scan a single corpus directory (non-recursive).
-///
-/// Processes only audio files directly in the given directory, compares against
-/// scan_state, creates FileInCorpus signals (one per file), and spawns follow-up
-/// computations.
-pub(super) fn execute_scan_corpus_directory(
+pub fn execute_scan_corpus_directory(
     db: &Database,
     directory: &Path,
     source: &str,
     paranoid: bool,
     witness: &ComputationWitness,
     start: Instant,
-) -> ComputationResult {
+) -> Result {
     let computation = Computation::ScanCorpusDirectory {
         directory: directory.to_path_buf(),
         source: source.to_string(),
@@ -109,13 +97,19 @@ pub(super) fn execute_scan_corpus_directory(
     };
 
     // Get signal sender for async writes
-    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
-        Ok(s) => s,
-        Err(result) => return result,
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
     };
 
     if !directory.exists() {
-        return ComputationResult::failure(
+        return Result::failure(
             computation,
             start.elapsed().as_millis() as u64,
             format!("Directory does not exist: {:?}", directory),
@@ -127,7 +121,7 @@ pub(super) fn execute_scan_corpus_directory(
 
     // If no files in directory, nothing to do
     if disk_state.is_empty() {
-        return ComputationResult::success(
+        return Result::success(
             computation,
             start.elapsed().as_millis() as u64,
             Vec::new(),
@@ -176,7 +170,7 @@ pub(super) fn execute_scan_corpus_directory(
         }
     }
 
-    ComputationResult::success(
+    Result::success(
         computation,
         start.elapsed().as_millis() as u64,
         spawn,
@@ -184,7 +178,7 @@ pub(super) fn execute_scan_corpus_directory(
 }
 
 /// Collect audio files directly in a directory (non-recursive).
-pub(super) fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
+pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
     let mut disk_state = Vec::new();
 
     let entries = match std::fs::read_dir(dir) {
@@ -218,21 +212,14 @@ pub(super) fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64
 // ============================================================================
 
 /// Phase 2: Compare disk state to database index.
-///
-/// Creates signals for:
-/// - MissingFromDisk: indexed files not on disk
-/// - MissingFromIndex: disk files not indexed
-///
-/// Spawns: VerifyMtime for files with mtime mismatches (non-paranoid)
-///         or VerifyTags for all files (paranoid mode)
-pub(super) fn execute_compare_inodes(
+pub fn execute_compare_inodes(
     db: &Database,
     source: &str,
     disk_state: &[(i64, PathBuf, i64, i64)],
     paranoid: bool,
     witness: &ComputationWitness,
     start: Instant,
-) -> ComputationResult {
+) -> Result {
     let _ = log_message(&format!(
         "[COMPUTE] CompareInodes: comparing {} disk files for source '{}'",
         disk_state.len(),
@@ -270,7 +257,7 @@ pub(super) fn execute_compare_inodes(
     // Create MissingFromDisk signals
     if !missing_from_disk.is_empty() {
         if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
-            create_missing_from_disk_issues(db, source, &missing_paths, witness);
+            create_missing_from_disk_issues(db, &missing_paths, witness);
         }
     }
 
@@ -287,7 +274,7 @@ pub(super) fn execute_compare_inodes(
     // Spawn follow-up computations for mtime verification
     let mut spawn: Vec<Computation> = Vec::new();
 
-    // Get scan_state entries for comparison (already returns HashMap<i64, ScanStateEntry>)
+    // Get scan_state entries for comparison
     let inode_vec: Vec<i64> = indexed_inodes.iter().copied().collect();
     let indexed_by_inode = db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
@@ -329,7 +316,7 @@ pub(super) fn execute_compare_inodes(
         if paranoid { "paranoid tag verify" } else { "mtime verify" }
     ));
 
-    ComputationResult::success(
+    Result::success(
         computation,
         start.elapsed().as_millis() as u64,
         spawn,
@@ -337,11 +324,8 @@ pub(super) fn execute_compare_inodes(
 }
 
 /// Create MissingFile signals for files in index but missing from disk.
-///
-/// Creates one signal per file with path as key (no metadata).
 fn create_missing_from_disk_issues(
     db: &Database,
-    _source: &str,
     missing_paths: &[String],
     witness: &ComputationWitness,
 ) {
@@ -349,15 +333,12 @@ fn create_missing_from_disk_issues(
         return;
     };
 
-    // Create one signal per missing file (with freshness check)
     for path in missing_paths {
         ensure_file_signal_if_missing(db, &sender, FileSignalType::MissingFile, path, witness);
     }
 }
 
 /// Create UnindexedFile signals for files on disk but not in index.
-///
-/// Called from CompareInodes when it identifies files missing from the index.
 fn create_missing_from_index_issues(
     db: &Database,
     missing_paths: &[String],
@@ -367,7 +348,6 @@ fn create_missing_from_index_issues(
         return;
     };
 
-    // File exists on disk but is not indexed = UnindexedFile (with freshness check)
     for path in missing_paths {
         ensure_file_signal_if_missing(db, &sender, FileSignalType::UnindexedFile, path, witness);
     }
@@ -378,17 +358,14 @@ fn create_missing_from_index_issues(
 // ============================================================================
 
 /// Phase 3: Verify single file mtime.
-///
-/// Checks if current mtime differs from expected (from scan_state).
-/// Spawns: VerifyTags if mtime mismatched.
-pub(super) fn execute_verify_mtime(
+pub fn execute_verify_mtime(
     _db: &Database,
     track_id: i64,
     path: &Path,
     expected_mtime_secs: i64,
     expected_mtime_nanos: i64,
     start: Instant,
-) -> ComputationResult {
+) -> Result {
     let computation = Computation::VerifyMtime {
         track_id,
         path: path.to_path_buf(),
@@ -400,7 +377,7 @@ pub(super) fn execute_verify_mtime(
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            return ComputationResult::failure(
+            return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
                 format!("Failed to read file metadata: {}", e),
@@ -420,9 +397,43 @@ pub(super) fn execute_verify_mtime(
         Vec::new()
     };
 
-    ComputationResult::success(
+    Result::success(
         computation,
         start.elapsed().as_millis() as u64,
         spawn,
     )
+}
+
+// ============================================================================
+// Verify Tags
+// ============================================================================
+
+/// Verify tags on disk match database.
+///
+/// Delegates to the existing verify_tags implementation in indexing module.
+pub fn execute_verify_tags(
+    db: &Database,
+    track_id: i64,
+    path: &Path,
+    start: Instant,
+) -> Result {
+    use crate::corpus::mutations::indexing;
+
+    let computation = Computation::VerifyTags {
+        track_id,
+        path: path.to_path_buf(),
+    };
+
+    match indexing::execute_verify_tags(db, track_id, path) {
+        Ok(()) => Result::success(
+            computation,
+            start.elapsed().as_millis() as u64,
+            Vec::new(),
+        ),
+        Err(e) => Result::failure(
+            computation,
+            start.elapsed().as_millis() as u64,
+            e.to_string(),
+        ),
+    }
 }

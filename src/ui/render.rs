@@ -447,42 +447,95 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
 
     // Left: Corpus stats
     let corpus_lines = if let Some(ref summary) = ctx.corpus_summary {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::raw("Tracks: "),
-                Span::styled(
-                    summary.track_count.to_string(),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
+        let mut lines = Vec::new();
+
+        // File-level stats: "N files (M indexed, Y missing, X new, Z relocated)"
+        let mut file_parts: Vec<Span> = vec![
+            Span::styled(
+                summary.files_in_corpus.to_string(),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw(" files ("),
+            Span::styled(
+                summary.healthy_files.to_string(),
+                Style::default().fg(Color::Green),
+            ),
+            Span::raw(" indexed"),
         ];
 
-        // Deployment percentage if available
-        if let Some(ref deploy) = summary.deployment_stats {
-            lines.push(Line::from(vec![
-                Span::raw("Deploy: "),
-                Span::styled(
-                    format!("{:.0}%", deploy.deployment_percentage),
-                    Style::default().fg(Color::Green),
-                ),
-            ]));
+        // Only show non-zero counts for file-level issues
+        if summary.missing_files > 0 {
+            file_parts.push(Span::raw(", "));
+            file_parts.push(Span::styled(
+                summary.missing_files.to_string(),
+                Style::default().fg(Color::Red),
+            ));
+            file_parts.push(Span::raw(" missing"));
         }
+        if summary.unindexed_files > 0 {
+            file_parts.push(Span::raw(", "));
+            file_parts.push(Span::styled(
+                summary.unindexed_files.to_string(),
+                Style::default().fg(Color::Yellow),
+            ));
+            file_parts.push(Span::raw(" new"));
+        }
+        if summary.moved_files > 0 {
+            file_parts.push(Span::raw(", "));
+            file_parts.push(Span::styled(
+                summary.moved_files.to_string(),
+                Style::default().fg(Color::Yellow),
+            ));
+            file_parts.push(Span::raw(" relocated"));
+        }
+        file_parts.push(Span::raw(")"));
 
-        // Health issues summary
-        let total_issues = summary.health_summary.total_issues;
-        if total_issues > 0 || summary.deploy_conflicts > 0 {
-            let issue_color = if total_issues > 10 { Color::Red } else { Color::Yellow };
-            lines.push(Line::from(vec![
-                Span::raw("Issues: "),
-                Span::styled(
-                    format!("{}", total_issues),
-                    Style::default().fg(issue_color),
-                ),
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                Span::styled("Healthy", Style::default().fg(Color::Green)),
-            ]));
+        lines.push(Line::from(file_parts));
+
+        // Signal breakdown (all remaining signals)
+        let hs = &summary.health_summary;
+        let total_signals = hs.fingerprint_duplicates
+            + hs.metadata_duplicates
+            + hs.canonicalization_issues
+            + hs.missing_tag_issues
+            + summary.deploy_conflicts
+            + summary.library_stale
+            + summary.library_orphan
+            + summary.modified_oob
+            + summary.tags_changed_oob
+            + summary.duplicate_inodes;
+
+        if total_signals > 0 {
+            let mut signal_parts: Vec<Span> = Vec::new();
+            let mut first = true;
+
+            // Helper macro to reduce repetition
+            macro_rules! add_signal {
+                ($count:expr, $label:expr, $color:expr) => {
+                    if $count > 0 {
+                        if !first { signal_parts.push(Span::raw(", ")); }
+                        signal_parts.push(Span::styled(
+                            $count.to_string(),
+                            Style::default().fg($color),
+                        ));
+                        signal_parts.push(Span::raw(concat!(" ", $label)));
+                        first = false;
+                    }
+                };
+            }
+
+            add_signal!(summary.library_stale, "stale", Color::Yellow);
+            add_signal!(summary.library_orphan, "orphan", Color::Yellow);
+            add_signal!(hs.missing_tag_issues, "missing-tags", Color::Yellow);
+            add_signal!(summary.deploy_conflicts, "conflicts", Color::Red);
+            add_signal!(hs.metadata_duplicates, "meta-dups", Color::Yellow);
+            add_signal!(hs.fingerprint_duplicates, "fp-dups", Color::Yellow);
+            add_signal!(hs.canonicalization_issues, "canon", Color::Yellow);
+            add_signal!(summary.modified_oob, "modified-oob", Color::Yellow);
+            add_signal!(summary.tags_changed_oob, "tags-oob", Color::Yellow);
+            add_signal!(summary.duplicate_inodes, "dup-inodes", Color::Yellow);
+
+            lines.push(Line::from(signal_parts));
         }
 
         lines

@@ -38,15 +38,87 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
 
-        // Get total health issue count (excluding deploy_conflicts which are shown separately)
+        // File-level signal counts (benign signals - shown separately)
+        let files_in_corpus: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'file_in_corpus'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let healthy_files: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'healthy_file'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let unindexed_files: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'unindexed_file'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let missing_files: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'missing_file'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let moved_files: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'moved_file'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let library_stale: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'library_stale'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let library_orphan: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'library_orphan'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let modified_oob: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'corpus_file_modified_out_of_band'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let tags_changed_oob: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'out_of_band_tag_change'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let duplicate_inodes: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'duplicate_inode'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        // Get total health issue count excluding:
+        // - deploy_conflicts (shown separately)
+        // - file_in_corpus, healthy_file (benign status signals)
+        // - unindexed_file, missing_file, moved_file (file-level signals shown separately)
         let total_health_issues: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type != 'deploy_conflict'",
+            r#"SELECT COUNT(*) FROM health_issues
+               WHERE issue_type NOT IN (
+                   'deploy_conflict',
+                   'file_in_corpus',
+                   'healthy_file',
+                   'unindexed_file',
+                   'missing_file',
+                   'moved_file'
+               )"#,
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let mut health_summary = self.get_health_summary().unwrap_or_default();
-        // Set total count from direct query
+        // Set total count from direct query (excludes benign/file-level signals)
         health_summary.total_issues = total_health_issues;
 
         let deployment_stats = self.get_deployment_stats().ok().flatten();
@@ -71,6 +143,16 @@ impl Database {
             deployment_stats,
             pending_changes,
             last_scan,
+            files_in_corpus,
+            healthy_files,
+            unindexed_files,
+            missing_files,
+            moved_files,
+            library_stale,
+            library_orphan,
+            modified_oob,
+            tags_changed_oob,
+            duplicate_inodes,
         })
     }
 

@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config;
-use crate::corpus::computations::Computation;
+use crate::corpus::computations::{Computation, asleep, awakening, awake};
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
 use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
@@ -74,6 +74,10 @@ pub struct TaskDaemon {
 
     /// When true, mutations are permanently disabled (read-only debug mode).
     read_only_mode: bool,
+
+    /// Whether mutations have run this session.
+    /// Used to auto-trigger content analysis after mutations + awakening drain.
+    mutations_ran_this_session: bool,
 
     // Session tracking
     session_start: Option<Instant>,
@@ -157,6 +161,7 @@ impl TaskDaemon {
             observation_state: CorpusObservationState::Unseen,
             accepting_mutations: false,
             read_only_mode: false,
+            mutations_ran_this_session: false,
             session_start: None,
             session_queued: 0,
             total_processed: 0,
@@ -287,22 +292,22 @@ impl TaskDaemon {
     ) {
         // Queue corpus walk
         self.queue_computation_with_label(
-            Computation::WalkCorpus {
+            Computation::Asleep(asleep::Computation::WalkCorpus {
                 root: corpus_root.to_path_buf(),
                 source: "corpus".to_string(),
                 paranoid,
-            },
+            }),
             Some("Eyeballing corpus".to_string()),
         );
 
         // Queue legacy library walk if configured
         if let Some(legacy_path) = legacy {
             self.queue_computation_with_label(
-                Computation::WalkCorpus {
+                Computation::Asleep(asleep::Computation::WalkCorpus {
                     root: legacy_path.to_path_buf(),
                     source: "legacy".to_string(),
                     paranoid,
-                },
+                }),
                 Some("Eyeballing legacy".to_string()),
             );
         }
@@ -441,8 +446,13 @@ impl TaskDaemon {
     fn transition_to_completed(&mut self) {
         let duration = self.session_start.map(|s| s.elapsed()).unwrap_or_default();
 
+        // Capture mutation flag before session reset
+        let had_mutations = self.mutations_ran_this_session;
+
         // Flag to queue awakening computations after session reset
         let mut queue_awakening_after_reset = false;
+        // Flag to auto-queue content analysis after mutations drain
+        let mut queue_content_analysis_after_reset = false;
 
         self.completed_session = Some(CompletedSession {
             completed_at: Instant::now(),
@@ -501,6 +511,16 @@ impl TaskDaemon {
                 );
             }
         }
+        // Handle post-mutation completion when eye is Awake
+        // Auto-trigger content analysis after mutations + awakening work drains
+        else if self.eye_state == EyeState::Awake && had_mutations {
+            let _ = config::log_message(&format!(
+                "[STATE] Post-mutation session complete (Awake). Auto-triggering content analysis. \
+                 Processed {} tasks.",
+                self.total_processed
+            ));
+            queue_content_analysis_after_reset = true;
+        }
 
         // Reset session state
         self.session_start = None;
@@ -510,11 +530,15 @@ impl TaskDaemon {
         self.task_counts.clear();
         self.recent_errors.clear();
         self.current_label = None;
+        self.mutations_ran_this_session = false;
 
-        // Queue awakening computations AFTER reset to fix off-by-one counting
+        // Queue follow-up computations AFTER reset to fix off-by-one counting
         // (if queued before reset, the task's queue count gets wiped but it still completes)
         if queue_awakening_after_reset {
             self.queue_awakening_computations();
+        }
+        if queue_content_analysis_after_reset {
+            self.queue_content_analysis_internal();
         }
     }
 
@@ -529,7 +553,7 @@ impl TaskDaemon {
 
         // Queue the orchestrator computation that will spawn per-directory derivations
         self.queue_computation_with_label(
-            Computation::ScheduleSecondLevelDerivations,
+            Computation::Awakening(awakening::Computation::ScheduleSecondLevelDerivations),
             Some("Computing directory signals".to_string()),
         );
     }
@@ -541,13 +565,20 @@ impl TaskDaemon {
     ///
     /// Called from UI after intake flow completes (Eye is already Awake).
     pub fn queue_content_analysis(&mut self) {
+        self.queue_content_analysis_internal();
+    }
+
+    /// Internal: Queue content analysis computations.
+    ///
+    /// Used by both the public API and auto-trigger from transition_to_completed.
+    fn queue_content_analysis_internal(&mut self) {
         let _ = config::log_message(
             "[STATE] Queueing ScheduleContentAnalysis for content analysis"
         );
 
         // Queue the orchestrator computation that will spawn all detection computations
         self.queue_computation_with_label(
-            Computation::ScheduleContentAnalysis,
+            Computation::Awake(awake::Computation::ScheduleContentAnalysis),
             Some("Analyzing metadata".to_string()),
         );
     }
@@ -631,6 +662,7 @@ impl TaskDaemon {
 
     pub(crate) fn queue_mutation_internal(&mut self, mutation: Mutation, label: Option<String>) {
         self.transition_to_working();
+        self.mutations_ran_this_session = true;
 
         let task = Task::Mutation(mutation);
         let task_label = self.resolve_label(label, &task);
@@ -642,6 +674,7 @@ impl TaskDaemon {
 
     pub(crate) fn queue_mutations_internal(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>) {
         self.transition_to_working();
+        self.mutations_ran_this_session = true;
 
         let queue_time = Instant::now();
         let mutations: Vec<_> = mutations.into_iter().collect();

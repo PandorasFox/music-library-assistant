@@ -23,7 +23,6 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use anyhow;
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, FileSignalType, HealthIssue, HealthIssueType,

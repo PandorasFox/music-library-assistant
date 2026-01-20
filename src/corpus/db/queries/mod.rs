@@ -9,6 +9,7 @@
 
 mod deployment;
 mod health;
+mod library_scan;
 mod metadata;
 mod scan_state;
 mod tracks;
@@ -308,6 +309,20 @@ impl Database {
                 value TEXT NOT NULL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- Library scan state: stores library file scan results between phases
+            -- Written by ScanLibraryDirectory (Awakening), read by DeriveDeployHealthSignals (Awake)
+            CREATE TABLE IF NOT EXISTS library_scan_state (
+                id INTEGER PRIMARY KEY,
+                library_name TEXT NOT NULL,
+                library_root TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                inode INTEGER NOT NULL,
+                scanned_at INTEGER NOT NULL,
+                UNIQUE(library_name, file_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_library_scan_library ON library_scan_state(library_name);
+            CREATE INDEX IF NOT EXISTS idx_library_scan_root ON library_scan_state(library_root);
             "#
         ).context("Failed to initialize database schema")?;
 

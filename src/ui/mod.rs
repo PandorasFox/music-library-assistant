@@ -31,12 +31,14 @@ pub mod eye;
 pub mod flows;
 pub mod helpers;
 pub mod insights_view;
+pub mod progress_screen;
 pub mod render;
 pub mod splash_screen;
 pub mod startup;
 pub mod tag_editor;
 pub mod tag_search;
 pub mod tree_browser;
+pub mod wait_state;
 pub mod widgets;
 
 // Re-export types for convenience

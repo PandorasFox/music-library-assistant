@@ -4,6 +4,8 @@ Check the docs/ folder for the Architecture overview and UI guidelines/UX consis
 
 Do not spawn threads, ever. Only the task daemon should spawn new threads for background work. That is *its* purpose: consistent and clean way for doing background work, with controlled gates for their side effects.
 
+Do not try to "refresh" signals. MLA is designed around precisely recomputing relevant signals in real-time. You keep adding unused (!) refresh hooks that then only get misused, because they're not things we need or want architecturally. They are expensive.
+
 ### Database Access Patterns
 
 MLA enforces strict separation between read-only UI queries and write mutations:

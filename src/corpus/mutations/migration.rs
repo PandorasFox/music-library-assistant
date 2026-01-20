@@ -46,13 +46,40 @@ pub struct MigrationRegistry {
 
 impl MigrationRegistry {
     /// Create a new migration registry with all known migrations.
-    ///
-    /// Schema is currently at v1 with no migrations needed.
-    /// Future migrations would be added here when breaking changes are made.
     pub fn new() -> Self {
-        Self {
+        let mut registry = Self {
             migrations: Vec::new(),
-        }
+        };
+
+        // v1 → v2: Add library_scan_state table for phase-stratified computation data flow
+        registry.register(Migration {
+            from_version: 1,
+            to_version: 2,
+            description: "Add library_scan_state table for phase-stratified computations",
+            apply: |db| {
+                db.execute_batch(
+                    r#"
+                    -- Library scan state: stores library file scan results between phases
+                    -- Written by ScanLibraryDirectory (Awakening), read by DeriveDeployHealthSignals (Awake)
+                    CREATE TABLE IF NOT EXISTS library_scan_state (
+                        id INTEGER PRIMARY KEY,
+                        library_name TEXT NOT NULL,
+                        library_root TEXT NOT NULL,
+                        file_path TEXT NOT NULL,
+                        inode INTEGER NOT NULL,
+                        scanned_at INTEGER NOT NULL,
+                        UNIQUE(library_name, file_path)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_library_scan_library ON library_scan_state(library_name);
+                    CREATE INDEX IF NOT EXISTS idx_library_scan_root ON library_scan_state(library_root);
+                    "#,
+                )?;
+                db.set_schema_version(2)?;
+                Ok(())
+            },
+        });
+
+        registry
     }
 
     /// Register a migration.
@@ -147,14 +174,17 @@ mod tests {
     fn test_migration_registry() {
         let registry = MigrationRegistry::new();
 
-        // Schema is at v1 with no migrations
-        assert_eq!(registry.latest_version(), 1);
+        // Latest schema version is v2 (after library_scan_state migration)
+        assert_eq!(registry.latest_version(), 2);
 
-        // No pending migrations from v1
+        // One pending migration from v1 to v2
         let pending = registry.pending_migrations(1);
-        assert!(pending.is_empty());
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].from_version, 1);
+        assert_eq!(pending[0].to_version, 2);
 
-        // needs_migration should return false for v1 database
-        // (can't test without actual DB, but pending_migrations covers the logic)
+        // No pending migrations from v2
+        let pending_v2 = registry.pending_migrations(2);
+        assert!(pending_v2.is_empty());
     }
 }

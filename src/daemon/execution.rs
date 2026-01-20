@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use crate::config;
-use crate::corpus::computations::Computation;
+use crate::corpus::computations::{Computation, awakening};
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
 
@@ -106,11 +106,12 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     // Queue per-file signal updates for affected paths
     // This ensures signals like UnindexedFile → HealthyFile are updated
-    let spawn = if success {
+    // Mutations can ONLY spawn awakening-phase computations (phase boundary enforcement)
+    let spawn: Vec<Computation> = if success {
         mutation
             .affected_paths()
             .into_iter()
-            .map(|path| Computation::UpdateFileSignals { path })
+            .map(|path| Computation::Awakening(awakening::Computation::UpdateFileSignals { path }))
             .collect()
     } else {
         Vec::new()
@@ -136,11 +137,14 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
     // Capture thread stats after execution
     let thread_stats = Some(computations::get_thread_stats());
 
+    // Collect all spawned computations (already wrapped in unified Computation enum)
+    let spawn = result.all_spawned();
+
     TaskResult {
         success: result.success,
         error: result.error,
         label,
-        spawn: result.spawn,
+        spawn,
         duration_ms: result.duration_ms,
         queue_wait_ms,
         thread_stats,

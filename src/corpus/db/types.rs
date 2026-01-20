@@ -563,6 +563,32 @@ pub struct CorpusSummary {
     pub deployment_stats: Option<DeploymentStats>,
     pub pending_changes: HashMap<String, usize>,
     pub last_scan: Option<String>,
+
+    // File-level stats (benign signals, shown separately from issues)
+    /// Total files discovered in corpus directories
+    pub files_in_corpus: usize,
+    /// Files that are healthy (in corpus + indexed + matching mtime)
+    pub healthy_files: usize,
+    /// Files in corpus but not indexed
+    pub unindexed_files: usize,
+    /// Files in index but no longer exist on disk
+    pub missing_files: usize,
+    /// Files that were moved (same inode, different path)
+    pub moved_files: usize,
+
+    // Library deployment signals
+    /// Library files that are stale (deployed from wrong source)
+    pub library_stale: usize,
+    /// Library files that are orphans (no corpus backing)
+    pub library_orphan: usize,
+
+    // Out-of-band change signals
+    /// Files with mtime changed outside MLA
+    pub modified_oob: usize,
+    /// Files with tags changed outside MLA
+    pub tags_changed_oob: usize,
+    /// Multiple index entries sharing same inode
+    pub duplicate_inodes: usize,
 }
 
 // ============================================================================

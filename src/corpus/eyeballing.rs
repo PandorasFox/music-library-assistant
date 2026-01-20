@@ -19,7 +19,7 @@
 //!             MissingFromIndex
 //! ```
 
-use crate::corpus::computations::Computation;
+use crate::corpus::computations::{Computation, asleep};
 use crate::daemon::TaskDaemon;
 use std::path::PathBuf;
 
@@ -41,18 +41,18 @@ pub fn queue_eyeballing(
     paranoid: bool,
 ) {
     // Queue WalkCorpus for main corpus with paranoid flag
-    daemon.queue_computation(Computation::WalkCorpus {
+    daemon.queue_computation(Computation::Asleep(asleep::Computation::WalkCorpus {
         root: corpus_root.clone(),
         source: "corpus".to_string(),
         paranoid,
-    });
+    }));
 
     // Queue WalkCorpus for legacy library if configured
     if let Some(legacy) = legacy_library {
-        daemon.queue_computation(Computation::WalkCorpus {
+        daemon.queue_computation(Computation::Asleep(asleep::Computation::WalkCorpus {
             root: legacy.clone(),
             source: "legacy".to_string(),
             paranoid,
-        });
+        }));
     }
 }

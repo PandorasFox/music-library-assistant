@@ -4,13 +4,12 @@
 //! like file type detection, path parsing, signal emission, and configuration access.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::db::types::FileSignalType;
 use crate::db_thread;
 
-use super::types::{Computation, ComputationResult, ComputationWitness};
+use super::types::ComputationWitness;
 
 // ============================================================================
 // File Type Detection
@@ -22,27 +21,6 @@ pub(super) fn is_audio_file(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(false)
-}
-
-// ============================================================================
-// Signal Sender Access
-// ============================================================================
-
-/// Get signal sender or return early failure.
-///
-/// Helper to reduce duplication across computations that need signal sender access.
-pub(super) fn get_signal_sender_or_fail(
-    computation: Computation,
-    start: Instant,
-) -> Result<db_thread::SignalWriteSender, ComputationResult> {
-    match db_thread::signal_sender() {
-        Some(s) => Ok(s.clone()),
-        None => Err(ComputationResult::failure(
-            computation,
-            start.elapsed().as_millis() as u64,
-            "DB thread not initialized".to_string(),
-        )),
-    }
 }
 
 // ============================================================================

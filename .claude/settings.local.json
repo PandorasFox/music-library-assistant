@@ -29,7 +29,14 @@
       "WebFetch(domain:docs.rs)",
       "Bash(git -C /Volumes/cerberus/archive/rituals/mla diff HEAD~5..HEAD --name-status)",
       "Bash(for dir in /Volumes/cerberus/archive/rituals/mla/src/*/)",
-      "Bash(cargo tree:*)"
+      "Bash(cargo tree:*)",
+      "Bash(ffprobe:*)",
+      "Bash(exiftool:*)",
+      "Bash(for:*)",
+      "Bash(do)",
+      "Bash(echo:*)",
+      "Bash(flac_name=\"$f%.wma.flac\")",
+      "Bash(ffmpeg:*)"
     ]
   }
 }

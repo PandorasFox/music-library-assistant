@@ -42,7 +42,7 @@ pub fn execute_index_track(
     // Insert track with tags into database
     let track_id = db
         .insert_track_with_tags(&track, &metadata.tags)
-        .context("Failed to insert track into database")?;
+        .with_context(|| format!("Failed to insert track into database: {}", path.display()))?;
 
     Ok(track_id)
 }

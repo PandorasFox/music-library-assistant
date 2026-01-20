@@ -93,16 +93,9 @@ pub enum HealthIssueType {
     // =========================================================================
     // Library deployment health signals
     // =========================================================================
-    /// Library file exists and matches corpus inode (healthy deployment)
-    /// Aggregated count per library - no per-file signals for healthy files.
-    /// issue_key: "library_health:{library_name}"
-    LibraryHealthSummary,
     /// Library file exists but deployed at wrong path (tags changed since deploy)
     /// issue_key: "library_stale:{library_name}:{library_path}"
     LibraryStale,
-    /// Corpus track should be deployed to library but isn't
-    /// issue_key: "library_not_deployed:{library_name}:{corpus_path}"
-    LibraryNotDeployed,
     /// Library file exists without corpus backing (orphan)
     /// issue_key: "library_orphan:{library_name}:{library_path}"
     LibraryOrphan,
@@ -159,9 +152,7 @@ impl HealthIssueType {
             Self::DeployConflict => "deploy_conflict",
 
             // Library deployment health signals
-            Self::LibraryHealthSummary => "library_health_summary",
             Self::LibraryStale => "library_stale",
-            Self::LibraryNotDeployed => "library_not_deployed",
             Self::LibraryOrphan => "library_orphan",
 
             // Content-level signals
@@ -197,9 +188,7 @@ impl HealthIssueType {
             "deploy_conflict" => Some(Self::DeployConflict),
 
             // Library deployment health signals
-            "library_health_summary" => Some(Self::LibraryHealthSummary),
             "library_stale" => Some(Self::LibraryStale),
-            "library_not_deployed" => Some(Self::LibraryNotDeployed),
             "library_orphan" => Some(Self::LibraryOrphan),
 
             // Content-level signals
@@ -273,8 +262,6 @@ pub enum FileSignalType {
     LibraryOrphan,
     /// Library file at wrong path
     LibraryStale,
-    /// Corpus track not deployed to library
-    LibraryNotDeployed,
 }
 
 impl FileSignalType {
@@ -289,7 +276,6 @@ impl FileSignalType {
             Self::OutOfBandTagChange => "oob_tag",
             Self::LibraryOrphan => "library_orphan",
             Self::LibraryStale => "library_stale",
-            Self::LibraryNotDeployed => "library_not_deployed",
         }
     }
 
@@ -304,7 +290,6 @@ impl FileSignalType {
             "oob_tag" => Some(Self::OutOfBandTagChange),
             "library_orphan" => Some(Self::LibraryOrphan),
             "library_stale" => Some(Self::LibraryStale),
-            "library_not_deployed" => Some(Self::LibraryNotDeployed),
             _ => None,
         }
     }
@@ -363,8 +348,6 @@ pub enum AggregateSignalType {
     TagCanonical,
     /// Multiple corpus files deploy to same library path
     DeployConflict,
-    /// Per-library health summary (counts)
-    LibraryHealthSummary,
 }
 
 impl AggregateSignalType {
@@ -376,7 +359,6 @@ impl AggregateSignalType {
             Self::MissingTag => "missing_tag",
             Self::TagCanonical => "tag_canon",
             Self::DeployConflict => "deploy_conflict",
-            Self::LibraryHealthSummary => "library_health_summary",
         }
     }
 
@@ -388,7 +370,6 @@ impl AggregateSignalType {
             "missing_tag" => Some(Self::MissingTag),
             "tag_canon" | "canon" | "genre_canon" => Some(Self::TagCanonical),
             "deploy_conflict" => Some(Self::DeployConflict),
-            "library_health_summary" => Some(Self::LibraryHealthSummary),
             _ => None,
         }
     }

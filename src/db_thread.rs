@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+use anyhow;
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, FileSignalType, HealthIssue, HealthIssueType,
@@ -112,26 +113,30 @@ enum IndexWriteOp {
 /// Shared statistics between DB thread and handle.
 ///
 /// All fields are atomic for lock-free access from UI thread.
+/// Timing-related fields are only updated when `timing_enabled` is true.
 struct SharedStats {
-    /// Total write operations processed
+    /// Whether timing instrumentation is enabled
+    timing_enabled: bool,
+    /// Total write operations processed (timing only)
     total_writes: AtomicU64,
-    /// Signal operations (ensure/clear/replace)
+    /// Signal operations (timing only)
     signal_writes: AtomicU64,
-    /// Index operations (Phase 2)
+    /// Index operations (Phase 2, timing only)
     index_writes: AtomicU64,
-    /// Current queue depth (approximate)
+    /// Current queue depth - always tracked for shutdown coordination
     queue_depth: AtomicU64,
-    /// Cumulative microseconds spent in DB operations
+    /// Cumulative microseconds spent in DB operations (timing only)
     total_db_time_us: AtomicU64,
-    /// True when queue is empty (for shutdown blocking)
+    /// True when queue is empty - always tracked for shutdown blocking
     queue_empty: AtomicBool,
-    /// Thread start time for rate calculations
+    /// Thread start time for rate calculations (timing only)
     start_time: Instant,
 }
 
 impl SharedStats {
-    fn new() -> Self {
+    fn new(timing_enabled: bool) -> Self {
         Self {
+            timing_enabled,
             total_writes: AtomicU64::new(0),
             signal_writes: AtomicU64::new(0),
             index_writes: AtomicU64::new(0),
@@ -172,13 +177,28 @@ impl DbThreadHandle {
         self.stats.queue_empty.load(Ordering::Acquire)
     }
 
+    /// Get the current queue depth (always available, regardless of timing).
+    pub fn queue_depth(&self) -> u64 {
+        self.stats.queue_depth.load(Ordering::Relaxed)
+    }
+
+    /// Check if timing instrumentation is enabled.
+    pub fn timing_enabled(&self) -> bool {
+        self.stats.timing_enabled
+    }
+
     /// Get current stats snapshot for UI display.
-    pub fn stats(&self) -> DbThreadStats {
+    /// Returns None if timing instrumentation is disabled.
+    pub fn stats(&self) -> Option<DbThreadStats> {
+        if !self.stats.timing_enabled {
+            return None;
+        }
+
         let total_writes = self.stats.total_writes.load(Ordering::Relaxed);
         let total_db_time_us = self.stats.total_db_time_us.load(Ordering::Relaxed);
         let elapsed_secs = self.stats.start_time.elapsed().as_secs_f64();
 
-        DbThreadStats {
+        Some(DbThreadStats {
             total_writes,
             signal_writes: self.stats.signal_writes.load(Ordering::Relaxed),
             index_writes: self.stats.index_writes.load(Ordering::Relaxed),
@@ -194,7 +214,7 @@ impl DbThreadHandle {
                 0.0
             },
             queue_empty: self.stats.queue_empty.load(Ordering::Acquire),
-        }
+        })
     }
 }
 
@@ -369,7 +389,8 @@ pub struct IndexWriteSender {
 /// Returns the handle for stats/shutdown. Also initializes the global signal sender
 /// so computation code can access it via `signal_sender()`.
 pub fn spawn() -> DbThreadHandle {
-    let stats = Arc::new(SharedStats::new());
+    let timing_enabled = config::is_timing_enabled();
+    let stats = Arc::new(SharedStats::new(timing_enabled));
 
     // Create channels (unbounded)
     let (signal_tx, signal_rx) = mpsc::channel::<SignalWriteOp>();
@@ -421,20 +442,27 @@ fn run_db_thread(
 
     // Process signal operations
     // Note: Using recv() which blocks until a message arrives or channel closes
+    let timing_enabled = stats.timing_enabled;
+
     loop {
         match signal_rx.recv() {
             Ok(op) => {
-                let start = Instant::now();
-                execute_signal_op(&db, &op);
-                let elapsed_us = start.elapsed().as_micros() as u64;
+                // Only time operations when instrumentation is enabled
+                if timing_enabled {
+                    let start = Instant::now();
+                    execute_signal_op(&db, &op);
+                    let elapsed_us = start.elapsed().as_micros() as u64;
 
-                // Update stats
-                stats.total_writes.fetch_add(1, Ordering::Relaxed);
-                stats.signal_writes.fetch_add(1, Ordering::Relaxed);
-                stats.total_db_time_us.fetch_add(elapsed_us, Ordering::Relaxed);
+                    // Update timing stats
+                    stats.total_writes.fetch_add(1, Ordering::Relaxed);
+                    stats.signal_writes.fetch_add(1, Ordering::Relaxed);
+                    stats.total_db_time_us.fetch_add(elapsed_us, Ordering::Relaxed);
+                } else {
+                    execute_signal_op(&db, &op);
+                }
+
+                // Always update queue management (needed for shutdown coordination)
                 stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
-
-                // Check if queue is now empty
                 if stats.queue_depth.load(Ordering::Relaxed) == 0 {
                     stats.queue_empty.store(true, Ordering::Release);
                 }
@@ -443,6 +471,68 @@ fn run_db_thread(
                 // Channel closed, thread should exit
                 let _ = config::log_message("[DB_THREAD] Channel closed, exiting");
                 break;
+            }
+        }
+    }
+}
+
+/// Retry constants for transient SQLite errors.
+const MAX_RETRIES: u32 = 3;
+const BASE_DELAY_MS: u64 = 50;
+
+/// Check if an error is a retryable SQLite error and return the reason if so.
+fn retryable_sqlite_error(e: &anyhow::Error) -> Option<String> {
+    e.chain().find_map(|cause| {
+        if let Some(sqlite_err) = cause.downcast_ref::<rusqlite::Error>() {
+            match sqlite_err {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error { code: rusqlite::ffi::ErrorCode::DatabaseBusy, extended_code },
+                    msg
+                ) => Some(format!("SQLITE_BUSY (ext={}): {:?}", extended_code, msg)),
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error { code: rusqlite::ffi::ErrorCode::DatabaseLocked, extended_code },
+                    msg
+                ) => Some(format!("SQLITE_LOCKED (ext={}): {:?}", extended_code, msg)),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    })
+}
+
+/// Execute an operation with retry logic for transient SQLite errors.
+fn with_retry<F>(op_name: &str, context: &str, mut f: F)
+where
+    F: FnMut() -> anyhow::Result<()>,
+{
+    for attempt in 0..=MAX_RETRIES {
+        match f() {
+            Ok(()) => return,
+            Err(e) => {
+                if let Some(reason) = retryable_sqlite_error(&e) {
+                    if attempt < MAX_RETRIES {
+                        let delay = BASE_DELAY_MS * (1 << attempt);
+                        let _ = config::log_message(&format!(
+                            "[DB_THREAD] {} retry {}/{} after {}ms: {} | {}",
+                            op_name, attempt + 1, MAX_RETRIES, delay, reason, context
+                        ));
+                        std::thread::sleep(std::time::Duration::from_millis(delay));
+                    } else {
+                        let _ = config::log_message(&format!(
+                            "[DB_THREAD] {} FAILED after {} retries: {} | {}",
+                            op_name, MAX_RETRIES, reason, context
+                        ));
+                        return;
+                    }
+                } else {
+                    // Non-retryable error
+                    let _ = config::log_message(&format!(
+                        "[DB_THREAD] {} failed (non-retryable): {} | {}",
+                        op_name, e, context
+                    ));
+                    return;
+                }
             }
         }
     }
@@ -458,31 +548,23 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
     match op {
         // Type-safe file signal operations
         SignalWriteOp::EnsureFileSignal { signal_type, path } => {
-            if let Err(e) = db.ensure_file_signal(*signal_type, path, &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] ensure_file_signal failed: {}",
-                    e
-                ));
-            }
+            with_retry("ensure_file_signal", path, || {
+                db.ensure_file_signal(*signal_type, path, &witness).map(|_| ())
+            });
         }
         SignalWriteOp::ClearFileSignal { signal_type, path } => {
-            if let Err(e) = db.clear_file_signal(*signal_type, path, &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] clear_file_signal failed: {}",
-                    e
-                ));
-            }
+            with_retry("clear_file_signal", path, || {
+                db.clear_file_signal(*signal_type, path, &witness).map(|_| ())
+            });
         }
         SignalWriteOp::ClearFileSignalsInDirectory {
             directory,
             signal_type,
         } => {
-            if let Err(e) = db.clear_file_signals_in_directory(directory, *signal_type, &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] clear_file_signals_in_directory failed: {}",
-                    e
-                ));
-            }
+            let ctx = directory.display().to_string();
+            with_retry("clear_file_signals_in_directory", &ctx, || {
+                db.clear_file_signals_in_directory(directory, *signal_type, &witness).map(|_| ())
+            });
         }
 
         // Aggregate signal operations
@@ -491,20 +573,14 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             key,
             metadata_json,
         } => {
-            if let Err(e) = db.ensure_aggregate_signal(*signal_type, key, metadata_json.as_deref(), &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] ensure_aggregate_signal failed: {}",
-                    e
-                ));
-            }
+            with_retry("ensure_aggregate_signal", key, || {
+                db.ensure_aggregate_signal(*signal_type, key, metadata_json.as_deref(), &witness).map(|_| ())
+            });
         }
         SignalWriteOp::ReplaceAggregateSignal { signal } => {
-            if let Err(e) = db.replace_aggregate_signal(signal, &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] replace_aggregate_signal failed: {}",
-                    e
-                ));
-            }
+            with_retry("replace_aggregate_signal", &signal.key, || {
+                db.replace_aggregate_signal(signal, &witness).map(|_| ())
+            });
         }
 
         // Legacy operations
@@ -513,42 +589,31 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             issue_key,
             metadata_json,
         } => {
-            if let Err(e) = db.ensure_signal(*issue_type, issue_key, metadata_json.as_deref(), &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] ensure_signal failed: {}",
-                    e
-                ));
-            }
+            with_retry("ensure_signal", issue_key, || {
+                db.ensure_signal(*issue_type, issue_key, metadata_json.as_deref(), &witness).map(|_| ())
+            });
         }
         SignalWriteOp::ClearSignal {
             issue_type,
             issue_key,
         } => {
-            if let Err(e) = db.clear_signal(*issue_type, issue_key, &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] clear_signal failed: {}",
-                    e
-                ));
-            }
+            with_retry("clear_signal", issue_key, || {
+                db.clear_signal(*issue_type, issue_key, &witness).map(|_| ())
+            });
         }
         SignalWriteOp::ReplaceSignal { issue } => {
-            if let Err(e) = db.replace_signal(issue, &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] replace_signal failed: {}",
-                    e
-                ));
-            }
+            with_retry("replace_signal", &issue.issue_key, || {
+                db.replace_signal(issue, &witness).map(|_| ())
+            });
         }
         SignalWriteOp::ClearSignalsInDirectory {
             directory,
             issue_type,
         } => {
-            if let Err(e) = db.clear_signals_in_directory(directory, *issue_type, &witness) {
-                let _ = config::log_message(&format!(
-                    "[DB_THREAD] clear_signals_in_directory failed: {}",
-                    e
-                ));
-            }
+            let ctx = format!("{:?} in {}", issue_type, directory.display());
+            with_retry("clear_signals_in_directory", &ctx, || {
+                db.clear_signals_in_directory(directory, *issue_type, &witness).map(|_| ())
+            });
         }
     }
 }

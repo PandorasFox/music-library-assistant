@@ -17,8 +17,71 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::Path;
 
+use crate::config;
+
 // Types are re-exported from db/mod.rs, not here.
 // This module only exposes the Database struct.
+
+// ============================================================================
+// Path Pattern Helpers
+// ============================================================================
+
+/// Escape SQL LIKE wildcard characters in a string.
+///
+/// In SQLite LIKE patterns, `%` matches any sequence and `_` matches any single
+/// character. When using file paths in LIKE patterns, these must be escaped to
+/// match literally.
+///
+/// Uses `\` as the escape character. **Important**: Queries using these patterns
+/// MUST include `ESCAPE '\'` in the LIKE clause.
+fn escape_like_wildcards(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '%' | '_' | '\\' => {
+                result.push('\\');
+                result.push(c);
+            }
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
+/// Build a LIKE pattern for matching files within a directory.
+///
+/// Normalizes the directory path (strips trailing slashes), escapes LIKE wildcards,
+/// and returns a pattern that matches files directly within or nested under the directory.
+///
+/// Pattern format: `{escaped_dir}/%` - requires a path separator after the directory,
+/// preventing matches on sibling directories with shared prefixes.
+///
+/// **Important**: Queries using this pattern MUST include `ESCAPE '\'`.
+///
+/// # Example
+/// ```ignore
+/// let pattern = dir_like_pattern("/path/to/Album_Name");
+/// // Returns: "/path/to/Album\\_Name/%"
+/// // Use: WHERE path LIKE ?1 ESCAPE '\'
+/// // Matches: "/path/to/Album_Name/song.mp3"
+/// // Does NOT match: "/path/to/Album/Name/song.mp3" (underscore matched as wildcard)
+/// ```
+pub(crate) fn dir_like_pattern(dir: &std::path::Path) -> String {
+    let dir_str = dir.to_string_lossy();
+    let normalized = dir_str.trim_end_matches('/');
+    let escaped = escape_like_wildcards(normalized);
+    format!("{}/%", escaped)
+}
+
+/// Build a LIKE pattern from a string directory path.
+///
+/// Same as `dir_like_pattern` but accepts a string slice directly.
+/// **Important**: Queries using this pattern MUST include `ESCAPE '\'`.
+pub(crate) fn dir_like_pattern_str(dir: &str) -> String {
+    let normalized = dir.trim_end_matches('/');
+    let escaped = escape_like_wildcards(normalized);
+    format!("{}/%", escaped)
+}
 
 /// Central database connection wrapper.
 pub struct Database {
@@ -36,9 +99,19 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
 
-        // Enable foreign key constraint enforcement
-        conn.execute("PRAGMA foreign_keys = ON", [])
-            .context("Failed to enable foreign key constraints")?;
+        // Performance tuning for flash storage
+        // Using execute_batch to handle PRAGMAs uniformly (some return rows, some don't)
+        let cache_kb = config::get_db_cache_kb();
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA busy_timeout = 5000;
+             PRAGMA cache_size = {};
+             PRAGMA temp_store = MEMORY;
+             PRAGMA foreign_keys = ON;",
+            cache_kb
+        ))
+        .context("Failed to set database pragmas")?;
 
         let db = Database { conn };
         db.initialize_schema()?;
@@ -55,13 +128,16 @@ impl Database {
     pub fn open_read_only(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
 
-        // Enable foreign key constraint enforcement
-        conn.execute("PRAGMA foreign_keys = ON", [])
-            .context("Failed to enable foreign key constraints")?;
-
-        // Enable read-only mode - prevents any writes
-        conn.execute("PRAGMA query_only = ON", [])
-            .context("Failed to enable read-only mode")?;
+        // Using execute_batch to handle PRAGMAs uniformly
+        let cache_kb = config::get_db_cache_kb();
+        conn.execute_batch(&format!(
+            "PRAGMA busy_timeout = 5000;
+             PRAGMA cache_size = {};
+             PRAGMA foreign_keys = ON;
+             PRAGMA query_only = ON;",
+            cache_kb
+        ))
+        .context("Failed to set database pragmas")?;
 
         Ok(Database { conn })
     }

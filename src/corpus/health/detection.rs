@@ -22,11 +22,14 @@
 //! - Group by normalized key for bulk resolution
 //! - Could also catch typo variants like "Deadmau5" vs "deadmau5"
 
+use std::collections::HashMap;
+
 use crate::config::Config;
-use crate::corpus::db::{Database, HealthIssue, Track};
+use crate::corpus::db::{Database, HealthIssue, HealthIssueType, Track};
+use crate::corpus::deploy::compute_deployment_path_with_tags;
 use anyhow::Result;
 
-use super::library::get_configured_library_names;
+use super::library::{get_configured_library_names, get_deployable_corpus_tracks};
 
 /// Default duration tolerance for fingerprint matching (10%)
 const DEFAULT_DURATION_TOLERANCE: f64 = 0.10;
@@ -101,18 +104,94 @@ pub fn detect_deployment_conflicts(config: &Config, db: &Database) -> Result<usi
 
 /// Detect deployment conflicts for a specific library.
 ///
-/// Returns the number of new conflicts detected.
+/// A deployment conflict occurs when multiple corpus tracks would deploy to the
+/// same target path (based on their metadata: album_artist/album/track/title).
 ///
-/// TODO: Requires compute_deployment_path from corpus::deploy which is disabled.
-/// Currently returns 0 (no conflicts detected).
+/// Returns the number of new conflicts detected.
 pub fn detect_deployment_conflicts_for_library(
-    _config: &Config,
-    _db: &Database,
-    _library_name: &str,
+    config: &Config,
+    db: &Database,
+    library_name: &str,
 ) -> Result<usize> {
-    // TODO: Re-enable when corpus::deploy is available
-    // This function requires compute_deployment_path to build target path maps.
-    Ok(0)
+    // Get all corpus tracks that should be deployed to this library
+    let tracks = get_deployable_corpus_tracks(config, db, library_name);
+
+    if tracks.is_empty() {
+        return Ok(0);
+    }
+
+    // Build deployment_path -> [track_ids] map
+    let mut path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
+
+    for track in &tracks {
+        let track_id = match track.id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Get tags for this track
+        let tags = db.get_track_tags(track_id).unwrap_or_default();
+        let tag_map: HashMap<String, String> = tags
+            .into_iter()
+            .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+            .collect();
+
+        // Compute deployment path
+        let deploy_path = compute_deployment_path_with_tags(track, &tag_map);
+        let path_key = deploy_path.to_string_lossy().to_string();
+
+        path_to_tracks
+            .entry(path_key)
+            .or_default()
+            .push(track_id);
+    }
+
+    // Find conflicts (paths with multiple tracks) and create health issues
+    let mut new_conflicts = 0;
+
+    for (deploy_path, track_ids) in path_to_tracks {
+        if track_ids.len() < 2 {
+            continue;
+        }
+
+        // Create a unique key for this conflict
+        let issue_key = format!("deploy_conflict:{}:{}", library_name, deploy_path);
+
+        // Check if this conflict already exists
+        let existing = db
+            .get_health_signals(Some(HealthIssueType::DeployConflict))?
+            .into_iter()
+            .find(|i| i.issue_key == issue_key);
+
+        if existing.is_none() {
+            // Get paths for metadata
+            let conflicting_paths: Vec<String> = track_ids
+                .iter()
+                .filter_map(|id| db.get_track_by_id(*id).ok().flatten())
+                .map(|t| t.path)
+                .collect();
+
+            let metadata = serde_json::json!({
+                "library_name": library_name,
+                "target_path": deploy_path,
+                "track_ids": track_ids,
+                "conflicting_paths": conflicting_paths,
+            });
+
+            let issue = HealthIssue {
+                id: None,
+                issue_type: HealthIssueType::DeployConflict,
+                issue_key,
+                discovered_at: None,
+                metadata_json: Some(metadata.to_string()),
+            };
+
+            db.insert_health_issue(&issue)?;
+            new_conflicts += 1;
+        }
+    }
+
+    Ok(new_conflicts)
 }
 
 /// Clean up deployment conflict signals that are no longer valid.
@@ -122,13 +201,82 @@ pub fn detect_deployment_conflicts_for_library(
 /// collides with another).
 ///
 /// Returns the number of signals deleted.
-///
-/// TODO: Requires compute_deployment_path from corpus::deploy which is disabled.
-/// Currently returns 0 (no cleanup performed).
-pub fn cleanup_resolved_deployment_conflicts(_config: &Config, _db: &Database) -> Result<usize> {
-    // TODO: Re-enable when corpus::deploy is available
-    // This function requires compute_deployment_path to recompute target paths.
-    Ok(0)
+pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> Result<usize> {
+    // Get all existing DeployConflict signals
+    let existing_conflicts = db.get_health_signals(Some(HealthIssueType::DeployConflict))?;
+
+    if existing_conflicts.is_empty() {
+        return Ok(0);
+    }
+
+    let mut deleted = 0;
+
+    for conflict in existing_conflicts {
+        let conflict_id = match conflict.id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Parse metadata to get track_ids
+        let track_ids: Vec<i64> = conflict
+            .metadata_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .and_then(|v| v.get("track_ids").cloned())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        if track_ids.is_empty() {
+            // Can't verify, delete stale signal
+            db.delete_health_signal(conflict_id)?;
+            deleted += 1;
+            continue;
+        }
+
+        // Parse library name from issue_key: "deploy_conflict:{library_name}:{path}"
+        let parts: Vec<&str> = conflict.issue_key.splitn(3, ':').collect();
+        let library_name = if parts.len() >= 2 { parts[1] } else { continue };
+
+        // Recompute deployment paths for all tracks
+        let mut path_counts: HashMap<String, usize> = HashMap::new();
+
+        for track_id in &track_ids {
+            // Check if track still exists
+            let track = match db.get_track_by_id(*track_id)? {
+                Some(t) => t,
+                None => continue, // Track deleted, won't contribute to conflict
+            };
+
+            // Check if track is still deployable to this library
+            let deployable_tracks = get_deployable_corpus_tracks(config, db, library_name);
+            if !deployable_tracks.iter().any(|t| t.id == Some(*track_id)) {
+                continue; // Track no longer mapped to this library
+            }
+
+            // Get tags and compute path
+            let tags = db.get_track_tags(*track_id).unwrap_or_default();
+            let tag_map: HashMap<String, String> = tags
+                .into_iter()
+                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                .collect();
+
+            let deploy_path = compute_deployment_path_with_tags(&track, &tag_map);
+            let path_key = deploy_path.to_string_lossy().to_string();
+
+            *path_counts.entry(path_key).or_insert(0) += 1;
+        }
+
+        // Check if any path still has multiple tracks (still a conflict)
+        let still_conflict = path_counts.values().any(|&count| count >= 2);
+
+        if !still_conflict {
+            // Conflict resolved, delete the signal
+            db.delete_health_signal(conflict_id)?;
+            deleted += 1;
+        }
+    }
+
+    Ok(deleted)
 }
 
 // ============================================================================

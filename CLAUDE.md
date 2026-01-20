@@ -30,6 +30,61 @@ MLA enforces strict separation between read-only UI queries and write mutations:
 
 This pattern ensures all mutations are properly witnessed and attributable to operator decisions, enforcing the "operator-driven" principle from PHILOSOPHY.md.
 
+### UI Caching Strategies
+
+**Never query the database directly from render code.** DB queries during render cause multi-second frame times when workers are active, and create SQLite contention with write operations.
+
+Two caching strategies exist for different use cases:
+
+**1. UiCache (`ui/cache.rs`) - For "lively" data that updates during operation**
+
+Use for data that changes while the user watches: corpus summary, daemon status, health stats.
+
+```rust
+// In event loop (ui/mod.rs run_app):
+if let Some(ref mut daemon) = app.task_daemon {
+    app.ui_cache.refresh(daemon);  // Refreshes stale cached values
+}
+
+// In render code:
+let summary = app.ui_cache.corpus_summary();  // Returns cached value, never queries DB
+```
+
+Adding new cached values to UiCache:
+1. Add field to `UiCache` struct with `_at: Instant` timestamp
+2. Add constant for refresh interval (e.g., `CORPUS_SUMMARY_INTERVAL`)
+3. Add refresh logic in `refresh()` method
+4. Add getter method that returns cloned/copied value
+
+**2. Modal/View Init Caching - For data static during interaction**
+
+Use for data that stays fixed while a modal or view is open: tag editor loading track tags, search results populating a list.
+
+```rust
+// Query once during modal/view initialization:
+impl TagEditorState {
+    pub fn new(track_id: i64, db: &Database) -> Self {
+        let tags = db.get_track_tags(track_id).unwrap_or_default();  // Query here, once
+        Self {
+            cached_tags: tags,  // Store in state struct
+            // ...
+        }
+    }
+}
+
+// In render code - use the cached data:
+fn render(&self, f: &mut Frame, area: Rect) {
+    for tag in &self.cached_tags {  // Never query, just read cached
+        // ...
+    }
+}
+```
+
+**Anti-patterns:**
+- `daemon.read_only_db().get_*()` in render functions
+- Passing `&Database` to render/display code
+- Any DB query inside `render()` or functions it calls
+
 ### Widget-First UI Development
 
 When building new UI components, **always use existing widgets first**. The `ui/widgets/` module provides reusable, composable components:
@@ -65,6 +120,34 @@ Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing
 **Core invariant: MLA never makes Decisions or Mutations autonomously.** All corpus Mutations must be attributable to explicit operator Decisions. See `docs/PHILOSOPHY.md` for full rationale.
 
 DecisionWitness and ExecutionWitnesses are our methods of guaranteeing this.
+
+### Signal Design Principles
+
+**Signals must be small and individual.** Each signal should correspond to exactly one file, track, or piece of metadata - never aggregate/macro-level state.
+
+**Good signals:**
+- `UnindexedFile` for path X (one file)
+- `LibraryOrphan` for library file Y (one file)
+- `FingerprintDuplicate` for fingerprint Z (one group of tracks)
+- `MissingTag` for tag T (one tag type across affected tracks)
+
+**Bad signals (DO NOT CREATE):**
+- `LibraryHealthSummary` (aggregate counts - compute at query time)
+- `LibraryNotDeployed` (inverts the model - track "should be" somewhere)
+- Any "summary" or "aggregate" signal that counts other signals
+- Any signal that requires iterating ALL items to emit/update
+
+**Why this matters:** If a computation runs per-directory (N directories) and each emits signals for ALL items (M items), you get N×M operations. With freshness checks this becomes N×M reads. Signals should be emitted by the computation that discovers the individual fact, not by aggregate passes.
+
+**Aggregate information** (counts, summaries, "library health") should be:
+1. Computed via SQL queries at UI time
+2. Cached in `UiCache` with appropriate refresh intervals
+3. NEVER stored as signals in the database
+
+**Computations** should:
+1. Emit signals for individual items they discover
+2. Spawn follow-up computations for items needing further analysis
+3. NOT iterate over "all items in the system" to emit global signals
 
 ### Dead Code Policy
 

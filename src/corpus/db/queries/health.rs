@@ -160,6 +160,32 @@ impl Database {
             .context("Failed to query health signal by key")
     }
 
+    /// Fast existence check for a signal (no data fetch).
+    ///
+    /// Use this before emitting signals to avoid redundant DB writes.
+    pub fn signal_exists(&self, issue_type: HealthIssueType, issue_key: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
+                params![issue_type.as_str(), issue_key],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
+    /// Fast existence check for a file signal type.
+    ///
+    /// Convenience wrapper using FileSignalType's string representation.
+    pub fn file_signal_exists(&self, signal_type: FileSignalType, key: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
+                params![signal_type.as_str(), key],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
     /// Delete a health signal by ID.
     pub fn delete_health_signal(&self, signal_id: i64) -> Result<()> {
         self.conn
@@ -303,14 +329,11 @@ impl Database {
         issue_type: HealthIssueType,
         _witness: &ComputationWitness,
     ) -> Result<usize> {
-        // Normalize directory path: ensure no trailing slash, then add one for LIKE pattern
-        let dir_str = directory.to_string_lossy();
-        let dir_normalized = dir_str.trim_end_matches('/');
-        let pattern = format!("{}/%", dir_normalized);
+        let pattern = super::dir_like_pattern(directory);
 
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2",
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
                 params![issue_type.as_str(), pattern],
             )
             .context("Failed to clear signals in directory")?;
@@ -367,13 +390,11 @@ impl Database {
         signal_type: FileSignalType,
         _witness: &ComputationWitness,
     ) -> Result<usize> {
-        let dir_str = directory.to_string_lossy();
-        let dir_normalized = dir_str.trim_end_matches('/');
-        let pattern = format!("{}/%", dir_normalized);
+        let pattern = super::dir_like_pattern(directory);
 
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2",
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
                 params![signal_type.as_str(), pattern],
             )
             .context("Failed to clear file signals in directory")?;
@@ -501,15 +522,12 @@ impl Database {
         dir: &std::path::Path,
         signal_type: HealthIssueType,
     ) -> Result<Vec<HealthIssue>> {
-        // Normalize directory path: ensure no trailing slash, then add one for LIKE pattern
-        let dir_str = dir.to_string_lossy();
-        let dir_normalized = dir_str.trim_end_matches('/');
-        let pattern = format!("{}/%", dir_normalized);
+        let pattern = super::dir_like_pattern(dir);
 
         let mut stmt = self.conn.prepare(
             r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
                FROM health_issues
-               WHERE issue_type = ?1 AND issue_key LIKE ?2"#
+               WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\'"#
         )?;
 
         let rows = stmt.query_map(
@@ -524,7 +542,7 @@ impl Database {
         Ok(issues)
     }
 
-    // Note: get_tracks_in_directory is defined in tracks.rs
+    // Note: get_tracks_in_directory_with_fingerprint is defined in tracks.rs
 
     /// Get signals discovered since a given timestamp.
     pub fn get_signals_since(

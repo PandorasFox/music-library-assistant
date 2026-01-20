@@ -6,11 +6,13 @@
 //! NOTE: Do not modify this module without explicit authorization.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
-use parallel_worker::{CancelableWorker, WorkerInit, WorkerMethods};
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config;
 use crate::corpus::computations::Computation;
@@ -458,6 +460,197 @@ struct TaskResult {
     label: String,
     /// Follow-up computations to queue (from computation chaining)
     spawn: Vec<Computation>,
+    /// Task execution duration in milliseconds
+    duration_ms: u64,
+    /// Time task waited in queue before execution (milliseconds)
+    queue_wait_ms: u64,
+    /// Snapshot of thread stats after execution (for computations)
+    thread_stats: Option<crate::corpus::computations::ThreadStats>,
+}
+
+// ============================================================================
+// Worker Performance Stats
+// ============================================================================
+
+/// Aggregated performance statistics from worker threads.
+#[derive(Debug, Clone, Default)]
+pub struct WorkerStats {
+    /// Total tasks completed across all threads
+    pub tasks_completed: u64,
+    /// Average task execution time in milliseconds
+    pub avg_task_ms: u64,
+    /// Slowest single task execution time
+    pub max_task_ms: u64,
+    /// Label of the slowest task
+    pub max_task_label: String,
+    /// Average queue wait time in milliseconds
+    pub queue_wait_avg_ms: u64,
+    /// Maximum queue wait time
+    pub queue_wait_max_ms: u64,
+    /// Number of worker threads that have executed tasks
+    pub active_threads: usize,
+    /// Average DB read time in microseconds
+    pub avg_db_read_us: u64,
+    /// Median DB read time in microseconds (from recent samples)
+    pub median_db_read_us: u64,
+    /// Maximum DB read time in microseconds (slowest single read)
+    pub max_db_read_us: u64,
+    /// Total DB reads across all threads
+    pub total_db_reads: u64,
+}
+
+// ============================================================================
+// Shared Worker Stats (Thread-Safe)
+// ============================================================================
+
+/// Inner data for SharedWorkerStats protected by mutex.
+struct WorkerStatsInner {
+    max_task_label: String,
+    thread_stats_map: HashMap<u64, crate::corpus::computations::ThreadStats>,
+}
+
+/// Thread-safe worker statistics, isolated from TaskDaemon struct.
+///
+/// This follows the proven pattern from DbThreadHandle - stats are stored in
+/// a separate heap allocation via Arc, with atomic counters for numeric data
+/// and a mutex for complex data (labels, thread_stats_map).
+struct SharedWorkerStats {
+    tasks_completed: AtomicU64,
+    total_task_duration_ms: AtomicU64,
+    total_queue_wait_ms: AtomicU64,
+    max_task_ms: AtomicU64,
+    max_queue_wait_ms: AtomicU64,
+    /// Complex data behind mutex
+    inner: Mutex<WorkerStatsInner>,
+}
+
+impl SharedWorkerStats {
+    fn new() -> Self {
+        Self {
+            tasks_completed: AtomicU64::new(0),
+            total_task_duration_ms: AtomicU64::new(0),
+            total_queue_wait_ms: AtomicU64::new(0),
+            max_task_ms: AtomicU64::new(0),
+            max_queue_wait_ms: AtomicU64::new(0),
+            inner: Mutex::new(WorkerStatsInner {
+                max_task_label: String::new(),
+                thread_stats_map: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Record a completed task result. Called from main thread's tick().
+    fn record_result(&self, result: &TaskResult) {
+        self.tasks_completed.fetch_add(1, Ordering::Relaxed);
+        self.total_task_duration_ms.fetch_add(result.duration_ms, Ordering::Relaxed);
+        self.total_queue_wait_ms.fetch_add(result.queue_wait_ms, Ordering::Relaxed);
+
+        // Atomic max update for task duration
+        let mut current_max = self.max_task_ms.load(Ordering::Relaxed);
+        while result.duration_ms > current_max {
+            match self.max_task_ms.compare_exchange_weak(
+                current_max,
+                result.duration_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    // Update label under mutex
+                    if let Ok(mut inner) = self.inner.lock() {
+                        inner.max_task_label = result.label.clone();
+                    }
+                    break;
+                }
+                Err(actual) => current_max = actual,
+            }
+        }
+
+        // Atomic max update for queue wait
+        let mut current_max = self.max_queue_wait_ms.load(Ordering::Relaxed);
+        while result.queue_wait_ms > current_max {
+            match self.max_queue_wait_ms.compare_exchange_weak(
+                current_max,
+                result.queue_wait_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current_max = actual,
+            }
+        }
+
+        // Thread stats under mutex
+        if let Some(ref thread_stats) = result.thread_stats {
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.thread_stats_map.insert(thread_stats.thread_id, thread_stats.clone());
+            }
+        }
+    }
+
+    /// Get a snapshot of current stats for UI display.
+    fn snapshot(&self) -> WorkerStats {
+        let tasks = self.tasks_completed.load(Ordering::Relaxed);
+        let total_duration = self.total_task_duration_ms.load(Ordering::Relaxed);
+        let total_queue = self.total_queue_wait_ms.load(Ordering::Relaxed);
+        let max_task = self.max_task_ms.load(Ordering::Relaxed);
+        let max_queue = self.max_queue_wait_ms.load(Ordering::Relaxed);
+
+        let inner = self.inner.lock().unwrap();
+
+        // Aggregate per-thread stats
+        let active_threads = inner.thread_stats_map.len();
+        let mut total_db_read_us = 0u64;
+        let mut total_db_reads = 0u64;
+        let mut max_db_read_us = 0u64;
+        let mut all_samples: Vec<u64> = Vec::new();
+
+        for stats in inner.thread_stats_map.values() {
+            total_db_read_us += stats.total_db_read_us;
+            total_db_reads += stats.db_read_count;
+            if stats.max_db_read_us > max_db_read_us {
+                max_db_read_us = stats.max_db_read_us;
+            }
+            // Collect samples for median calculation
+            all_samples.extend_from_slice(&stats.read_samples[..stats.read_sample_count]);
+        }
+
+        let avg_db_read_us = if total_db_reads > 0 {
+            total_db_read_us / total_db_reads
+        } else {
+            0
+        };
+
+        // Compute median from samples
+        let median_db_read_us = if all_samples.is_empty() {
+            0
+        } else {
+            all_samples.sort_unstable();
+            all_samples[all_samples.len() / 2]
+        };
+
+        WorkerStats {
+            tasks_completed: tasks,
+            avg_task_ms: if tasks > 0 { total_duration / tasks } else { 0 },
+            max_task_ms: max_task,
+            max_task_label: inner.max_task_label.clone(),
+            queue_wait_avg_ms: if tasks > 0 { total_queue / tasks } else { 0 },
+            queue_wait_max_ms: max_queue,
+            active_threads,
+            avg_db_read_us,
+            median_db_read_us,
+            max_db_read_us,
+            total_db_reads,
+        }
+    }
+
+    /// Debug: get raw values for logging
+    fn debug_values(&self) -> (u64, u64, u64) {
+        (
+            self.tasks_completed.load(Ordering::Relaxed),
+            self.total_queue_wait_ms.load(Ordering::Relaxed),
+            self.max_queue_wait_ms.load(Ordering::Relaxed),
+        )
+    }
 }
 
 // ============================================================================
@@ -466,7 +659,9 @@ struct TaskResult {
 
 /// Simple parallel task queue with state machine.
 pub struct TaskDaemon {
-    worker: CancelableWorker<(Task, String), TaskResult>,
+    // Rayon-based task execution with channel for results
+    result_tx: Sender<TaskResult>,
+    result_rx: Receiver<TaskResult>,
 
     /// When this daemon instance was created.
     /// Used for signal freshness tracking (`discovered_at > launch_time` = new signal).
@@ -517,6 +712,14 @@ pub struct TaskDaemon {
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
     db_thread_handle: DbThreadHandle,
+
+    // -------------------------------------------------------------------------
+    // Worker Performance Stats (Thread-Safe, Isolated)
+    // -------------------------------------------------------------------------
+
+    /// Thread-safe worker stats in separate heap allocation.
+    /// None when timing instrumentation is disabled.
+    worker_stats_shared: Option<Arc<SharedWorkerStats>>,
 }
 
 impl TaskDaemon {
@@ -524,15 +727,36 @@ impl TaskDaemon {
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
     pub fn new() -> Self {
-        let worker = CancelableWorker::new(|(task, label): (Task, String), _state| {
-            Some(execute_task(task, label))
-        });
+        // Use rayon's global thread pool with work-stealing for better performance.
+        // Thread count from config (default: 2x logical cores for I/O-bound workloads).
+        let num_threads = config::get_worker_thread_count();
+
+        // Configure rayon's global thread pool (only first call takes effect)
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global();
+
+        let _ = config::log_message(&format!(
+            "[WORKER] Using rayon thread pool with {} threads",
+            num_threads
+        ));
+
+        // Channel for receiving task results
+        let (result_tx, result_rx) = mpsc::channel();
 
         // Spawn the dedicated DB write thread
         let db_thread_handle = db_thread::spawn();
 
-        Self {
-            worker,
+        // Create isolated worker stats only when timing instrumentation is enabled
+        let worker_stats_shared = if config::is_timing_enabled() {
+            Some(Arc::new(SharedWorkerStats::new()))
+        } else {
+            None
+        };
+
+        let daemon = Self {
+            result_tx,
+            result_rx,
             launch_time: Utc::now(),
             state: DaemonState::Idle,
             eye_state: EyeState::Closed,
@@ -552,7 +776,19 @@ impl TaskDaemon {
             pending_transaction: None,
             read_only_conn: None,
             db_thread_handle,
+            worker_stats_shared,
+        };
+
+        // DEBUG: Verify initialization (only when timing enabled)
+        if let Some(ref stats) = daemon.worker_stats_shared {
+            let (tasks, total_qw, max_qw) = stats.debug_values();
+            let _ = crate::config::log_message(&format!(
+                "[PERF INIT] TaskDaemon::new() - total_queue_wait_ms={}, max_queue_wait_ms={}, total_processed={}",
+                total_qw, max_qw, daemon.total_processed
+            ));
         }
+
+        daemon
     }
 
     /// Create a new daemon with opinions applied.
@@ -680,25 +916,60 @@ impl TaskDaemon {
         }
     }
 
-    /// Advance internal processing. Call each frame from UI loop.
+    /// Advance internal processing. MUST be called exactly once per frame from the event loop.
+    ///
+    /// **IMPORTANT**: Only call from `run_app()` event loop. Use `status()` for readonly access elsewhere.
+    /// Calling tick() multiple times per frame will corrupt task counting.
     ///
     /// - Drains completed task results from worker
     /// - Auto-queues any spawned follow-up computations
     /// - Updates state machine transitions
+    /// - Aggregates worker performance stats (when timing enabled)
     pub fn tick(&mut self) -> DaemonStatus {
+        // DEBUG: Log first tick state (only when timing enabled)
+        if let Some(ref stats) = self.worker_stats_shared {
+            let (_, total_qw_before, _) = stats.debug_values();
+            if self.total_processed == 0 && total_qw_before != 0 {
+                let _ = crate::config::log_message(&format!(
+                    "[PERF BUG] tick() called with total_processed=0 but total_queue_wait_ms={}!",
+                    total_qw_before
+                ));
+            }
+        }
+
         let mut completed = 0;
         let mut failed = 0;
 
         // Drain completed results and collect spawned computations
         let mut spawned: Vec<Computation> = Vec::new();
 
-        while let Some(result) = self.worker.get() {
+        while let Ok(result) = self.result_rx.try_recv() {
             // Task has completed - no longer in flight
             self.in_flight = self.in_flight.saturating_sub(1);
             self.total_processed += 1;
 
             // Track by task type
             *self.task_counts.entry(result.label.clone()).or_insert(0) += 1;
+
+            // Record stats via thread-safe interface (only when timing enabled)
+            if let Some(ref stats) = self.worker_stats_shared {
+                stats.record_result(&result);
+
+                // DEBUG: Log queue wait values
+                let (_, total_qw_now, max_qw_now) = stats.debug_values();
+                if self.total_processed == 1 {
+                    let _ = crate::config::log_message(&format!(
+                        "[PERF FIRST] FIRST TASK: queue_wait_ms={}, total_queue_wait_ms={} (should equal queue_wait_ms!), max_queue_wait_ms={}",
+                        result.queue_wait_ms, total_qw_now, max_qw_now
+                    ));
+                }
+                if self.total_processed <= 50 || self.total_processed % 500 == 0 || result.queue_wait_ms > 50000 {
+                    let _ = crate::config::log_message(&format!(
+                        "[PERF DEBUG] queue_wait_ms={} for task={}, total_processed={}, total_queue_wait_ms={}, max_queue_wait_ms={}",
+                        result.queue_wait_ms, result.label, self.total_processed, total_qw_now, max_qw_now
+                    ));
+                }
+            }
 
             if result.success {
                 completed += 1;
@@ -756,10 +1027,10 @@ impl TaskDaemon {
                 // Idle → Working: handled in queue methods
             }
             DaemonState::Working => {
-                // Working → Completed: when all tasks finish (none in-flight)
-                // We use in_flight which tracks tasks from add_task() to result drain,
-                // ensuring we don't transition while tasks are executing on worker threads.
-                if self.in_flight == 0 && self.total_processed > 0 {
+                // Working → Completed: when all work finishes (no in-flight tasks AND
+                // db_thread queue empty). Uses centralized has_pending() for consistency
+                // with exit handlers and UI state display.
+                if !self.has_pending() && self.total_processed > 0 {
                     self.transition_to_completed();
                 }
             }
@@ -777,6 +1048,9 @@ impl TaskDaemon {
 
     fn transition_to_completed(&mut self) {
         let duration = self.session_start.map(|s| s.elapsed()).unwrap_or_default();
+
+        // Flag to queue awakening computations after session reset
+        let mut queue_awakening_after_reset = false;
 
         self.completed_session = Some(CompletedSession {
             completed_at: Instant::now(),
@@ -802,8 +1076,9 @@ impl TaskDaemon {
                         self.total_processed
                     ));
                     self.eye_state = EyeState::Awakening;
-                    self.queue_awakening_computations();
-                    // transition_to_completed will be called again when those complete
+                    // Flag to queue awakening computations AFTER session reset
+                    // (avoids off-by-one: task queued before reset, completed after)
+                    queue_awakening_after_reset = true;
                 }
                 EyeState::Awake => {
                     let _ = crate::config::log_message(
@@ -843,6 +1118,12 @@ impl TaskDaemon {
         self.task_counts.clear();
         self.recent_errors.clear();
         self.current_label = None;
+
+        // Queue awakening computations AFTER reset to fix off-by-one counting
+        // (if queued before reset, the task's queue count gets wiped but it still completes)
+        if queue_awakening_after_reset {
+            self.queue_awakening_computations();
+        }
     }
 
     /// Queue second-level signal computations during Awakening.
@@ -879,7 +1160,7 @@ impl TaskDaemon {
         // Queue the orchestrator computation that will spawn all detection computations
         self.queue_computation_with_label(
             Computation::ScheduleContentAnalysis,
-            Some("Analyzing content".to_string()),
+            Some("Analyzing metadata".to_string()),
         );
     }
 
@@ -894,6 +1175,46 @@ impl TaskDaemon {
             self.session_start = Some(Instant::now());
         }
         self.state = DaemonState::Working;
+    }
+
+    // -------------------------------------------------------------------------
+    // Task Spawning Helper
+    // -------------------------------------------------------------------------
+
+    /// Spawn a task on the rayon thread pool with panic catching.
+    ///
+    /// If the task panics, we still send a failure result so the daemon's
+    /// in_flight counter stays accurate and we don't lose tasks silently.
+    fn spawn_task(&self, task: Task, label: String, queue_time: Instant) {
+        let tx = self.result_tx.clone();
+        let label_for_panic = label.clone();
+        rayon::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                execute_task(task, label, queue_time)
+            }));
+            let result = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic".to_string()
+                    };
+                    TaskResult {
+                        success: false,
+                        error: Some(format!("Task panicked: {}", panic_msg)),
+                        label: label_for_panic,
+                        spawn: Vec::new(),
+                        duration_ms: queue_time.elapsed().as_millis() as u64,
+                        queue_wait_ms: 0,
+                        thread_stats: None,
+                    }
+                }
+            };
+            let _ = tx.send(result);
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -918,30 +1239,30 @@ impl TaskDaemon {
 
         self.session_queued += 1;
         self.in_flight += 1;
-        self.worker.add_task((Task::Mutation(mutation), task_label));
+        self.spawn_task(Task::Mutation(mutation), task_label, Instant::now());
     }
 
     fn queue_mutations_internal(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>) {
         self.transition_to_working();
 
-        let tasks: Vec<(Task, String)> = mutations
-            .into_iter()
-            .map(|m| {
-                let task_label = label.clone()
-                    .or_else(|| self.current_label.clone())
-                    .unwrap_or_else(|| TaskLabel::from_mutation(&m).0);
-                (Task::Mutation(m), task_label)
-            })
-            .collect();
+        let queue_time = Instant::now();
+        let current_label = self.current_label.clone();
+        let mutations: Vec<_> = mutations.into_iter().collect();
 
         let _ = config::log_message(&format!(
             "[WORKER] queue_mutations_internal: queueing {} mutations (label={:?})",
-            tasks.len(), label
+            mutations.len(), label
         ));
 
-        self.session_queued += tasks.len();
-        self.in_flight += tasks.len();
-        self.worker.add_tasks(tasks);
+        self.session_queued += mutations.len();
+        self.in_flight += mutations.len();
+
+        for mutation in mutations {
+            let task_label = label.clone()
+                .or_else(|| current_label.clone())
+                .unwrap_or_else(|| TaskLabel::from_mutation(&mutation).0);
+            self.spawn_task(Task::Mutation(mutation), task_label, queue_time);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -970,7 +1291,7 @@ impl TaskDaemon {
 
         self.session_queued += 1;
         self.in_flight += 1;
-        self.worker.add_task((Task::Computation(computation), task_label));
+        self.spawn_task(Task::Computation(computation), task_label, Instant::now());
     }
 
     /// Queue multiple computations (no witness required).
@@ -985,19 +1306,19 @@ impl TaskDaemon {
     pub fn queue_computations_with_label(&mut self, computations: impl IntoIterator<Item = Computation>, label: Option<String>) {
         self.transition_to_working();
 
-        let tasks: Vec<(Task, String)> = computations
-            .into_iter()
-            .map(|c| {
-                let task_label = label.clone()
-                    .or_else(|| self.current_label.clone())
-                    .unwrap_or_else(|| TaskLabel::from_computation(&c).0);
-                (Task::Computation(c), task_label)
-            })
-            .collect();
+        let queue_time = Instant::now();
+        let current_label = self.current_label.clone();
+        let computations: Vec<_> = computations.into_iter().collect();
 
-        self.session_queued += tasks.len();
-        self.in_flight += tasks.len();
-        self.worker.add_tasks(tasks);
+        self.session_queued += computations.len();
+        self.in_flight += computations.len();
+
+        for computation in computations {
+            let task_label = label.clone()
+                .or_else(|| current_label.clone())
+                .unwrap_or_else(|| TaskLabel::from_computation(&computation).0);
+            self.spawn_task(Task::Computation(computation), task_label, queue_time);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1040,7 +1361,7 @@ impl TaskDaemon {
 
         self.session_queued += 1;
         self.in_flight += 1;
-        self.worker.add_task((Task::Migration(migration), task_label));
+        self.spawn_task(Task::Migration(migration), task_label, Instant::now());
     }
 
     fn queue_migrations_internal(
@@ -1050,20 +1371,19 @@ impl TaskDaemon {
     ) {
         self.transition_to_working();
 
-        let tasks: Vec<(Task, String)> = migrations
-            .into_iter()
-            .map(|m| {
-                let task_label = label
-                    .clone()
-                    .or_else(|| self.current_label.clone())
-                    .unwrap_or_else(|| TaskLabel::from_migration(&m).0);
-                (Task::Migration(m), task_label)
-            })
-            .collect();
+        let queue_time = Instant::now();
+        let current_label = self.current_label.clone();
+        let migrations: Vec<_> = migrations.into_iter().collect();
 
-        self.session_queued += tasks.len();
-        self.in_flight += tasks.len();
-        self.worker.add_tasks(tasks);
+        self.session_queued += migrations.len();
+        self.in_flight += migrations.len();
+
+        for migration in migrations {
+            let task_label = label.clone()
+                .or_else(|| current_label.clone())
+                .unwrap_or_else(|| TaskLabel::from_migration(&migration).0);
+            self.spawn_task(Task::Migration(migration), task_label, queue_time);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1326,10 +1646,10 @@ impl TaskDaemon {
     // Utility Methods
     // -------------------------------------------------------------------------
 
-    /// Get current daemon status snapshot (without advancing state).
+    /// Get current daemon status snapshot (readonly, does not advance state).
     ///
-    /// Use `tick()` to advance state and get status. Use this for read-only
-    /// status checks when you don't want to advance the state machine.
+    /// Safe to call from render code, utility functions, etc.
+    /// Use `tick()` only from the main event loop to advance state.
     pub fn status(&self) -> DaemonStatus {
         DaemonStatus {
             state: self.state.into(),
@@ -1351,8 +1671,30 @@ impl TaskDaemon {
     }
 
     /// Get current DB thread stats for UI display.
-    pub fn db_stats(&self) -> DbThreadStats {
+    /// Returns None if timing instrumentation is disabled.
+    pub fn db_stats(&self) -> Option<DbThreadStats> {
         self.db_thread_handle.stats()
+    }
+
+    /// Get pending DB write queue depth (always available, no timing guard).
+    pub fn db_queue_depth(&self) -> u64 {
+        self.db_thread_handle.queue_depth()
+    }
+
+    /// Get current worker performance stats for UI display.
+    /// Returns None if timing instrumentation is disabled.
+    pub fn worker_stats(&self) -> Option<WorkerStats> {
+        let stats = self.worker_stats_shared.as_ref()?.snapshot();
+
+        // DEBUG: Log if avg > max (should never happen now with isolated stats)
+        if stats.tasks_completed > 0 && stats.queue_wait_avg_ms > stats.queue_wait_max_ms {
+            let _ = crate::config::log_message(&format!(
+                "[PERF BUG] avg > max! tasks={}, avg={}, max={}",
+                stats.tasks_completed, stats.queue_wait_avg_ms, stats.queue_wait_max_ms
+            ));
+        }
+
+        Some(stats)
     }
 
     /// Check if there's a lingering completed session to display.
@@ -1361,10 +1703,12 @@ impl TaskDaemon {
     }
 
     /// Cancel all pending tasks.
+    ///
+    /// Note: With rayon, spawned tasks will still complete but their results
+    /// are drained and discarded. The in_flight counter is reset to 0.
     pub fn cancel(&mut self) {
-        self.worker.cancel_tasks();
-        // Note: in_flight may not accurately reflect cancelled state since
-        // cancelled tasks won't produce results to drain. Reset to 0.
+        // Drain any pending results (discard them)
+        while self.result_rx.try_recv().is_ok() {}
         self.in_flight = 0;
     }
 }
@@ -1380,19 +1724,23 @@ impl Default for TaskDaemon {
 // ============================================================================
 
 /// Execute a single task (mutation, computation, or migration). Opens DB connection as needed.
-fn execute_task(task: Task, label: String) -> TaskResult {
+fn execute_task(task: Task, label: String, queue_time: Instant) -> TaskResult {
+    let queue_wait_ms = queue_time.elapsed().as_millis() as u64;
+
     match task {
-        Task::Mutation(mutation) => execute_mutation(mutation, label),
-        Task::Computation(computation) => execute_computation(computation, label),
-        Task::Migration(migration) => execute_migration(migration, label),
+        Task::Mutation(mutation) => execute_mutation(mutation, label, queue_wait_ms),
+        Task::Computation(computation) => execute_computation(computation, label, queue_wait_ms),
+        Task::Migration(migration) => execute_migration(migration, label, queue_wait_ms),
     }
 }
 
 /// Execute a single mutation. Opens DB connection as needed.
-fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
+fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> TaskResult {
     use crate::config;
     use crate::corpus::db::Database;
     use crate::corpus::mutations::{file_ops, tag_edit, indexing, MutationCategory};
+
+    let start = Instant::now();
 
     let _ = config::log_message(&format!(
         "[EXECUTION] execute_mutation START: {:?} (label={:?})",
@@ -1415,6 +1763,9 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
                 error: Some(format!("DB error: {}", e)),
                 label,
                 spawn: Vec::new(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                queue_wait_ms,
+                thread_stats: None,
             };
         }
     };
@@ -1444,9 +1795,11 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
         }
     };
 
+    let duration_ms = start.elapsed().as_millis() as u64;
+
     let _ = config::log_message(&format!(
-        "[EXECUTION] execute_mutation END: success={}, error={:?}",
-        success, error
+        "[EXECUTION] execute_mutation END: success={}, error={:?}, duration={}ms",
+        success, error, duration_ms
     ));
 
     // Queue computations to recompute signals for affected directories
@@ -1461,28 +1814,44 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
         Vec::new()
     };
 
-    TaskResult { success, error, label, spawn }
+    TaskResult {
+        success,
+        error,
+        label,
+        spawn,
+        duration_ms,
+        queue_wait_ms,
+        thread_stats: None, // Mutations don't use thread-local stats
+    }
 }
 
-/// Execute a single computation. Opens DB connection as needed.
-fn execute_computation(computation: Computation, label: String) -> TaskResult {
+/// Execute a single computation. Uses thread-local DB connection.
+fn execute_computation(computation: Computation, label: String, queue_wait_ms: u64) -> TaskResult {
     use crate::corpus::computations;
 
     let result = computations::execute_single(&computation);
+
+    // Capture thread stats after execution
+    let thread_stats = Some(computations::get_thread_stats());
 
     TaskResult {
         success: result.success,
         error: result.error,
         label,
         spawn: result.spawn,
+        duration_ms: result.duration_ms,
+        queue_wait_ms,
+        thread_stats,
     }
 }
 
 /// Execute a single migration. Opens DB connection and runs the migration.
-fn execute_migration(migration: Migration, label: String) -> TaskResult {
+fn execute_migration(migration: Migration, label: String, queue_wait_ms: u64) -> TaskResult {
     use crate::config;
     use crate::corpus::db::Database;
     use crate::corpus::mutations::MigrationRegistry;
+
+    let start = Instant::now();
 
     // Create migration witness - proves we're inside daemon execution context
     let witness = MigrationWitness::new();
@@ -1496,6 +1865,9 @@ fn execute_migration(migration: Migration, label: String) -> TaskResult {
                 error: Some(format!("DB error: {}", e)),
                 label,
                 spawn: Vec::new(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                queue_wait_ms,
+                thread_stats: None,
             }
         }
     };
@@ -1514,5 +1886,8 @@ fn execute_migration(migration: Migration, label: String) -> TaskResult {
         error,
         label,
         spawn: Vec::new(),
+        duration_ms: start.elapsed().as_millis() as u64,
+        queue_wait_ms,
+        thread_stats: None, // Migrations don't use thread-local stats
     }
 }

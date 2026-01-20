@@ -3,6 +3,7 @@
 //! Modular UI components for the Music Library Assistant.
 
 pub mod app;
+pub mod cache;
 pub mod deploy_flow;
 pub mod eye;
 pub mod flows;
@@ -118,6 +119,9 @@ pub(crate) struct App {
 
     // Eye animation
     eye: EyeAnimation,
+
+    // UI cache - all cached DB results for rendering (never query DB directly in render code)
+    ui_cache: cache::UiCache,
 }
 
 impl App {
@@ -139,6 +143,7 @@ impl App {
             task_daemon: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
+            ui_cache: cache::UiCache::new(),
         }
     }
 
@@ -308,9 +313,14 @@ impl App {
         match action {
             startup::IntakeConfirmationAction::None => {}
             startup::IntakeConfirmationAction::Confirmed => {
-                // User confirmed - create IndexTrack mutations
-                if let Some(ref state) = self.intake_confirmation {
-                    let mutations = state.create_index_mutations();
+                // User confirmed - create IndexTrack mutations and start processing
+                // Extract mutations first to avoid borrow conflicts
+                let mutations = self.intake_confirmation
+                    .as_ref()
+                    .map(|s| s.create_index_mutations())
+                    .unwrap_or_default();
+
+                if !mutations.is_empty() {
                     let count = mutations.len();
 
                     let _ = config::log_message(&format!(
@@ -326,17 +336,23 @@ impl App {
                         let _ = daemon.confirm_transaction(&witness);
                     }
 
-                    self.status_message = Some(format!("Indexing {} files...", count));
+                    // Start processing mode - stay on this screen until complete
+                    if let Some(ref mut state) = self.intake_confirmation {
+                        state.start_processing();
+                    }
                 }
+            }
+            startup::IntakeConfirmationAction::Skipped => {
+                // User skipped - proceed to metadata analysis without indexing
+                // UnindexedFile signals remain for later handling
+                let _ = config::log_message("IntakeConfirmation: user skipped indexing");
 
-                // Clean up and proceed to content analysis
                 self.intake_confirmation = None;
                 self.start_content_analysis();
             }
-            startup::IntakeConfirmationAction::Skipped => {
-                // User skipped - proceed to content analysis without indexing
-                // UnindexedFile signals remain for later handling
-                let _ = config::log_message("IntakeConfirmation: user skipped indexing");
+            startup::IntakeConfirmationAction::ProcessingComplete => {
+                // Indexing complete - proceed to metadata analysis
+                let _ = config::log_message("IntakeConfirmation: indexing complete, proceeding to metadata analysis");
 
                 self.intake_confirmation = None;
                 self.start_content_analysis();
@@ -649,7 +665,7 @@ impl App {
         // Query database for tracks in this directory
         let db = self.db();
 
-        let tracks = match db.get_tracks_in_directory(directory) {
+        let tracks = match db.get_tracks_for_tag_editing(directory) {
             Ok(tracks) => tracks,
             Err(e) => {
                 self.status_message = Some(format!("Failed to query tracks: {}", e));
@@ -1052,24 +1068,39 @@ impl App {
             ));
         }
 
-        // Update db_stats on splash screen (for optional display)
+        // Update stats on splash screen (for optional display)
         if let Some(daemon) = &self.task_daemon {
+            splash.set_db_queue_depth(daemon.db_queue_depth());
             splash.set_db_stats(daemon.db_stats());
+            splash.set_worker_stats(daemon.worker_stats());
         }
 
         // Put it back or transition
         if splash.is_complete() {
             // Don't put it back - check for unindexed files before transitioning
+            let transition_start = std::time::Instant::now();
             if let Some(intake_state) = self.check_for_unindexed_files() {
+                let check_duration = transition_start.elapsed();
                 let _ = config::log_message(&format!(
-                    "IntakeConfirmation: showing prompt for {} files",
+                    "[TRANSITION] check_for_unindexed_files took {}ms, found {} files",
+                    check_duration.as_millis(),
                     intake_state.file_count
                 ));
                 self.intake_confirmation = Some(intake_state);
                 self.mode = UiMode::IntakeConfirmation;
             } else {
+                let check_duration = transition_start.elapsed();
+                let _ = config::log_message(&format!(
+                    "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files",
+                    check_duration.as_millis()
+                ));
                 // No unindexed files - skip intake, proceed to content analysis
+                let analysis_start = std::time::Instant::now();
                 self.start_content_analysis();
+                let _ = config::log_message(&format!(
+                    "[TRANSITION] start_content_analysis took {}ms",
+                    analysis_start.elapsed().as_millis()
+                ));
             }
         } else {
             self.splash_screen = Some(splash);
@@ -1092,13 +1123,52 @@ impl App {
         if completed {
             let status = self.daemon().status();
             let _ = config::log_message(&format!(
-                "Content analysis complete: {} processed",
+                "Metadata analysis complete: {} processed",
                 status.total_processed
             ));
             // Transition to Insights view
             self.start_insights_view();
         } else {
+            // Update stats on progress screen (for optional display)
+            if let Some(daemon) = &self.task_daemon {
+                progress.set_db_queue_depth(daemon.db_queue_depth());
+                progress.set_db_stats(daemon.db_stats());
+                progress.set_worker_stats(daemon.worker_stats());
+            }
             self.content_analysis = Some(progress);
+        }
+    }
+
+    /// Tick intake confirmation while processing.
+    ///
+    /// Called each frame while intake_confirmation is in processing mode.
+    /// When indexing completes, triggers transition to metadata analysis.
+    fn tick_intake_confirmation(&mut self) {
+        // Take intake_confirmation temporarily to avoid borrow conflicts
+        let mut state = match self.intake_confirmation.take() {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Tick progress - it checks daemon state for completion
+        let completed = state.tick(self.daemon());
+        if completed {
+            let status = self.daemon().status();
+            let _ = config::log_message(&format!(
+                "Intake indexing complete: {} processed",
+                status.total_processed
+            ));
+            // Handle completion via action
+            self.intake_confirmation = Some(state);
+            self.handle_intake_confirmation_action(startup::IntakeConfirmationAction::ProcessingComplete);
+        } else {
+            // Update stats for display
+            if let Some(daemon) = &self.task_daemon {
+                state.set_db_queue_depth(daemon.db_queue_depth());
+                state.set_db_stats(daemon.db_stats());
+                state.set_worker_stats(daemon.worker_stats());
+            }
+            self.intake_confirmation = Some(state);
         }
     }
 
@@ -1120,7 +1190,6 @@ impl App {
         // Clone corpus_root to avoid borrow conflict with daemon's db reference
         let corpus_root = self.config.corpus_root.clone();
 
-        // Log current eye state for debugging
         let eye_state = self.daemon().eye_state();
         let _ = config::log_message(&format!(
             "check_for_unindexed_files: eye_state={:?}",
@@ -1129,15 +1198,25 @@ impl App {
 
         let db = self.db();
 
-        // Also query total signal count for debugging
-        if let Ok(all_signals) = db.get_health_signals(None) {
-            let _ = config::log_message(&format!(
-                "check_for_unindexed_files: total health signals in db = {}",
-                all_signals.len()
-            ));
-        }
+        // Query signal count - this can be slow with many signals
+        let signals_start = std::time::Instant::now();
+        let signal_count = db.get_health_signals(None)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let _ = config::log_message(&format!(
+            "[TRANSITION] get_health_signals(None) took {}ms, {} signals",
+            signals_start.elapsed().as_millis(),
+            signal_count
+        ));
 
-        startup::IntakeConfirmationState::gather(db, &corpus_root, "corpus")
+        let gather_start = std::time::Instant::now();
+        let result = startup::IntakeConfirmationState::gather(db, &corpus_root, "corpus");
+        let _ = config::log_message(&format!(
+            "[TRANSITION] IntakeConfirmationState::gather took {}ms",
+            gather_start.elapsed().as_millis()
+        ));
+
+        result
     }
 }
 
@@ -1146,13 +1225,24 @@ impl App {
 // ============================================================================
 
 fn render(f: &mut Frame, app: &mut App) {
-    // Fetch corpus summary for footer display
-    let corpus_summary = app.task_daemon.as_mut().and_then(|d| {
-        d.read_only_db().get_corpus_summary().ok()
-    });
+    // Use cached corpus summary to avoid DB queries every frame.
+    // The cache is refreshed in the event loop via ui_cache.refresh().
+    let corpus_summary = app.ui_cache.corpus_summary();
 
-    // Fetch DB thread stats
-    let db_stats = app.task_daemon.as_ref().map(|d| d.db_stats());
+    // Fetch DB thread stats (cheap - just reads cached atomic values)
+    // Returns None if timing instrumentation is disabled
+    let db_stats = app.task_daemon.as_ref().and_then(|d| d.db_stats());
+
+    // Get daemon status WITHOUT ticking again - status() just reads current state
+    let daemon_status = app.task_daemon.as_ref().and_then(|d| {
+        let status = d.status();
+        // Show if there's pending work OR a lingering completed session
+        if status.pending > 0 || status.completed_session.is_some() {
+            Some(status)
+        } else {
+            None
+        }
+    });
 
     let mut ctx = render::RenderContext {
         mode: app.mode,
@@ -1169,16 +1259,7 @@ fn render(f: &mut Frame, app: &mut App) {
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,
-        daemon_status: app.task_daemon.as_mut().and_then(|d| {
-            // Tick to advance daemon and get current status (including lingering completed sessions)
-            let status = d.tick();
-            // Show if there's pending work OR a lingering completed session
-            if status.pending > 0 || status.completed_session.is_some() {
-                Some(status)
-            } else {
-                None
-            }
-        }),
+        daemon_status,
         corpus_summary,
         db_stats,
     };
@@ -1257,6 +1338,8 @@ fn run_app<B: ratatui::backend::Backend>(
     }
 
     loop {
+        let frame_start = std::time::Instant::now();
+
         // Check if a signal was received - treat as ESC
         if signal_received.swap(false, Ordering::SeqCst) {
             let esc_key = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
@@ -1264,7 +1347,17 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Tick daemon first - she is the driving system
-        app.daemon().tick();
+        let tick_start = std::time::Instant::now();
+        let tick_status = app.daemon().tick();
+        let tick_duration = tick_start.elapsed();
+        if tick_duration.as_millis() > 16 {
+            let _ = config::log_message(&format!(
+                "[FRAME DEBUG] daemon.tick() took {}ms, drained {} results",
+                tick_duration.as_millis(),
+                tick_status.total_processed
+            ));
+        }
+
         app.check_daemon_status();
 
         // Update eye animation - only animate when daemon eye is Awake
@@ -1282,12 +1375,40 @@ fn run_app<B: ratatui::backend::Backend>(
             app.tick_splash_screen();
         }
 
+        // Tick intake confirmation if processing
+        if app.intake_confirmation.as_ref().map(|s| s.is_processing()).unwrap_or(false) {
+            app.tick_intake_confirmation();
+        }
+
         // Tick content analysis if active (post-intake computation)
         if app.content_analysis.is_some() {
             app.tick_content_analysis();
         }
 
+        // Refresh UI cache periodically (avoids per-frame DB queries in render code)
+        if let Some(ref mut daemon) = app.task_daemon {
+            app.ui_cache.refresh(daemon);
+        }
+
+        let draw_start = std::time::Instant::now();
         terminal.draw(|f| render(f, app))?;
+        let draw_duration = draw_start.elapsed();
+        if draw_duration.as_millis() > 16 {
+            let _ = config::log_message(&format!(
+                "[FRAME DEBUG] terminal.draw() took {}ms",
+                draw_duration.as_millis()
+            ));
+        }
+
+        let frame_duration = frame_start.elapsed();
+        if frame_duration.as_millis() > 16 {
+            let _ = config::log_message(&format!(
+                "[FRAME DEBUG] SLOW FRAME: total {}ms (tick={}ms, draw={}ms)",
+                frame_duration.as_millis(),
+                tick_duration.as_millis(),
+                draw_duration.as_millis()
+            ));
+        }
 
         // Tick tag search for pending bulk edit (after modal has rendered)
         app.tick_tag_search();

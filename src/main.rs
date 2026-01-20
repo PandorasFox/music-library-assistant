@@ -36,8 +36,9 @@ fn main() -> Result<()> {
     // Step 2: Load config (parse KDL)
     let config = match config::load_config() {
         Ok(cfg) => {
-            // Step 3: Log successful parse
+            // Step 3: Log successful parse and initialize performance globals
             let _ = config::log_message("Config loaded successfully");
+            config::init_performance_config(cfg.opinions.performance.clone());
             cfg
         }
         Err(e) => {

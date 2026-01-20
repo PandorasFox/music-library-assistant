@@ -14,8 +14,7 @@
 
 pub mod computations;
 pub mod db;
-// TODO: Re-enable once adapted to transactions and new signals
-// pub mod deploy;
+pub mod deploy;
 pub mod eyeballing;
 pub mod health;
 pub mod metadata;

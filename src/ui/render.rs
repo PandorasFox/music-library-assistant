@@ -13,7 +13,7 @@ use ratatui::{
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::config::Config;
+use crate::config::{self, Config};
 
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
@@ -47,7 +47,15 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
     // Loading splash takes the whole screen
     if ctx.mode == super::UiMode::LoadingSplash {
         if let Some(splash) = ctx.splash_screen {
+            let start = Instant::now();
             super::splash_screen::render(f, f.area(), splash, ctx.config);
+            let elapsed = start.elapsed();
+            if elapsed.as_millis() > 16 {
+                let _ = config::log_message(&format!(
+                    "[RENDER DEBUG] splash_screen::render took {}ms",
+                    elapsed.as_millis()
+                ));
+            }
         }
         return;
     }
@@ -61,7 +69,15 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
                 EyeFrame::Closing => EYE_CLOSING,
                 EyeFrame::Closed => EYE_CLOSED,
             };
+            let start = Instant::now();
             super::startup::content_analysis::render(f, f.area(), progress, eye_frame);
+            let elapsed = start.elapsed();
+            if elapsed.as_millis() > 16 {
+                let _ = config::log_message(&format!(
+                    "[RENDER DEBUG] content_analysis::render took {}ms",
+                    elapsed.as_millis()
+                ));
+            }
         }
         return;
     }
@@ -86,8 +102,22 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
             ])
             .split(f.area());
 
+        let start = Instant::now();
         render_content(f, chunks[0], ctx);
+        let content_time = start.elapsed();
+
+        let start = Instant::now();
         render_footer(f, chunks[1], ctx);
+        let footer_time = start.elapsed();
+
+        if content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
+            let _ = config::log_message(&format!(
+                "[RENDER DEBUG] mode={:?} content={}ms footer={}ms",
+                ctx.mode,
+                content_time.as_millis(),
+                footer_time.as_millis()
+            ));
+        }
     } else {
         // Standard three-part layout: header + content + footer
         let chunks = Layout::default()
@@ -99,9 +129,27 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
             ])
             .split(f.area());
 
+        let start = Instant::now();
         render_header(f, chunks[0], ctx);
+        let header_time = start.elapsed();
+
+        let start = Instant::now();
         render_content(f, chunks[1], ctx);
+        let content_time = start.elapsed();
+
+        let start = Instant::now();
         render_footer(f, chunks[2], ctx);
+        let footer_time = start.elapsed();
+
+        if header_time.as_millis() > 16 || content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
+            let _ = config::log_message(&format!(
+                "[RENDER DEBUG] mode={:?} header={}ms content={}ms footer={}ms",
+                ctx.mode,
+                header_time.as_millis(),
+                content_time.as_millis(),
+                footer_time.as_millis()
+            ));
+        }
     }
 }
 
@@ -134,29 +182,38 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
 }
 
 fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderContext) {
+    let start = Instant::now();
+    let view_name: &str;
+
     match ctx.mode {
         super::UiMode::ContentAnalysis => {
             // Never reached - handled separately in render() before this function
+            view_name = "content_analysis";
         }
         super::UiMode::DirBrowser => {
+            view_name = "dir_browser";
             if let Some(ref mut browser) = ctx.tree_browser {
                 browser.render(f, area);
             }
         }
         super::UiMode::DeploymentPreview => {
+            view_name = "deployment_preview";
             if let Some(ref mut preview) = ctx.deployment_preview {
                 preview.render(f, area);
             }
         }
         super::UiMode::ExitConfirmModal => {
+            view_name = "exit_confirm_modal";
             render_exit_confirm_modal(f, area, ctx.exit_confirm_modal_state);
         }
         super::UiMode::CorpusBrowser => {
+            view_name = "corpus_browser";
             if let Some(ref mut browser) = ctx.tree_browser {
                 browser.render(f, area);
             }
         }
         super::UiMode::Insights => {
+            view_name = "insights";
             if let Some(ref mut view) = ctx.insights_view {
                 insights_view::render_insights_view(f, area, view);
             } else {
@@ -165,23 +222,36 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             }
         }
         super::UiMode::TagSearch => {
+            view_name = "tag_search";
             if let Some(ref state) = ctx.tag_search {
                 state.render(f, area);
             }
         }
         super::UiMode::LoadingSplash => {
             // Never reached - handled separately in render() before this function
+            view_name = "loading_splash";
         }
         super::UiMode::IntakeConfirmation => {
+            view_name = "intake_confirmation";
             if let Some(ref state) = ctx.intake_confirmation {
                 super::startup::intake_confirmation::render(f, area, state);
             }
         }
         super::UiMode::UnifiedTagEditor => {
+            view_name = "unified_tag_editor";
             if let Some(ref mut editor) = ctx.unified_tag_editor {
                 editor.render(f, area, ctx.status_message);
             }
         }
+    }
+
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 16 {
+        let _ = config::log_message(&format!(
+            "[RENDER DEBUG] render_content({}) took {}ms",
+            view_name,
+            elapsed.as_millis()
+        ));
     }
 }
 
@@ -338,12 +408,34 @@ fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         ])
         .split(footer_layout[0]);
 
+    let start = Instant::now();
     render_corpus_status(f, status_layout[0], ctx);
+    let corpus_time = start.elapsed();
+
+    let start = Instant::now();
     render_operation_status(f, status_layout[1], ctx);
+    let operation_time = start.elapsed();
+
+    let start = Instant::now();
     render_controls(f, status_layout[2], ctx);
+    let controls_time = start.elapsed();
 
     // Eye animation
+    let start = Instant::now();
     render_eye(f, footer_layout[1], ctx);
+    let eye_time = start.elapsed();
+
+    if corpus_time.as_millis() > 16 || operation_time.as_millis() > 16
+        || controls_time.as_millis() > 16 || eye_time.as_millis() > 16
+    {
+        let _ = config::log_message(&format!(
+            "[RENDER DEBUG] footer: corpus={}ms operation={}ms controls={}ms eye={}ms",
+            corpus_time.as_millis(),
+            operation_time.as_millis(),
+            controls_time.as_millis(),
+            eye_time.as_millis()
+        ));
+    }
 }
 
 fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {

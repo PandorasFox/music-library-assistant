@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 // Re-export utilities from mla-utils for backward compatibility
 pub use mla_utils::{
@@ -33,6 +34,7 @@ pub struct Opinions {
     pub re_releases: ReReleaseOpinions,
     pub startup: StartupOpinions,
     pub health_detection: HealthDetectionOpinions,
+    pub performance: PerformanceOpinions,
 }
 
 
@@ -131,15 +133,12 @@ pub struct StartupOpinions {
     /// Verify in-file tags match database at startup (default: true)
     /// This is "paranoid" mode - catches out-of-band tag edits by external tools
     pub paranoid_tag_verification: bool,
-    /// Show DB thread performance stats on splash screen (default: false)
-    pub show_db_stats_on_splash: bool,
 }
 
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
             paranoid_tag_verification: true,
-            show_db_stats_on_splash: false,
         }
     }
 }
@@ -162,6 +161,73 @@ impl Default for HealthDetectionOpinions {
             ],
         }
     }
+}
+
+/// Opinions for performance tuning (threads, caches, instrumentation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceOpinions {
+    /// Number of worker threads. None = 2x logical cores (default).
+    pub worker_threads: Option<usize>,
+    /// SQLite page cache size per connection in MB (default: 256).
+    pub db_cache_mb: u32,
+    /// Enable timing instrumentation and stats display (default: false).
+    /// When false, skips all atomic counter updates for better performance.
+    pub timing_instrumentation: bool,
+}
+
+impl Default for PerformanceOpinions {
+    fn default() -> Self {
+        Self {
+            worker_threads: None, // 2x cores
+            db_cache_mb: 256,
+            timing_instrumentation: false,
+        }
+    }
+}
+
+// =============================================================================
+// Global Performance Config
+// =============================================================================
+
+static PERFORMANCE_CONFIG: OnceLock<PerformanceOpinions> = OnceLock::new();
+
+/// Initialize the global performance config. Called once at startup.
+pub fn init_performance_config(opinions: PerformanceOpinions) {
+    let _ = PERFORMANCE_CONFIG.set(opinions);
+}
+
+/// Get the configured worker thread count.
+/// Returns 2x logical cores if not configured or not initialized.
+pub fn get_worker_thread_count() -> usize {
+    let default_count = std::thread::available_parallelism()
+        .map(|n| n.get() * 2)
+        .unwrap_or(8);
+
+    PERFORMANCE_CONFIG
+        .get()
+        .and_then(|p| p.worker_threads)
+        .unwrap_or(default_count)
+}
+
+/// Get the configured DB cache size in KB (for SQLite PRAGMA cache_size).
+/// Returns negative value as SQLite interprets negative as KB.
+pub fn get_db_cache_kb() -> i64 {
+    let mb = PERFORMANCE_CONFIG
+        .get()
+        .map(|p| p.db_cache_mb)
+        .unwrap_or(256);
+
+    // Convert MB to KB, return as negative (SQLite convention for KB)
+    -(mb as i64 * 1024)
+}
+
+/// Check if timing instrumentation is enabled.
+/// When false, stats collection is skipped entirely for better performance.
+pub fn is_timing_enabled() -> bool {
+    PERFORMANCE_CONFIG
+        .get()
+        .map(|p| p.timing_instrumentation)
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,7 +452,10 @@ impl Config {
     }
 }
 
-/// Load config from $XDG_CONFIG_HOME/mla/config.kdl (or ~/.config/mla/config.kdl if XDG_CONFIG_HOME is not set)
+/// Load config from disk. Does NOT validate.
+///
+/// Filesystem validation (`config.validate()`) should be called once at startup.
+/// It doesn't need to be repeated - the filesystem layout won't change at runtime.
 pub fn load_config() -> Result<Config> {
     let config_dir = get_config_dir()?;
     let config_path = config_dir.join("config.kdl");
@@ -402,10 +471,7 @@ pub fn load_config() -> Result<Config> {
     let content = fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config from {:?}", config_path))?;
 
-    let config = parse_kdl_config(&content)?;
-    config.validate()?;
-
-    Ok(config)
+    parse_kdl_config(&content)
 }
 
 /// Parse fingerprint-matching opinions from KDL node
@@ -529,13 +595,6 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                         }
                     }
                 }
-                "show-db-stats-on-splash" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.show_db_stats_on_splash = val;
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -556,6 +615,67 @@ fn parse_health_detection_opinions(node: &kdl::KdlNode, opinions: &mut HealthDet
                 if !tags.is_empty() {
                     opinions.required_tags = tags;
                 }
+            }
+        }
+    }
+}
+
+/// Parse a human-readable size string like "256mb", "1gb", "512" into MB.
+/// Accepts: plain numbers (interpreted as MB), or suffixed with kb/mb/gb (case-insensitive).
+fn parse_size_mb(s: &str) -> Option<u32> {
+    let s = s.trim().to_lowercase();
+
+    if let Some(num_str) = s.strip_suffix("gb") {
+        num_str.trim().parse::<u32>().ok().map(|n| n * 1024)
+    } else if let Some(num_str) = s.strip_suffix("mb") {
+        num_str.trim().parse::<u32>().ok()
+    } else if let Some(num_str) = s.strip_suffix("kb") {
+        // KB rounds up to nearest MB (minimum 1MB)
+        num_str.trim().parse::<u32>().ok().map(|n| (n + 1023) / 1024)
+    } else {
+        // Plain number = MB
+        s.parse::<u32>().ok()
+    }
+}
+
+/// Parse performance opinions from KDL node
+fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "worker-threads" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.worker_threads = Some(val as usize);
+                            }
+                        }
+                    }
+                }
+                "db-cache" => {
+                    if let Some(entry) = child.entries().first() {
+                        // Try string first (e.g., "256mb", "1gb")
+                        if let Some(s) = entry.value().as_string() {
+                            if let Some(mb) = parse_size_mb(s) {
+                                opinions.db_cache_mb = mb;
+                            }
+                        }
+                        // Fall back to plain integer (interpreted as MB)
+                        else if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.db_cache_mb = val as u32;
+                            }
+                        }
+                    }
+                }
+                "timing-instrumentation" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.timing_instrumentation = val;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -693,6 +813,9 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "health-detection" => {
                                 parse_health_detection_opinions(child, &mut config.opinions.health_detection);
+                            }
+                            "performance" => {
+                                parse_performance_opinions(child, &mut config.opinions.performance);
                             }
                             _ => {}
                         }

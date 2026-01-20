@@ -191,6 +191,8 @@ pub enum Computation {
     WalkLibrary {
         library_root: PathBuf,
         library_name: String,
+        /// Corpus path prefixes that deploy to this library (from config.deploy_mappings)
+        corpus_path_prefixes: Vec<PathBuf>,
     },
 
     /// Scan a single library directory and collect (path, inode) pairs.
@@ -199,16 +201,19 @@ pub enum Computation {
     ScanLibraryDirectory {
         directory: PathBuf,
         library_name: String,
+        library_root: PathBuf,
+        corpus_path_prefixes: Vec<PathBuf>,
     },
 
-    /// Derive library health signals after scanning all directories.
+    /// Derive library health signals for files in a single directory.
     ///
     /// Compares library inodes against corpus index:
-    /// - Match by inode → check if path is correct (healthy vs stale)
-    /// - Corpus track not in library → LibraryNotDeployed
+    /// - Match by inode → check if path is correct (LibraryStale if wrong)
     /// - Library file without corpus backing → LibraryOrphan
     DeriveLibraryHealthSignals {
         library_name: String,
+        library_root: PathBuf,
+        corpus_path_prefixes: Vec<PathBuf>,
         /// Library files: (path, inode)
         library_files: Vec<(PathBuf, i64)>,
     },
@@ -358,10 +363,177 @@ impl ComputationResult {
 // Each worker thread opens once and reuses, eliminating connection overhead.
 thread_local! {
     static THREAD_DB: std::cell::RefCell<Option<crate::corpus::db::Database>> = const { std::cell::RefCell::new(None) };
+    static THREAD_STATS: std::cell::RefCell<ThreadStats> = const { std::cell::RefCell::new(ThreadStats::new()) };
+}
+
+// ============================================================================
+// Thread-Local Performance Stats
+// ============================================================================
+
+/// Number of read time samples to keep per thread for median calculation
+const READ_SAMPLE_SIZE: usize = 64;
+
+/// Performance statistics accumulated per worker thread.
+///
+/// Each thread maintains its own stats via thread-local storage.
+/// These are periodically snapshotted and aggregated by the daemon.
+#[derive(Debug, Clone)]
+pub struct ThreadStats {
+    /// Unique identifier for this thread (assigned on first task)
+    pub thread_id: u64,
+    /// Total tasks completed by this thread
+    pub tasks_completed: u64,
+    /// Cumulative task execution time in milliseconds
+    pub total_task_ms: u64,
+    /// Slowest single task execution time
+    pub max_task_ms: u64,
+    /// Label of the slowest task
+    pub max_task_label: String,
+    /// Number of DB connection opens (should be 1 per thread)
+    pub db_opens: u64,
+    /// Cumulative time spent in DB reads (microseconds)
+    pub total_db_read_us: u64,
+    /// Number of DB read operations
+    pub db_read_count: u64,
+    /// Slowest single DB read (microseconds)
+    pub max_db_read_us: u64,
+    /// Circular buffer of recent read times for median calculation
+    pub read_samples: [u64; READ_SAMPLE_SIZE],
+    /// Write index into read_samples (wraps around)
+    pub read_sample_idx: usize,
+    /// How many samples have been written (caps at READ_SAMPLE_SIZE)
+    pub read_sample_count: usize,
+}
+
+impl Default for ThreadStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ThreadStats {
+    pub const fn new() -> Self {
+        Self {
+            thread_id: 0,
+            tasks_completed: 0,
+            total_task_ms: 0,
+            max_task_ms: 0,
+            max_task_label: String::new(),
+            db_opens: 0,
+            total_db_read_us: 0,
+            db_read_count: 0,
+            max_db_read_us: 0,
+            read_samples: [0; READ_SAMPLE_SIZE],
+            read_sample_idx: 0,
+            read_sample_count: 0,
+        }
+    }
+
+    /// Average DB read time in microseconds
+    pub fn avg_db_read_us(&self) -> u64 {
+        if self.db_read_count > 0 {
+            self.total_db_read_us / self.db_read_count
+        } else {
+            0
+        }
+    }
+
+    /// Average task time in milliseconds
+    pub fn avg_task_ms(&self) -> u64 {
+        if self.tasks_completed > 0 {
+            self.total_task_ms / self.tasks_completed
+        } else {
+            0
+        }
+    }
+}
+
+/// Get a snapshot of the current thread's stats.
+pub fn get_thread_stats() -> ThreadStats {
+    THREAD_STATS.with(|cell| cell.borrow().clone())
+}
+
+/// Assign a thread ID if not already set. Returns the thread ID.
+/// Only tracks when timing instrumentation is enabled.
+fn ensure_thread_id() -> u64 {
+    use crate::config;
+    if !config::is_timing_enabled() {
+        return 0;
+    }
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static THREAD_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    THREAD_STATS.with(|cell| {
+        let mut stats = cell.borrow_mut();
+        if stats.thread_id == 0 {
+            stats.thread_id = THREAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        }
+        stats.thread_id
+    })
+}
+
+/// Record a completed task's stats.
+/// No-op when timing instrumentation is disabled.
+fn record_task_stats(label: &str, duration_ms: u64) {
+    use crate::config;
+    if !config::is_timing_enabled() {
+        return;
+    }
+
+    THREAD_STATS.with(|cell| {
+        let mut stats = cell.borrow_mut();
+        stats.tasks_completed += 1;
+        stats.total_task_ms += duration_ms;
+        if duration_ms > stats.max_task_ms {
+            stats.max_task_ms = duration_ms;
+            stats.max_task_label = label.to_string();
+        }
+    });
+}
+
+/// Record a DB read operation's timing.
+/// No-op when timing instrumentation is disabled.
+fn record_db_read(duration_us: u64) {
+    use crate::config;
+    if !config::is_timing_enabled() {
+        return;
+    }
+
+    THREAD_STATS.with(|cell| {
+        let mut stats = cell.borrow_mut();
+        stats.total_db_read_us += duration_us;
+        stats.db_read_count += 1;
+        if duration_us > stats.max_db_read_us {
+            stats.max_db_read_us = duration_us;
+        }
+        // Add to circular sample buffer
+        let idx = stats.read_sample_idx;
+        stats.read_samples[idx] = duration_us;
+        stats.read_sample_idx = (idx + 1) % READ_SAMPLE_SIZE;
+        if stats.read_sample_count < READ_SAMPLE_SIZE {
+            stats.read_sample_count += 1;
+        }
+    });
+}
+
+/// Record a DB connection open.
+/// No-op when timing instrumentation is disabled.
+fn record_db_open() {
+    use crate::config;
+    if !config::is_timing_enabled() {
+        return;
+    }
+
+    THREAD_STATS.with(|cell| {
+        let mut stats = cell.borrow_mut();
+        stats.db_opens += 1;
+    });
 }
 
 /// Execute a function with the thread-local read-only database connection.
 /// Opens and caches the connection on first use per thread.
+/// Tracks DB read timing for performance instrumentation (when enabled).
 fn with_thread_db<T, F>(f: F) -> Result<T, String>
 where
     F: FnOnce(&crate::corpus::db::Database) -> T,
@@ -375,9 +547,55 @@ where
             let db_path = config::get_db_path().map_err(|e| e.to_string())?;
             let db = Database::open_read_only(&db_path).map_err(|e| e.to_string())?;
             *opt = Some(db);
+            record_db_open();
         }
-        Ok(f(opt.as_ref().unwrap()))
+
+        // Only time DB access when instrumentation is enabled
+        if config::is_timing_enabled() {
+            let db_start = std::time::Instant::now();
+            let result = f(opt.as_ref().unwrap());
+            record_db_read(db_start.elapsed().as_micros() as u64);
+            Ok(result)
+        } else {
+            Ok(f(opt.as_ref().unwrap()))
+        }
     })
+}
+
+// ============================================================================
+// Signal Emission Helpers (with freshness checks)
+// ============================================================================
+
+/// Ensure a file signal exists, but only queue the write if it doesn't already exist.
+///
+/// Uses the read-only DB to check freshness before queueing to the write thread.
+/// This dramatically reduces redundant writes during re-computation.
+fn ensure_file_signal_if_missing(
+    db: &crate::corpus::db::Database,
+    sender: &db_thread::SignalWriteSender,
+    signal_type: FileSignalType,
+    key: &str,
+    witness: &ComputationWitness,
+) {
+    if !db.file_signal_exists(signal_type, key) {
+        sender.ensure_file_signal(signal_type, key, witness);
+    }
+}
+
+/// Clear a file signal, but only queue the delete if it currently exists.
+///
+/// Uses the read-only DB to check existence before queueing to the write thread.
+/// This dramatically reduces redundant writes during re-computation.
+fn clear_file_signal_if_present(
+    db: &crate::corpus::db::Database,
+    sender: &db_thread::SignalWriteSender,
+    signal_type: FileSignalType,
+    key: &str,
+    witness: &ComputationWitness,
+) {
+    if db.file_signal_exists(signal_type, key) {
+        sender.clear_file_signal(signal_type, key, witness);
+    }
 }
 
 /// Execute a single computation.
@@ -388,6 +606,9 @@ where
 pub fn execute_single(computation: &Computation) -> ComputationResult {
     use crate::config;
     use crate::corpus::mutations::indexing;
+
+    // Ensure this thread has an ID assigned for stats tracking
+    let _thread_id = ensure_thread_id();
 
     let start = std::time::Instant::now();
 
@@ -445,16 +666,16 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                 execute_check_deploy_conflicts(db, *track_id, start)
             }
 
-            Computation::WalkLibrary { library_root, library_name } => {
-                execute_walk_library(db, library_root, library_name, start)
+            Computation::WalkLibrary { library_root, library_name, corpus_path_prefixes } => {
+                execute_walk_library(db, library_root, library_name, corpus_path_prefixes, start)
             }
 
-            Computation::ScanLibraryDirectory { directory, library_name } => {
-                execute_scan_library_directory(db, directory, library_name, start)
+            Computation::ScanLibraryDirectory { directory, library_name, library_root, corpus_path_prefixes } => {
+                execute_scan_library_directory(db, directory, library_name, library_root, corpus_path_prefixes, start)
             }
 
-            Computation::DeriveLibraryHealthSignals { library_name, library_files } => {
-                execute_derive_library_health_signals(db, library_name, library_files, &witness, start)
+            Computation::DeriveLibraryHealthSignals { library_name, library_root, corpus_path_prefixes, library_files } => {
+                execute_derive_library_health_signals(db, library_name, library_root, corpus_path_prefixes, library_files, &witness, start)
             }
 
             // Content analysis computations
@@ -499,15 +720,20 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
         compute_result
     });
 
-    // Handle db access failure
-    match result {
+    // Handle db access failure and record stats
+    let final_result = match result {
         Ok(r) => r,
         Err(e) => ComputationResult::failure(
             computation.clone(),
             start.elapsed().as_millis() as u64,
             format!("DB access failed: {}", e),
         ),
-    }
+    };
+
+    // Record task completion stats
+    record_task_stats(computation.label(), final_result.duration_ms);
+
+    final_result
 }
 
 // ============================================================================
@@ -735,7 +961,7 @@ fn execute_scan_corpus_directory(
             }
         } else {
             // File not indexed - create a FileInCorpus signal for this file
-            sender.ensure_file_signal(FileSignalType::FileInCorpus, &path_str, witness);
+            ensure_file_signal_if_missing(db, sender, FileSignalType::FileInCorpus, &path_str, witness);
         }
     }
 
@@ -825,7 +1051,7 @@ fn execute_compare_inodes(
     // Create MissingFromDisk signals
     if !missing_from_disk.is_empty() {
         if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
-            create_missing_from_disk_issues(source, &missing_paths, witness);
+            create_missing_from_disk_issues(db, source, &missing_paths, witness);
         }
     }
 
@@ -836,7 +1062,7 @@ fn execute_compare_inodes(
             .filter_map(|inode| disk_inode_to_state.get(inode))
             .map(|(path, _, _)| path.to_string_lossy().to_string())
             .collect();
-        create_missing_from_index_issues(&missing_paths, witness);
+        create_missing_from_index_issues(db, &missing_paths, witness);
     }
 
     // Spawn follow-up computations for mtime verification
@@ -895,6 +1121,7 @@ fn execute_compare_inodes(
 ///
 /// Creates one signal per file with path as key (no metadata).
 fn create_missing_from_disk_issues(
+    db: &Database,
     _source: &str,
     missing_paths: &[String],
     witness: &ComputationWitness,
@@ -903,23 +1130,27 @@ fn create_missing_from_disk_issues(
         return;
     };
 
-    // Create one signal per missing file
+    // Create one signal per missing file (with freshness check)
     for path in missing_paths {
-        sender.ensure_file_signal(FileSignalType::MissingFile, path, witness);
+        ensure_file_signal_if_missing(db, &sender, FileSignalType::MissingFile, path, witness);
     }
 }
 
 /// Create UnindexedFile signals for files on disk but not in index.
 ///
 /// Called from CompareInodes when it identifies files missing from the index.
-fn create_missing_from_index_issues(missing_paths: &[String], witness: &ComputationWitness) {
+fn create_missing_from_index_issues(
+    db: &Database,
+    missing_paths: &[String],
+    witness: &ComputationWitness,
+) {
     let Some(sender) = db_thread::signal_sender() else {
         return;
     };
 
-    // File exists on disk but is not indexed = UnindexedFile
+    // File exists on disk but is not indexed = UnindexedFile (with freshness check)
     for path in missing_paths {
-        sender.ensure_file_signal(FileSignalType::UnindexedFile, path, witness);
+        ensure_file_signal_if_missing(db, &sender, FileSignalType::UnindexedFile, path, witness);
     }
 }
 
@@ -1030,9 +1261,11 @@ fn execute_schedule_second_level_derivations(
 
         for library_name in library_names {
             let library_root = config.libraries_root.join(&library_name);
+            let corpus_path_prefixes = config.get_corpus_paths_for_library(&library_name);
             spawn.push(Computation::WalkLibrary {
                 library_root,
                 library_name,
+                corpus_path_prefixes,
             });
         }
     }
@@ -1084,8 +1317,9 @@ fn execute_derive_directory_signals(
         }
     };
 
-    // Get indexed tracks for this directory
-    let tracks = match db.get_tracks_in_directory(directory) {
+    // Get indexed tracks for this directory (regardless of fingerprint status)
+    let dir_str = directory.to_string_lossy();
+    let tracks = match db.get_tracks_by_corpus_path_prefix(&dir_str) {
         Ok(t) => t,
         Err(e) => {
             return ComputationResult::failure(
@@ -1107,16 +1341,32 @@ fn execute_derive_directory_signals(
         .map(|t| (t.path.clone(), t))
         .collect();
 
+    // Prune stale UnindexedFile signals: those without a matching FileInCorpus.
+    // This handles files that were deleted/converted (e.g., WMA→FLAC) - the old
+    // UnindexedFile signal should be removed since the file no longer exists.
+    // NOTE: No freshness check needed here - we're iterating signals we know exist.
+    if let Ok(existing_unindexed) =
+        db.get_signals_in_directory(directory, HealthIssueType::UnindexedFile)
+    {
+        for signal in existing_unindexed {
+            if !corpus_paths.contains(&signal.issue_key) {
+                // No FileInCorpus for this path → file was deleted → prune stale signal
+                // Direct call since we already know the signal exists from DB query
+                sender.clear_file_signal(FileSignalType::UnindexedFile, &signal.issue_key, witness);
+            }
+        }
+    }
+
     let mut spawn: Vec<Computation> = Vec::new();
 
     // Process files in corpus (FileInCorpus signals)
     for corpus_path in &corpus_paths {
         if indexed_paths.contains_key(corpus_path) {
             // File is in both corpus and index → clear UnindexedFile if it exists
-            sender.clear_file_signal(FileSignalType::UnindexedFile, corpus_path, witness);
+            clear_file_signal_if_present(db, sender, FileSignalType::UnindexedFile, corpus_path, witness);
         } else {
             // File in corpus but not indexed → ensure UnindexedFile signal
-            sender.ensure_file_signal(FileSignalType::UnindexedFile, corpus_path, witness);
+            ensure_file_signal_if_missing(db, sender, FileSignalType::UnindexedFile, corpus_path, witness);
         }
     }
 
@@ -1125,10 +1375,10 @@ fn execute_derive_directory_signals(
         if corpus_paths.contains(path) {
             // File exists in both corpus and index → healthy
             // Clear MissingFile signal if it existed
-            sender.clear_file_signal(FileSignalType::MissingFile, path, witness);
+            clear_file_signal_if_present(db, sender, FileSignalType::MissingFile, path, witness);
 
             // Ensure HealthyFile signal
-            sender.ensure_file_signal(FileSignalType::HealthyFile, path, witness);
+            ensure_file_signal_if_missing(db, sender, FileSignalType::HealthyFile, path, witness);
 
             // Spawn deploy conflict check for healthy files
             if let Some(track_id) = track.id {
@@ -1137,10 +1387,10 @@ fn execute_derive_directory_signals(
         } else {
             // Track without FileInCorpus → file is missing from disk
             // Clear HealthyFile signal if it existed
-            sender.clear_file_signal(FileSignalType::HealthyFile, path, witness);
+            clear_file_signal_if_present(db, sender, FileSignalType::HealthyFile, path, witness);
 
             // Ensure MissingFile signal
-            sender.ensure_file_signal(FileSignalType::MissingFile, path, witness);
+            ensure_file_signal_if_missing(db, sender, FileSignalType::MissingFile, path, witness);
         }
     }
 
@@ -1192,11 +1442,13 @@ fn execute_walk_library(
     _db: &Database,
     library_root: &Path,
     library_name: &str,
+    corpus_path_prefixes: &[PathBuf],
     start: Instant,
 ) -> ComputationResult {
     let computation = Computation::WalkLibrary {
         library_root: library_root.to_path_buf(),
         library_name: library_name.to_string(),
+        corpus_path_prefixes: corpus_path_prefixes.to_vec(),
     };
 
     if !library_root.exists() {
@@ -1232,6 +1484,8 @@ fn execute_walk_library(
         .map(|directory| Computation::ScanLibraryDirectory {
             directory,
             library_name: library_name.to_string(),
+            library_root: library_root.to_path_buf(),
+            corpus_path_prefixes: corpus_path_prefixes.to_vec(),
         })
         .collect();
 
@@ -1253,11 +1507,15 @@ fn execute_scan_library_directory(
     _db: &Database,
     directory: &Path,
     library_name: &str,
+    library_root: &Path,
+    corpus_path_prefixes: &[PathBuf],
     start: Instant,
 ) -> ComputationResult {
     let computation = Computation::ScanLibraryDirectory {
         directory: directory.to_path_buf(),
         library_name: library_name.to_string(),
+        library_root: library_root.to_path_buf(),
+        corpus_path_prefixes: corpus_path_prefixes.to_vec(),
     };
 
     // Collect audio files in this directory (non-recursive, only immediate children)
@@ -1284,6 +1542,8 @@ fn execute_scan_library_directory(
     } else {
         vec![Computation::DeriveLibraryHealthSignals {
             library_name: library_name.to_string(),
+            library_root: library_root.to_path_buf(),
+            corpus_path_prefixes: corpus_path_prefixes.to_vec(),
             library_files,
         }]
     };
@@ -1301,12 +1561,18 @@ fn execute_scan_library_directory(
 fn execute_derive_library_health_signals(
     db: &Database,
     library_name: &str,
+    library_root: &Path,
+    corpus_path_prefixes: &[PathBuf],
     library_files: &[(PathBuf, i64)],
     witness: &ComputationWitness,
     start: Instant,
 ) -> ComputationResult {
+    use crate::corpus::deploy::compute_deployment_path_with_tags;
+
     let computation = Computation::DeriveLibraryHealthSignals {
         library_name: library_name.to_string(),
+        library_root: library_root.to_path_buf(),
+        corpus_path_prefixes: corpus_path_prefixes.to_vec(),
         library_files: library_files.to_vec(),
     };
 
@@ -1322,17 +1588,11 @@ fn execute_derive_library_health_signals(
         }
     };
 
-    // Build inode -> library_path map
-    let _library_inodes: HashMap<i64, &PathBuf> = library_files
-        .iter()
-        .map(|(path, inode)| (*inode, path))
-        .collect();
-
-    // Get all corpus track inodes
+    // Get all corpus track inodes (inode -> corpus_path)
     let corpus_inodes = db.get_all_track_inodes().unwrap_or_default();
 
     let mut healthy_count: usize = 0;
-    let stale_count: usize = 0;
+    let mut stale_count: usize = 0;
     let mut orphan_count: usize = 0;
 
     // Check each library file against corpus
@@ -1342,51 +1602,67 @@ fn execute_derive_library_health_signals(
             library_name,
             library_path.display()
         );
+        let stale_key = format!(
+            "library_stale:{}:{}",
+            library_name,
+            library_path.display()
+        );
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
             // Inode match found - this file is deployed from corpus
             // Clear any orphan signal that might have existed
-            sender.clear_file_signal(FileSignalType::LibraryOrphan, &orphan_key, witness);
+            clear_file_signal_if_present(db, sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
 
-            // For now, just count as healthy. Stale detection requires
-            // comparing expected deployment path vs actual, which needs
-            // the deploy path computation (currently disabled).
-            healthy_count += 1;
+            // Check if deployed at correct path (stale detection)
+            let is_stale = if let Ok(Some(track)) = db.get_track_by_path(corpus_path) {
+                if let Some(track_id) = track.id {
+                    // Get tags and compute expected deployment path
+                    let tags = db.get_track_tags(track_id).unwrap_or_default();
+                    let tag_map: std::collections::HashMap<String, String> = tags
+                        .into_iter()
+                        .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                        .collect();
 
-            // TODO: When corpus::deploy is re-enabled, check if library_path
-            // matches the expected deployment path. If not, create LibraryStale signal.
-            let _ = corpus_path; // Suppress unused warning
+                    let expected_relative = compute_deployment_path_with_tags(&track, &tag_map);
+                    let expected_path = library_root.join(&expected_relative);
+
+                    // Compare paths (normalize for comparison)
+                    library_path != &expected_path
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if is_stale {
+                stale_count += 1;
+                ensure_file_signal_if_missing(db, sender, FileSignalType::LibraryStale, &stale_key, witness);
+            } else {
+                healthy_count += 1;
+                clear_file_signal_if_present(db, sender, FileSignalType::LibraryStale, &stale_key, witness);
+            }
         } else {
             // No corpus match - this is an orphan
             orphan_count += 1;
-
-            // LibraryOrphan is a file signal - key contains all needed info
-            sender.ensure_file_signal(FileSignalType::LibraryOrphan, &orphan_key, witness);
+            ensure_file_signal_if_missing(db, sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
+            // Clear any stale signal (orphans aren't stale, they're orphans)
+            clear_file_signal_if_present(db, sender, FileSignalType::LibraryStale, &stale_key, witness);
         }
     }
 
-    // TODO: Check for LibraryNotDeployed (corpus tracks that should be in library but aren't)
-    // This requires knowing which corpus tracks are deployable to this library,
-    // which depends on the deploy_mappings config. For now, skip this check.
+    // Library health is now just per-file signals (LibraryOrphan, LibraryStale).
+    // Aggregate counts are computed at UI time via queries, not stored as signals.
+    // This avoids the N×M explosion when running per-directory computations.
 
-    // Replace LibraryHealthSummary signal with fresh data
-    let summary_key = format!("library_health:{}", library_name);
-    let summary_metadata = serde_json::json!({
-        "library_name": library_name,
-        "healthy_count": healthy_count,
-        "stale_count": stale_count,
-        "orphan_count": orphan_count,
-        "total_files": library_files.len(),
-    });
-
-    let summary_signal = AggregateSignal {
-        id: None,
-        signal_type: AggregateSignalType::LibraryHealthSummary,
-        key: summary_key,
-        discovered_at: None,
-        metadata_json: Some(summary_metadata.to_string()),
-    };
-    sender.replace_aggregate_signal(summary_signal, witness);
+    let _ = log_message(&format!(
+        "[COMPUTE] DeriveLibraryHealthSignals '{}': {} files, {} healthy, {} stale, {} orphan",
+        library_name,
+        library_files.len(),
+        healthy_count,
+        stale_count,
+        orphan_count,
+    ));
 
     ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
@@ -2084,7 +2360,7 @@ fn execute_verify_out_of_band_changes(
         if mismatch_count > 0 {
             // Tags differ - create OutOfBandTagChange signal
             tag_change_count += 1;
-            sender.ensure_file_signal(FileSignalType::OutOfBandTagChange, path, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::OutOfBandTagChange, path, witness);
         } else {
             // Tags match but mtime changed - file was touched but unchanged
             mtime_only_count += 1;

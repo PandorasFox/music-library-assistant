@@ -32,14 +32,82 @@ impl Database {
                     &track.fingerprint,
                 ],
             )
-            .context("Failed to insert track")?;
+            .with_context(|| format!(
+                "Failed to insert track: path={}, source={}, inode={:?}, size={}",
+                track.path, track.source, track.inode, track.file_size
+            ))?;
 
         Ok(self.conn.last_insert_rowid())
     }
 
     /// Insert a track and its tags together.
     /// Returns the track ID.
+    ///
+    /// Retries up to 3 times on transient SQLite errors (BUSY, LOCKED).
     pub fn insert_track_with_tags(&self, track: &Track, tags: &[(String, String)]) -> Result<i64> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 50;
+
+        let mut last_error = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            match self.insert_track_with_tags_inner(track, tags) {
+                Ok(track_id) => return Ok(track_id),
+                Err(e) => {
+                    // Check if this is a retryable SQLite error and extract the specific code
+                    let retryable_reason = e.chain().find_map(|cause| {
+                        if let Some(sqlite_err) = cause.downcast_ref::<rusqlite::Error>() {
+                            match sqlite_err {
+                                rusqlite::Error::SqliteFailure(
+                                    rusqlite::ffi::Error { code: rusqlite::ffi::ErrorCode::DatabaseBusy, extended_code },
+                                    msg
+                                ) => Some(format!("SQLITE_BUSY (ext={}): {:?}", extended_code, msg)),
+                                rusqlite::Error::SqliteFailure(
+                                    rusqlite::ffi::Error { code: rusqlite::ffi::ErrorCode::DatabaseLocked, extended_code },
+                                    msg
+                                ) => Some(format!("SQLITE_LOCKED (ext={}): {:?}", extended_code, msg)),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let Some(reason) = retryable_reason {
+                        if attempt < MAX_RETRIES {
+                            let delay = BASE_DELAY_MS * (1 << attempt); // exponential backoff
+                            let _ = crate::config::log_message(&format!(
+                                "[DB] insert_track retry {}/{} after {}ms: {} | path={}",
+                                attempt + 1, MAX_RETRIES, delay, reason, track.path
+                            ));
+                            std::thread::sleep(std::time::Duration::from_millis(delay));
+                        } else {
+                            // Log final failure with reason
+                            let _ = crate::config::log_message(&format!(
+                                "[DB] insert_track FAILED after {} retries: {} | path={}",
+                                MAX_RETRIES, reason, track.path
+                            ));
+                            last_error = Some(e);
+                            break;
+                        }
+                    } else {
+                        // Non-retryable error - log and fail immediately
+                        let _ = crate::config::log_message(&format!(
+                            "[DB] insert_track non-retryable error: {} | path={}",
+                            e, track.path
+                        ));
+                        last_error = Some(e);
+                        break;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap())
+    }
+
+    /// Inner implementation without retry logic.
+    fn insert_track_with_tags_inner(&self, track: &Track, tags: &[(String, String)]) -> Result<i64> {
         let track_id = self.insert_track(track)?;
         self.set_track_tags(track_id, tags)?;
         Ok(track_id)
@@ -352,15 +420,17 @@ impl Database {
     }
 
     pub fn get_tracks_by_corpus_path_prefix(&self, path_prefix: &str) -> Result<Vec<Track>> {
+        let pattern = super::dir_like_pattern_str(path_prefix);
+
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
-             WHERE source = 'corpus' AND path LIKE ?1 || '%'
+             WHERE source = 'corpus' AND path LIKE ?1 ESCAPE '\\'
              ORDER BY path",
         )?;
 
-        let tracks = stmt.query_map(params![path_prefix], Self::row_to_track)?;
+        let tracks = stmt.query_map(params![pattern], Self::row_to_track)?;
         tracks.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -380,7 +450,7 @@ impl Database {
         let conditions: Vec<String> = path_prefixes
             .iter()
             .enumerate()
-            .map(|(i, _)| format!("path LIKE ?{}", i + 2))
+            .map(|(i, _)| format!("path LIKE ?{} ESCAPE '\\'", i + 2))
             .collect();
         let where_clause = conditions.join(" OR ");
 
@@ -397,8 +467,7 @@ impl Database {
 
         let mut params: Vec<String> = vec![source.to_string()];
         for prefix in path_prefixes {
-            let pattern = format!("{}%", prefix.to_string_lossy());
-            params.push(pattern);
+            params.push(super::dir_like_pattern(prefix));
         }
 
         let param_refs: Vec<&dyn rusqlite::ToSql> =
@@ -412,47 +481,46 @@ impl Database {
     }
 
     /// Get all tracks with fingerprints in a specific directory (recursive).
+    ///
+    /// **Important**: This filters by `fingerprint IS NOT NULL`, so it only returns
+    /// tracks that have been fingerprinted. For checking if files are indexed
+    /// (regardless of fingerprint status), use `get_tracks_by_corpus_path_prefix`.
+    ///
     /// Used by sleuthing to find duplicates between selected directories.
-    pub fn get_tracks_in_directory(&self, dir_path: &std::path::Path) -> Result<Vec<Track>> {
-        let path_prefix = format!("{}%", dir_path.to_string_lossy());
+    pub fn get_tracks_in_directory_with_fingerprint(&self, dir_path: &std::path::Path) -> Result<Vec<Track>> {
+        let pattern = super::dir_like_pattern(dir_path);
 
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
-             WHERE source = 'corpus' AND fingerprint IS NOT NULL AND path LIKE ?1
+             WHERE source = 'corpus' AND fingerprint IS NOT NULL AND path LIKE ?1 ESCAPE '\\'
              ORDER BY path",
         )?;
 
         let tracks = stmt
-            .query_map(params![path_prefix], Self::row_to_track)?
+            .query_map(params![pattern], Self::row_to_track)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(tracks)
     }
 
     /// Get all tracks in a directory tree for tag editing.
-    /// Unlike `get_tracks_in_directory`, this does NOT filter by fingerprint or source.
+    /// Unlike `get_tracks_in_directory_with_fingerprint`, this does NOT filter by fingerprint or source.
     /// Used by corpus browser to enable editing all indexed tracks.
     pub fn get_tracks_for_tag_editing(&self, dir_path: &std::path::Path) -> Result<Vec<Track>> {
-        // Add trailing separator to ensure we only match files within this directory
-        let dir_str = dir_path.to_string_lossy();
-        let path_prefix = if dir_str.ends_with(std::path::MAIN_SEPARATOR) {
-            format!("{}%", dir_str)
-        } else {
-            format!("{}{}%", dir_str, std::path::MAIN_SEPARATOR)
-        };
+        let pattern = super::dir_like_pattern(dir_path);
 
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint
              FROM tracks
-             WHERE path LIKE ?1
+             WHERE path LIKE ?1 ESCAPE '\\'
              ORDER BY path",
         )?;
 
         let tracks = stmt
-            .query_map(params![path_prefix], Self::row_to_track)?
+            .query_map(params![pattern], Self::row_to_track)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(tracks)

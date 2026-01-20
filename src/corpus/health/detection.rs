@@ -22,108 +22,22 @@
 //! - Group by normalized key for bulk resolution
 //! - Could also catch typo variants like "Deadmau5" vs "deadmau5"
 
-use std::collections::HashMap;
-
 use crate::config::Config;
-use crate::corpus::db::{Database, HealthIssue, HealthIssueType, Track, TrackRole};
-// TODO: Re-enable when corpus::deploy is available
-// use crate::corpus::deploy::compute_deployment_path;
+use crate::corpus::db::{Database, HealthIssue, Track};
 use anyhow::Result;
 
-use super::filter::{durations_within_tolerance, is_legitimate_rerelease, is_same_album_different_tracks};
-use super::library::{get_configured_library_names, get_deployable_corpus_tracks};
+use super::library::get_configured_library_names;
 
 /// Default duration tolerance for fingerprint matching (10%)
 const DEFAULT_DURATION_TOLERANCE: f64 = 0.10;
 
 /// Detect fingerprint duplicate issues for a newly inserted/updated track.
 ///
-/// This should be called after a track with a fingerprint is inserted into the database.
-/// It checks if other tracks share the same fingerprint and creates health issues accordingly.
-pub fn detect_fingerprint_issues(db: &Database, track: &Track) -> Result<Vec<HealthIssue>> {
-    let fingerprint = match &track.fingerprint {
-        Some(fp) => fp,
-        None => return Ok(vec![]), // No fingerprint, no issues to detect
-    };
-
-    // Find all tracks with the same fingerprint
-    let matching_tracks = db.get_tracks_by_fingerprint(fingerprint)?;
-
-    // Need at least 2 tracks for a duplicate
-    if matching_tracks.len() < 2 {
-        return Ok(vec![]);
-    }
-
-    // Check if this is a false positive case
-
-    // Case 1: Same album, different track numbers (e.g., C418 ambient tracks)
-    if is_same_album_different_tracks(&matching_tracks) {
-        return Ok(vec![]);
-    }
-
-    // Case 2: Durations differ significantly (not true duplicates)
-    if !durations_within_tolerance(&matching_tracks, DEFAULT_DURATION_TOLERANCE) {
-        return Ok(vec![]);
-    }
-
-    // Case 3: Legitimate re-release (same audio on different albums)
-    if is_legitimate_rerelease(&matching_tracks) {
-        // This is a known variant, not a duplicate requiring resolution
-        // Check if we already have a known_variant entry
-        if db.is_known_variant(fingerprint)? {
-            return Ok(vec![]);
-        }
-
-        // Create a new known variant entry
-        let variant = crate::corpus::db::KnownVariant {
-            id: None,
-            variant_type: crate::corpus::db::VariantType::Rerelease,
-            canonical_fingerprint: fingerprint.clone(),
-            variant_fingerprint: None,
-            canonical_track_id: matching_tracks.first().and_then(|t| t.id),
-            variant_track_id: track.id,
-            marked_at: None,
-            notes: Some("Auto-detected re-release".to_string()),
-        };
-        db.insert_known_variant(&variant)?;
-
-        return Ok(vec![]);
-    }
-
-    // Check if an issue already exists for this fingerprint
-    if let Some(existing) = db.get_health_issue_by_key(HealthIssueType::FingerprintDuplicate, fingerprint)? {
-        // Issue exists - add this track as a member if not already
-        if let Some(issue_id) = existing.id {
-            if let Some(track_id) = track.id {
-                // Check if track is already a member (tuple: (Track, TrackRole))
-                let existing_tracks = db.get_health_issue_tracks(issue_id)?;
-                if !existing_tracks.iter().any(|(t, _role)| t.id == Some(track_id)) {
-                    db.add_health_issue_track(issue_id, track_id, TrackRole::Member)?;
-                }
-            }
-        }
-        return Ok(vec![existing]);
-    }
-
-    // Create new health issue for fingerprint duplicate
-    let issue = HealthIssue {
-        id: None,
-        issue_type: HealthIssueType::FingerprintDuplicate,
-        issue_key: fingerprint.clone(),
-        discovered_at: None,
-        metadata_json: None,
-    };
-
-    let issue_id = db.insert_health_issue(&issue)?;
-
-    // Add all matching tracks as members
-    for t in &matching_tracks {
-        if let Some(tid) = t.id {
-            db.add_health_issue_track(issue_id, tid, TrackRole::Member)?;
-        }
-    }
-
-    Ok(vec![HealthIssue { id: Some(issue_id), ..issue }])
+/// DEPRECATED: Incremental detection disabled. Use bulk DetectFingerprintDuplicates
+/// computation instead, which embeds track_ids in metadata_json.
+pub fn detect_fingerprint_issues(_db: &Database, _track: &Track) -> Result<Vec<HealthIssue>> {
+    // Bulk computation handles this now - see execute_detect_fingerprint_duplicates
+    Ok(vec![])
 }
 
 /// Refresh health issues for a specific track.

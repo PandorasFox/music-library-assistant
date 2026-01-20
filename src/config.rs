@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 // Re-export utilities from mla-utils for backward compatibility
 pub use mla_utils::{
-    get_config_dir, get_data_dir, get_db_path, is_audio_extension, log_message, log_scan_error,
+    get_config_dir, get_db_path, is_audio_extension, log_message, log_scan_error,
     AUDIO_EXTENSIONS,
 };
 

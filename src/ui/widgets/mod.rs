@@ -30,10 +30,8 @@ pub use modal::{centered_rect, Modal, ModalButton, ModalStyle};
 pub use controls::{presets as control_presets, ControlsHint};
 
 // List widgets
-pub use list::{SelectableItem, SelectableList, SelectableListState, SelectableListStyle};
 
 // Status widgets
-pub use status::HealthStatus;
 
 // Title bar widgets
 pub use titlebar::{LateralView, UnifiedTitleBar};

@@ -19,7 +19,7 @@ use super::Database;
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, HealthIssue,
-    HealthIssueType, HealthSummary, KnownVariant, Track, TrackRole, VariantType,
+    HealthIssueType, HealthSummary, KnownVariant, Track, VariantType,
 };
 
 impl Database {
@@ -551,73 +551,9 @@ impl Database {
         Ok(issues)
     }
 
-    /// Add a track to a health issue.
-    pub fn add_health_issue_track(
-        &self,
-        issue_id: i64,
-        track_id: i64,
-        role: TrackRole,
-    ) -> Result<i64> {
-        self.conn
-            .execute(
-                r#"INSERT INTO health_issue_tracks (issue_id, track_id, role)
-                   VALUES (?1, ?2, ?3)"#,
-                params![issue_id, track_id, role.as_str()],
-            )
-            .context("Failed to add health issue track")?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    /// Get tracks for a health issue.
-    pub fn get_health_issue_tracks(&self, issue_id: i64) -> Result<Vec<(Track, TrackRole)>> {
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
-        let mut stmt = self.conn.prepare(
-            r#"SELECT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
-                      t.artist, t.album, t.album_artist, t.title, t.track_number, t.genre,
-                      t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint, t.isrc,
-                      hit.role
-               FROM health_issue_tracks hit
-               JOIN tracks t ON t.id = hit.track_id
-               WHERE hit.issue_id = ?1"#,
-        )?;
-
-        let rows = stmt.query_map(params![issue_id], |row| {
-            let track = Self::row_to_track(row)?;
-            let role_str: String = row.get(17)?;
-            let role = TrackRole::from_str(&role_str).unwrap_or(TrackRole::Member);
-            Ok((track, role))
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
-    /// Get health signals for a specific track.
-    pub fn get_health_issues_for_track(&self, track_id: i64) -> Result<Vec<HealthIssue>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT hi.id, hi.issue_type, hi.issue_key, hi.discovered_at, hi.metadata_json
-               FROM health_issues hi
-               JOIN health_issue_tracks hit ON hi.id = hit.issue_id
-               WHERE hit.track_id = ?1"#,
-        )?;
-
-        let rows = stmt.query_map(params![track_id], Self::row_to_health_issue)?;
-
-        let mut issues = Vec::new();
-        for row in rows {
-            issues.push(row?);
-        }
-        Ok(issues)
-    }
-
     /// Get tracks associated with an aggregate signal (from embedded track_ids in metadata_json).
     ///
-    /// Aggregate signals store track IDs directly in metadata_json["track_ids"] rather than
-    /// using the health_issue_tracks junction table. This method extracts and fetches those tracks.
+    /// Aggregate signals store track IDs directly in metadata_json["track_ids"].
     pub fn get_aggregate_signal_tracks(&self, signal_id: i64) -> Result<Vec<Track>> {
         // Get the signal to extract track_ids from metadata
         let signal: HealthIssue = self.conn.query_row(

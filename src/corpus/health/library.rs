@@ -4,7 +4,7 @@
 //! Detects healthy deployments, not-deployed files, stale deployments
 //! (where tags changed since deploy), and orphaned library files.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

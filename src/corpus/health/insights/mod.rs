@@ -15,7 +15,6 @@
 
 mod one_dim;
 
-pub use one_dim::compute_one_dim_insights;
 
 // =============================================================================
 // Multi-Dim Stubs (to be reimplemented via TaskDaemon)

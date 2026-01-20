@@ -13,6 +13,5 @@ pub mod types;
 pub use queries::Database;
 pub use types::{ScanStateEntry, Track};
 // New type-safe signal system
-pub use types::{Signal, FileSignal, FileSignalType, AggregateSignal, AggregateSignalType};
 // Legacy (for migration compatibility)
-pub use types::{HealthIssue, HealthIssueType, KnownVariant, TrackRole, VariantType};
+pub use types::{HealthIssue, HealthIssueType};

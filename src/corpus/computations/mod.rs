@@ -1274,7 +1274,7 @@ fn execute_scan_library_directory(
         }
     }
 
-    let file_count = library_files.len();
+    let _file_count = library_files.len();
 
     // Spawn DeriveLibraryHealthSignals to process these files
     // Note: Each directory spawns its own derivation. A future optimization
@@ -1323,7 +1323,7 @@ fn execute_derive_library_health_signals(
     };
 
     // Build inode -> library_path map
-    let library_inodes: HashMap<i64, &PathBuf> = library_files
+    let _library_inodes: HashMap<i64, &PathBuf> = library_files
         .iter()
         .map(|(path, inode)| (*inode, path))
         .collect();
@@ -1332,7 +1332,7 @@ fn execute_derive_library_health_signals(
     let corpus_inodes = db.get_all_track_inodes().unwrap_or_default();
 
     let mut healthy_count: usize = 0;
-    let mut stale_count: usize = 0;
+    let stale_count: usize = 0;
     let mut orphan_count: usize = 0;
 
     // Check each library file against corpus
@@ -1854,7 +1854,7 @@ fn execute_detect_metadata_duplicates(
 
     // Build tag signature for each track
     // GROUP_CONCAT with ORDER BY ensures consistent ordering
-    let query = "
+    let _query = "
         SELECT t.id,
                GROUP_CONCAT(LOWER(tt.tag_name) || '=' || tt.tag_value, '|')
                OVER (PARTITION BY t.id ORDER BY LOWER(tt.tag_name)) as tag_sig

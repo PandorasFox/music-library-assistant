@@ -107,14 +107,6 @@ impl Database {
             )
             .with_context(|| format!("Failed to delete tag edit history for track: {}", path))?;
 
-        // Delete from health_issue_tracks before deleting the track
-        self.conn
-            .execute(
-                "DELETE FROM health_issue_tracks WHERE track_id = ?1",
-                params![track_id],
-            )
-            .with_context(|| format!("Failed to delete health issue tracks for: {}", path))?;
-
         // Now delete the track itself
         let deleted = self
             .conn
@@ -690,7 +682,7 @@ impl Database {
     }
 
     /// Delete track by ID.
-    /// Cascades to dependent tables (duplicate_group_members, tag_edit_history, health_issue_tracks).
+    /// Cascades to dependent tables (duplicate_group_members, tag_edit_history).
     /// Used by MissingFromDisk signal handler.
     pub fn delete_track(&self, track_id: i64) -> Result<bool> {
         // Delete from dependent tables first (foreign key constraints)
@@ -707,13 +699,6 @@ impl Database {
                 params![track_id],
             )
             .with_context(|| format!("Failed to delete tag edit history for track: {}", track_id))?;
-
-        self.conn
-            .execute(
-                "DELETE FROM health_issue_tracks WHERE track_id = ?1",
-                params![track_id],
-            )
-            .with_context(|| format!("Failed to delete health issue tracks for track: {}", track_id))?;
 
         // Now delete the track itself
         let deleted = self

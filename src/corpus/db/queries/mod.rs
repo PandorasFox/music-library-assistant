@@ -179,18 +179,6 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_health_issues_type ON health_issues(issue_type);
             CREATE INDEX IF NOT EXISTS idx_health_issues_discovered ON health_issues(discovered_at);
 
-            -- Tracks involved in each health issue
-            CREATE TABLE IF NOT EXISTS health_issue_tracks (
-                id INTEGER PRIMARY KEY,
-                issue_id INTEGER NOT NULL,
-                track_id INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                FOREIGN KEY(issue_id) REFERENCES health_issues(id) ON DELETE CASCADE,
-                FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_health_issue_tracks_issue ON health_issue_tracks(issue_id);
-            CREATE INDEX IF NOT EXISTS idx_health_issue_tracks_track ON health_issue_tracks(track_id);
-
             -- Known variants (legitimate re-releases, remixes, etc.)
             CREATE TABLE IF NOT EXISTS known_variants (
                 id INTEGER PRIMARY KEY,

@@ -35,8 +35,6 @@ pub mod canonicalization;
 pub mod collision;
 mod detection;
 pub mod filter;
-pub mod insights;
-pub mod library;
 pub mod normalization;
 pub mod tag_cloud;
 

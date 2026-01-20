@@ -20,13 +20,7 @@
 //!     └── file_ops::execute_single()
 //! ```
 //!
-//! ## Grouping (future)
-//!
-//! The `grouping` module provides utilities for batching mutations
-//! by file path, which will be used for optimizing execution.
-
 mod types;
-mod grouping;
 mod migration;
 pub mod tag_edit;
 pub mod indexing;

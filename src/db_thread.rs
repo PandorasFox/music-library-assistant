@@ -79,7 +79,6 @@ enum SignalWriteOp {
         signal_type: FileSignalType,
     },
     // Legacy operations (for migration)
-    #[allow(dead_code)]
     EnsureSignal {
         issue_type: HealthIssueType,
         issue_key: String,
@@ -100,7 +99,6 @@ enum SignalWriteOp {
 
 /// Index write operations (track mutations) - Phase 2 placeholder.
 #[derive(Debug)]
-#[allow(dead_code)]
 enum IndexWriteOp {
     // Phase 2: Will mirror mutation types from corpus/mutations/
     Placeholder,
@@ -165,10 +163,11 @@ pub struct DbThreadStats {
 }
 
 /// Handle to the DB thread for stats access and shutdown coordination.
+///
+/// Note: `thread_handle` is never accessed but must be retained - dropping it kills the thread.
 pub struct DbThreadHandle {
     stats: Arc<SharedStats>,
-    #[allow(dead_code)]
-    thread_handle: JoinHandle<()>,
+    _thread_handle: JoinHandle<()>,
 }
 
 impl DbThreadHandle {
@@ -374,10 +373,8 @@ impl SignalWriteSender {
 /// Clone-able, thread-safe. All methods will require `MutationExecutionWitness`.
 #[derive(Clone)]
 pub struct IndexWriteSender {
-    #[allow(dead_code)]
-    tx: Sender<IndexWriteOp>,
-    #[allow(dead_code)]
-    stats: Arc<SharedStats>,
+    _tx: Sender<IndexWriteOp>,
+    _stats: Arc<SharedStats>,
 }
 
 // ============================================================================
@@ -403,7 +400,7 @@ pub fn spawn() -> DbThreadHandle {
 
     let handle = DbThreadHandle {
         stats: Arc::clone(&stats),
-        thread_handle,
+        _thread_handle: thread_handle,
     };
 
     let signal_sender = SignalWriteSender {
@@ -416,8 +413,8 @@ pub fn spawn() -> DbThreadHandle {
 
     // Index sender placeholder (Phase 2)
     let _index_sender = IndexWriteSender {
-        tx: index_tx,
-        stats: Arc::clone(&stats),
+        _tx: index_tx,
+        _stats: Arc::clone(&stats),
     };
 
     handle

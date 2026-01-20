@@ -133,14 +133,6 @@ impl Database {
         Ok(issues)
     }
 
-    /// Backwards compatibility alias
-    #[deprecated(note = "Use get_health_signals instead")]
-    pub fn get_unresolved_health_issues(
-        &self,
-        issue_type: Option<HealthIssueType>,
-    ) -> Result<Vec<HealthIssue>> {
-        self.get_health_signals(issue_type)
-    }
 
     /// Get health signal by type and key (e.g., path or fingerprint).
     pub fn get_health_issue_by_key(

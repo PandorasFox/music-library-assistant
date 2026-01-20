@@ -1210,6 +1210,22 @@ fn execute_verify_mtime(
 }
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Get all configured library names from deploy mappings (inlined from removed library.rs)
+fn get_configured_library_names(config: &crate::config::Config) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut names = HashSet::new();
+    for mapping in &config.deploy_mappings {
+        for name in &mapping.library_names {
+            names.insert(name.clone());
+        }
+    }
+    names.into_iter().collect()
+}
+
+// ============================================================================
 // Second-Level Signal Computation Executors
 // ============================================================================
 
@@ -1253,7 +1269,7 @@ fn execute_schedule_second_level_derivations(
 
     // Also spawn library health computations for each configured library
     if let Ok(config) = crate::config::load_config() {
-        let library_names = crate::corpus::health::library::get_configured_library_names(&config);
+        let library_names = get_configured_library_names(&config);
         let _ = log_message(&format!(
             "[COMPUTE] ScheduleSecondLevelDerivations: spawning {} library walks",
             library_names.len()
@@ -2302,7 +2318,7 @@ fn execute_verify_out_of_band_changes(
     };
 
     // Get all CorpusFileModifiedOutOfBand signals
-    let oob_signals = match db.get_unresolved_health_issues(Some(HealthIssueType::CorpusFileModifiedOutOfBand)) {
+    let oob_signals = match db.get_health_signals(Some(HealthIssueType::CorpusFileModifiedOutOfBand)) {
         Ok(signals) => signals,
         Err(e) => {
             return ComputationResult::failure(

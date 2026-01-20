@@ -38,8 +38,7 @@
       "Bash(flac_name=\"$f%.wma.flac\")",
       "Bash(ffmpeg:*)",
       "Bash(xargs -I {} sh -c 'echo \"\"=== {} ===\"\" && git show {} --stat --format=\"\"%s\"\" | head -40')",
-      "Bash(test:*)",
-      "Bash(wait)"
+      "Bash(test:*)"
     ]
   }
 }

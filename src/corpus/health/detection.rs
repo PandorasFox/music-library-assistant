@@ -22,17 +22,47 @@
 //! - Group by normalized key for bulk resolution
 //! - Could also catch typo variants like "Deadmau5" vs "deadmau5"
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::Config;
 use crate::corpus::db::{Database, HealthIssue, HealthIssueType, Track};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use anyhow::Result;
 
-use super::library::{get_configured_library_names, get_deployable_corpus_tracks};
-
 /// Default duration tolerance for fingerprint matching (10%)
 const DEFAULT_DURATION_TOLERANCE: f64 = 0.10;
+
+// ============================================================================
+// Helper Functions (inlined from removed library.rs)
+// ============================================================================
+
+/// Get all configured library names from deploy mappings
+fn get_configured_library_names(config: &Config) -> Vec<String> {
+    let mut names = HashSet::new();
+    for mapping in &config.deploy_mappings {
+        for name in &mapping.library_names {
+            names.insert(name.clone());
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// Get all corpus tracks that should be deployed to a specific library
+fn get_deployable_corpus_tracks(
+    config: &Config,
+    db: &Database,
+    library_name: &str,
+) -> Vec<Track> {
+    let mut all_tracks = Vec::new();
+
+    for corpus_path in config.get_corpus_paths_for_library(library_name) {
+        if let Ok(tracks) = db.get_tracks_by_corpus_path_prefix(&corpus_path.to_string_lossy()) {
+            all_tracks.extend(tracks);
+        }
+    }
+
+    all_tracks
+}
 
 /// Detect fingerprint duplicate issues for a newly inserted/updated track.
 ///

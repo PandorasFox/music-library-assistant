@@ -119,8 +119,6 @@ pub enum HealthIssueType {
     TagCanonical,
     /// Missing required tags (e.g., album_artist)
     MissingTag,
-    /// Quality variants (same content, different quality)
-    QualityVariant,
     /// Tags on disk differ from indexed tags (out-of-band tag change)
     OutOfBandTagChange,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
@@ -171,7 +169,6 @@ impl HealthIssueType {
             Self::MetadataDuplicate => "metadata_dup",
             Self::TagCanonical => "tag_canon",
             Self::MissingTag => "missing_tag",
-            Self::QualityVariant => "quality",
             Self::OutOfBandTagChange => "oob_tag",
             Self::DuplicateInode => "duplicate_inode",
 
@@ -212,7 +209,6 @@ impl HealthIssueType {
             "canon" => Some(Self::TagCanonical),        // Legacy
             "genre_canon" => Some(Self::TagCanonical),  // Legacy
             "missing_tag" => Some(Self::MissingTag),
-            "quality" => Some(Self::QualityVariant),
             "oob_tag" => Some(Self::OutOfBandTagChange),
             "duplicate_inode" => Some(Self::DuplicateInode),
 
@@ -228,17 +224,242 @@ impl HealthIssueType {
 }
 
 
-/// A health signal detected in the corpus.
+// ============================================================================
+// Signal Types (Type-Safe Signal System)
+// ============================================================================
+
+/// A health signal - either file-based or aggregate.
 ///
-/// Signals are facts about corpus state. They are created by computations and
-/// deleted when they become stale (not "resolved" - there is no resolution concept).
+/// Uses Rust's type system to enforce:
+/// - File signals have no metadata (path is the key)
+/// - Aggregate signals have metadata (grouping key + details)
+#[derive(Debug, Clone)]
+pub enum Signal {
+    /// File-based signal (key = path, no metadata)
+    File(FileSignal),
+    /// Aggregate signal (key = grouping key, has metadata)
+    Aggregate(AggregateSignal),
+}
+
+/// File-based health signal.
+///
+/// The path uniquely identifies the signal. No metadata needed.
+#[derive(Debug, Clone)]
+pub struct FileSignal {
+    pub id: Option<i64>,
+    pub signal_type: FileSignalType,
+    pub path: String,
+    pub discovered_at: Option<String>,
+}
+
+/// Types of file-based signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileSignalType {
+    /// File exists in corpus directory
+    FileInCorpus,
+    /// File in corpus but not in index
+    UnindexedFile,
+    /// File in corpus + index, healthy state
+    HealthyFile,
+    /// File in index but missing from corpus
+    MissingFile,
+    /// File mtime differs from indexed mtime
+    CorpusFileModifiedOutOfBand,
+    /// File moved (same inode, different path)
+    MovedFile,
+    /// Tags on disk differ from indexed tags
+    OutOfBandTagChange,
+    /// Library file without corpus backing
+    LibraryOrphan,
+    /// Library file at wrong path
+    LibraryStale,
+    /// Corpus track not deployed to library
+    LibraryNotDeployed,
+}
+
+impl FileSignalType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FileInCorpus => "file_in_corpus",
+            Self::UnindexedFile => "unindexed_file",
+            Self::HealthyFile => "healthy_file",
+            Self::MissingFile => "missing_file",
+            Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
+            Self::MovedFile => "moved_file",
+            Self::OutOfBandTagChange => "oob_tag",
+            Self::LibraryOrphan => "library_orphan",
+            Self::LibraryStale => "library_stale",
+            Self::LibraryNotDeployed => "library_not_deployed",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "file_in_corpus" => Some(Self::FileInCorpus),
+            "unindexed_file" => Some(Self::UnindexedFile),
+            "healthy_file" => Some(Self::HealthyFile),
+            "missing_file" | "missing_from_disk" => Some(Self::MissingFile),
+            "corpus_file_modified_oob" | "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
+            "moved_file" | "file_relocated" => Some(Self::MovedFile),
+            "oob_tag" => Some(Self::OutOfBandTagChange),
+            "library_orphan" => Some(Self::LibraryOrphan),
+            "library_stale" => Some(Self::LibraryStale),
+            "library_not_deployed" => Some(Self::LibraryNotDeployed),
+            _ => None,
+        }
+    }
+}
+
+/// Aggregate health signal.
+///
+/// Groups multiple tracks under a common key. Metadata contains details.
+#[derive(Debug, Clone)]
+pub struct AggregateSignal {
+    pub id: Option<i64>,
+    pub signal_type: AggregateSignalType,
+    pub key: String,
+    pub discovered_at: Option<String>,
+    pub metadata_json: Option<String>,
+}
+
+impl AggregateSignal {
+    /// Get track IDs from metadata_json.
+    pub fn track_ids(&self) -> Vec<i64> {
+        self.metadata_json
+            .as_ref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("track_ids").cloned())
+            .and_then(|v| v.as_array().cloned())
+            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Create a new aggregate signal with track IDs embedded in metadata.
+    pub fn with_track_ids(mut self, ids: &[i64]) -> Self {
+        let mut meta = self
+            .metadata_json
+            .as_ref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        meta["track_ids"] = serde_json::json!(ids);
+        meta["track_count"] = serde_json::json!(ids.len());
+        self.metadata_json = Some(meta.to_string());
+        self
+    }
+}
+
+/// Types of aggregate signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AggregateSignalType {
+    /// Multiple files with same fingerprint
+    FingerprintDuplicate,
+    /// Multiple files with same artist/album/title
+    MetadataDuplicate,
+    /// Multiple index entries with same inode
+    DuplicateInode,
+    /// Tracks missing a required tag
+    MissingTag,
+    /// Tag value variants that should be canonicalized
+    TagCanonical,
+    /// Multiple corpus files deploy to same library path
+    DeployConflict,
+    /// Per-library health summary (counts)
+    LibraryHealthSummary,
+}
+
+impl AggregateSignalType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FingerprintDuplicate => "fingerprint_dup",
+            Self::MetadataDuplicate => "metadata_dup",
+            Self::DuplicateInode => "duplicate_inode",
+            Self::MissingTag => "missing_tag",
+            Self::TagCanonical => "tag_canon",
+            Self::DeployConflict => "deploy_conflict",
+            Self::LibraryHealthSummary => "library_health_summary",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "fingerprint_dup" => Some(Self::FingerprintDuplicate),
+            "metadata_dup" => Some(Self::MetadataDuplicate),
+            "duplicate_inode" => Some(Self::DuplicateInode),
+            "missing_tag" => Some(Self::MissingTag),
+            "tag_canon" | "canon" | "genre_canon" => Some(Self::TagCanonical),
+            "deploy_conflict" => Some(Self::DeployConflict),
+            "library_health_summary" => Some(Self::LibraryHealthSummary),
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
+// Legacy HealthIssue (for migration compatibility)
+// ============================================================================
+
+/// Legacy unified signal type.
+///
+/// Kept for backwards compatibility. Prefer `Signal` enum for new code.
 #[derive(Debug, Clone)]
 pub struct HealthIssue {
     pub id: Option<i64>,
     pub issue_type: HealthIssueType,
-    pub issue_key: String, // Path, fingerprint, normalized metadata key, etc.
+    pub issue_key: String,
     pub discovered_at: Option<String>,
     pub metadata_json: Option<String>,
+}
+
+impl HealthIssue {
+    /// Convert to the new Signal type.
+    pub fn to_signal(&self) -> Option<Signal> {
+        // Try file signal first
+        if let Some(file_type) = FileSignalType::from_str(self.issue_type.as_str()) {
+            return Some(Signal::File(FileSignal {
+                id: self.id,
+                signal_type: file_type,
+                path: self.issue_key.clone(),
+                discovered_at: self.discovered_at.clone(),
+            }));
+        }
+        // Try aggregate signal
+        if let Some(agg_type) = AggregateSignalType::from_str(self.issue_type.as_str()) {
+            return Some(Signal::Aggregate(AggregateSignal {
+                id: self.id,
+                signal_type: agg_type,
+                key: self.issue_key.clone(),
+                discovered_at: self.discovered_at.clone(),
+                metadata_json: self.metadata_json.clone(),
+            }));
+        }
+        None
+    }
+}
+
+impl From<FileSignal> for HealthIssue {
+    fn from(sig: FileSignal) -> Self {
+        Self {
+            id: sig.id,
+            issue_type: HealthIssueType::from_str(sig.signal_type.as_str())
+                .unwrap_or(HealthIssueType::FileInCorpus),
+            issue_key: sig.path,
+            discovered_at: sig.discovered_at,
+            metadata_json: None,
+        }
+    }
+}
+
+impl From<AggregateSignal> for HealthIssue {
+    fn from(sig: AggregateSignal) -> Self {
+        Self {
+            id: sig.id,
+            issue_type: HealthIssueType::from_str(sig.signal_type.as_str())
+                .unwrap_or(HealthIssueType::FingerprintDuplicate),
+            issue_key: sig.key,
+            discovered_at: sig.discovered_at,
+            metadata_json: sig.metadata_json,
+        }
+    }
 }
 
 /// Role of a track in a health issue.
@@ -348,7 +569,6 @@ pub struct HealthSummary {
     pub metadata_duplicates: usize,
     pub canonicalization_issues: usize,
     pub missing_tag_issues: usize,
-    pub quality_variants: usize,
     pub known_variants: usize,
 }
 

@@ -215,6 +215,28 @@ impl Database {
         tracks.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Get all track inodes mapped to their corpus paths.
+    ///
+    /// Returns HashMap<inode, path> for all indexed tracks.
+    /// Used for library health checks to match library files to corpus.
+    pub fn get_all_track_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path FROM tracks"
+        )?;
+
+        let mut result = std::collections::HashMap::new();
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (inode, path) = row?;
+            result.insert(inode, path);
+        }
+
+        Ok(result)
+    }
+
     /// Get a track by its ID.
     pub fn get_track_by_id(&self, track_id: i64) -> Result<Option<Track>> {
         let result = self.conn.query_row(
@@ -261,6 +283,48 @@ impl Database {
 
         let tracks = stmt
             .query_map(params![fingerprint], Self::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(tracks)
+    }
+
+    /// Get all tracks with a specific inode.
+    pub fn get_tracks_by_inode(&self, inode: i64) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+             FROM tracks
+             WHERE inode = ?1
+             ORDER BY path",
+        )?;
+
+        let tracks = stmt
+            .query_map(params![inode], Self::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(tracks)
+    }
+
+    /// Get tracks by a list of IDs.
+    pub fn get_tracks_by_ids(&self, ids: &[i64]) -> Result<Vec<Track>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build IN clause with placeholders
+        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+             FROM tracks
+             WHERE id IN ({})
+             ORDER BY path",
+            placeholders
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let tracks = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), Self::row_to_track)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(tracks)

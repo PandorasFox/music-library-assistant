@@ -45,6 +45,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::config::log_message;
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSignalType};
+use crate::db_thread;
 
 // ============================================================================
 // ComputationWitness - Proof of Computation Execution Context
@@ -57,13 +59,22 @@ mod sealed {
     /// This witness is required by signal-altering database operations to ensure
     /// health signals are only modified through the computation system.
     ///
-    /// Cannot be constructed outside of `execute_single`.
+    /// Cannot be constructed outside of `execute_single` or the DB write thread.
     #[derive(Debug, Clone, Copy)]
     pub struct ComputationWitness(());
 
     impl ComputationWitness {
         /// Create a new witness. Only callable from within this crate's computation execution.
         pub(crate) fn new() -> Self {
+            Self(())
+        }
+
+        /// Create a witness for the DB write thread.
+        ///
+        /// The DB thread executes signal operations that were enqueued from legitimate
+        /// computation contexts (which required a witness at send time). This constructor
+        /// allows the DB thread to obtain a witness for the actual DB call.
+        pub(crate) fn new_for_db_thread() -> Self {
             Self(())
         }
     }
@@ -201,6 +212,59 @@ pub enum Computation {
         /// Library files: (path, inode)
         library_files: Vec<(PathBuf, i64)>,
     },
+
+    // -------------------------------------------------------------------------
+    // Content Analysis Computations (Awakening Stage 2)
+    // -------------------------------------------------------------------------
+
+    /// Schedule all content analysis computations.
+    ///
+    /// This is an orchestrator that spawns all detection computations in parallel:
+    /// - DetectFingerprintDuplicates
+    /// - DetectDuplicateInodes
+    /// - DetectMissingTags
+    /// - DetectMetadataDuplicates
+    /// - DetectTagCanonicalizations
+    /// - VerifyOutOfBandChanges
+    ScheduleContentAnalysis,
+
+    /// Detect fingerprint duplicates across all tracks.
+    ///
+    /// Bulk SQL query: GROUP BY fingerprint HAVING COUNT > 1
+    /// Creates/updates FingerprintDuplicate signals with fingerprint as issue_key.
+    DetectFingerprintDuplicates,
+
+    /// Detect duplicate inodes across all tracks.
+    ///
+    /// Bulk SQL query: GROUP BY inode HAVING COUNT > 1
+    /// Creates DuplicateInode signals for each duplicate group.
+    DetectDuplicateInodes,
+
+    /// Detect tracks missing required tags.
+    ///
+    /// Checks each required tag (from config) and creates MissingTag signals.
+    /// Issue key: "missing_tag:{tag_name}"
+    DetectMissingTags,
+
+    /// Detect metadata duplicates (exact match on artist/album/title).
+    ///
+    /// Case-insensitive tag names, CASE-SENSITIVE tag values.
+    /// Creates MetadataDuplicate signals with metadata as issue_key.
+    DetectMetadataDuplicates,
+
+    /// Detect tag canonicalization opportunities.
+    ///
+    /// Calls existing detect_and_store_canonicalizations() which uses TagCloud.
+    /// Stores to tag_canonicalization table (tag-level, not track-level).
+    DetectTagCanonicalizations,
+
+    /// Verify out-of-band changes for files with modified mtime.
+    ///
+    /// For each CorpusFileModifiedOutOfBand signal:
+    /// - Read file tags and compare to database
+    /// - If tags differ: create OutOfBandTagChange signal
+    /// - If tags match: clear CorpusFileModifiedOutOfBand (file was touched but unchanged)
+    VerifyOutOfBandChanges,
 }
 
 impl Computation {
@@ -218,6 +282,14 @@ impl Computation {
             Computation::WalkLibrary { library_root, .. } => Some(library_root),
             Computation::ScanLibraryDirectory { directory, .. } => Some(directory),
             Computation::DeriveLibraryHealthSignals { .. } => None,
+            // Content analysis computations
+            Computation::ScheduleContentAnalysis => None,
+            Computation::DetectFingerprintDuplicates => None,
+            Computation::DetectDuplicateInodes => None,
+            Computation::DetectMissingTags => None,
+            Computation::DetectMetadataDuplicates => None,
+            Computation::DetectTagCanonicalizations => None,
+            Computation::VerifyOutOfBandChanges => None,
         }
     }
 
@@ -237,6 +309,14 @@ impl Computation {
             Computation::WalkLibrary { .. } => "Walking library",
             Computation::ScanLibraryDirectory { .. } => "Scanning library directory",
             Computation::DeriveLibraryHealthSignals { .. } => "Deriving library health",
+            // Content analysis computations
+            Computation::ScheduleContentAnalysis => "Scheduling content analysis",
+            Computation::DetectFingerprintDuplicates => "Detecting fingerprint duplicates",
+            Computation::DetectDuplicateInodes => "Detecting duplicate inodes",
+            Computation::DetectMissingTags => "Detecting missing tags",
+            Computation::DetectMetadataDuplicates => "Detecting metadata duplicates",
+            Computation::DetectTagCanonicalizations => "Detecting tag canonicalizations",
+            Computation::VerifyOutOfBandChanges => "Verifying out-of-band changes",
         }
     }
 }
@@ -274,13 +354,39 @@ impl ComputationResult {
     }
 }
 
+// Thread-local cached read-only database connection for computation workers.
+// Each worker thread opens once and reuses, eliminating connection overhead.
+thread_local! {
+    static THREAD_DB: std::cell::RefCell<Option<crate::corpus::db::Database>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Execute a function with the thread-local read-only database connection.
+/// Opens and caches the connection on first use per thread.
+fn with_thread_db<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce(&crate::corpus::db::Database) -> T,
+{
+    use crate::config;
+    use crate::corpus::db::Database;
+
+    THREAD_DB.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        if opt.is_none() {
+            let db_path = config::get_db_path().map_err(|e| e.to_string())?;
+            let db = Database::open_read_only(&db_path).map_err(|e| e.to_string())?;
+            *opt = Some(db);
+        }
+        Ok(f(opt.as_ref().unwrap()))
+    })
+}
+
 /// Execute a single computation.
 ///
-/// Opens DB connection as needed to record signals.
+/// Uses thread-local cached read-only connection for queries.
+/// Writes go through the DB thread via SignalWriteSender.
 /// Creates a `ComputationWitness` for signal-altering operations.
 pub fn execute_single(computation: &Computation) -> ComputationResult {
     use crate::config;
-    use crate::corpus::db::Database;
     use crate::corpus::mutations::indexing;
 
     let start = std::time::Instant::now();
@@ -288,74 +394,119 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
     // Create witness for signal operations - only valid within this execution context
     let witness = ComputationWitness::new();
 
-    // Open database for signal recording
-    let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
-        Ok(db) => db,
-        Err(e) => {
-            return ComputationResult::failure(
-                computation.clone(),
-                start.elapsed().as_millis() as u64,
-                format!("DB error: {}", e),
-            );
-        }
-    };
+    // Use thread-local cached connection - first access per thread opens, subsequent reuses
+    let db_access_start = std::time::Instant::now();
 
-    match computation {
-        Computation::VerifyTags { track_id, path } => {
-            // Delegate to the existing execute_verify_tags implementation
-            match indexing::execute_verify_tags(&db, *track_id, path) {
-                Ok(()) => ComputationResult::success(
-                    computation.clone(),
-                    start.elapsed().as_millis() as u64,
-                    Vec::new(),
-                ),
-                Err(e) => ComputationResult::failure(
-                    computation.clone(),
-                    start.elapsed().as_millis() as u64,
-                    e.to_string(),
-                ),
+    let result = with_thread_db(|db| {
+        let db_access_ms = db_access_start.elapsed().as_millis();
+
+        let compute_result = match computation {
+            Computation::VerifyTags { track_id, path } => {
+                // Delegate to the existing execute_verify_tags implementation
+                match indexing::execute_verify_tags(db, *track_id, path) {
+                    Ok(()) => ComputationResult::success(
+                        computation.clone(),
+                        start.elapsed().as_millis() as u64,
+                        Vec::new(),
+                    ),
+                    Err(e) => ComputationResult::failure(
+                        computation.clone(),
+                        start.elapsed().as_millis() as u64,
+                        e.to_string(),
+                    ),
+                }
             }
+
+            Computation::WalkCorpus { root, source, paranoid } => {
+                execute_walk_corpus(db, root, source, *paranoid, start)
+            }
+
+            Computation::ScanCorpusDirectory { directory, source, paranoid } => {
+                execute_scan_corpus_directory(db, directory, source, *paranoid, &witness, start)
+            }
+
+            Computation::CompareInodes { source, disk_state, paranoid } => {
+                execute_compare_inodes(db, source, disk_state, *paranoid, &witness, start)
+            }
+
+            Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
+                execute_verify_mtime(db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)
+            }
+
+            Computation::ScheduleSecondLevelDerivations => {
+                execute_schedule_second_level_derivations(db, start)
+            }
+
+            Computation::DeriveDirectorySignals { directory } => {
+                execute_derive_directory_signals(db, directory, &witness, start)
+            }
+
+            Computation::CheckDeployConflicts { track_id } => {
+                execute_check_deploy_conflicts(db, *track_id, start)
+            }
+
+            Computation::WalkLibrary { library_root, library_name } => {
+                execute_walk_library(db, library_root, library_name, start)
+            }
+
+            Computation::ScanLibraryDirectory { directory, library_name } => {
+                execute_scan_library_directory(db, directory, library_name, start)
+            }
+
+            Computation::DeriveLibraryHealthSignals { library_name, library_files } => {
+                execute_derive_library_health_signals(db, library_name, library_files, &witness, start)
+            }
+
+            // Content analysis computations
+            Computation::ScheduleContentAnalysis => {
+                execute_schedule_content_analysis(start)
+            }
+
+            Computation::DetectFingerprintDuplicates => {
+                execute_detect_fingerprint_duplicates(db, &witness, start)
+            }
+
+            Computation::DetectDuplicateInodes => {
+                execute_detect_duplicate_inodes(db, &witness, start)
+            }
+
+            Computation::DetectMissingTags => {
+                execute_detect_missing_tags(db, &witness, start)
+            }
+
+            Computation::DetectMetadataDuplicates => {
+                execute_detect_metadata_duplicates(db, &witness, start)
+            }
+
+            Computation::DetectTagCanonicalizations => {
+                execute_detect_tag_canonicalizations(db, start)
+            }
+
+            Computation::VerifyOutOfBandChanges => {
+                execute_verify_out_of_band_changes(db, &witness, start)
+            }
+        };
+
+        // Log timing (only on first access when connection is opened)
+        if db_access_ms > 1 {
+            let _ = config::log_message(&format!(
+                "[PERF] {} db_access={}ms (thread-local init)",
+                computation.label(),
+                db_access_ms
+            ));
         }
 
-        Computation::WalkCorpus { root, source, paranoid } => {
-            execute_walk_corpus(&db, root, source, *paranoid, start)
-        }
+        compute_result
+    });
 
-        Computation::ScanCorpusDirectory { directory, source, paranoid } => {
-            execute_scan_corpus_directory(&db, directory, source, *paranoid, &witness, start)
-        }
-
-        Computation::CompareInodes { source, disk_state, paranoid } => {
-            execute_compare_inodes(&db, source, disk_state, *paranoid, &witness, start)
-        }
-
-        Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
-            execute_verify_mtime(&db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)
-        }
-
-        Computation::ScheduleSecondLevelDerivations => {
-            execute_schedule_second_level_derivations(&db, start)
-        }
-
-        Computation::DeriveDirectorySignals { directory } => {
-            execute_derive_directory_signals(&db, directory, &witness, start)
-        }
-
-        Computation::CheckDeployConflicts { track_id } => {
-            execute_check_deploy_conflicts(&db, *track_id, start)
-        }
-
-        Computation::WalkLibrary { library_root, library_name } => {
-            execute_walk_library(&db, library_root, library_name, start)
-        }
-
-        Computation::ScanLibraryDirectory { directory, library_name } => {
-            execute_scan_library_directory(&db, directory, library_name, start)
-        }
-
-        Computation::DeriveLibraryHealthSignals { library_name, library_files } => {
-            execute_derive_library_health_signals(&db, library_name, library_files, &witness, start)
-        }
+    // Handle db access failure
+    match result {
+        Ok(r) => r,
+        Err(e) => ComputationResult::failure(
+            computation.clone(),
+            start.elapsed().as_millis() as u64,
+            format!("DB access failed: {}", e),
+        ),
     }
 }
 
@@ -498,7 +649,8 @@ fn walk_dir_recursive(dir: &Path, disk_state: &mut Vec<(i64, PathBuf, i64, i64)>
 /// Scan a single corpus directory (non-recursive).
 ///
 /// Processes only audio files directly in the given directory, compares against
-/// scan_state, creates FileInCorpus signals, and spawns follow-up computations.
+/// scan_state, creates FileInCorpus signals (one per file), and spawns follow-up
+/// computations.
 fn execute_scan_corpus_directory(
     db: &Database,
     directory: &Path,
@@ -507,20 +659,25 @@ fn execute_scan_corpus_directory(
     witness: &ComputationWitness,
     start: Instant,
 ) -> ComputationResult {
-    use crate::corpus::db::types::HealthIssueType;
-
     let computation = Computation::ScanCorpusDirectory {
         directory: directory.to_path_buf(),
         source: source.to_string(),
         paranoid,
     };
 
-    let dir_str = directory.to_string_lossy().to_string();
-    let issue_key = format!("file_in_corpus:{}", dir_str);
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
 
     if !directory.exists() {
-        // Directory doesn't exist - clear any existing FileInCorpus signal
-        let _ = db.clear_signal(HealthIssueType::FileInCorpus, &issue_key, witness);
         return ComputationResult::failure(
             computation,
             start.elapsed().as_millis() as u64,
@@ -531,9 +688,8 @@ fn execute_scan_corpus_directory(
     // Collect disk state for files DIRECTLY in this directory (not recursive)
     let disk_state = collect_directory_files(directory);
 
-    // If no files in directory, clear any existing signal and return
+    // If no files in directory, nothing to do
     if disk_state.is_empty() {
-        let _ = db.clear_signal(HealthIssueType::FileInCorpus, &issue_key, witness);
         return ComputationResult::success(
             computation,
             start.elapsed().as_millis() as u64,
@@ -549,7 +705,6 @@ fn execute_scan_corpus_directory(
     let indexed_by_inode = db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
     let mut spawn: Vec<Computation> = Vec::new();
-    let mut unindexed_paths: Vec<String> = Vec::new();
 
     // Process each file found on disk
     for (inode, path, disk_mtime_s, disk_mtime_ns) in &disk_state {
@@ -579,28 +734,9 @@ fn execute_scan_corpus_directory(
                 });
             }
         } else {
-            // File not indexed - record for FileInCorpus signal
-            unindexed_paths.push(path_str);
+            // File not indexed - create a FileInCorpus signal for this file
+            sender.ensure_file_signal(FileSignalType::FileInCorpus, &path_str, witness);
         }
-    }
-
-    // Manage FileInCorpus signal for this directory
-    if !unindexed_paths.is_empty() {
-        let metadata = serde_json::json!({
-            "directory": dir_str,
-            "file_count": unindexed_paths.len(),
-            "sample_files": unindexed_paths.iter().take(5).collect::<Vec<_>>(),
-        });
-
-        let _ = db.ensure_signal(
-            HealthIssueType::FileInCorpus,
-            &issue_key,
-            Some(&metadata.to_string()),
-            witness,
-        );
-    } else {
-        // All files are indexed - clear any existing FileInCorpus signal
-        let _ = db.clear_signal(HealthIssueType::FileInCorpus, &issue_key, witness);
     }
 
     ComputationResult::success(
@@ -689,7 +825,7 @@ fn execute_compare_inodes(
     // Create MissingFromDisk signals
     if !missing_from_disk.is_empty() {
         if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
-            create_missing_from_disk_issues(db, source, &missing_paths, witness);
+            create_missing_from_disk_issues(source, &missing_paths, witness);
         }
     }
 
@@ -700,7 +836,7 @@ fn execute_compare_inodes(
             .filter_map(|inode| disk_inode_to_state.get(inode))
             .map(|(path, _, _)| path.to_string_lossy().to_string())
             .collect();
-        create_missing_from_index_issues(db, &missing_paths, witness);
+        create_missing_from_index_issues(&missing_paths, witness);
     }
 
     // Spawn follow-up computations for mtime verification
@@ -755,85 +891,35 @@ fn execute_compare_inodes(
     )
 }
 
-/// Create health issues for files missing from disk.
+/// Create MissingFile signals for files in index but missing from disk.
+///
+/// Creates one signal per file with path as key (no metadata).
 fn create_missing_from_disk_issues(
-    db: &Database,
-    source: &str,
+    _source: &str,
     missing_paths: &[String],
     witness: &ComputationWitness,
 ) {
-    use crate::corpus::db::types::HealthIssueType;
+    let Some(sender) = db_thread::signal_sender() else {
+        return;
+    };
 
-    // Group by parent directory
-    let mut by_directory: HashMap<String, Vec<String>> = HashMap::new();
+    // Create one signal per missing file
     for path in missing_paths {
-        let parent = std::path::Path::new(path)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "[root]".to_string());
-        by_directory.entry(parent).or_default().push(path.clone());
-    }
-
-    for (directory, files) in by_directory {
-        let issue_key = format!("missing_from_disk:{}:{}", source, directory);
-
-        let metadata = serde_json::json!({
-            "source": source,
-            "directory": directory,
-            "file_count": files.len(),
-            "sample_files": files.iter().take(5).collect::<Vec<_>>(),
-        });
-
-        let _ = db.ensure_signal(
-            HealthIssueType::MissingFile,
-            &issue_key,
-            Some(&metadata.to_string()),
-            witness,
-        );
+        sender.ensure_file_signal(FileSignalType::MissingFile, path, witness);
     }
 }
 
-/// Create signals for files in corpus but not in index.
-fn create_missing_from_index_issues(
-    db: &Database,
-    missing_paths: &[String],
-    witness: &ComputationWitness,
-) {
-    use crate::corpus::db::types::HealthIssueType;
+/// Create UnindexedFile signals for files on disk but not in index.
+///
+/// Called from CompareInodes when it identifies files missing from the index.
+fn create_missing_from_index_issues(missing_paths: &[String], witness: &ComputationWitness) {
+    let Some(sender) = db_thread::signal_sender() else {
+        return;
+    };
 
-    // Group by parent directory
-    let mut by_directory: HashMap<String, Vec<String>> = HashMap::new();
+    // File exists on disk but is not indexed = UnindexedFile
     for path in missing_paths {
-        let parent = std::path::Path::new(path)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "[root]".to_string());
-        by_directory.entry(parent).or_default().push(path.clone());
-    }
-
-    // Log signal creation for diagnostics
-    let total_files: usize = by_directory.values().map(|v| v.len()).sum();
-    let _ = log_message(&format!(
-        "FileInCorpus: {} files across {} directories",
-        total_files,
-        by_directory.len()
-    ));
-
-    for (directory, files) in by_directory {
-        let issue_key = format!("file_in_corpus:{}", directory);
-
-        let metadata = serde_json::json!({
-            "directory": directory,
-            "file_count": files.len(),
-            "sample_files": files.iter().take(5).collect::<Vec<_>>(),
-        });
-
-        let _ = db.ensure_signal(
-            HealthIssueType::FileInCorpus,
-            &issue_key,
-            Some(&metadata.to_string()),
-            witness,
-        );
+        sender.ensure_file_signal(FileSignalType::UnindexedFile, path, witness);
     }
 }
 
@@ -974,6 +1060,18 @@ fn execute_derive_directory_signals(
         directory: directory.to_path_buf(),
     };
 
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
     // Get FileInCorpus signals for this directory
     let corpus_signals = match db.get_signals_in_directory(directory, HealthIssueType::FileInCorpus) {
         Ok(s) => s,
@@ -1015,15 +1113,10 @@ fn execute_derive_directory_signals(
     for corpus_path in &corpus_paths {
         if indexed_paths.contains_key(corpus_path) {
             // File is in both corpus and index → clear UnindexedFile if it exists
-            let _ = db.clear_signal(HealthIssueType::UnindexedFile, corpus_path, witness);
+            sender.clear_file_signal(FileSignalType::UnindexedFile, corpus_path, witness);
         } else {
             // File in corpus but not indexed → ensure UnindexedFile signal
-            let _ = db.ensure_signal(
-                HealthIssueType::UnindexedFile,
-                corpus_path,
-                None,
-                witness,
-            );
+            sender.ensure_file_signal(FileSignalType::UnindexedFile, corpus_path, witness);
         }
     }
 
@@ -1032,15 +1125,10 @@ fn execute_derive_directory_signals(
         if corpus_paths.contains(path) {
             // File exists in both corpus and index → healthy
             // Clear MissingFile signal if it existed
-            let _ = db.clear_signal(HealthIssueType::MissingFile, path, witness);
+            sender.clear_file_signal(FileSignalType::MissingFile, path, witness);
 
             // Ensure HealthyFile signal
-            let _ = db.ensure_signal(
-                HealthIssueType::HealthyFile,
-                path,
-                None,
-                witness,
-            );
+            sender.ensure_file_signal(FileSignalType::HealthyFile, path, witness);
 
             // Spawn deploy conflict check for healthy files
             if let Some(track_id) = track.id {
@@ -1049,15 +1137,10 @@ fn execute_derive_directory_signals(
         } else {
             // Track without FileInCorpus → file is missing from disk
             // Clear HealthyFile signal if it existed
-            let _ = db.clear_signal(HealthIssueType::HealthyFile, path, witness);
+            sender.clear_file_signal(FileSignalType::HealthyFile, path, witness);
 
             // Ensure MissingFile signal
-            let _ = db.ensure_signal(
-                HealthIssueType::MissingFile,
-                path,
-                None,
-                witness,
-            );
+            sender.ensure_file_signal(FileSignalType::MissingFile, path, witness);
         }
     }
 
@@ -1205,10 +1288,11 @@ fn execute_scan_library_directory(
         }]
     };
 
-    let _ = log_message(&format!(
-        "[COMPUTE] ScanLibraryDirectory '{}': found {} audio files in {:?}",
-        library_name, file_count, directory
-    ));
+    // Verbose logging disabled - too noisy for directory-level computations
+    // let _ = log_message(&format!(
+    //     "[COMPUTE] ScanLibraryDirectory '{}': found {} audio files in {:?}",
+    //     library_name, file_count, directory
+    // ));
 
     ComputationResult::success(computation, start.elapsed().as_millis() as u64, spawn)
 }
@@ -1221,18 +1305,22 @@ fn execute_derive_library_health_signals(
     witness: &ComputationWitness,
     start: Instant,
 ) -> ComputationResult {
-    use crate::corpus::db::types::{HealthIssue, HealthIssueType};
-
     let computation = Computation::DeriveLibraryHealthSignals {
         library_name: library_name.to_string(),
         library_files: library_files.to_vec(),
     };
 
-    let _ = log_message(&format!(
-        "[COMPUTE] DeriveLibraryHealthSignals '{}': processing {} files",
-        library_name,
-        library_files.len()
-    ));
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
 
     // Build inode -> library_path map
     let library_inodes: HashMap<i64, &PathBuf> = library_files
@@ -1258,7 +1346,7 @@ fn execute_derive_library_health_signals(
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
             // Inode match found - this file is deployed from corpus
             // Clear any orphan signal that might have existed
-            let _ = db.clear_signal(HealthIssueType::LibraryOrphan, &orphan_key, witness);
+            sender.clear_file_signal(FileSignalType::LibraryOrphan, &orphan_key, witness);
 
             // For now, just count as healthy. Stale detection requires
             // comparing expected deployment path vs actual, which needs
@@ -1272,29 +1360,14 @@ fn execute_derive_library_health_signals(
             // No corpus match - this is an orphan
             orphan_count += 1;
 
-            let metadata = serde_json::json!({
-                "library_name": library_name,
-                "library_path": library_path.display().to_string(),
-                "inode": library_inode,
-            });
-
-            let _ = db.ensure_signal(
-                HealthIssueType::LibraryOrphan,
-                &orphan_key,
-                Some(&metadata.to_string()),
-                witness,
-            );
+            // LibraryOrphan is a file signal - key contains all needed info
+            sender.ensure_file_signal(FileSignalType::LibraryOrphan, &orphan_key, witness);
         }
     }
 
     // TODO: Check for LibraryNotDeployed (corpus tracks that should be in library but aren't)
     // This requires knowing which corpus tracks are deployable to this library,
     // which depends on the deploy_mappings config. For now, skip this check.
-
-    let _ = log_message(&format!(
-        "[COMPUTE] DeriveLibraryHealthSignals '{}': {} healthy, {} stale, {} orphan",
-        library_name, healthy_count, stale_count, orphan_count
-    ));
 
     // Replace LibraryHealthSummary signal with fresh data
     let summary_key = format!("library_health:{}", library_name);
@@ -1306,14 +1379,738 @@ fn execute_derive_library_health_signals(
         "total_files": library_files.len(),
     });
 
-    let summary_issue = HealthIssue {
+    let summary_signal = AggregateSignal {
         id: None,
-        issue_type: HealthIssueType::LibraryHealthSummary,
-        issue_key: summary_key,
+        signal_type: AggregateSignalType::LibraryHealthSummary,
+        key: summary_key,
         discovered_at: None,
         metadata_json: Some(summary_metadata.to_string()),
     };
-    let _ = db.replace_signal(&summary_issue, witness);
+    sender.replace_aggregate_signal(summary_signal, witness);
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Content Analysis Computations
+// ============================================================================
+
+/// Execute ScheduleContentAnalysis - spawns all content detection computations in parallel.
+fn execute_schedule_content_analysis(
+    start: std::time::Instant,
+) -> ComputationResult {
+    let _ = log_message("[COMPUTE] ScheduleContentAnalysis: spawning all detection computations");
+
+    let spawn = vec![
+        Computation::DetectFingerprintDuplicates,
+        Computation::DetectDuplicateInodes,
+        Computation::DetectMissingTags,
+        Computation::DetectMetadataDuplicates,
+        Computation::DetectTagCanonicalizations,
+        Computation::VerifyOutOfBandChanges,
+    ];
+
+    ComputationResult::success(
+        Computation::ScheduleContentAnalysis,
+        start.elapsed().as_millis() as u64,
+        spawn,
+    )
+}
+
+/// Execute DetectFingerprintDuplicates - bulk detection of fingerprint duplicates.
+fn execute_detect_fingerprint_duplicates(
+    db: &Database,
+    witness: &ComputationWitness,
+    start: std::time::Instant,
+) -> ComputationResult {
+    use rusqlite::params;
+
+    let computation = Computation::DetectFingerprintDuplicates;
+
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // First, clear stale FingerprintDuplicate signals
+    // (fingerprints that no longer have duplicates)
+    let clear_result = db.conn.execute(
+        "DELETE FROM health_issues WHERE issue_type = 'fingerprint_dup'
+         AND issue_key NOT IN (
+             SELECT fingerprint FROM tracks
+             WHERE fingerprint IS NOT NULL
+             GROUP BY fingerprint HAVING COUNT(*) > 1
+         )",
+        params![],
+    );
+    if let Err(e) = clear_result {
+        let _ = log_message(&format!(
+            "[COMPUTE] DetectFingerprintDuplicates: error clearing stale signals: {}",
+            e
+        ));
+    }
+
+    // Find all fingerprints with duplicates, including track IDs
+    let query = "SELECT fingerprint, GROUP_CONCAT(id) as track_ids
+                 FROM tracks
+                 WHERE fingerprint IS NOT NULL
+                 GROUP BY fingerprint
+                 HAVING COUNT(*) > 1";
+
+    let mut stmt = match db.conn.prepare(query) {
+        Ok(s) => s,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to prepare query: {}", e),
+            );
+        }
+    };
+
+    let rows = match stmt.query_map(params![], |row| {
+        let fingerprint: String = row.get(0)?;
+        let track_ids_str: String = row.get(1)?;
+        Ok((fingerprint, track_ids_str))
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to execute query: {}", e),
+            );
+        }
+    };
+
+    let mut total_groups = 0;
+    let mut total_tracks = 0;
+
+    for row_result in rows {
+        let (fingerprint, track_ids_str) = match row_result {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = log_message(&format!(
+                    "[COMPUTE] DetectFingerprintDuplicates: row error: {}",
+                    e
+                ));
+                continue;
+            }
+        };
+
+        // Parse track IDs from comma-separated string
+        let track_ids: Vec<i64> = track_ids_str
+            .split(',')
+            .filter_map(|s| s.trim().parse::<i64>().ok())
+            .collect();
+
+        total_groups += 1;
+        total_tracks += track_ids.len();
+
+        // Create/replace signal with embedded track IDs
+        let signal = AggregateSignal {
+            id: None,
+            signal_type: AggregateSignalType::FingerprintDuplicate,
+            key: fingerprint.clone(),
+            discovered_at: None,
+            metadata_json: Some(serde_json::json!({
+                "fingerprint": fingerprint,
+            }).to_string()),
+        }
+        .with_track_ids(&track_ids);
+
+        sender.replace_aggregate_signal(signal, witness);
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectFingerprintDuplicates: {} groups, {} tracks total",
+        total_groups, total_tracks
+    ));
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Execute DetectDuplicateInodes - bulk detection of duplicate inodes.
+fn execute_detect_duplicate_inodes(
+    db: &Database,
+    witness: &ComputationWitness,
+    start: std::time::Instant,
+) -> ComputationResult {
+    use rusqlite::params;
+
+    let computation = Computation::DetectDuplicateInodes;
+
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // First, clear stale DuplicateInode signals
+    let clear_result = db.conn.execute(
+        "DELETE FROM health_issues WHERE issue_type = 'duplicate_inode'
+         AND issue_key NOT IN (
+             SELECT CAST(inode AS TEXT) FROM tracks
+             GROUP BY inode HAVING COUNT(*) > 1
+         )",
+        params![],
+    );
+    if let Err(e) = clear_result {
+        let _ = log_message(&format!(
+            "[COMPUTE] DetectDuplicateInodes: error clearing stale signals: {}",
+            e
+        ));
+    }
+
+    // Find all inodes with duplicates, including track IDs
+    let query = "SELECT inode, GROUP_CONCAT(id) as track_ids
+                 FROM tracks
+                 GROUP BY inode
+                 HAVING COUNT(*) > 1";
+
+    let mut stmt = match db.conn.prepare(query) {
+        Ok(s) => s,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to prepare query: {}", e),
+            );
+        }
+    };
+
+    let rows = match stmt.query_map(params![], |row| {
+        let inode: i64 = row.get(0)?;
+        let track_ids_str: String = row.get(1)?;
+        Ok((inode, track_ids_str))
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to execute query: {}", e),
+            );
+        }
+    };
+
+    let mut total_groups = 0;
+
+    for row_result in rows {
+        let (inode, track_ids_str) = match row_result {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = log_message(&format!(
+                    "[COMPUTE] DetectDuplicateInodes: row error: {}",
+                    e
+                ));
+                continue;
+            }
+        };
+
+        // Parse track IDs from comma-separated string
+        let track_ids: Vec<i64> = track_ids_str
+            .split(',')
+            .filter_map(|s| s.trim().parse::<i64>().ok())
+            .collect();
+
+        total_groups += 1;
+
+        // Create/replace signal with embedded track IDs
+        let signal = AggregateSignal {
+            id: None,
+            signal_type: AggregateSignalType::DuplicateInode,
+            key: inode.to_string(),
+            discovered_at: None,
+            metadata_json: Some(serde_json::json!({
+                "inode": inode,
+            }).to_string()),
+        }
+        .with_track_ids(&track_ids);
+
+        sender.replace_aggregate_signal(signal, witness);
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectDuplicateInodes: {} duplicate inode groups",
+        total_groups
+    ));
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Execute DetectMissingTags - detect tracks missing required tags.
+///
+/// Groups tracks by album (or directory if no album tag), listing which tags
+/// are missing in the metadata. Key format: `album=AlbumName` or `dir=/path`.
+fn execute_detect_missing_tags(
+    db: &Database,
+    witness: &ComputationWitness,
+    start: std::time::Instant,
+) -> ComputationResult {
+    use rusqlite::params;
+    use std::collections::{HashMap, HashSet};
+
+    let computation = Computation::DetectMissingTags;
+
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Load required tags from config
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to load config: {}", e),
+            );
+        }
+    };
+
+    let required_tags: HashSet<String> = config
+        .opinions
+        .health_detection
+        .required_tags
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect();
+
+    // Clear all existing MissingTag signals (we'll rebuild)
+    let _ = db.conn.execute(
+        "DELETE FROM health_issues WHERE issue_type = 'missing_tag'",
+        params![],
+    );
+
+    // Get all tracks with their tags and paths
+    // We need: track_id, path, album (if present), all tag names present
+    let query = "
+        SELECT t.id, t.path,
+               (SELECT tag_value FROM track_tags WHERE track_id = t.id AND LOWER(tag_name) = 'album' LIMIT 1) as album,
+               GROUP_CONCAT(LOWER(tt.tag_name), ',') as present_tags
+        FROM tracks t
+        LEFT JOIN track_tags tt ON t.id = tt.track_id
+        GROUP BY t.id
+    ";
+
+    let mut stmt = match db.conn.prepare(query) {
+        Ok(s) => s,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to prepare query: {}", e),
+            );
+        }
+    };
+
+    // Group by album (or directory), accumulating which tags are missing
+    // Key: album=value or dir=/path
+    // Value: (missing_tags set, track_ids)
+    let mut groups: HashMap<String, (HashSet<String>, Vec<i64>)> = HashMap::new();
+
+    let rows = match stmt.query_map(params![], |row| {
+        let track_id: i64 = row.get(0)?;
+        let path: String = row.get(1)?;
+        let album: Option<String> = row.get(2)?;
+        let present_tags: Option<String> = row.get(3)?;
+        Ok((track_id, path, album, present_tags))
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to execute query: {}", e),
+            );
+        }
+    };
+
+    for row_result in rows {
+        let (track_id, path, album, present_tags_str) = match row_result {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        // Parse present tags
+        let present_tags: HashSet<String> = present_tags_str
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+
+        // Find missing required tags
+        let missing: HashSet<String> = required_tags
+            .difference(&present_tags)
+            .cloned()
+            .collect();
+
+        if missing.is_empty() {
+            continue;
+        }
+
+        // Determine grouping key: album=value or dir=/path
+        let key = if let Some(album_name) = album {
+            format!("album={}", album_name)
+        } else {
+            // Use parent directory as fallback
+            let parent = std::path::Path::new(&path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "/".to_string());
+            format!("dir={}", parent)
+        };
+
+        let entry = groups.entry(key).or_insert_with(|| (HashSet::new(), Vec::new()));
+        entry.0.extend(missing);
+        entry.1.push(track_id);
+    }
+
+    // Create signals for each group
+    let mut total_groups = 0;
+
+    for (key, (missing_tags, track_ids)) in groups {
+        total_groups += 1;
+
+        let mut missing_list: Vec<String> = missing_tags.into_iter().collect();
+        missing_list.sort();
+
+        let signal = AggregateSignal {
+            id: None,
+            signal_type: AggregateSignalType::MissingTag,
+            key: key.clone(),
+            discovered_at: None,
+            metadata_json: Some(serde_json::json!({
+                "missing_tags": missing_list,
+            }).to_string()),
+        }
+        .with_track_ids(&track_ids);
+
+        sender.replace_aggregate_signal(signal, witness);
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectMissingTags: {} groups with missing tags",
+        total_groups
+    ));
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Execute DetectMetadataDuplicates - detect exact metadata duplicates.
+///
+/// Groups tracks by their FULL tag signature (all tags, sorted by name).
+/// Two tracks are duplicates if ALL their tags match exactly.
+fn execute_detect_metadata_duplicates(
+    db: &Database,
+    witness: &ComputationWitness,
+    start: std::time::Instant,
+) -> ComputationResult {
+    use rusqlite::params;
+    use std::collections::HashMap;
+
+    let computation = Computation::DetectMetadataDuplicates;
+
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // First, clear all MetadataDuplicate signals (we'll rebuild)
+    let _ = db.conn.execute(
+        "DELETE FROM health_issues WHERE issue_type = 'metadata_dup'",
+        params![],
+    );
+
+    // Build tag signature for each track
+    // GROUP_CONCAT with ORDER BY ensures consistent ordering
+    let query = "
+        SELECT t.id,
+               GROUP_CONCAT(LOWER(tt.tag_name) || '=' || tt.tag_value, '|')
+               OVER (PARTITION BY t.id ORDER BY LOWER(tt.tag_name)) as tag_sig
+        FROM tracks t
+        JOIN track_tags tt ON t.id = tt.track_id
+    ";
+
+    // Actually, window functions with GROUP_CONCAT are tricky in SQLite.
+    // Let's do this more simply: get all tracks with their tags, build signatures in code.
+    let query = "
+        SELECT t.id, tt.tag_name, tt.tag_value
+        FROM tracks t
+        JOIN track_tags tt ON t.id = tt.track_id
+        ORDER BY t.id, LOWER(tt.tag_name)
+    ";
+
+    let mut stmt = match db.conn.prepare(query) {
+        Ok(s) => s,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to prepare query: {}", e),
+            );
+        }
+    };
+
+    // Build track_id -> sorted tag signature map
+    let mut track_tags: HashMap<i64, Vec<(String, String)>> = HashMap::new();
+
+    let rows = match stmt.query_map(params![], |row| {
+        let track_id: i64 = row.get(0)?;
+        let tag_name: String = row.get(1)?;
+        let tag_value: String = row.get(2)?;
+        Ok((track_id, tag_name, tag_value))
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to execute query: {}", e),
+            );
+        }
+    };
+
+    for row_result in rows {
+        let (track_id, tag_name, tag_value) = match row_result {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        track_tags
+            .entry(track_id)
+            .or_default()
+            .push((tag_name.to_lowercase(), tag_value));
+    }
+
+    // Build signature -> track_ids map
+    let mut sig_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
+
+    for (track_id, mut tags) in track_tags {
+        // Sort by tag name for consistent signature
+        tags.sort_by(|a, b| a.0.cmp(&b.0));
+        let signature: String = tags
+            .iter()
+            .map(|(name, value)| format!("{}={}", name, value))
+            .collect::<Vec<_>>()
+            .join("|");
+
+        sig_to_tracks
+            .entry(signature)
+            .or_default()
+            .push(track_id);
+    }
+
+    // Create signals for duplicates
+    let mut total_groups = 0;
+
+    for (signature, track_ids) in sig_to_tracks {
+        if track_ids.len() < 2 {
+            continue;
+        }
+
+        total_groups += 1;
+
+        // Create/replace signal with embedded track IDs
+        // The key is a hash of the signature to keep it manageable
+        // (full signatures can be very long)
+        let key_hash = format!("{:x}", md5_hash(&signature));
+
+        let signal = AggregateSignal {
+            id: None,
+            signal_type: AggregateSignalType::MetadataDuplicate,
+            key: key_hash,
+            discovered_at: None,
+            metadata_json: Some(serde_json::json!({
+                "tag_signature": signature,
+            }).to_string()),
+        }
+        .with_track_ids(&track_ids);
+
+        sender.replace_aggregate_signal(signal, witness);
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectMetadataDuplicates: {} duplicate metadata groups",
+        total_groups
+    ));
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Simple hash function for signature strings.
+fn md5_hash(s: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Execute DetectTagCanonicalizations - detect tag canonicalization opportunities.
+fn execute_detect_tag_canonicalizations(
+    db: &Database,
+    start: std::time::Instant,
+) -> ComputationResult {
+    use crate::corpus::health::canonicalization::detect_and_store_canonicalizations;
+
+    let computation = Computation::DetectTagCanonicalizations;
+
+    match detect_and_store_canonicalizations(db) {
+        Ok(count) => {
+            let _ = log_message(&format!(
+                "[COMPUTE] DetectTagCanonicalizations: {} new canonicalization entries",
+                count
+            ));
+            ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+        }
+        Err(e) => ComputationResult::failure(
+            computation,
+            start.elapsed().as_millis() as u64,
+            format!("Failed to detect canonicalizations: {}", e),
+        ),
+    }
+}
+
+/// Execute VerifyOutOfBandChanges - verify files with modified mtime.
+fn execute_verify_out_of_band_changes(
+    db: &Database,
+    witness: &ComputationWitness,
+    start: std::time::Instant,
+) -> ComputationResult {
+    use crate::corpus::db::HealthIssueType;
+    use crate::corpus::mutations::indexing::execute_verify_tags;
+    use rusqlite::params;
+
+    let computation = Computation::VerifyOutOfBandChanges;
+
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Get all CorpusFileModifiedOutOfBand signals
+    let oob_signals = match db.get_unresolved_health_issues(Some(HealthIssueType::CorpusFileModifiedOutOfBand)) {
+        Ok(signals) => signals,
+        Err(e) => {
+            return ComputationResult::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to get OOB signals: {}", e),
+            );
+        }
+    };
+
+    let mut verified_count = 0;
+    let mut tag_change_count = 0;
+    let mut mtime_only_count = 0;
+
+    for signal in oob_signals {
+        // The issue_key is the file path
+        let path = &signal.issue_key;
+
+        // Find the track for this path
+        let track = match db.get_track_by_path(path) {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                // Track no longer exists - clear the signal
+                sender.clear_file_signal(FileSignalType::CorpusFileModifiedOutOfBand, path, witness);
+                continue;
+            }
+            Err(_) => continue,
+        };
+
+        let track_id = match track.id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Run tag verification
+        if let Err(e) = execute_verify_tags(db, track_id, std::path::Path::new(path)) {
+            let _ = log_message(&format!(
+                "[COMPUTE] VerifyOutOfBandChanges: error verifying {}: {}",
+                path, e
+            ));
+            continue;
+        }
+
+        verified_count += 1;
+
+        // Check if there are any tag mismatches for this track
+        let mismatch_count: i64 = db.conn
+            .query_row(
+                "SELECT COUNT(*) FROM tag_mismatches WHERE track_id = ?1",
+                params![track_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        if mismatch_count > 0 {
+            // Tags differ - create OutOfBandTagChange signal
+            tag_change_count += 1;
+            sender.ensure_file_signal(FileSignalType::OutOfBandTagChange, path, witness);
+        } else {
+            // Tags match but mtime changed - file was touched but unchanged
+            mtime_only_count += 1;
+            // Clear the CorpusFileModifiedOutOfBand signal
+            sender.clear_file_signal(FileSignalType::CorpusFileModifiedOutOfBand, path, witness);
+
+            // Update scan_state to current mtime to avoid future toil
+            // (This is a minor mutation but acceptable in computation context for bookkeeping)
+            let file_path = std::path::Path::new(path);
+            if let Ok(metadata) = std::fs::metadata(file_path) {
+                use std::os::unix::fs::MetadataExt;
+                let mtime_secs = metadata.mtime();
+                let mtime_nanos = metadata.mtime_nsec() as i64;
+
+                let _ = db.conn.execute(
+                    "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
+                    params![mtime_secs, mtime_nanos, path],
+                );
+            }
+        }
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] VerifyOutOfBandChanges: verified {} files, {} tag changes, {} mtime-only",
+        verified_count, tag_change_count, mtime_only_count
+    ));
 
     ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

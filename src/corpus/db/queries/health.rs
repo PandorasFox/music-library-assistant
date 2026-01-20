@@ -18,8 +18,8 @@ use rusqlite::{params, OptionalExtension};
 use super::Database;
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
-    CorpusSummary, HealthIssue, HealthIssueType, HealthSummary, KnownVariant, Track, TrackRole,
-    VariantType,
+    AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, HealthIssue,
+    HealthIssueType, HealthSummary, KnownVariant, Track, TrackRole, VariantType,
 };
 
 impl Database {
@@ -211,20 +211,11 @@ impl Database {
         metadata_json: Option<&str>,
         _witness: &ComputationWitness,
     ) -> Result<bool> {
-        // Check if signal already exists
-        let exists = self
-            .get_health_issue_by_key(issue_type, issue_key)?
-            .is_some();
-
-        if exists {
-            return Ok(false);
-        }
-
-        // Create new signal
+        // Single-statement idempotent insert using UNIQUE constraint
         self.conn
             .execute(
                 r#"
-                INSERT INTO health_issues
+                INSERT OR IGNORE INTO health_issues
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
                 "#,
@@ -236,7 +227,7 @@ impl Database {
             )
             .context("Failed to ensure signal")?;
 
-        Ok(true)
+        Ok(self.conn.changes() > 0)
     }
 
     /// Clear a signal if it exists (idempotent delete).
@@ -312,8 +303,10 @@ impl Database {
         issue_type: HealthIssueType,
         _witness: &ComputationWitness,
     ) -> Result<usize> {
+        // Normalize directory path: ensure no trailing slash, then add one for LIKE pattern
         let dir_str = directory.to_string_lossy();
-        let pattern = format!("{}%", dir_str);
+        let dir_normalized = dir_str.trim_end_matches('/');
+        let pattern = format!("{}/%", dir_normalized);
 
         let deleted = self.conn
             .execute(
@@ -323,6 +316,123 @@ impl Database {
             .context("Failed to clear signals in directory")?;
 
         Ok(deleted)
+    }
+
+    // ========================================================================
+    // Type-Safe Signal Operations (File and Aggregate)
+    // ========================================================================
+
+    /// Ensure a file signal exists (idempotent, no metadata).
+    pub fn ensure_file_signal(
+        &self,
+        signal_type: FileSignalType,
+        path: &str,
+        _witness: &ComputationWitness,
+    ) -> Result<bool> {
+        self.conn
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO health_issues
+                (issue_type, issue_key, discovered_at, metadata_json)
+                VALUES (?1, ?2, CURRENT_TIMESTAMP, NULL)
+                "#,
+                params![signal_type.as_str(), path],
+            )
+            .context("Failed to ensure file signal")?;
+
+        Ok(self.conn.changes() > 0)
+    }
+
+    /// Clear a file signal (idempotent delete).
+    pub fn clear_file_signal(
+        &self,
+        signal_type: FileSignalType,
+        path: &str,
+        _witness: &ComputationWitness,
+    ) -> Result<bool> {
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                params![signal_type.as_str(), path],
+            )
+            .context("Failed to clear file signal")?;
+
+        Ok(deleted > 0)
+    }
+
+    /// Clear all file signals of a type in a directory.
+    pub fn clear_file_signals_in_directory(
+        &self,
+        directory: &std::path::Path,
+        signal_type: FileSignalType,
+        _witness: &ComputationWitness,
+    ) -> Result<usize> {
+        let dir_str = directory.to_string_lossy();
+        let dir_normalized = dir_str.trim_end_matches('/');
+        let pattern = format!("{}/%", dir_normalized);
+
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2",
+                params![signal_type.as_str(), pattern],
+            )
+            .context("Failed to clear file signals in directory")?;
+
+        Ok(deleted)
+    }
+
+    /// Ensure an aggregate signal exists (with metadata).
+    pub fn ensure_aggregate_signal(
+        &self,
+        signal_type: AggregateSignalType,
+        key: &str,
+        metadata_json: Option<&str>,
+        _witness: &ComputationWitness,
+    ) -> Result<bool> {
+        self.conn
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO health_issues
+                (issue_type, issue_key, discovered_at, metadata_json)
+                VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
+                "#,
+                params![signal_type.as_str(), key, metadata_json],
+            )
+            .context("Failed to ensure aggregate signal")?;
+
+        Ok(self.conn.changes() > 0)
+    }
+
+    /// Replace an aggregate signal (delete + insert).
+    pub fn replace_aggregate_signal(
+        &self,
+        signal: &AggregateSignal,
+        _witness: &ComputationWitness,
+    ) -> Result<i64> {
+        self.conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                params![signal.signal_type.as_str(), &signal.key],
+            )
+            .context("Failed to delete existing aggregate signal")?;
+
+        self.conn
+            .execute(
+                r#"
+                INSERT INTO health_issues
+                (issue_type, issue_key, discovered_at, metadata_json)
+                VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
+                "#,
+                params![
+                    signal.signal_type.as_str(),
+                    &signal.key,
+                    &signal.discovered_at,
+                    &signal.metadata_json,
+                ],
+            )
+            .context("Failed to replace aggregate signal")?;
+
+        Ok(self.conn.last_insert_rowid())
     }
 
     // ========================================================================
@@ -352,40 +462,49 @@ impl Database {
     }
 
     /// Get distinct parent directories from FileInCorpus signals.
+    ///
+    /// FileInCorpus signals use the file path as issue_key.
+    /// This extracts and deduplicates the parent directories.
     pub fn get_distinct_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
         use std::path::PathBuf;
 
-        // FileInCorpus signals use issue_key format "file_in_corpus:{directory}"
+        // FileInCorpus signals use file path as issue_key
         let mut stmt = self.conn.prepare(
             r#"SELECT DISTINCT issue_key FROM health_issues
                WHERE issue_type = 'file_in_corpus'"#
         )?;
 
         let rows = stmt.query_map(params![], |row| {
-            let key: String = row.get(0)?;
-            Ok(key)
+            let path: String = row.get(0)?;
+            Ok(path)
         })?;
 
-        let mut directories = Vec::new();
+        let mut directories = std::collections::HashSet::new();
         for row in rows {
-            let key = row?;
-            // Parse "file_in_corpus:{directory}" format
-            if let Some(dir) = key.strip_prefix("file_in_corpus:") {
-                directories.push(PathBuf::from(dir));
+            let path = row?;
+            // Extract parent directory from file path
+            if let Some(parent) = PathBuf::from(&path).parent() {
+                directories.insert(parent.to_path_buf());
             }
         }
 
-        Ok(directories)
+        Ok(directories.into_iter().collect())
     }
 
     /// Get signals in a specific directory.
+    ///
+    /// For FileInCorpus signals, issue_key is the file path.
+    /// Uses LIKE pattern with trailing slash to avoid matching sibling directories
+    /// (e.g., `/path/to/dir/` won't match `/path/to/dir-extra/file.mp3`).
     pub fn get_signals_in_directory(
         &self,
         dir: &std::path::Path,
         signal_type: HealthIssueType,
     ) -> Result<Vec<HealthIssue>> {
+        // Normalize directory path: ensure no trailing slash, then add one for LIKE pattern
         let dir_str = dir.to_string_lossy();
-        let pattern = format!("{}%", dir_str);
+        let dir_normalized = dir_str.trim_end_matches('/');
+        let pattern = format!("{}/%", dir_normalized);
 
         let mut stmt = self.conn.prepare(
             r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
@@ -495,6 +614,37 @@ impl Database {
         Ok(issues)
     }
 
+    /// Get tracks associated with an aggregate signal (from embedded track_ids in metadata_json).
+    ///
+    /// Aggregate signals store track IDs directly in metadata_json["track_ids"] rather than
+    /// using the health_issue_tracks junction table. This method extracts and fetches those tracks.
+    pub fn get_aggregate_signal_tracks(&self, signal_id: i64) -> Result<Vec<Track>> {
+        // Get the signal to extract track_ids from metadata
+        let signal: HealthIssue = self.conn.query_row(
+            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
+               FROM health_issues WHERE id = ?1"#,
+            params![signal_id],
+            Self::row_to_health_issue,
+        ).context("Signal not found")?;
+
+        // Parse track_ids from metadata_json
+        let track_ids: Vec<i64> = signal
+            .metadata_json
+            .as_ref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("track_ids").cloned())
+            .and_then(|v| v.as_array().cloned())
+            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+            .unwrap_or_default();
+
+        if track_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Batch fetch tracks by ID
+        self.get_tracks_by_ids(&track_ids)
+    }
+
     /// Get health summary statistics.
     pub fn get_health_summary(&self) -> Result<HealthSummary> {
         let mut summary = HealthSummary::default();
@@ -521,7 +671,6 @@ impl Database {
                 // Legacy and unified type both map to canonicalization_issues
                 "canon" | "tag_canon" | "genre_canon" => summary.canonicalization_issues += count,
                 "missing_tag" => summary.missing_tag_issues += count,
-                "quality" => summary.quality_variants += count,
                 _ => {}
             }
         }

@@ -1808,13 +1808,13 @@ fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> Ta
         success, error, duration_ms
     ));
 
-    // Queue computations to recompute signals for affected directories
+    // Queue per-file signal updates for affected paths
     // This ensures signals like UnindexedFile → HealthyFile are updated
     let spawn = if success {
         mutation
-            .affected_directories()
+            .affected_paths()
             .into_iter()
-            .map(|directory| Computation::DeriveDirectorySignals { directory })
+            .map(|path| Computation::UpdateFileSignals { path })
             .collect()
     } else {
         Vec::new()

@@ -181,6 +181,17 @@ pub enum Computation {
     /// Checks if this track has deployment conflicts with other tracks.
     CheckDeployConflicts { track_id: i64 },
 
+    /// Update signals for a single file after mutation.
+    ///
+    /// Lightweight per-file computation that updates:
+    /// - FileInCorpus: if file exists on disk
+    /// - HealthyFile: if file exists in corpus AND is indexed
+    /// - UnindexedFile: if file exists in corpus but NOT indexed
+    /// - MissingFile: if file is indexed but NOT in corpus
+    ///
+    /// Does NOT spawn CheckDeployConflicts (handled in bulk by DetectDeployConflicts).
+    UpdateFileSignals { path: PathBuf },
+
     // -------------------------------------------------------------------------
     // Library Health Computations
     // -------------------------------------------------------------------------
@@ -270,6 +281,14 @@ pub enum Computation {
     /// - If tags differ: create OutOfBandTagChange signal
     /// - If tags match: clear CorpusFileModifiedOutOfBand (file was touched but unchanged)
     VerifyOutOfBandChanges,
+
+    /// Detect deployment conflicts across all healthy tracks (bulk).
+    ///
+    /// Groups healthy tracks by their computed deployment path. Tracks that would
+    /// deploy to the same path are marked as DeployConflict signals.
+    ///
+    /// This is more efficient than per-track CheckDeployConflicts during bulk operations.
+    DetectDeployConflicts,
 }
 
 impl Computation {
@@ -284,6 +303,7 @@ impl Computation {
             Computation::ScheduleSecondLevelDerivations => None,
             Computation::DeriveDirectorySignals { directory } => Some(directory),
             Computation::CheckDeployConflicts { .. } => None,
+            Computation::UpdateFileSignals { path } => Some(path),
             Computation::WalkLibrary { library_root, .. } => Some(library_root),
             Computation::ScanLibraryDirectory { directory, .. } => Some(directory),
             Computation::DeriveLibraryHealthSignals { .. } => None,
@@ -295,6 +315,7 @@ impl Computation {
             Computation::DetectMetadataDuplicates => None,
             Computation::DetectTagCanonicalizations => None,
             Computation::VerifyOutOfBandChanges => None,
+            Computation::DetectDeployConflicts => None,
         }
     }
 
@@ -311,6 +332,7 @@ impl Computation {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
             Computation::DeriveDirectorySignals { .. } => "Deriving signals",
             Computation::CheckDeployConflicts { .. } => "Checking deploy conflicts",
+            Computation::UpdateFileSignals { .. } => "Updating file signals",
             Computation::WalkLibrary { .. } => "Walking library",
             Computation::ScanLibraryDirectory { .. } => "Scanning library directory",
             Computation::DeriveLibraryHealthSignals { .. } => "Deriving library health",
@@ -322,6 +344,7 @@ impl Computation {
             Computation::DetectMetadataDuplicates => "Detecting metadata duplicates",
             Computation::DetectTagCanonicalizations => "Detecting tag canonicalizations",
             Computation::VerifyOutOfBandChanges => "Verifying out-of-band changes",
+            Computation::DetectDeployConflicts => "Detecting deploy conflicts",
         }
     }
 }
@@ -666,6 +689,10 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                 execute_check_deploy_conflicts(db, *track_id, start)
             }
 
+            Computation::UpdateFileSignals { path } => {
+                execute_update_file_signals(db, path, &witness, start)
+            }
+
             Computation::WalkLibrary { library_root, library_name, corpus_path_prefixes } => {
                 execute_walk_library(db, library_root, library_name, corpus_path_prefixes, start)
             }
@@ -705,6 +732,10 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
 
             Computation::VerifyOutOfBandChanges => {
                 execute_verify_out_of_band_changes(db, &witness, start)
+            }
+
+            Computation::DetectDeployConflicts => {
+                execute_detect_deploy_conflicts(db, &witness, start)
             }
         };
 
@@ -1394,7 +1425,7 @@ fn execute_derive_directory_signals(
         }
     }
 
-    let mut spawn: Vec<Computation> = Vec::new();
+    let spawn: Vec<Computation> = Vec::new();
 
     // Process files in corpus (FileInCorpus signals)
     for corpus_path in &corpus_paths {
@@ -1408,7 +1439,7 @@ fn execute_derive_directory_signals(
     }
 
     // Process indexed tracks
-    for (path, track) in &indexed_paths {
+    for (path, _track) in &indexed_paths {
         if corpus_paths.contains(path) {
             // File exists in both corpus and index → healthy
             // Clear MissingFile signal if it existed
@@ -1417,10 +1448,8 @@ fn execute_derive_directory_signals(
             // Ensure HealthyFile signal
             ensure_file_signal_if_missing(db, &sender, FileSignalType::HealthyFile, path, witness);
 
-            // Spawn deploy conflict check for healthy files
-            if let Some(track_id) = track.id {
-                spawn.push(Computation::CheckDeployConflicts { track_id });
-            }
+            // NOTE: CheckDeployConflicts is now handled in bulk by DetectDeployConflicts
+            // during ScheduleContentAnalysis, not per-file here.
         } else {
             // Track without FileInCorpus → file is missing from disk
             // Clear HealthyFile signal if it existed
@@ -1468,6 +1497,68 @@ fn execute_check_deploy_conflicts(
         start.elapsed().as_millis() as u64,
         Vec::new(),
     )
+}
+
+/// Update signals for a single file after a mutation.
+///
+/// This is a lightweight computation that:
+/// 1. Checks if file exists on disk (FileInCorpus)
+/// 2. Checks if file is indexed (track exists)
+/// 3. Updates exactly the signals that apply to THIS file
+///
+/// Does NOT spawn CheckDeployConflicts - that is handled in bulk by
+/// DetectDeployConflicts during ScheduleContentAnalysis.
+fn execute_update_file_signals(
+    db: &Database,
+    path: &Path,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> ComputationResult {
+    let computation = Computation::UpdateFileSignals {
+        path: path.to_path_buf(),
+    };
+
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+    let file_exists = path.exists() && is_audio_file(path);
+    let is_indexed = db.get_track_by_path(&path_str).ok().flatten().is_some();
+
+    if file_exists {
+        // File exists on disk
+        ensure_file_signal_if_missing(db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
+
+        if is_indexed {
+            // Healthy: exists + indexed
+            clear_file_signal_if_present(db, &sender, FileSignalType::UnindexedFile, &path_str, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::MissingFile, &path_str, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::HealthyFile, &path_str, witness);
+        } else {
+            // Unindexed: exists but not indexed
+            clear_file_signal_if_present(db, &sender, FileSignalType::HealthyFile, &path_str, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::MissingFile, &path_str, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::UnindexedFile, &path_str, witness);
+        }
+    } else {
+        // File does not exist on disk
+        clear_file_signal_if_present(db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
+        clear_file_signal_if_present(db, &sender, FileSignalType::UnindexedFile, &path_str, witness);
+
+        if is_indexed {
+            // Missing: indexed but not on disk
+            clear_file_signal_if_present(db, &sender, FileSignalType::HealthyFile, &path_str, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::MissingFile, &path_str, witness);
+        } else {
+            // Gone: not indexed, not on disk - clear all
+            clear_file_signal_if_present(db, &sender, FileSignalType::HealthyFile, &path_str, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::MissingFile, &path_str, witness);
+        }
+    }
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
 // ============================================================================
@@ -1710,6 +1801,7 @@ fn execute_schedule_content_analysis(
         Computation::DetectMetadataDuplicates,
         Computation::DetectTagCanonicalizations,
         Computation::VerifyOutOfBandChanges,
+        Computation::DetectDeployConflicts,
     ];
 
     ComputationResult::success(
@@ -2376,6 +2468,94 @@ fn execute_verify_out_of_band_changes(
     let _ = log_message(&format!(
         "[COMPUTE] VerifyOutOfBandChanges: verified {} files, {} tag changes, {} mtime-only",
         verified_count, tag_change_count, mtime_only_count
+    ));
+
+    ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Execute DetectDeployConflicts - bulk detection of deploy path collisions.
+///
+/// Groups healthy tracks by their computed deployment path. Tracks that would
+/// deploy to the same path are marked as DeployConflict signals.
+fn execute_detect_deploy_conflicts(
+    db: &Database,
+    witness: &ComputationWitness,
+    start: std::time::Instant,
+) -> ComputationResult {
+    use crate::corpus::db::types::HealthIssueType;
+    use crate::corpus::deploy::compute_deployment_path_with_tags;
+    use std::collections::HashMap;
+
+    let computation = Computation::DetectDeployConflicts;
+
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
+    };
+
+    // Clear all existing DeployConflict signals (we rebuild from scratch)
+    let _ = db.conn.execute(
+        "DELETE FROM health_issues WHERE issue_type = 'deploy_conflict'",
+        rusqlite::params![],
+    );
+
+    // Get all HealthyFile signals
+    let healthy_signals = db
+        .get_health_signals(Some(HealthIssueType::HealthyFile))
+        .unwrap_or_default();
+
+    // Compute deployment paths and group by path
+    let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
+
+    for signal in &healthy_signals {
+        let path = &signal.issue_key;
+        if let Ok(Some(track)) = db.get_track_by_path(path) {
+            if let Some(track_id) = track.id {
+                let tags = db.get_track_tags(track_id).unwrap_or_default();
+                let tag_map: HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                    .collect();
+
+                let deploy_path = compute_deployment_path_with_tags(&track, &tag_map)
+                    .to_string_lossy()
+                    .to_string();
+
+                deploy_path_to_tracks
+                    .entry(deploy_path)
+                    .or_default()
+                    .push(track_id);
+            }
+        }
+    }
+
+    // Create signals for conflicts (paths with multiple tracks)
+    let mut conflict_count = 0;
+    for (deploy_path, track_ids) in deploy_path_to_tracks {
+        if track_ids.len() > 1 {
+            conflict_count += 1;
+            let signal = AggregateSignal {
+                id: None,
+                signal_type: AggregateSignalType::DeployConflict,
+                key: deploy_path.clone(),
+                discovered_at: None,
+                metadata_json: Some(
+                    serde_json::json!({
+                        "deploy_path": deploy_path,
+                    })
+                    .to_string(),
+                ),
+            }
+            .with_track_ids(&track_ids);
+
+            sender.replace_aggregate_signal(signal, witness);
+        }
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectDeployConflicts: {} conflicts among {} healthy files",
+        conflict_count,
+        healthy_signals.len()
     ));
 
     ComputationResult::success(computation, start.elapsed().as_millis() as u64, Vec::new())

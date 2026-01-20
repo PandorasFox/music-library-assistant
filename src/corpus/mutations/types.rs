@@ -427,6 +427,53 @@ impl Mutation {
         dirs.dedup();
         dirs
     }
+
+    /// Get specific file paths affected by this mutation for signal updates.
+    ///
+    /// Unlike `affected_directories()` which returns parent directories,
+    /// this returns the actual file paths that need signal updates.
+    /// Used to spawn per-file `UpdateFileSignals` computations.
+    pub fn affected_paths(&self) -> Vec<PathBuf> {
+        match self {
+            // Indexing: the file being indexed
+            Mutation::IndexTrack { path, .. }
+            | Mutation::IndexFileFromPath { path, .. }
+            | Mutation::UpdateScanState { path, .. } => vec![path.clone()],
+
+            // Tag operations: the file being modified
+            Mutation::TagFlushToDisk { path, .. }
+            | Mutation::TagEditAndFlush { path, .. } => vec![path.clone()],
+
+            // File operations: source and destination
+            Mutation::Move { source, destination, .. }
+            | Mutation::Copy { source, destination }
+            | Mutation::HardLink { source, destination } => {
+                vec![source.clone(), destination.clone()]
+            }
+
+            Mutation::Delete { path, .. } | Mutation::MoveToStash { path, .. } => {
+                vec![path.clone()]
+            }
+
+            // Path updates: both old and new paths
+            Mutation::UpdateTrackPath {
+                old_path, new_path, ..
+            } => vec![old_path.clone(), new_path.clone()],
+
+            // Drop: the path being dropped
+            Mutation::DropFromIndex { path, .. } => vec![path.clone()],
+
+            // Track update: the path being updated
+            Mutation::UpdateTrack { path, .. } => vec![path.clone()],
+
+            // Operations without specific file paths that need signal updates
+            Mutation::TagEditDb { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::DbMigration { .. }
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::Unlink { .. } => Vec::new(),
+        }
+    }
 }
 
 /// Result of executing a single mutation.

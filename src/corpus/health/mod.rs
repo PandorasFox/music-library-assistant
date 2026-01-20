@@ -31,7 +31,7 @@
 //! - **Deployment Conflicts**: Multiple corpus files would deploy to same path
 
 pub mod album_normalization;
-mod canonicalization;
+pub mod canonicalization;
 pub mod collision;
 mod detection;
 pub mod filter;
@@ -41,6 +41,7 @@ pub mod normalization;
 pub mod tag_cloud;
 
 pub use detection::{cleanup_resolved_deployment_conflicts, refresh_health_for_track};
+pub use canonicalization::detect_and_store_canonicalizations;
 
 // TODO: Canonicalization detection should be reimplemented with direct SQL queries
 // against the read-only db accessor on the task daemon, replacing the TagCloud approach.

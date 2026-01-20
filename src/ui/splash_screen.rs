@@ -25,12 +25,14 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
 
+use crate::config::Config;
 use crate::daemon::{DaemonStatus, EyeState, TaskDaemon};
+use crate::db_thread::DbThreadStats;
 use super::app::{EYE_CLOSED, EYE_CLOSING};
 
 // ============================================================================
@@ -85,6 +87,8 @@ pub struct SplashScreen {
     complete: bool,
     /// Current eye state (for rendering appropriate frame)
     eye_state: EyeState,
+    /// DB thread stats for optional display
+    db_stats: Option<DbThreadStats>,
 }
 
 impl SplashScreen {
@@ -99,6 +103,7 @@ impl SplashScreen {
             progress_detail: Some("Starting...".to_string()),
             complete: false,
             eye_state: EyeState::Closed,
+            db_stats: None,
         }
     }
 
@@ -110,7 +115,13 @@ impl SplashScreen {
             progress_detail: Some("Starting...".to_string()),
             complete: false,
             eye_state: EyeState::Closed,
+            db_stats: None,
         }
+    }
+
+    /// Update DB thread stats for display.
+    pub fn set_db_stats(&mut self, stats: DbThreadStats) {
+        self.db_stats = Some(stats);
     }
 
     /// Check if the splash screen is complete and ready to transition.
@@ -180,12 +191,16 @@ impl SplashScreen {
 /// Render the splash screen.
 ///
 /// Shows a centered closed eye with a loading message and optional progress bar.
-pub fn render(f: &mut Frame, area: Rect, splash: &SplashScreen) {
+/// If `config.opinions.startup.show_db_stats_on_splash` is true, also shows
+/// DB thread performance stats below the progress bar.
+pub fn render(f: &mut Frame, area: Rect, splash: &SplashScreen, config: &Config) {
     // Eye closed art is 16 lines tall
     let eye_height = 16;
-    // Message line + spacing + eye + optional progress bar
+    // Message line + spacing + eye + optional progress bar + optional db stats
     let progress_height = if splash.progress.is_some() { 3 } else { 0 };
-    let total_height = 2 + eye_height + progress_height; // message + gap + eye + progress
+    let show_db_stats = config.opinions.startup.show_db_stats_on_splash && splash.db_stats.is_some();
+    let db_stats_height = if show_db_stats { 1 } else { 0 };
+    let total_height = 2 + eye_height + progress_height + db_stats_height;
 
     // Calculate vertical centering
     let v_margin = area.height.saturating_sub(total_height as u16) / 2;
@@ -198,12 +213,13 @@ pub fn render(f: &mut Frame, area: Rect, splash: &SplashScreen) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(v_margin),           // Top margin
-            Constraint::Length(1),                  // Message
-            Constraint::Length(1),                  // Spacing
-            Constraint::Length(eye_height as u16), // Eye
-            Constraint::Length(progress_height as u16), // Progress bar (if any)
-            Constraint::Min(0),                     // Bottom margin
+            Constraint::Length(v_margin),                // Top margin
+            Constraint::Length(1),                       // Message
+            Constraint::Length(1),                       // Spacing
+            Constraint::Length(eye_height as u16),       // Eye
+            Constraint::Length(progress_height as u16),  // Progress bar (if any)
+            Constraint::Length(db_stats_height as u16),  // DB stats (if enabled)
+            Constraint::Min(0),                          // Bottom margin
         ])
         .split(area);
 
@@ -268,5 +284,34 @@ pub fn render(f: &mut Frame, area: Rect, splash: &SplashScreen) {
         };
 
         f.render_widget(progress_widget, centered_progress);
+    }
+
+    // Render DB stats if enabled and available
+    if show_db_stats {
+        if let Some(stats) = &splash.db_stats {
+            let stats_area = chunks[5];
+
+            // Format: "Writes: 456 | 12.3/s | Q: 3"
+            let queue_color = if stats.queue_depth > 100 {
+                Color::Red
+            } else if stats.queue_depth > 0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+
+            let stats_line = Line::from(vec![
+                Span::styled("Writes: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", stats.total_writes), Style::default().fg(Color::Cyan)),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:.1}/s", stats.writes_per_sec), Style::default().fg(Color::Green)),
+                Span::styled(" | Q: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", stats.queue_depth), Style::default().fg(queue_color)),
+            ]);
+
+            let stats_widget = Paragraph::new(stats_line)
+                .alignment(Alignment::Center);
+            f.render_widget(stats_widget, stats_area);
+        }
     }
 }

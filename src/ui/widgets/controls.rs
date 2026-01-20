@@ -275,15 +275,6 @@ pub mod presets {
             .binding(KeyBinding::new("Esc", "Cancel"))
     }
 
-    /// Drop missing confirmation controls
-    pub fn drop_missing() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("↑↓", "Scroll"))
-            .binding(KeyBinding::new("←→", "Select Option"))
-            .binding(KeyBinding::new("Enter", "Confirm"))
-            .binding(KeyBinding::new("Esc", "Cancel"))
-    }
-
     /// Deployment preview controls
     pub fn deployment_preview() -> ControlsHint {
         ControlsHint::new()

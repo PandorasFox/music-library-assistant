@@ -173,10 +173,10 @@ impl Database {
                 issue_type TEXT NOT NULL,
                 issue_key TEXT NOT NULL,
                 discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                metadata_json TEXT
+                metadata_json TEXT,
+                UNIQUE(issue_type, issue_key)
             );
             CREATE INDEX IF NOT EXISTS idx_health_issues_type ON health_issues(issue_type);
-            CREATE INDEX IF NOT EXISTS idx_health_issues_key ON health_issues(issue_key);
             CREATE INDEX IF NOT EXISTS idx_health_issues_discovered ON health_issues(discovered_at);
 
             -- Tracks involved in each health issue

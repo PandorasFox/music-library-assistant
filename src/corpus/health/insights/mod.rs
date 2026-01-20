@@ -92,7 +92,7 @@ pub enum Insight {
     // =========================================================================
     /// Fingerprint duplicates where quality comparison is possible.
     ///
-    /// Correlates FingerprintDuplicate + QualityVariant signals.
+    /// Quality is introspected from Track metadata (file_type, bitrate_kbps) at runtime.
     QualityDuplicates {
         /// Number of duplicate groups
         dupe_groups: usize,

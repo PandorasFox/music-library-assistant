@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use crate::corpus::db::{Database, Track};
-use crate::flows::deploy::compute_deployment_path_with_tags;
+// TODO: Re-enable when corpus::deploy is available
+// use crate::corpus::deploy::compute_deployment_path_with_tags;
 
 use super::types::{LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS};
 use super::QueryFieldFocus;
@@ -261,12 +262,9 @@ impl TagSearchState {
         // Build and execute the query
         let mut results = self.query_database(db);
 
-        // Sort by deployment path
-        results.sort_by(|a, b| {
-            let path_a = compute_deployment_path_with_tags(&a.track, &a.tags);
-            let path_b = compute_deployment_path_with_tags(&b.track, &b.tags);
-            path_a.cmp(&path_b)
-        });
+        // Sort by corpus path (deployment path sorting disabled)
+        // TODO: Re-enable deployment path sorting when corpus::deploy is available
+        results.sort_by(|a, b| a.track.path.cmp(&b.track.path));
 
         self.results = results;
         self.results_selected = 0;

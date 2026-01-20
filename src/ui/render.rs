@@ -27,17 +27,19 @@ pub struct RenderContext<'a> {
     pub config: &'a Config,
     pub status_message: Option<&'a str>,
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
-    pub drop_missing_state: Option<&'a super::DropMissingState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub splash_screen: Option<&'a super::splash_screen::SplashScreen>,
+    pub content_analysis: Option<&'a super::startup::ContentAnalysisProgress>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
     pub tag_search: Option<&'a tag_search::TagSearchState>,
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub eye: &'a EyeAnimation,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
-    pub daemon_status: Option<crate::flows::DaemonStatus>,
+    pub daemon_status: Option<crate::daemon::DaemonStatus>,
+    pub corpus_summary: Option<crate::corpus::db::types::CorpusSummary>,
+    pub db_stats: Option<crate::db_thread::DbThreadStats>,
 }
 
 /// Main render entry point - dispatches to sub-renderers based on mode.
@@ -45,7 +47,21 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
     // Loading splash takes the whole screen
     if ctx.mode == super::UiMode::LoadingSplash {
         if let Some(splash) = ctx.splash_screen {
-            super::splash_screen::render(f, f.area(), splash);
+            super::splash_screen::render(f, f.area(), splash, ctx.config);
+        }
+        return;
+    }
+
+    // Content analysis progress takes the whole screen (with awake eye)
+    if ctx.mode == super::UiMode::ContentAnalysis {
+        if let Some(progress) = ctx.content_analysis {
+            // Get current eye frame for animated display
+            let eye_frame = match ctx.eye.current_frame() {
+                EyeFrame::Open => EYE_OPEN,
+                EyeFrame::Closing => EYE_CLOSING,
+                EyeFrame::Closed => EYE_CLOSED,
+            };
+            super::startup::content_analysis::render(f, f.area(), progress, eye_frame);
         }
         return;
     }
@@ -92,8 +108,8 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
 fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
     // Get mode-specific suffix (if any)
     let suffix = match ctx.mode {
+        super::UiMode::ContentAnalysis => None, // Never reached - handled separately
         super::UiMode::DirBrowser => Some("Directory Browser"),
-        super::UiMode::DropMissingConfirmation => Some("Drop Missing From Index"),
         super::UiMode::DeploymentPreview => Some("Deployment Preview"),
         super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
         super::UiMode::CorpusBrowser => Some("Corpus Browser"),
@@ -119,13 +135,13 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
 
 fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderContext) {
     match ctx.mode {
+        super::UiMode::ContentAnalysis => {
+            // Never reached - handled separately in render() before this function
+        }
         super::UiMode::DirBrowser => {
             if let Some(ref mut browser) = ctx.tree_browser {
                 browser.render(f, area);
             }
-        }
-        super::UiMode::DropMissingConfirmation => {
-            render_drop_missing_confirmation(f, area, ctx);
         }
         super::UiMode::DeploymentPreview => {
             if let Some(ref mut preview) = ctx.deployment_preview {
@@ -303,79 +319,6 @@ fn render_exit_confirm_modal(
     }
 }
 
-pub fn render_drop_missing_confirmation(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    if let Some(ref state) = ctx.drop_missing_state {
-        let count = state.missing_tracks.len();
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),  // Header with count
-                Constraint::Min(5),     // File list
-                Constraint::Length(3),  // Action buttons
-            ])
-            .split(area);
-
-        // Header
-        let header_text = format!(
-            "Found {} missing file{} in corpus index\nThese files no longer exist on disk but are still in the database.",
-            count,
-            if count == 1 { "" } else { "s" }
-        );
-        let header = Paragraph::new(header_text)
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL));
-        f.render_widget(header, chunks[0]);
-
-        // File list
-        let max_visible = chunks[1].height.saturating_sub(2) as usize;
-        let items: Vec<ListItem> = state
-            .missing_tracks
-            .iter()
-            .skip(state.list_offset)
-            .take(max_visible)
-            .map(|track| {
-                ListItem::new(track.path.clone())
-                    .style(Style::default().fg(Color::White))
-            })
-            .collect();
-
-        let list_title = format!(
-            "Missing Files ({}-{} of {})",
-            state.list_offset + 1,
-            (state.list_offset + items.len()).min(count),
-            count
-        );
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(list_title));
-        f.render_widget(list, chunks[1]);
-
-        // Action buttons
-        let cancel_style = if state.selected_option == 0 {
-            Style::default().fg(Color::Black).bg(Color::White)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let drop_style = if state.selected_option == 1 {
-            Style::default().fg(Color::Black).bg(Color::Red)
-        } else {
-            Style::default().fg(Color::Red)
-        };
-
-        let buttons = Line::from(vec![
-            Span::raw("  "),
-            Span::styled(" Cancel ", cancel_style),
-            Span::raw("    "),
-            Span::styled(format!(" Drop {} entries ", count), drop_style),
-            Span::raw("  "),
-        ]);
-        let buttons_para = Paragraph::new(buttons)
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title("Action"));
-        f.render_widget(buttons_para, chunks[2]);
-    }
-}
-
 fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
     let footer_layout = Layout::default()
         .direction(Direction::Horizontal)
@@ -403,16 +346,113 @@ fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
     render_eye(f, footer_layout[1], ctx);
 }
 
-fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, _ctx: &RenderContext) {
-    // TODO: Corpus status should show health_issues summary from eyeballing
-    let lines = vec![
-        Line::from("No observation data")
-            .style(Style::default().fg(Color::DarkGray)),
-    ];
+fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
+    // Split horizontally: corpus stats | db thread stats
+    let split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
 
-    let para = Paragraph::new(lines)
+    // Left: Corpus stats
+    let corpus_lines = if let Some(ref summary) = ctx.corpus_summary {
+        let mut lines = vec![
+            Line::from(vec![
+                Span::raw("Tracks: "),
+                Span::styled(
+                    summary.track_count.to_string(),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
+        ];
+
+        // Deployment percentage if available
+        if let Some(ref deploy) = summary.deployment_stats {
+            lines.push(Line::from(vec![
+                Span::raw("Deploy: "),
+                Span::styled(
+                    format!("{:.0}%", deploy.deployment_percentage),
+                    Style::default().fg(Color::Green),
+                ),
+            ]));
+        }
+
+        // Health issues summary
+        let total_issues = summary.health_summary.total_issues;
+        if total_issues > 0 || summary.deploy_conflicts > 0 {
+            let issue_color = if total_issues > 10 { Color::Red } else { Color::Yellow };
+            lines.push(Line::from(vec![
+                Span::raw("Issues: "),
+                Span::styled(
+                    format!("{}", total_issues),
+                    Style::default().fg(issue_color),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("Healthy", Style::default().fg(Color::Green)),
+            ]));
+        }
+
+        lines
+    } else {
+        vec![Line::from("No data").style(Style::default().fg(Color::DarkGray))]
+    };
+
+    let corpus_para = Paragraph::new(corpus_lines)
         .block(Block::default().borders(Borders::ALL).title("Corpus"));
-    f.render_widget(para, area);
+    f.render_widget(corpus_para, split[0]);
+
+    // Right: DB thread stats
+    let db_lines = if let Some(ref stats) = ctx.db_stats {
+        let rate_str = if stats.writes_per_sec >= 1.0 {
+            format!("{:.0}/s", stats.writes_per_sec)
+        } else if stats.writes_per_sec > 0.0 {
+            format!("{:.1}/s", stats.writes_per_sec)
+        } else {
+            "0/s".to_string()
+        };
+
+        let latency_str = if stats.avg_latency_us > 1000 {
+            format!("{}ms", stats.avg_latency_us / 1000)
+        } else {
+            format!("{}µs", stats.avg_latency_us)
+        };
+
+        vec![
+            Line::from(vec![
+                Span::raw("Writes: "),
+                Span::styled(
+                    stats.total_writes.to_string(),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("Rate: "),
+                Span::styled(rate_str, Style::default().fg(Color::Green)),
+                Span::raw(" • "),
+                Span::styled(latency_str, Style::default().fg(Color::Yellow)),
+            ]),
+            Line::from(vec![
+                Span::raw("Queue: "),
+                Span::styled(
+                    stats.queue_depth.to_string(),
+                    if stats.queue_depth > 100 {
+                        Style::default().fg(Color::Red)
+                    } else if stats.queue_depth > 0 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    },
+                ),
+            ]),
+        ]
+    } else {
+        vec![Line::from("No DB thread").style(Style::default().fg(Color::DarkGray))]
+    };
+
+    let db_para = Paragraph::new(db_lines)
+        .block(Block::default().borders(Borders::ALL).title("DB Thread"));
+    f.render_widget(db_para, split[1]);
 }
 
 fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
@@ -508,8 +548,8 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
 
     // Get mode-specific controls hint
     let controls = match ctx.mode {
+        super::UiMode::ContentAnalysis => control_presets::empty(), // No controls during analysis
         super::UiMode::DirBrowser => control_presets::dir_browser(),
-        super::UiMode::DropMissingConfirmation => control_presets::drop_missing(),
         super::UiMode::DeploymentPreview => control_presets::deployment_preview(),
         super::UiMode::ExitConfirmModal => control_presets::exit_confirm_modal(),
         super::UiMode::CorpusBrowser => control_presets::corpus_browser(),

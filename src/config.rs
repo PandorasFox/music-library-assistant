@@ -32,6 +32,7 @@ pub struct Opinions {
     pub canonicalization: CanonicalizationOpinions,
     pub re_releases: ReReleaseOpinions,
     pub startup: StartupOpinions,
+    pub health_detection: HealthDetectionOpinions,
 }
 
 
@@ -130,12 +131,35 @@ pub struct StartupOpinions {
     /// Verify in-file tags match database at startup (default: true)
     /// This is "paranoid" mode - catches out-of-band tag edits by external tools
     pub paranoid_tag_verification: bool,
+    /// Show DB thread performance stats on splash screen (default: false)
+    pub show_db_stats_on_splash: bool,
 }
 
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
             paranoid_tag_verification: true,
+            show_db_stats_on_splash: false,
+        }
+    }
+}
+
+/// Opinions for health detection behavior
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthDetectionOpinions {
+    /// Tags that must be present on every track (default: title, album, artist, album_artist)
+    pub required_tags: Vec<String>,
+}
+
+impl Default for HealthDetectionOpinions {
+    fn default() -> Self {
+        Self {
+            required_tags: vec![
+                "title".to_string(),
+                "album".to_string(),
+                "artist".to_string(),
+                "album_artist".to_string(),
+            ],
         }
     }
 }
@@ -505,8 +529,33 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                         }
                     }
                 }
-                // Note: eyeballing always runs at startup (not configurable)
+                "show-db-stats-on-splash" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.show_db_stats_on_splash = val;
+                        }
+                    }
+                }
                 _ => {}
+            }
+        }
+    }
+}
+
+/// Parse health detection opinions from KDL node
+fn parse_health_detection_opinions(node: &kdl::KdlNode, opinions: &mut HealthDetectionOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == "required-tags" {
+                // Collect all string values from the node entries
+                let tags: Vec<String> = child
+                    .entries()
+                    .iter()
+                    .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                    .collect();
+                if !tags.is_empty() {
+                    opinions.required_tags = tags;
+                }
             }
         }
     }
@@ -641,6 +690,9 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "startup" => {
                                 parse_startup_opinions(child, &mut config.opinions.startup);
+                            }
+                            "health-detection" => {
+                                parse_health_detection_opinions(child, &mut config.opinions.health_detection);
                             }
                             _ => {}
                         }

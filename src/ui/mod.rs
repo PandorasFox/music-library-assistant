@@ -4,7 +4,6 @@
 
 pub mod app;
 pub mod deploy_flow;
-pub mod drop_flow;
 pub mod eye;
 pub mod flows;
 pub mod helpers;
@@ -44,8 +43,9 @@ use app::EyeAnimation;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum UiMode {
+    /// Content analysis progress screen - post-intake health signal computation
+    ContentAnalysis,
     DirBrowser,
-    DropMissingConfirmation,
     DeploymentPreview,
     /// Exit confirmation modal (when operations are in progress)
     ExitConfirmModal,
@@ -62,9 +62,6 @@ pub(crate) enum UiMode {
     /// Unified tag editor with transaction support (replaces TagEditor and DirectoryTagEditor)
     UnifiedTagEditor,
 }
-
-/// Re-export from drop_flow module
-pub(crate) use drop_flow::DropMissingState;
 
 /// State for the exit confirmation modal.
 /// Default selection is "No" (stay in application).
@@ -97,7 +94,6 @@ pub(crate) struct App {
     // UI mode and state
     mode: UiMode,
     tree_browser: Option<tree_browser::TreeBrowserState>,
-    drop_missing_state: Option<DropMissingState>,
     deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
     // Unified tag editor (transaction-based)
     unified_tag_editor: Option<tag_editor::UnifiedTagEditorState>,
@@ -111,9 +107,11 @@ pub(crate) struct App {
     tag_search: Option<tag_search::TagSearchState>,
     // Intake confirmation modal
     intake_confirmation: Option<startup::IntakeConfirmationState>,
+    // Content analysis progress screen
+    content_analysis: Option<startup::ContentAnalysisProgress>,
 
     // Task daemon for mutation execution
-    task_daemon: Option<crate::flows::TaskDaemon>,
+    task_daemon: Option<crate::daemon::TaskDaemon>,
 
     // Throughput tracking for rolling average (timestamp, bytes_processed)
     throughput_samples: VecDeque<(Instant, u64)>,
@@ -130,7 +128,6 @@ impl App {
             status_message: None,
             mode: UiMode::Insights,
             tree_browser: None,
-            drop_missing_state: None,
             deployment_preview: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
@@ -138,6 +135,7 @@ impl App {
             insights_view: None,
             tag_search: None,
             intake_confirmation: None,
+            content_analysis: None,
             task_daemon: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
@@ -146,14 +144,14 @@ impl App {
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         match self.mode {
+            UiMode::ContentAnalysis => {
+                // Content analysis ignores keys - can't interact during computation
+            }
             UiMode::DirBrowser => {
                 if let Some(ref mut browser) = self.tree_browser {
                     let action = browser.handle_key(key);
                     self.handle_tree_browser_action(action);
                 }
-            }
-            UiMode::DropMissingConfirmation => {
-                self.handle_drop_missing_key(key);
             }
             UiMode::DeploymentPreview => {
                 if let Some(ref mut preview) = self.deployment_preview {
@@ -331,17 +329,17 @@ impl App {
                     self.status_message = Some(format!("Indexing {} files...", count));
                 }
 
-                // Clean up and transition to Insights
+                // Clean up and proceed to content analysis
                 self.intake_confirmation = None;
-                self.start_insights_view();
+                self.start_content_analysis();
             }
             startup::IntakeConfirmationAction::Skipped => {
-                // User skipped - proceed to Insights without indexing
-                // MissingFromIndex signals remain in health_issues for later handling
+                // User skipped - proceed to content analysis without indexing
+                // UnindexedFile signals remain for later handling
                 let _ = config::log_message("IntakeConfirmation: user skipped indexing");
 
                 self.intake_confirmation = None;
-                self.start_insights_view();
+                self.start_content_analysis();
             }
         }
     }
@@ -352,26 +350,23 @@ impl App {
     }
 
     /// Start the insights view.
-    ///
-    /// Initializes the view with one-dim insights computed immediately,
-    /// spawns background computation for multi-dim insights.
     fn start_insights_view(&mut self) {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                self.status_message = Some(format!("Config error: {}", e));
-                return;
-            }
-        };
-
-        let db = self.db();
-
-        // Initialize insights view (queries health_issues table directly)
-        let mut view = insights_view::InsightsViewState::new();
-        view.initialize(db, db_path.to_str().unwrap_or(""));
-
-        self.insights_view = Some(view);
+        self.insights_view = Some(insights_view::InsightsViewState::new());
         self.mode = UiMode::Insights;
+    }
+
+    /// Start content analysis phase (after intake).
+    ///
+    /// Queues content analysis computations and shows the progress screen.
+    fn start_content_analysis(&mut self) {
+        let _ = config::log_message("Starting content analysis phase");
+
+        // Queue content analysis computations
+        self.daemon().queue_content_analysis();
+
+        // Create progress screen and transition
+        self.content_analysis = Some(startup::ContentAnalysisProgress::new());
+        self.mode = UiMode::ContentAnalysis;
     }
 
     fn start_tag_search(&mut self) {
@@ -404,108 +399,9 @@ impl App {
     }
 
     fn start_deployment_preview(&mut self) {
-        // Compute deployment status synchronously (could be made async for large libraries)
-        // Clone config to avoid borrow conflict with daemon's db reference
-        let config = self.config.clone();
-        let db = self.db();
-
-        let _ = config::log_message("Computing deployment status...");
-        match crate::flows::deploy::compute_full_deployment_status(&config, db) {
-            Ok(statuses) => {
-                let session_id = uuid::Uuid::new_v4().to_string();
-                let total_mutations: usize = statuses
-                    .iter()
-                    .map(|s| s.to_deploy.len() + s.stale.len() + s.orphans.len())
-                    .sum();
-
-                let _ = config::log_message(&format!(
-                    "Computed deployment status: {} libraries, {} total mutations",
-                    statuses.len(),
-                    total_mutations
-                ));
-
-                self.deployment_preview =
-                    Some(deploy_flow::DeploymentPreviewState::new(statuses, session_id));
-                self.mode = UiMode::DeploymentPreview;
-            }
-            Err(e) => {
-                let _ = config::log_message(&format!("ERROR: Failed to compute deployment status: {}", e));
-                self.status_message = Some(format!("Deployment status error: {}", e));
-            }
-        }
-    }
-
-    fn start_drop_missing_confirmation(&mut self) {
-        let db = self.db();
-        match drop_flow::find_missing_tracks(db) {
-            Ok(missing) => {
-                if missing.is_empty() {
-                    self.status_message = Some("No missing files found in index".to_string());
-                } else {
-                    self.drop_missing_state = Some(DropMissingState::new(missing));
-                    self.mode = UiMode::DropMissingConfirmation;
-                }
-            }
-            Err(e) => {
-                self.status_message = Some(e);
-            }
-        }
-    }
-
-    fn handle_drop_missing_key(&mut self, key: crossterm::event::KeyEvent) {
-        if let Some(ref mut state) = self.drop_missing_state {
-            let action = state.handle_key(key);
-            match action {
-                drop_flow::DropMissingAction::None => {}
-                drop_flow::DropMissingAction::Execute => {
-                    self.execute_drop_missing();
-                }
-                drop_flow::DropMissingAction::Cancel => {
-                    self.drop_missing_state = None;
-                    self.start_insights_view();
-                    self.status_message = Some("Drop cancelled".to_string());
-                }
-            }
-        }
-    }
-
-    fn execute_drop_missing(&mut self) {
-        // Get the missing tracks from state
-        let missing_tracks = match &self.drop_missing_state {
-            Some(state) => state.missing_tracks.clone(),
-            None => {
-                self.start_insights_view();
-                self.status_message = Some("No missing tracks to drop".to_string());
-                return;
-            }
-        };
-
-        let db = self.db();
-        match drop_flow::execute_drop_missing(db, &missing_tracks) {
-            Ok(result) => {
-                let mut msg = if let Some(log_path) = result.log_path {
-                    format!("Dropped {} entries from index. Log: {}", result.dropped_count, log_path)
-                } else {
-                    format!("Dropped {} entries from index", result.dropped_count)
-                };
-
-                if result.orphans_cleaned > 0 {
-                    msg = format!("{} (also cleaned {} orphaned scan entries)", msg, result.orphans_cleaned);
-                }
-
-                if result.failed_count > 0 {
-                    msg = format!("{}. {} failed: {:?}", msg, result.failed_count, result.errors);
-                }
-
-                self.status_message = Some(msg);
-            }
-            Err(e) => {
-                self.status_message = Some(e);
-            }
-        }
-
-        self.drop_missing_state = None;
-        self.start_insights_view();
+        // TODO: Reconnect when corpus::deploy is re-enabled
+        // This function requires compute_full_deployment_status from the disabled deploy module.
+        self.status_message = Some("Deployment preview disabled - deploy module being updated".to_string());
     }
 
     fn start_corpus_browser(&mut self) {
@@ -1082,93 +978,9 @@ impl App {
         match action {
             deploy_flow::DeploymentPreviewAction::None => {}
             deploy_flow::DeploymentPreviewAction::Confirm => {
-                // Generate mutations from deployment status and spawn background execution
-                if let Some(ref preview) = self.deployment_preview {
-                    let _ = config::log_message("=== DEPLOYMENT PREVIEW: CONFIRM REQUESTED ===");
-
-                    // Generate decisions for all libraries
-                    let all_decisions = crate::flows::deploy::all_deployment_statuses_to_decisions(
-                        &preview.statuses,
-                        &self.config,
-                    );
-
-                    let _ = config::log_message(&format!(
-                        "Generated {} deployment decisions",
-                        all_decisions.len()
-                    ));
-
-                    if all_decisions.is_empty() {
-                        self.deployment_preview = None;
-                        self.start_insights_view();
-                        self.status_message = Some("No deployment changes needed".to_string());
-                        return;
-                    }
-
-                    // Get library names for status message
-                    let library_names: Vec<String> = preview.statuses
-                        .iter()
-                        .map(|s| s.library_name.clone())
-                        .collect();
-                    let library_display = if library_names.len() == 1 {
-                        library_names[0].clone()
-                    } else {
-                        format!("{} libraries", library_names.len())
-                    };
-
-                    let _decision_count = all_decisions.len();
-
-                    // Convert decisions to mutations and queue to daemon
-                    use crate::corpus::mutations::Mutation;
-                    use crate::flows::DecisionType;
-                    use std::path::PathBuf;
-
-                    let mutations: Vec<Mutation> = all_decisions
-                        .iter()
-                        .filter_map(|d| {
-                            match d.decision_type {
-                                DecisionType::Deploy => {
-                                    let target = d.target_path.as_ref()?;
-                                    Some(Mutation::HardLink {
-                                        source: PathBuf::from(&d.source_path),
-                                        destination: PathBuf::from(target),
-                                    })
-                                }
-                                DecisionType::Undeploy => {
-                                    Some(Mutation::Unlink {
-                                        path: PathBuf::from(&d.source_path),
-                                    })
-                                }
-                                DecisionType::Redeploy => {
-                                    // Redeploy = remove old + create new
-                                    // For now, just create the new link (old will be orphaned)
-                                    let target = d.target_path.as_ref()?;
-                                    Some(Mutation::HardLink {
-                                        source: PathBuf::from(&d.source_path),
-                                        destination: PathBuf::from(target),
-                                    })
-                                }
-                                _ => None, // Other decision types not handled here
-                            }
-                        })
-                        .collect();
-
-                    let _mutation_count = mutations.len();
-                    let label = format!("Deploy to {}", library_display);
-
-                    // TODO: Reconnect via DecisionWitness when UI integration is complete.
-                    // Deployment confirms are user-led decisions and need:
-                    //   let witness = crate::daemon::confirm_decision();
-                    //   self.daemon().queue_all_with_label(mutations, Some(label), &witness);
-                    let _ = (mutations, label);
-                    todo!("Reconnect: Deployment confirm needs DecisionWitness");
-
-                    #[allow(unreachable_code)]
-                    { self.status_message = Some(format!(
-                        "Queued {} deployment operations to {}",
-                        _mutation_count, library_display
-                    )); }
-                }
-                // Return to main menu immediately - deployment runs in background
+                // TODO: Reconnect when corpus::deploy is re-enabled
+                // This function requires all_deployment_statuses_to_decisions from the disabled deploy module.
+                self.status_message = Some("Deployment confirm disabled - deploy module being updated".to_string());
                 self.deployment_preview = None;
                 self.start_insights_view();
             }
@@ -1206,9 +1018,9 @@ impl App {
     }
 
     /// Get or create the task daemon.
-    fn daemon(&mut self) -> &mut crate::flows::TaskDaemon {
+    fn daemon(&mut self) -> &mut crate::daemon::TaskDaemon {
         if self.task_daemon.is_none() {
-            self.task_daemon = Some(crate::flows::TaskDaemon::new());
+            self.task_daemon = Some(crate::daemon::TaskDaemon::new());
         }
         self.task_daemon.as_mut().unwrap()
     }
@@ -1221,7 +1033,8 @@ impl App {
     /// Tick the splash screen and check for completion.
     ///
     /// Called each frame while splash_screen is Some. When daemon eye state
-    /// becomes Awake (eyeballing complete), transitions to Insights view.
+    /// becomes Awake (eyeballing complete), checks for unindexed files and
+    /// proceeds to intake confirmation or content analysis.
     fn tick_splash_screen(&mut self) {
         // Take splash_screen temporarily to avoid borrow conflicts
         let mut splash = match self.splash_screen.take() {
@@ -1239,6 +1052,11 @@ impl App {
             ));
         }
 
+        // Update db_stats on splash screen (for optional display)
+        if let Some(daemon) = &self.task_daemon {
+            splash.set_db_stats(daemon.db_stats());
+        }
+
         // Put it back or transition
         if splash.is_complete() {
             // Don't put it back - check for unindexed files before transitioning
@@ -1250,10 +1068,37 @@ impl App {
                 self.intake_confirmation = Some(intake_state);
                 self.mode = UiMode::IntakeConfirmation;
             } else {
-                self.start_insights_view();
+                // No unindexed files - skip intake, proceed to content analysis
+                self.start_content_analysis();
             }
         } else {
             self.splash_screen = Some(splash);
+        }
+    }
+
+    /// Tick content analysis progress and check for completion.
+    ///
+    /// Called each frame while content_analysis is Some. When all content
+    /// analysis computations complete, transitions to Insights view.
+    fn tick_content_analysis(&mut self) {
+        // Take content_analysis temporarily to avoid borrow conflicts
+        let mut progress = match self.content_analysis.take() {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Tick progress screen - it checks daemon state for completion
+        let completed = progress.tick(self.daemon());
+        if completed {
+            let status = self.daemon().status();
+            let _ = config::log_message(&format!(
+                "Content analysis complete: {} processed",
+                status.total_processed
+            ));
+            // Transition to Insights view
+            self.start_insights_view();
+        } else {
+            self.content_analysis = Some(progress);
         }
     }
 
@@ -1274,7 +1119,24 @@ impl App {
     fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
         // Clone corpus_root to avoid borrow conflict with daemon's db reference
         let corpus_root = self.config.corpus_root.clone();
+
+        // Log current eye state for debugging
+        let eye_state = self.daemon().eye_state();
+        let _ = config::log_message(&format!(
+            "check_for_unindexed_files: eye_state={:?}",
+            eye_state
+        ));
+
         let db = self.db();
+
+        // Also query total signal count for debugging
+        if let Ok(all_signals) = db.get_health_signals(None) {
+            let _ = config::log_message(&format!(
+                "check_for_unindexed_files: total health signals in db = {}",
+                all_signals.len()
+            ));
+        }
+
         startup::IntakeConfirmationState::gather(db, &corpus_root, "corpus")
     }
 }
@@ -1284,15 +1146,23 @@ impl App {
 // ============================================================================
 
 fn render(f: &mut Frame, app: &mut App) {
+    // Fetch corpus summary for footer display
+    let corpus_summary = app.task_daemon.as_mut().and_then(|d| {
+        d.read_only_db().get_corpus_summary().ok()
+    });
+
+    // Fetch DB thread stats
+    let db_stats = app.task_daemon.as_ref().map(|d| d.db_stats());
+
     let mut ctx = render::RenderContext {
         mode: app.mode,
         config: &app.config,
         status_message: app.status_message.as_deref(),
         tree_browser: app.tree_browser.as_mut(),
-        drop_missing_state: app.drop_missing_state.as_ref(),
         deployment_preview: app.deployment_preview.as_mut(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         splash_screen: app.splash_screen.as_ref(),
+        content_analysis: app.content_analysis.as_ref(),
         insights_view: app.insights_view.as_mut(),
         tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
@@ -1309,6 +1179,8 @@ fn render(f: &mut Frame, app: &mut App) {
                 None
             }
         }),
+        corpus_summary,
+        db_stats,
     };
     render::render(f, &mut ctx);
 }
@@ -1399,9 +1271,20 @@ fn run_app<B: ratatui::backend::Backend>(
         let can_animate = app.daemon().eye_state() == crate::daemon::EyeState::Awake;
         app.eye.update(can_animate);
 
+        // Update insights view with daemon status
+        if let Some(ref mut view) = app.insights_view {
+            let status = app.task_daemon.as_ref().map(|d| d.status());
+            view.update(status.as_ref());
+        }
+
         // Tick splash screen if active (startup eyeballing)
         if app.splash_screen.is_some() {
             app.tick_splash_screen();
+        }
+
+        // Tick content analysis if active (post-intake computation)
+        if app.content_analysis.is_some() {
+            app.tick_content_analysis();
         }
 
         terminal.draw(|f| render(f, app))?;

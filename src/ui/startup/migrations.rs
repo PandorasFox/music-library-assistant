@@ -13,7 +13,7 @@ use ratatui::Terminal;
 use crate::config;
 use crate::corpus::db::Database;
 use crate::corpus::mutations::MigrationRegistry;
-use crate::daemon::confirm_decision;
+use crate::daemon::confirm_startup_migration;
 
 /// Check for database migrations and run them with user approval.
 ///
@@ -118,8 +118,7 @@ pub fn check_and_run_migrations<B: ratatui::backend::Backend>(
         if let Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Enter => {
-                    // User approved - create witness and proceed
-                    let _witness = confirm_decision();
+                    // User approved - proceed with migrations
                     break;
                 }
                 KeyCode::Esc => {
@@ -180,8 +179,9 @@ pub fn check_and_run_migrations<B: ratatui::backend::Backend>(
         f.render_widget(paragraph, dialog_area);
     })?;
 
-    // Execute migrations (with witness created above)
-    let result = registry.apply_all_pending(&db);
+    // Execute migrations (create witness to prove user approved)
+    let witness = confirm_startup_migration();
+    let result = registry.apply_all_pending(&db, &witness);
 
     match result {
         Ok(count) => {

@@ -397,8 +397,8 @@ mod tests {
         let ratio = min as f64 / max as f64;
         assert!(ratio < 0.7, "Should detect significant bitrate difference");
 
-        // This would trigger QualityVariant health issue creation
-        // Then user can choose to stash the MP3 versions
+        // Quality differences are introspectable at runtime from Track metadata
+        // when viewing FingerprintDuplicate issues - user can choose to stash lower quality
     }
 
     #[test]

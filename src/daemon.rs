@@ -16,6 +16,7 @@ use crate::config;
 use crate::corpus::computations::Computation;
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
+use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
 
 // ============================================================================
 // State Machine
@@ -46,11 +47,12 @@ pub enum EyeState {
     /// Eye is closed - startup mode, splash screen shown.
     #[default]
     Closed,
-    /// Transitioning to Awake (NOP for now, transitions immediately).
+    /// Transitioning to Awake - second-level signals being computed.
     Awakening,
     /// Eye is awake - normal operation, can blink.
     Awake,
 }
+
 
 /// Corpus observation state - tracks whether the corpus has been seen.
 ///
@@ -153,9 +155,26 @@ pub mod sealed {
             Self(())
         }
     }
+
+    /// A zero-sized token proving code is executing inside TaskDaemon's migration worker.
+    ///
+    /// Migration apply functions require this witness, ensuring they can only be
+    /// called from within the daemon's `execute_migration()` function.
+    ///
+    /// Cannot be constructed outside the daemon's `execute_migration()` function.
+    #[derive(Clone, Copy)]
+    pub struct MigrationWitness(());
+
+    impl MigrationWitness {
+        /// Internal constructor - only callable from execute_migration()
+        pub(super) fn new() -> Self {
+            Self(())
+        }
+    }
 }
 
 pub use sealed::DecisionWitness;
+pub use sealed::MigrationWitness;
 pub use sealed::MutationExecutionWitness;
 
 /// Create a DecisionWitness, certifying that the user has confirmed a decision.
@@ -182,6 +201,17 @@ pub use sealed::MutationExecutionWitness;
 /// ```
 pub fn confirm_decision() -> DecisionWitness {
     DecisionWitness::new()
+}
+
+/// Create a MigrationWitness for startup migrations (pre-daemon context).
+///
+/// Call this when the user approves database migrations at startup.
+/// The returned witness can then be passed to [`MigrationRegistry::apply_all_pending`].
+///
+/// This is separate from the daemon's `execute_migration()` context witness -
+/// it's for migrations that run before the daemon exists.
+pub fn confirm_startup_migration() -> MigrationWitness {
+    MigrationWitness::new()
 }
 
 // ============================================================================
@@ -483,6 +513,10 @@ pub struct TaskDaemon {
     /// Only accessed from the main thread via `read_only_db()`.
     /// UI code should use this instead of creating direct connections.
     read_only_conn: Option<Database>,
+
+    /// Handle to the dedicated DB write thread.
+    /// Provides stats access and shutdown coordination.
+    db_thread_handle: DbThreadHandle,
 }
 
 impl TaskDaemon {
@@ -493,6 +527,9 @@ impl TaskDaemon {
         let worker = CancelableWorker::new(|(task, label): (Task, String), _state| {
             Some(execute_task(task, label))
         });
+
+        // Spawn the dedicated DB write thread
+        let db_thread_handle = db_thread::spawn();
 
         Self {
             worker,
@@ -514,6 +551,7 @@ impl TaskDaemon {
             completed_at: None,
             pending_transaction: None,
             read_only_conn: None,
+            db_thread_handle,
         }
     }
 
@@ -757,7 +795,7 @@ impl TaskDaemon {
 
             match self.eye_state {
                 EyeState::Closed => {
-                    // First eyeballing complete - enter Awakening
+                    // Eyeballing complete - enter Awakening for directory derivations
                     let _ = crate::config::log_message(&format!(
                         "[STATE] Eyeballing complete. Transitioning Closed → Awakening. \
                          Processed {} tasks.",
@@ -778,8 +816,8 @@ impl TaskDaemon {
                 }
             }
         }
-        // Handle awakening completion (second-level computations)
-        // Separate from eyeballing - observation_state is already Complete here
+        // Handle awakening completion - transition directly to Awake
+        // ContentAnalysis is triggered separately via queue_content_analysis() after intake
         else if self.eye_state == EyeState::Awakening {
             let _ = crate::config::log_message(&format!(
                 "[STATE] Awakening complete. Transitioning Awakening → Awake. \
@@ -807,7 +845,7 @@ impl TaskDaemon {
         self.current_label = None;
     }
 
-    /// Queue second-level signal computations during Awakening phase.
+    /// Queue second-level signal computations during Awakening.
     ///
     /// This queues `ScheduleSecondLevelDerivations` which will spawn per-directory
     /// computations to derive signals like UnindexedFile, MissingFile, etc.
@@ -815,13 +853,33 @@ impl TaskDaemon {
         use crate::corpus::computations::Computation;
 
         let _ = crate::config::log_message(
-            "[STATE] Queueing ScheduleSecondLevelDerivations for Awakening phase"
+            "[STATE] Queueing ScheduleSecondLevelDerivations for Awakening"
         );
 
         // Queue the orchestrator computation that will spawn per-directory derivations
         self.queue_computation_with_label(
             Computation::ScheduleSecondLevelDerivations,
-            Some("Computing signals".to_string()),
+            Some("Computing directory signals".to_string()),
+        );
+    }
+
+    /// Queue content analysis computations.
+    ///
+    /// This queues `ScheduleContentAnalysis` which will spawn bulk detection
+    /// computations for FingerprintDuplicate, MissingTag, etc.
+    ///
+    /// Called from UI after intake flow completes (Eye is already Awake).
+    pub fn queue_content_analysis(&mut self) {
+        use crate::corpus::computations::Computation;
+
+        let _ = crate::config::log_message(
+            "[STATE] Queueing ScheduleContentAnalysis for content analysis"
+        );
+
+        // Queue the orchestrator computation that will spawn all detection computations
+        self.queue_computation_with_label(
+            Computation::ScheduleContentAnalysis,
+            Some("Analyzing content".to_string()),
         );
     }
 
@@ -1289,7 +1347,12 @@ impl TaskDaemon {
 
     /// Check if there's pending work (tasks queued or in-flight).
     pub fn has_pending(&self) -> bool {
-        self.in_flight > 0
+        self.in_flight > 0 || !self.db_thread_handle.queue_empty()
+    }
+
+    /// Get current DB thread stats for UI display.
+    pub fn db_stats(&self) -> DbThreadStats {
+        self.db_thread_handle.stats()
     }
 
     /// Check if there's a lingering completed session to display.
@@ -1329,7 +1392,6 @@ fn execute_task(task: Task, label: String) -> TaskResult {
 fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
     use crate::config;
     use crate::corpus::db::Database;
-    use crate::corpus::health::refresh_health_for_track;
     use crate::corpus::mutations::{file_ops, tag_edit, indexing, MutationCategory};
 
     let _ = config::log_message(&format!(
@@ -1359,9 +1421,6 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
 
     let session_id = "daemon";
 
-    // Track the affected track_id for post-mutation health refresh
-    let affected_track_id = mutation.affected_track_id();
-
     let (success, error) = match mutation.category() {
         MutationCategory::TagEdit => {
             let _ = config::log_message(&format!(
@@ -1389,22 +1448,6 @@ fn execute_mutation(mutation: Mutation, label: String) -> TaskResult {
         "[EXECUTION] execute_mutation END: success={}, error={:?}",
         success, error
     ));
-
-    // After successful mutation, refresh health signals for affected track
-    // This is expensive (full deployment conflict detection) but comprehensive
-    // TODO: Consider removing this once we're confident the computation-based
-    // signal recomputation is working reliably
-    if success {
-        if let Some(track_id) = affected_track_id {
-            if let Err(e) = refresh_health_for_track(&db, track_id) {
-                let _ = config::log_message(&format!(
-                    "Warning: health refresh failed for track {}: {}",
-                    track_id, e
-                ));
-                // Don't fail the mutation for health refresh errors
-            }
-        }
-    }
 
     // Queue computations to recompute signals for affected directories
     // This ensures signals like UnindexedFile → HealthyFile are updated
@@ -1441,6 +1484,9 @@ fn execute_migration(migration: Migration, label: String) -> TaskResult {
     use crate::corpus::db::Database;
     use crate::corpus::mutations::MigrationRegistry;
 
+    // Create migration witness - proves we're inside daemon execution context
+    let witness = MigrationWitness::new();
+
     // Open database
     let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
         Ok(db) => db,
@@ -1456,7 +1502,7 @@ fn execute_migration(migration: Migration, label: String) -> TaskResult {
 
     // Apply the specific migration
     let registry = MigrationRegistry::new();
-    let result = registry.apply_migration(&db, migration.to_version);
+    let result = registry.apply_migration(&db, migration.to_version, &witness);
 
     let (success, error) = match result {
         Ok(()) => (true, None),

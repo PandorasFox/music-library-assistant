@@ -20,7 +20,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::flows::deploy::compute_deployment_path_with_tags;
+// TODO: Re-enable when corpus::deploy is available
+// use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 pub use state::TagSearchState;
@@ -371,7 +372,8 @@ impl TagSearchState {
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        // Render track list sorted by deployment path
+        // Render track list sorted by path
+        // TODO: Re-enable deployment path display when corpus::deploy is available
         let visible_height = inner.height as usize;
         let scroll = self.results_scroll;
 
@@ -381,8 +383,8 @@ impl TagSearchState {
             .skip(scroll)
             .take(visible_height)
             .map(|(idx, twt)| {
-                let deploy_path = compute_deployment_path_with_tags(&twt.track, &twt.tags);
-                let path_str = deploy_path.to_string_lossy();
+                // Use corpus path directly (deployment path display disabled)
+                let path_str = &twt.track.path;
                 let is_selected = idx == self.results_selected;
 
                 let indicator = if is_selected { "▶ " } else { "  " };

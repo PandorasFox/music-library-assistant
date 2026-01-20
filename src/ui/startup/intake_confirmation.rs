@@ -53,9 +53,21 @@ impl IntakeConfirmationState {
     /// Returns None if there are no unindexed files.
     pub fn gather(db: &Database, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
         // Get all UnindexedFile signals - these are pre-computed during Awakening
-        let issues = db
-            .get_health_signals(Some(HealthIssueType::UnindexedFile))
-            .ok()?;
+        let issues = match db.get_health_signals(Some(HealthIssueType::UnindexedFile)) {
+            Ok(i) => i,
+            Err(e) => {
+                let _ = log_message(&format!(
+                    "IntakeConfirmation::gather: query failed: {:?}",
+                    e
+                ));
+                return None;
+            }
+        };
+
+        let _ = log_message(&format!(
+            "IntakeConfirmation::gather: found {} UnindexedFile signals",
+            issues.len()
+        ));
 
         if issues.is_empty() {
             return None;

@@ -756,6 +756,58 @@ fn is_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Get signal sender or return early failure.
+///
+/// Helper to reduce duplication across computations that need signal sender access.
+fn get_signal_sender_or_fail(
+    computation: Computation,
+    start: Instant,
+) -> Result<db_thread::SignalWriteSender, ComputationResult> {
+    match db_thread::signal_sender() {
+        Some(s) => Ok(s.clone()),
+        None => Err(ComputationResult::failure(
+            computation,
+            start.elapsed().as_millis() as u64,
+            "DB thread not initialized".to_string(),
+        )),
+    }
+}
+
+/// Parse comma-separated track IDs into Vec<i64>.
+///
+/// Filters out invalid integers and whitespace.
+fn parse_track_ids_csv(s: &str) -> Vec<i64> {
+    s.split(',')
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .collect()
+}
+
+/// Extract modification time from metadata as (seconds, nanoseconds) tuple.
+///
+/// Returns (0, 0) if mtime extraction fails.
+fn extract_mtime(metadata: &std::fs::Metadata) -> (i64, i64) {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+        .unwrap_or((0, 0))
+}
+
+/// Enumerate all directories under root, including root itself.
+///
+/// Returns (directories, symlink_count). Symlinks are skipped.
+fn enumerate_all_directories(root: &Path) -> (Vec<PathBuf>, usize) {
+    let mut directories: Vec<PathBuf> = Vec::new();
+    let mut symlink_count = 0;
+    enumerate_directories_recursive(root, &mut directories, &mut symlink_count);
+
+    // Include root itself (for files directly in root)
+    directories.push(root.to_path_buf());
+
+    (directories, symlink_count)
+}
+
 /// Phase 1: Enumerate ALL corpus directories and spawn per-directory scans.
 ///
 /// Recursively walks the entire corpus tree to find all directories,
@@ -783,12 +835,7 @@ fn execute_walk_corpus(
     }
 
     // Recursively enumerate ALL directories
-    let mut directories: Vec<PathBuf> = Vec::new();
-    let mut symlink_count = 0;
-    enumerate_directories_recursive(root, &mut directories, &mut symlink_count);
-
-    // Always include root itself (for files directly in root)
-    directories.push(root.to_path_buf());
+    let (directories, symlink_count) = enumerate_all_directories(root);
 
     if symlink_count > 0 {
         let _ = log_message(&format!(
@@ -861,10 +908,7 @@ fn walk_dir_recursive(dir: &Path, disk_state: &mut Vec<(i64, PathBuf, i64, i64)>
         } else if is_audio_file(&path) {
             if let Ok(metadata) = std::fs::metadata(&path) {
                 let inode = metadata.ino() as i64;
-                let mtime = metadata.modified().ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-                    .unwrap_or((0, 0));
+                let mtime = extract_mtime(&metadata);
 
                 disk_state.push((inode, path, mtime.0, mtime.1));
             }
@@ -892,15 +936,9 @@ fn execute_scan_corpus_directory(
     };
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     if !directory.exists() {
@@ -961,7 +999,7 @@ fn execute_scan_corpus_directory(
             }
         } else {
             // File not indexed - create a FileInCorpus signal for this file
-            ensure_file_signal_if_missing(db, sender, FileSignalType::FileInCorpus, &path_str, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
         }
     }
 
@@ -992,10 +1030,7 @@ fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
         if is_audio_file(&path) {
             if let Ok(metadata) = std::fs::metadata(&path) {
                 let inode = metadata.ino() as i64;
-                let mtime = metadata.modified().ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-                    .unwrap_or((0, 0));
+                let mtime = extract_mtime(&metadata);
 
                 disk_state.push((inode, path, mtime.0, mtime.1));
             }
@@ -1171,10 +1206,8 @@ fn execute_verify_mtime(
     };
 
     // Read current mtime from disk
-    let current_mtime = match std::fs::metadata(path) {
-        Ok(m) => m.modified().ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64)),
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
         Err(e) => {
             return ComputationResult::failure(
                 computation,
@@ -1184,13 +1217,7 @@ fn execute_verify_mtime(
         }
     };
 
-    let Some((current_secs, current_nanos)) = current_mtime else {
-        return ComputationResult::failure(
-            computation,
-            start.elapsed().as_millis() as u64,
-            "Failed to read file mtime".to_string(),
-        );
-    };
+    let (current_secs, current_nanos) = extract_mtime(&metadata);
 
     // If mtime differs from expected, spawn VerifyTags to check actual content
     let spawn = if current_secs != expected_mtime_secs || current_nanos != expected_mtime_nanos {
@@ -1310,15 +1337,9 @@ fn execute_derive_directory_signals(
     };
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     // Get FileInCorpus signals for this directory
@@ -1379,10 +1400,10 @@ fn execute_derive_directory_signals(
     for corpus_path in &corpus_paths {
         if indexed_paths.contains_key(corpus_path) {
             // File is in both corpus and index → clear UnindexedFile if it exists
-            clear_file_signal_if_present(db, sender, FileSignalType::UnindexedFile, corpus_path, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::UnindexedFile, corpus_path, witness);
         } else {
             // File in corpus but not indexed → ensure UnindexedFile signal
-            ensure_file_signal_if_missing(db, sender, FileSignalType::UnindexedFile, corpus_path, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::UnindexedFile, corpus_path, witness);
         }
     }
 
@@ -1391,10 +1412,10 @@ fn execute_derive_directory_signals(
         if corpus_paths.contains(path) {
             // File exists in both corpus and index → healthy
             // Clear MissingFile signal if it existed
-            clear_file_signal_if_present(db, sender, FileSignalType::MissingFile, path, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::MissingFile, path, witness);
 
             // Ensure HealthyFile signal
-            ensure_file_signal_if_missing(db, sender, FileSignalType::HealthyFile, path, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::HealthyFile, path, witness);
 
             // Spawn deploy conflict check for healthy files
             if let Some(track_id) = track.id {
@@ -1403,10 +1424,10 @@ fn execute_derive_directory_signals(
         } else {
             // Track without FileInCorpus → file is missing from disk
             // Clear HealthyFile signal if it existed
-            clear_file_signal_if_present(db, sender, FileSignalType::HealthyFile, path, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::HealthyFile, path, witness);
 
             // Ensure MissingFile signal
-            ensure_file_signal_if_missing(db, sender, FileSignalType::MissingFile, path, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::MissingFile, path, witness);
         }
     }
 
@@ -1480,12 +1501,7 @@ fn execute_walk_library(
     }
 
     // Enumerate all directories recursively
-    let mut directories: Vec<PathBuf> = Vec::new();
-    let mut symlink_count = 0;
-    enumerate_directories_recursive(library_root, &mut directories, &mut symlink_count);
-
-    // Include root itself
-    directories.push(library_root.to_path_buf());
+    let (directories, _symlink_count) = enumerate_all_directories(library_root);
 
     let _ = log_message(&format!(
         "[COMPUTE] WalkLibrary '{}': found {} directories in {:?}",
@@ -1593,15 +1609,9 @@ fn execute_derive_library_health_signals(
     };
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     // Get all corpus track inodes (inode -> corpus_path)
@@ -1627,7 +1637,7 @@ fn execute_derive_library_health_signals(
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
             // Inode match found - this file is deployed from corpus
             // Clear any orphan signal that might have existed
-            clear_file_signal_if_present(db, sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
 
             // Check if deployed at correct path (stale detection)
             let is_stale = if let Ok(Some(track)) = db.get_track_by_path(corpus_path) {
@@ -1653,17 +1663,17 @@ fn execute_derive_library_health_signals(
 
             if is_stale {
                 stale_count += 1;
-                ensure_file_signal_if_missing(db, sender, FileSignalType::LibraryStale, &stale_key, witness);
+                ensure_file_signal_if_missing(db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
             } else {
                 healthy_count += 1;
-                clear_file_signal_if_present(db, sender, FileSignalType::LibraryStale, &stale_key, witness);
+                clear_file_signal_if_present(db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
             }
         } else {
             // No corpus match - this is an orphan
             orphan_count += 1;
-            ensure_file_signal_if_missing(db, sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
+            ensure_file_signal_if_missing(db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
             // Clear any stale signal (orphans aren't stale, they're orphans)
-            clear_file_signal_if_present(db, sender, FileSignalType::LibraryStale, &stale_key, witness);
+            clear_file_signal_if_present(db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
         }
     }
 
@@ -1720,15 +1730,9 @@ fn execute_detect_fingerprint_duplicates(
     let computation = Computation::DetectFingerprintDuplicates;
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     // First, clear stale FingerprintDuplicate signals
@@ -1798,10 +1802,7 @@ fn execute_detect_fingerprint_duplicates(
         };
 
         // Parse track IDs from comma-separated string
-        let track_ids: Vec<i64> = track_ids_str
-            .split(',')
-            .filter_map(|s| s.trim().parse::<i64>().ok())
-            .collect();
+        let track_ids = parse_track_ids_csv(&track_ids_str);
 
         total_groups += 1;
         total_tracks += track_ids.len();
@@ -1840,15 +1841,9 @@ fn execute_detect_duplicate_inodes(
     let computation = Computation::DetectDuplicateInodes;
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     // First, clear stale DuplicateInode signals
@@ -1914,10 +1909,7 @@ fn execute_detect_duplicate_inodes(
         };
 
         // Parse track IDs from comma-separated string
-        let track_ids: Vec<i64> = track_ids_str
-            .split(',')
-            .filter_map(|s| s.trim().parse::<i64>().ok())
-            .collect();
+        let track_ids = parse_track_ids_csv(&track_ids_str);
 
         total_groups += 1;
 
@@ -1959,15 +1951,9 @@ fn execute_detect_missing_tags(
     let computation = Computation::DetectMissingTags;
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     // Load required tags from config
@@ -2127,15 +2113,9 @@ fn execute_detect_metadata_duplicates(
     let computation = Computation::DetectMetadataDuplicates;
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     // First, clear all MetadataDuplicate signals (we'll rebuild)
@@ -2306,15 +2286,9 @@ fn execute_verify_out_of_band_changes(
     let computation = Computation::VerifyOutOfBandChanges;
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => {
-            return ComputationResult::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
+    let sender = match get_signal_sender_or_fail(computation.clone(), start) {
+        Ok(s) => s,
+        Err(result) => return result,
     };
 
     // Get all CorpusFileModifiedOutOfBand signals

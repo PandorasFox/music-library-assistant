@@ -512,6 +512,15 @@ impl UnifiedTagEditorState {
         self.staged_mutations_for_current = None;
     }
 
+    /// Reset field navigation state (called when navigating between items)
+    ///
+    /// Combines the common pattern of resetting field_idx, scroll offset, and staged mutations.
+    pub fn reset_field_state(&mut self) {
+        self.current_field_idx = 0;
+        self.field_scroll_offset = 0;
+        self.clear_staged_mutations();
+    }
+
     // ========================================================================
     // Signals
     // ========================================================================

@@ -37,6 +37,55 @@ use crate::config::{self, Config};
 use app::EyeAnimation;
 
 // ============================================================================
+// Progress Stats Trait
+// ============================================================================
+
+/// Trait for progress states that display daemon statistics.
+///
+/// Allows generic stats update logic in tick functions.
+trait ProgressStatsUpdater {
+    fn set_db_queue_depth(&mut self, depth: u64);
+    fn set_db_stats(&mut self, stats: Option<crate::db_thread::DbThreadStats>);
+    fn set_worker_stats(&mut self, stats: Option<crate::daemon::WorkerStats>);
+}
+
+impl ProgressStatsUpdater for splash_screen::SplashScreen {
+    fn set_db_queue_depth(&mut self, depth: u64) {
+        splash_screen::SplashScreen::set_db_queue_depth(self, depth);
+    }
+    fn set_db_stats(&mut self, stats: Option<crate::db_thread::DbThreadStats>) {
+        splash_screen::SplashScreen::set_db_stats(self, stats);
+    }
+    fn set_worker_stats(&mut self, stats: Option<crate::daemon::WorkerStats>) {
+        splash_screen::SplashScreen::set_worker_stats(self, stats);
+    }
+}
+
+impl ProgressStatsUpdater for startup::ContentAnalysisProgress {
+    fn set_db_queue_depth(&mut self, depth: u64) {
+        startup::ContentAnalysisProgress::set_db_queue_depth(self, depth);
+    }
+    fn set_db_stats(&mut self, stats: Option<crate::db_thread::DbThreadStats>) {
+        startup::ContentAnalysisProgress::set_db_stats(self, stats);
+    }
+    fn set_worker_stats(&mut self, stats: Option<crate::daemon::WorkerStats>) {
+        startup::ContentAnalysisProgress::set_worker_stats(self, stats);
+    }
+}
+
+impl ProgressStatsUpdater for startup::IntakeConfirmationState {
+    fn set_db_queue_depth(&mut self, depth: u64) {
+        startup::IntakeConfirmationState::set_db_queue_depth(self, depth);
+    }
+    fn set_db_stats(&mut self, stats: Option<crate::db_thread::DbThreadStats>) {
+        startup::IntakeConfirmationState::set_db_stats(self, stats);
+    }
+    fn set_worker_stats(&mut self, stats: Option<crate::daemon::WorkerStats>) {
+        startup::IntakeConfirmationState::set_worker_stats(self, stats);
+    }
+}
+
+// ============================================================================
 // Application State
 // ============================================================================
 
@@ -371,6 +420,66 @@ impl App {
         self.mode = UiMode::Insights;
     }
 
+    /// Stage a decision to the daemon's transaction and update editor state.
+    ///
+    /// Helper for StageDecision, StageDecisionAndNext, and StageDecisionAndReview actions.
+    fn stage_decision(&mut self, index: usize, mutations: Vec<crate::corpus::mutations::Mutation>) {
+        let witness = crate::daemon::confirm_decision();
+        if let Some(daemon) = self.task_daemon.as_mut() {
+            let label = self.unified_tag_editor
+                .as_ref()
+                .map(|e| e.current_item_label())
+                .unwrap_or_else(|| "Tag edit".to_string());
+            let _ = daemon.add_decision(index, &witness, label, mutations.clone());
+        }
+        // Track staged mutations for redundant confirmation skipping
+        if let Some(ref mut editor) = self.unified_tag_editor {
+            editor.set_staged_mutations(mutations);
+        }
+        self.status_message = Some(format!("Decision staged (item {})", index + 1));
+    }
+
+    /// Gather transaction decisions from daemon for review modal.
+    ///
+    /// Returns list of (decision_index, label, mutation_count) for all staged decisions.
+    fn gather_transaction_decisions(&self) -> Vec<(usize, String, usize)> {
+        if let Some(daemon) = self.task_daemon.as_ref() {
+            daemon.decision_indices()
+                .iter()
+                .filter_map(|&idx| {
+                    daemon.get_decision(idx).map(|d| {
+                        (idx, d.label.clone(), d.mutations.len())
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Abort current operation and return to insights view with a status message.
+    ///
+    /// Helper for error handling in start_tag_editor_for_path.
+    fn abort_to_insights(&mut self, message: String) {
+        self.status_message = Some(message);
+        self.tree_browser = None;
+        self.start_insights_view();
+    }
+
+    /// Update daemon stats on a progress state that implements the stats setter methods.
+    ///
+    /// Helper for updating queue depth, db stats, and worker stats from daemon.
+    fn update_progress_stats<T>(&self, state: &mut T)
+    where
+        T: ProgressStatsUpdater,
+    {
+        if let Some(daemon) = &self.task_daemon {
+            state.set_db_queue_depth(daemon.db_queue_depth());
+            state.set_db_stats(daemon.db_stats());
+            state.set_worker_stats(daemon.worker_stats());
+        }
+    }
+
     /// Start content analysis phase (after intake).
     ///
     /// Queues content analysis computations and shows the progress screen.
@@ -475,13 +584,11 @@ impl App {
             match db.get_tracks_for_tag_editing(path) {
                 Ok(t) => (t, 0usize),
                 Err(e) => {
-                    self.status_message = Some(format!(
+                    self.abort_to_insights(format!(
                         "Query error for path '{}': {}",
                         path.display(),
                         e
                     ));
-                    self.tree_browser = None;
-                    self.start_insights_view();
                     return;
                 }
             }
@@ -490,12 +597,10 @@ impl App {
             let parent_dir = match path.parent() {
                 Some(p) => p,
                 None => {
-                    self.status_message = Some(format!(
+                    self.abort_to_insights(format!(
                         "Cannot determine parent directory: {}",
                         path.display()
                     ));
-                    self.tree_browser = None;
-                    self.start_insights_view();
                     return;
                 }
             };
@@ -504,13 +609,11 @@ impl App {
             let dir_tracks = match db.get_tracks_for_tag_editing(parent_dir) {
                 Ok(t) => t,
                 Err(e) => {
-                    self.status_message = Some(format!(
+                    self.abort_to_insights(format!(
                         "Query error for directory '{}': {}",
                         parent_dir.display(),
                         e
                     ));
-                    self.tree_browser = None;
-                    self.start_insights_view();
                     return;
                 }
             };
@@ -543,22 +646,18 @@ impl App {
                 match db.get_track_by_path(&path_str) {
                     Ok(Some(track)) => (vec![track], 0),
                     Ok(None) => {
-                        self.status_message = Some(format!(
+                        self.abort_to_insights(format!(
                             "Track not in index: {}",
                             path.display()
                         ));
-                        self.tree_browser = None;
-                        self.start_insights_view();
                         return;
                     }
                     Err(e) => {
-                        self.status_message = Some(format!(
+                        self.abort_to_insights(format!(
                             "Query error for '{}': {}",
                             path.display(),
                             e
                         ));
-                        self.tree_browser = None;
-                        self.start_insights_view();
                         return;
                     }
                 }
@@ -568,12 +667,10 @@ impl App {
         };
 
         if tracks.is_empty() {
-            self.status_message = Some(format!(
+            self.abort_to_insights(format!(
                 "No indexed tracks at: {}",
                 path.display()
             ));
-            self.tree_browser = None;
-            self.start_insights_view();
             return;
         }
 
@@ -723,70 +820,22 @@ impl App {
 
             UnifiedTagEditorAction::StageDecision { index, mutations } => {
                 // User confirmed changes for this item - stage to transaction
-                let witness = crate::daemon::confirm_decision();
-                if let Some(daemon) = self.task_daemon.as_mut() {
-                    let label = self.unified_tag_editor
-                        .as_ref()
-                        .map(|e| e.current_item_label())
-                        .unwrap_or_else(|| "Tag edit".to_string());
-                    let _ = daemon.add_decision(index, &witness, label, mutations.clone());
-                }
-                // Track staged mutations for redundant confirmation skipping
-                if let Some(ref mut editor) = self.unified_tag_editor {
-                    editor.set_staged_mutations(mutations);
-                }
-                self.status_message = Some(format!("Decision staged (item {})", index + 1));
+                self.stage_decision(index, mutations);
             }
 
             UnifiedTagEditorAction::StageDecisionAndNext { index, mutations } => {
                 // Stage the decision AND navigate to next sibling
-                let witness = crate::daemon::confirm_decision();
-                if let Some(daemon) = self.task_daemon.as_mut() {
-                    let label = self.unified_tag_editor
-                        .as_ref()
-                        .map(|e| e.current_item_label())
-                        .unwrap_or_else(|| "Tag edit".to_string());
-                    let _ = daemon.add_decision(index, &witness, label, mutations.clone());
-                }
-                // Track staged mutations
-                if let Some(ref mut editor) = self.unified_tag_editor {
-                    editor.set_staged_mutations(mutations);
-                }
-                self.status_message = Some(format!("Decision staged (item {})", index + 1));
-                // Now navigate to next sibling
+                self.stage_decision(index, mutations);
                 self.navigate_to_next_sibling();
             }
 
             UnifiedTagEditorAction::StageDecisionAndReview { index, mutations } => {
                 // Stage the decision AND immediately show transaction review
                 // Used for aggregated mode or single-item contexts where "next sibling" is meaningless
-                let witness = crate::daemon::confirm_decision();
-                if let Some(daemon) = self.task_daemon.as_mut() {
-                    let label = self.unified_tag_editor
-                        .as_ref()
-                        .map(|e| e.current_item_label())
-                        .unwrap_or_else(|| "Tag edit".to_string());
-                    let _ = daemon.add_decision(index, &witness, label, mutations.clone());
-                }
-                // Track staged mutations
-                if let Some(ref mut editor) = self.unified_tag_editor {
-                    editor.set_staged_mutations(mutations);
-                }
-                self.status_message = Some(format!("Decision staged (item {})", index + 1));
+                self.stage_decision(index, mutations);
 
                 // Immediately show transaction review modal
-                let decisions: Vec<(usize, String, usize)> = if let Some(daemon) = self.task_daemon.as_ref() {
-                    daemon.decision_indices()
-                        .iter()
-                        .filter_map(|&idx| {
-                            daemon.get_decision(idx).map(|d| {
-                                (idx, d.label.clone(), d.mutations.len())
-                            })
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let decisions = self.gather_transaction_decisions();
 
                 if let Some(ref mut editor) = self.unified_tag_editor {
                     editor.modal = Some(tag_editor::UnifiedTagEditorModal::TransactionReview {
@@ -836,9 +885,7 @@ impl App {
                 if let Some(ref mut editor) = self.unified_tag_editor {
                     if editor.current_item_idx < editor.total_items.saturating_sub(1) {
                         editor.current_item_idx += 1;
-                        editor.current_field_idx = 0;
-                        editor.field_scroll_offset = 0;
-                        editor.clear_staged_mutations();
+                        editor.reset_field_state();
                     }
                 }
             }
@@ -847,9 +894,7 @@ impl App {
                 if let Some(ref mut editor) = self.unified_tag_editor {
                     if editor.current_item_idx > 0 {
                         editor.current_item_idx -= 1;
-                        editor.current_field_idx = 0;
-                        editor.field_scroll_offset = 0;
-                        editor.clear_staged_mutations();
+                        editor.reset_field_state();
                     }
                 }
             }
@@ -902,18 +947,7 @@ impl App {
 
             UnifiedTagEditorAction::RequestTransactionReview => {
                 // Query daemon for staged decisions and populate the review modal
-                let decisions: Vec<(usize, String, usize)> = if let Some(daemon) = self.task_daemon.as_ref() {
-                    daemon.decision_indices()
-                        .iter()
-                        .filter_map(|&idx| {
-                            daemon.get_decision(idx).map(|d| {
-                                (idx, d.label.clone(), d.mutations.len())
-                            })
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let decisions = self.gather_transaction_decisions();
 
                 if let Some(ref mut editor) = self.unified_tag_editor {
                     editor.modal = Some(tag_editor::UnifiedTagEditorModal::TransactionReview {
@@ -950,9 +984,7 @@ impl App {
             if let Some(ref mut editor) = self.unified_tag_editor {
                 if editor.current_item_idx < editor.total_items.saturating_sub(1) {
                     editor.current_item_idx += 1;
-                    editor.current_field_idx = 0;
-                    editor.field_scroll_offset = 0;
-                    editor.clear_staged_mutations();
+                    editor.reset_field_state();
                 }
             }
         }
@@ -982,9 +1014,7 @@ impl App {
             if let Some(ref mut editor) = self.unified_tag_editor {
                 if editor.current_item_idx > 0 {
                     editor.current_item_idx -= 1;
-                    editor.current_field_idx = 0;
-                    editor.field_scroll_offset = 0;
-                    editor.clear_staged_mutations();
+                    editor.reset_field_state();
                 }
             }
         }
@@ -1069,11 +1099,7 @@ impl App {
         }
 
         // Update stats on splash screen (for optional display)
-        if let Some(daemon) = &self.task_daemon {
-            splash.set_db_queue_depth(daemon.db_queue_depth());
-            splash.set_db_stats(daemon.db_stats());
-            splash.set_worker_stats(daemon.worker_stats());
-        }
+        self.update_progress_stats(&mut splash);
 
         // Put it back or transition
         if splash.is_complete() {
@@ -1130,11 +1156,7 @@ impl App {
             self.start_insights_view();
         } else {
             // Update stats on progress screen (for optional display)
-            if let Some(daemon) = &self.task_daemon {
-                progress.set_db_queue_depth(daemon.db_queue_depth());
-                progress.set_db_stats(daemon.db_stats());
-                progress.set_worker_stats(daemon.worker_stats());
-            }
+            self.update_progress_stats(&mut progress);
             self.content_analysis = Some(progress);
         }
     }
@@ -1163,11 +1185,7 @@ impl App {
             self.handle_intake_confirmation_action(startup::IntakeConfirmationAction::ProcessingComplete);
         } else {
             // Update stats for display
-            if let Some(daemon) = &self.task_daemon {
-                state.set_db_queue_depth(daemon.db_queue_depth());
-                state.set_db_stats(daemon.db_stats());
-                state.set_worker_stats(daemon.worker_stats());
-            }
+            self.update_progress_stats(&mut state);
             self.intake_confirmation = Some(state);
         }
     }

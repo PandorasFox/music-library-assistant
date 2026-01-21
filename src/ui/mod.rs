@@ -317,7 +317,7 @@ impl App {
         if self.task_daemon.is_none() {
             // Load startup opinions from config
             let (read_only, force_freshen) = crate::config::load_config()
-                .map(|c| (false, c.opinions.startup.always_freshen_last_stage))
+                .map(|c| (false, c.opinions.startup.freshen_last_stage_at_startup))
                 .unwrap_or((false, false));
             self.task_daemon = Some(crate::daemon::TaskDaemon::with_opinions(read_only, force_freshen));
         }

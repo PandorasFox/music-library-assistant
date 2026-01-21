@@ -134,17 +134,17 @@ pub struct StartupOpinions {
     /// This is "paranoid" mode - catches out-of-band tag edits by external tools
     pub paranoid_tag_verification: bool,
 
-    /// Always run last-stage content analysis even without mutations (default: false)
+    /// Run last-stage content analysis once at startup, even without mutations (default: false).
     /// Useful after fixing broken computations to force re-derivation of signals.
-    /// Set to true temporarily, run once, then set back to false.
-    pub always_freshen_last_stage: bool,
+    /// This is a one-shot latch: triggers once at startup, then auto-clears.
+    pub freshen_last_stage_at_startup: bool,
 }
 
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
             paranoid_tag_verification: true,
-            always_freshen_last_stage: false,
+            freshen_last_stage_at_startup: false,
         }
     }
 }
@@ -555,10 +555,10 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                         }
                     }
                 }
-                "always-freshen-last-stage" => {
+                "freshen-last-stage" => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
-                            opinions.always_freshen_last_stage = val;
+                            opinions.freshen_last_stage_at_startup = val;
                         }
                     }
                 }

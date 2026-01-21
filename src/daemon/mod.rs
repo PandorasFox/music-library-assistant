@@ -81,9 +81,9 @@ pub struct TaskDaemon {
     /// Used to auto-trigger content analysis after mutations + awakening drain.
     mutations_ran_this_session: bool,
 
-    /// Force last-stage content analysis even without mutations.
-    /// Loaded once from config at startup. Useful after fixing broken computations.
-    force_freshen_last_stage: bool,
+    /// One-shot latch: force content analysis once at startup, then auto-clear.
+    /// Loaded from config at startup. Useful after fixing broken computations.
+    freshen_last_stage_at_startup: bool,
 
     // Session tracking
     session_start: Option<Instant>,
@@ -172,7 +172,7 @@ impl TaskDaemon {
             accepting_mutations: false,
             read_only_mode: false,
             mutations_ran_this_session: false,
-            force_freshen_last_stage: false, // Set via with_opinions()
+            freshen_last_stage_at_startup: false, // Set via with_opinions()
             session_start: None,
             session_queued: 0,
             total_processed: 0,
@@ -203,13 +203,13 @@ impl TaskDaemon {
     }
 
     /// Create a new daemon with opinions applied.
-    pub fn with_opinions(read_only_mode: bool, force_freshen_last_stage: bool) -> Self {
+    pub fn with_opinions(read_only_mode: bool, freshen_last_stage_at_startup: bool) -> Self {
         let mut daemon = Self::new();
         daemon.read_only_mode = read_only_mode;
-        daemon.force_freshen_last_stage = force_freshen_last_stage;
-        if force_freshen_last_stage {
+        daemon.freshen_last_stage_at_startup = freshen_last_stage_at_startup;
+        if freshen_last_stage_at_startup {
             let _ = config::log_message(
-                "[DAEMON] force_freshen_last_stage=true: will run content analysis even without mutations"
+                "[DAEMON] freshen_last_stage_at_startup=true: will run content analysis once after awakening"
             );
         }
         daemon
@@ -534,11 +534,11 @@ impl TaskDaemon {
         }
         // Handle post-mutation completion when eye is Awake
         // Auto-trigger content analysis after mutations + awakening work drains
-        // Also trigger if force_freshen_last_stage is set (useful after fixing broken computations)
+        // Also trigger if freshen_last_stage_at_startup latch is set (one-shot, clears after use)
         else if self.eye_state == EyeState::Awake {
-            if had_mutations || self.force_freshen_last_stage {
-                let reason = if self.force_freshen_last_stage && !had_mutations {
-                    "force_freshen_last_stage=true"
+            if had_mutations || self.freshen_last_stage_at_startup {
+                let reason = if self.freshen_last_stage_at_startup && !had_mutations {
+                    "freshen_last_stage_at_startup (one-shot)"
                 } else {
                     "post-mutation"
                 };
@@ -548,6 +548,13 @@ impl TaskDaemon {
                     reason, self.total_processed
                 ));
                 queue_content_analysis_after_reset = true;
+                // Clear the one-shot latch so it doesn't trigger again
+                if self.freshen_last_stage_at_startup {
+                    self.freshen_last_stage_at_startup = false;
+                    let _ = config::log_message(
+                        "[DAEMON] freshen_last_stage_at_startup latch cleared (one-shot complete)"
+                    );
+                }
             }
         }
 

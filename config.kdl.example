@@ -57,6 +57,11 @@ opinions {
         // Show DB thread performance stats on splash screen (default: false)
         // Useful for debugging performance issues during startup
         // show-db-stats-on-splash false
+
+        // Force content analysis once at startup, even without mutations (default: false)
+        // Useful after fixing broken computations to re-derive signals.
+        // One-shot latch: triggers once, then auto-clears.
+        // freshen-last-stage false
     }
 
     // -------------------------------------------------------------------------

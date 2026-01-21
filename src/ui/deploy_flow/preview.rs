@@ -1,103 +1,463 @@
 //! Deployment Preview UI
 //!
-//! Shows a comprehensive preview of deployment status for all libraries.
-//! Displays healthy, to_deploy, stale, leftover, and conflict counts.
-//! Allows the librarian to confirm (generate mutations) or cancel.
-//!
-//! TODO: This module is disabled while corpus::deploy is being updated.
-//! Requires FullDeploymentStatus from the deploy module.
+//! Shows a tabbed view of deploy signals with an info pane.
+//! - Tab navigation with Left/Right arrows
+//! - Scrollable list of signals sorted by path (non-interactable)
+//! - Info pane showing context for selected signal type
+//! - Enter opens confirmation dialog
+//! - Escape returns to Insights view
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    text::Line,
-    widgets::{Block, Borders, Paragraph},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
-use crate::ui::widgets::{LateralView, UnifiedTitleBar};
+use super::types::{DeployConfirmModal, DeployModalData};
+use crate::ui::widgets::{DeployTab, ModalStyle, SignalInfo, SignalInfoPane, TabbedSignalList};
 
-/// Actions returned from the deployment preview
+/// Actions returned from the deployment preview.
 #[derive(Debug, Clone)]
 pub enum DeploymentPreviewAction {
-    /// No action needed
+    /// No action needed.
     None,
-    /// Confirm and generate mutations, transition to session review
+    /// User confirmed deployment - generate mutations.
     Confirm,
-    /// Cancel and return to main menu
+    /// Cancel and return to Insights view.
     Cancel,
-    /// Cycle to next view in lateral ring (Tab)
-    CycleNext,
-    /// Cycle to previous view in lateral ring (Shift-Tab)
-    CyclePrev,
 }
 
-/// State for the deployment preview
-///
-/// TODO: Re-enable when corpus::deploy is available.
-/// Previously held Vec<FullDeploymentStatus> from the deploy module.
+/// State for the deployment preview modal.
 #[derive(Debug)]
 pub struct DeploymentPreviewState {
-    /// Session ID for mutations
-    pub session_id: String,
+    /// Currently active tab.
+    pub active_tab: DeployTab,
+    /// Scroll position per tab.
+    pub tab_scroll: [usize; 5],
+    /// Cached signal data (loaded once on init).
+    pub cached_data: DeployModalData,
+    /// Confirmation dialog (if open).
+    pub confirm_modal: Option<DeployConfirmModal>,
 }
 
 impl DeploymentPreviewState {
-    /// Create a new deployment preview state
-    ///
-    /// TODO: Restore full signature when corpus::deploy is re-enabled:
-    /// pub fn new(statuses: Vec<FullDeploymentStatus>, session_id: String) -> Self
-    pub fn new_stub(session_id: String) -> Self {
-        Self { session_id }
+    /// Create a new deployment preview state with cached data.
+    pub fn new(cached_data: DeployModalData) -> Self {
+        // Start on the New tab if there are new files, otherwise Healthy
+        let active_tab = if !cached_data.new.is_empty() {
+            DeployTab::New
+        } else {
+            DeployTab::Healthy
+        };
+
+        Self {
+            active_tab,
+            tab_scroll: [0; 5],
+            cached_data,
+            confirm_modal: None,
+        }
     }
 
-    /// Handle key input
+    /// Handle key input.
     pub fn handle_key(&mut self, key: KeyEvent) -> DeploymentPreviewAction {
+        // If confirmation dialog is open, handle its keys
+        if self.confirm_modal.is_some() {
+            let was_confirm_selected = self.confirm_modal.as_ref()
+                .map(|m| m.is_confirm_selected())
+                .unwrap_or(false);
+            return self.handle_confirm_key(key, was_confirm_selected);
+        }
+
         match key.code {
-            // Tab/Shift-Tab for lateral view cycling
-            KeyCode::Tab => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    DeploymentPreviewAction::CyclePrev
-                } else {
-                    DeploymentPreviewAction::CycleNext
-                }
+            // Tab navigation (arrows and Tab/Shift-Tab)
+            KeyCode::Left | KeyCode::BackTab => {
+                self.active_tab = self.active_tab.prev();
+                DeploymentPreviewAction::None
             }
-            KeyCode::BackTab => DeploymentPreviewAction::CyclePrev,
+            KeyCode::Right | KeyCode::Tab => {
+                self.active_tab = self.active_tab.next();
+                DeploymentPreviewAction::None
+            }
+
+            // Scroll within tab
+            KeyCode::Up => {
+                let idx = self.active_tab.index();
+                self.tab_scroll[idx] = self.tab_scroll[idx].saturating_sub(1);
+                DeploymentPreviewAction::None
+            }
+            KeyCode::Down => {
+                let idx = self.active_tab.index();
+                let max_scroll = self.max_scroll_for_tab();
+                if self.tab_scroll[idx] < max_scroll {
+                    self.tab_scroll[idx] += 1;
+                }
+                DeploymentPreviewAction::None
+            }
+            KeyCode::PageUp => {
+                let idx = self.active_tab.index();
+                self.tab_scroll[idx] = self.tab_scroll[idx].saturating_sub(10);
+                DeploymentPreviewAction::None
+            }
+            KeyCode::PageDown => {
+                let idx = self.active_tab.index();
+                let max_scroll = self.max_scroll_for_tab();
+                self.tab_scroll[idx] = (self.tab_scroll[idx] + 10).min(max_scroll);
+                DeploymentPreviewAction::None
+            }
+
+            // Open confirmation dialog
+            KeyCode::Enter => {
+                let summary = self.cached_data.summary();
+                self.confirm_modal = Some(DeployConfirmModal::new(summary));
+                DeploymentPreviewAction::None
+            }
+
+            // Return to Insights
             KeyCode::Esc => DeploymentPreviewAction::Cancel,
+
             _ => DeploymentPreviewAction::None,
         }
     }
 
-    /// Render the deployment preview
-    pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        // Layout: Title bar at top (3 rows for borders), content below
+    fn handle_confirm_key(&mut self, key: KeyEvent, was_confirm_selected: bool) -> DeploymentPreviewAction {
+        match key.code {
+            // Toggle button selection
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                if let Some(ref mut modal) = self.confirm_modal {
+                    modal.toggle_button();
+                }
+                DeploymentPreviewAction::None
+            }
+
+            // Confirm selection
+            KeyCode::Enter => {
+                let action = if was_confirm_selected && !self.cached_data.has_conflicts() {
+                    DeploymentPreviewAction::Confirm
+                } else {
+                    // Cancel or blocked by conflicts
+                    self.confirm_modal = None;
+                    DeploymentPreviewAction::None
+                };
+                action
+            }
+
+            // Close dialog
+            KeyCode::Esc => {
+                self.confirm_modal = None;
+                DeploymentPreviewAction::None
+            }
+
+            _ => DeploymentPreviewAction::None,
+        }
+    }
+
+    fn max_scroll_for_tab(&self) -> usize {
+        let count = match self.active_tab {
+            DeployTab::Healthy => self.cached_data.healthy.len(),
+            DeployTab::New => self.cached_data.new_by_dir.len(),
+            DeployTab::Conflicts => self.cached_data.conflicts.len(),
+            DeployTab::Leftover => self.cached_data.leftover_by_dir.len(),
+            DeployTab::Stale => self.cached_data.stale.len(),
+        };
+        count.saturating_sub(1)
+    }
+
+    /// Render the deployment preview.
+    pub fn render(&self, f: &mut Frame, area: Rect) {
+        // Clear background
+        f.render_widget(Clear, area);
+
+        // Layout: title (3) + main content
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(UnifiedTitleBar::height()), // Title bar with borders
-                Constraint::Min(10),                           // Content
+                Constraint::Length(3), // Title bar
+                Constraint::Min(10),   // Content
+                Constraint::Length(2), // Controls hint
             ])
             .split(area);
 
-        // Render unified title bar
-        let titlebar = UnifiedTitleBar::new(LateralView::Deploy);
-        titlebar.render(f, main_chunks[0]);
+        // Render title
+        self.render_title(f, main_chunks[0]);
 
-        // Render disabled message
-        let lines = vec![
+        // Render main content (tabbed list + info pane)
+        self.render_content(f, main_chunks[1]);
+
+        // Render controls hint
+        self.render_controls(f, main_chunks[2]);
+
+        // Render confirmation dialog if open
+        if let Some(ref modal) = self.confirm_modal {
+            self.render_confirm_dialog(f, area, modal);
+        }
+    }
+
+    fn render_title(&self, f: &mut Frame, area: Rect) {
+        let title = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " Deploy Preview ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({} total operations)", self.cached_data.summary().total_operations()),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]))
+        .block(Block::default().borders(Borders::ALL));
+
+        f.render_widget(title, area);
+    }
+
+    fn render_content(&self, f: &mut Frame, area: Rect) {
+        // Split: tabbed list (60%) + info pane (40%)
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+
+        // Render tabbed list on left
+        self.render_tabbed_list(f, chunks[0]);
+
+        // Render info pane on right
+        self.render_info_pane(f, chunks[1]);
+    }
+
+    fn render_tabbed_list(&self, f: &mut Frame, area: Rect) {
+        // Get display items for current tab
+        // For New and Leftover, show "directory (count)" format
+        let items: Vec<String> = match self.active_tab {
+            DeployTab::Healthy => self
+                .cached_data
+                .healthy
+                .iter()
+                .map(|f| f.corpus_path.clone())
+                .collect(),
+            DeployTab::New => self
+                .cached_data
+                .new_by_dir
+                .iter()
+                .map(|d| format!("{} ({})", d.directory, d.count))
+                .collect(),
+            DeployTab::Conflicts => self
+                .cached_data
+                .conflicts
+                .iter()
+                .map(|g| g.deploy_path.clone())
+                .collect(),
+            DeployTab::Leftover => self
+                .cached_data
+                .leftover_by_dir
+                .iter()
+                .map(|d| format!("{} ({})", d.directory, d.count))
+                .collect(),
+            DeployTab::Stale => self
+                .cached_data
+                .stale
+                .iter()
+                .map(|f| f.library_path.clone())
+                .collect(),
+        };
+
+        let paths: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+        let scroll = self.tab_scroll[self.active_tab.index()];
+
+        let widget = TabbedSignalList::new(self.active_tab)
+            .items(paths)
+            .scroll(scroll)
+            .tab_counts(self.cached_data.tab_counts());
+
+        widget.render(f, area);
+    }
+
+    fn render_info_pane(&self, f: &mut Frame, area: Rect) {
+        let scroll = self.tab_scroll[self.active_tab.index()];
+
+        let info = match self.active_tab {
+            DeployTab::Healthy => {
+                self.cached_data.healthy.get(scroll).map(|file| SignalInfo::Healthy {
+                    corpus_path: file.corpus_path.clone(),
+                    library_path: file.deploy_path.clone(),
+                })
+            }
+            DeployTab::New => {
+                self.cached_data.new_by_dir.get(scroll).map(|dir| SignalInfo::NewDirectory {
+                    directory: dir.directory.clone(),
+                    file_count: dir.count,
+                })
+            }
+            DeployTab::Conflicts => {
+                self.cached_data.conflicts.get(scroll).map(|group| SignalInfo::Conflict {
+                    deploy_path: group.deploy_path.clone(),
+                    conflicting_files: group
+                        .conflicting_files
+                        .iter()
+                        .map(|(path, _)| path.clone())
+                        .collect(),
+                })
+            }
+            DeployTab::Leftover => {
+                self.cached_data.leftover_by_dir.get(scroll).map(|dir| SignalInfo::LeftoverDirectory {
+                    directory: dir.directory.clone(),
+                    file_count: dir.count,
+                })
+            }
+            DeployTab::Stale => {
+                self.cached_data.stale.get(scroll).map(|file| SignalInfo::Stale {
+                    library_path: file.library_path.clone(),
+                    expected_path: file.expected_path.clone(),
+                })
+            }
+        };
+
+        let info = info.unwrap_or(SignalInfo::None);
+        let pane = SignalInfoPane::new(self.active_tab, &info);
+        pane.render(f, area);
+    }
+
+    fn render_controls(&self, f: &mut Frame, area: Rect) {
+        let controls = if self.confirm_modal.is_some() {
+            "[Left/Right] Select  [Enter] Confirm  [Esc] Cancel"
+        } else {
+            "[Tab/Arrows] Switch Tab  [Up/Down] Scroll  [Enter] Deploy  [Esc] Back"
+        };
+
+        let paragraph = Paragraph::new(controls)
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::TOP));
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_confirm_dialog(&self, f: &mut Frame, area: Rect, modal: &DeployConfirmModal) {
+        let DeployConfirmModal::Review { summary, selected_button } = modal;
+
+        // Build message lines
+        let mut lines = vec![
             Line::from(""),
-            Line::from("Deployment preview is temporarily disabled."),
+            Line::from(Span::styled(
+                "Deploy Summary",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
             Line::from(""),
-            Line::from("The deploy module is being updated to use the new"),
-            Line::from("transaction API and library health signals."),
-            Line::from(""),
-            Line::from("Press Tab to cycle views or Esc to exit."),
         ];
 
-        let para = Paragraph::new(lines)
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Deployment Preview (Disabled)"));
-        f.render_widget(para, main_chunks[1]);
+        if summary.new_count > 0 {
+            lines.push(Line::from(format!(
+                "  New files to deploy: {}",
+                summary.new_count
+            )));
+        }
+        if summary.stale_count > 0 {
+            lines.push(Line::from(format!(
+                "  Stale files to fix: {}",
+                summary.stale_count
+            )));
+        }
+        if summary.leftover_count > 0 {
+            lines.push(Line::from(format!(
+                "  Leftover files to remove: {}",
+                summary.leftover_count
+            )));
+        }
+        if summary.healthy_count > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  Already healthy: {}", summary.healthy_count),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        lines.push(Line::from(""));
+
+        // Show conflict warning if blocked
+        if summary.conflict_count > 0 {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "WARNING: {} conflicts must be resolved first!",
+                    summary.conflict_count
+                ),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+        }
+
+        lines.push(Line::from(format!(
+            "Total operations: {}",
+            summary.total_operations()
+        )));
+        lines.push(Line::from(""));
+
+        // Buttons
+        let cancel_style = if *selected_button == 0 {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let confirm_style = if *selected_button == 1 && summary.conflict_count == 0 {
+            Style::default().fg(Color::Black).bg(Color::Green)
+        } else if summary.conflict_count > 0 {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(" [Cancel] ", cancel_style),
+            Span::raw("  "),
+            Span::styled(
+                if summary.conflict_count > 0 {
+                    " [Blocked] "
+                } else {
+                    " [Confirm] "
+                },
+                confirm_style,
+            ),
+        ]));
+
+        // Render as centered modal
+        let modal_style = if summary.conflict_count > 0 {
+            ModalStyle::error()
+        } else {
+            ModalStyle::info()
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(modal_style.border_color))
+            .title("Confirm Deployment")
+            .style(Style::default().bg(Color::Black));
+
+        // Calculate centered area
+        let popup_area = centered_rect(50, 50, area);
+        f.render_widget(Clear, popup_area);
+
+        let paragraph = Paragraph::new(lines).block(block);
+        f.render_widget(paragraph, popup_area);
     }
+}
+
+/// Compute a centered rectangle.
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }

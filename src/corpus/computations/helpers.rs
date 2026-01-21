@@ -128,6 +128,22 @@ pub(super) fn ensure_file_signal_if_missing(
     }
 }
 
+/// Ensure a file signal with metadata, only queue if it doesn't exist.
+///
+/// For signals like LibraryStale that need extra context in metadata_json.
+pub(super) fn ensure_file_signal_with_metadata_if_missing(
+    read_only_db: &crate::corpus::db::Database,
+    sender: &db_thread::SignalWriteSender,
+    signal_type: FileSignalType,
+    key: &str,
+    metadata_json: &str,
+    witness: &ComputationWitness,
+) {
+    if !read_only_db.file_signal_exists(signal_type, key) {
+        sender.ensure_file_signal_with_metadata(signal_type, key, Some(metadata_json), witness);
+    }
+}
+
 /// Clear a file signal, but only queue the delete if it currently exists.
 ///
 /// Uses the read-only DB to check existence before queueing to the write thread.

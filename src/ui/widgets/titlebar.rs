@@ -26,12 +26,14 @@ use ratatui::{
 const TITLE_PANE_WIDTH: u16 = 16;
 
 /// Views available in the lateral view ring.
+///
+/// Note: Deploy was removed from the lateral ring - it's now accessed via
+/// the Insights view by pressing Enter on deploy-related insights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LateralView {
     TagSearch,
     CorpusBrowser,
     Insights,
-    Deploy,
 }
 
 impl LateralView {
@@ -41,7 +43,6 @@ impl LateralView {
             LateralView::TagSearch => "Tag Search",
             LateralView::CorpusBrowser => "Corpus Browser",
             LateralView::Insights => "Insights & Operations",
-            LateralView::Deploy => "Deploy",
         }
     }
 
@@ -50,24 +51,22 @@ impl LateralView {
         match self {
             LateralView::TagSearch => LateralView::CorpusBrowser,
             LateralView::CorpusBrowser => LateralView::Insights,
-            LateralView::Insights => LateralView::Deploy,
-            LateralView::Deploy => LateralView::TagSearch,
+            LateralView::Insights => LateralView::TagSearch,
         }
     }
 
     /// Get the previous view in the ring (Shift-Tab)
     pub fn prev(&self) -> Self {
         match self {
-            LateralView::TagSearch => LateralView::Deploy,
+            LateralView::TagSearch => LateralView::Insights,
             LateralView::CorpusBrowser => LateralView::TagSearch,
             LateralView::Insights => LateralView::CorpusBrowser,
-            LateralView::Deploy => LateralView::Insights,
         }
     }
 
     /// All views in order
     pub fn all() -> &'static [LateralView] {
-        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::Deploy]
+        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights]
     }
 }
 
@@ -155,17 +154,16 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling: TagSearch → CorpusBrowser → Insights → Deploy → TagSearch
+        // Test forward cycling: TagSearch → CorpusBrowser → Insights → TagSearch
         let view = LateralView::TagSearch;
         assert_eq!(view.next(), LateralView::CorpusBrowser);
         assert_eq!(view.next().next(), LateralView::Insights);
-        assert_eq!(view.next().next().next(), LateralView::Deploy);
-        assert_eq!(view.next().next().next().next(), LateralView::TagSearch);
+        assert_eq!(view.next().next().next(), LateralView::TagSearch);
 
         // Test backward cycling from CorpusBrowser
         let view = LateralView::CorpusBrowser;
         assert_eq!(view.prev(), LateralView::TagSearch);
-        assert_eq!(view.prev().prev(), LateralView::Deploy);
+        assert_eq!(view.prev().prev(), LateralView::Insights);
     }
 
     #[test]
@@ -173,7 +171,6 @@ mod tests {
         assert_eq!(LateralView::TagSearch.label(), "Tag Search");
         assert_eq!(LateralView::CorpusBrowser.label(), "Corpus Browser");
         assert_eq!(LateralView::Insights.label(), "Insights & Operations");
-        assert_eq!(LateralView::Deploy.label(), "Deploy");
     }
 
     #[test]

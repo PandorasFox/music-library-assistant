@@ -257,6 +257,25 @@ impl FileSignalType {
             _ => None,
         }
     }
+
+    /// Convert to HealthIssueType for signals that need metadata.
+    /// Panics for DeployReady/DeployedHealthy which use different storage.
+    pub fn to_health_issue_type(&self) -> HealthIssueType {
+        match self {
+            Self::FileInCorpus => HealthIssueType::FileInCorpus,
+            Self::UnindexedFile => HealthIssueType::UnindexedFile,
+            Self::HealthyFile => HealthIssueType::HealthyFile,
+            Self::MissingFile => HealthIssueType::MissingFile,
+            Self::CorpusFileModifiedOutOfBand => HealthIssueType::CorpusFileModifiedOutOfBand,
+            Self::MovedFile => HealthIssueType::MovedFile,
+            Self::OutOfBandTagChange => HealthIssueType::OutOfBandTagChange,
+            Self::LibraryLeftover => HealthIssueType::LibraryLeftover,
+            Self::LibraryStale => HealthIssueType::LibraryStale,
+            Self::DeployReady | Self::DeployedHealthy => {
+                panic!("DeployReady/DeployedHealthy should not use to_health_issue_type")
+            }
+        }
+    }
 }
 
 /// Aggregate health signal.
@@ -524,5 +543,49 @@ pub struct DirectoryBreakdown {
 pub struct DirectoryBreakdownEntry {
     pub directory: String,
     pub count: usize,
+}
+
+// ============================================================================
+// Deploy Modal Data Types
+// ============================================================================
+
+/// A file with deploy info (for healthy/new files).
+#[derive(Debug, Clone)]
+pub struct DeploySignalFile {
+    /// Path in the corpus
+    pub corpus_path: String,
+    /// Computed deploy path in library
+    pub deploy_path: String,
+    /// Track ID for mutation generation
+    pub track_id: i64,
+}
+
+/// A stale library file (deployed path differs from expected).
+#[derive(Debug, Clone)]
+pub struct StaleSignalFile {
+    /// Current path in library (wrong)
+    pub library_path: String,
+    /// Expected path (computed from current tags)
+    pub expected_path: String,
+    /// Corpus file path (source)
+    pub corpus_path: String,
+    /// Track ID for mutation generation
+    pub track_id: i64,
+}
+
+/// A leftover file (in library but no corpus backing).
+#[derive(Debug, Clone)]
+pub struct LeftoverSignalFile {
+    /// Path in the library
+    pub library_path: String,
+}
+
+/// A deploy conflict group (multiple corpus files → same library path).
+#[derive(Debug, Clone)]
+pub struct ConflictGroup {
+    /// The library path they all would deploy to
+    pub deploy_path: String,
+    /// List of conflicting corpus files: (corpus_path, track_id)
+    pub conflicting_files: Vec<(String, i64)>,
 }
 

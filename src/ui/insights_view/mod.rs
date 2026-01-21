@@ -166,6 +166,13 @@ impl InsightsViewState {
         matches!(self.modal, InsightsModal::NotReady_WitchBusy)
     }
 
+    /// Check if a deploy-related insight is currently selected.
+    ///
+    /// Returns true if the Library bucket is focused (any of: stale, leftover, deploy_ready, deployed_healthy)
+    pub fn is_deploy_insight_selected(&self) -> bool {
+        self.focused_bucket == FocusedBucket::Library
+    }
+
     /// Get the entry count for a specific bucket
     pub fn get_bucket_entry_count(&self, bucket: FocusedBucket) -> usize {
         match bucket {

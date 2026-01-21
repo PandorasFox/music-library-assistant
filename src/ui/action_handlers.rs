@@ -10,6 +10,34 @@ use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
 impl App {
+    // =========================================================================
+    // Post-Mutation Helpers
+    // =========================================================================
+
+    /// Transition to progress screen after queueing mutations.
+    ///
+    /// This is the standard post-mutation hook - use it after any transaction
+    /// that queues mutations to the Witch. The progress screen shows work status
+    /// and transitions to Insights when complete.
+    ///
+    /// - `ContentAnalysis`: For intake indexing (triggers metadata extraction)
+    /// - `SignalRefresh`: For file operations (health signals need update)
+    pub(super) fn transition_to_progress_after_mutations(&mut self, phase: progress_screen::ProgressPhase) {
+        use progress_screen::ProgressPhase;
+
+        let screen = match phase {
+            ProgressPhase::Eyeballing => progress_screen::ProgressScreen::new_eyeballing(),
+            ProgressPhase::ContentAnalysis => progress_screen::ProgressScreen::new_content_analysis(),
+            ProgressPhase::SignalRefresh => progress_screen::ProgressScreen::new_signal_refresh(),
+        };
+        self.progress_screen = Some(screen);
+        self.mode = UiMode::Progress;
+    }
+
+    // =========================================================================
+    // View Action Handlers
+    // =========================================================================
+
     pub(super) fn handle_insights_action(&mut self, action: insights_view::InsightsAction) {
         match action {
             insights_view::InsightsAction::None => {}
@@ -24,9 +52,9 @@ impl App {
                 }
             }
             insights_view::InsightsAction::CycleNext => {
-                // Insights → Deploy
+                // Insights → Tag Search (Deploy removed from lateral ring)
                 self.insights_view = None;
-                self.start_deployment_preview();
+                self.start_tag_search();
             }
             insights_view::InsightsAction::CyclePrev => {
                 // Insights → Corpus Browser
@@ -34,10 +62,49 @@ impl App {
                 self.start_corpus_browser();
             }
             insights_view::InsightsAction::LaunchFlow => {
-                // Stub: flows not yet implemented
-                self.status_message = Some("Flows not yet implemented".to_string());
+                // Check if deploy insight is selected - launch deploy modal
+                let is_deploy = self.insights_view.as_ref()
+                    .map(|v| v.is_deploy_insight_selected())
+                    .unwrap_or(false);
+
+                if is_deploy {
+                    // Load deploy modal data and start preview
+                    self.start_deployment_preview_from_insights();
+                } else {
+                    // Other flows not yet implemented
+                    self.status_message = Some("Flows not yet implemented".to_string());
+                }
             }
         }
+    }
+
+    /// Start deployment preview from Insights view.
+    ///
+    /// Uses cached data if available, otherwise loads from database.
+    fn start_deployment_preview_from_insights(&mut self) {
+        // Try to use cached deploy modal data first
+        let data = self.witch.as_ref()
+            .and_then(|w| w.ui_read_cache().deploy_modal_data())
+            .or_else(|| {
+                // Fall back to loading from database
+                self.witch.as_mut().and_then(|w| {
+                    let db = w.read_only_db();
+                    deploy_flow::DeployModalData::load(db).ok()
+                })
+            })
+            .unwrap_or_default();
+
+        // Trigger cache warming for next time
+        if let Some(ref witch) = self.witch {
+            witch.ui_read_cache().warm_deploy_modal_data();
+        }
+
+        // Create preview state with cached data
+        let preview = deploy_flow::DeploymentPreviewState::new(data);
+        self.deployment_preview = Some(preview);
+        self.mode = UiMode::DeploymentPreview;
+
+        // Keep insights view alive for return
     }
 
     /// Handle tag search actions.
@@ -55,9 +122,9 @@ impl App {
                 self.start_corpus_browser();
             }
             tag_search::TagSearchAction::CyclePrev => {
-                // TagSearch → Deploy
+                // TagSearch → Insights (Deploy removed from lateral ring)
                 self.tag_search = None;
-                self.start_deployment_preview();
+                self.start_insights_view();
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search with db access - take ownership temporarily to avoid borrow conflict
@@ -115,8 +182,7 @@ impl App {
                     }
 
                     // Transition to progress screen to wait for indexing + content analysis
-                    self.progress_screen = Some(progress_screen::ProgressScreen::new_content_analysis());
-                    self.mode = UiMode::Progress;
+                    self.transition_to_progress_after_mutations(progress_screen::ProgressPhase::ContentAnalysis);
                 }
             }
             startup::IntakeConfirmationAction::Skipped => {
@@ -320,11 +386,25 @@ impl App {
         match action {
             deploy_flow::DeploymentPreviewAction::None => {}
             deploy_flow::DeploymentPreviewAction::Confirm => {
-                // TODO: Reconnect when corpus::deploy is re-enabled
-                // This function requires all_deployment_statuses_to_decisions from the disabled deploy module.
-                self.status_message = Some("Deployment confirm disabled - deploy module being updated".to_string());
-                self.deployment_preview = None;
-                self.start_insights_view();
+                // Generate and queue deploy mutations
+                // Clone the cached data to avoid borrow issues
+                let cached_data = self.deployment_preview.as_ref()
+                    .map(|p| p.cached_data.clone());
+                if let Some(data) = cached_data {
+                    let mutation_count = self.execute_deploy_mutations(&data);
+                    if mutation_count > 0 {
+                        self.deployment_preview = None;
+                        self.transition_to_progress_after_mutations(progress_screen::ProgressPhase::SignalRefresh);
+                    } else {
+                        // No mutations (edge case) - go directly to Insights
+                        self.deployment_preview = None;
+                        self.start_insights_view();
+                        self.status_message = Some("No deploy operations needed".to_string());
+                    }
+                } else {
+                    self.deployment_preview = None;
+                    self.start_insights_view();
+                }
             }
             deploy_flow::DeploymentPreviewAction::Cancel => {
                 let _ = config::log_message("Deployment preview cancelled");
@@ -332,16 +412,60 @@ impl App {
                 self.start_insights_view();
                 self.status_message = Some("Deployment cancelled".to_string());
             }
-            deploy_flow::DeploymentPreviewAction::CycleNext => {
-                // Deploy → TagSearch
-                self.deployment_preview = None;
-                self.start_tag_search();
-            }
-            deploy_flow::DeploymentPreviewAction::CyclePrev => {
-                // Deploy → Insights
-                self.deployment_preview = None;
-                self.start_insights_view();
-            }
         }
+    }
+
+    /// Execute deploy mutations from the cached data.
+    ///
+    /// Returns the number of mutations queued.
+    fn execute_deploy_mutations(&mut self, data: &deploy_flow::DeployModalData) -> usize {
+        use crate::corpus::mutations::Mutation;
+        use crate::witch::confirm_decision;
+        use std::path::PathBuf;
+
+        let Some(ref mut witch) = self.witch else {
+            return 0;
+        };
+        let mut mutations = Vec::new();
+
+        // New files: create hard links
+        for file in &data.new {
+            mutations.push(Mutation::HardLink {
+                source: PathBuf::from(&file.corpus_path),
+                destination: PathBuf::from(&file.deploy_path),
+            });
+        }
+
+        // Stale files: unlink old, create new
+        for file in &data.stale {
+            mutations.push(Mutation::Unlink {
+                path: PathBuf::from(&file.library_path),
+            });
+            mutations.push(Mutation::HardLink {
+                source: PathBuf::from(&file.corpus_path),
+                destination: PathBuf::from(&file.expected_path),
+            });
+        }
+
+        // Leftover files: unlink
+        for file in &data.leftover {
+            mutations.push(Mutation::Unlink {
+                path: PathBuf::from(&file.library_path),
+            });
+        }
+
+        let count = mutations.len();
+        if count == 0 {
+            return 0;
+        }
+
+        // Submit via transaction API
+        let witness = confirm_decision();
+        if witch.start_transaction("Deploy").is_ok() {
+            let _ = witch.add_decision(0, &witness, "Deploy operations", mutations);
+            let _ = witch.confirm_transaction(&witness);
+        }
+
+        count
     }
 }

@@ -242,6 +242,13 @@ impl ProgressScreen {
                 }
             }
             ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
+                // Never complete until DB writes are flushed
+                let writes_flushed = self.db_queue_depth == 0;
+                if !writes_flushed {
+                    self.consecutive_idle_ticks = 0;
+                    return false;
+                }
+
                 // Use WaitState for completion detection
                 if self.wait_state.tick(witch) {
                     self.complete = true;
@@ -305,9 +312,9 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let eye_height = 16;
     let progress_height = if screen.progress.is_some() { 3 } else { 0 };
 
-    // Always show queue depth when there's a backlog
+    // Always reserve space for queue depth line to prevent layout jumping
     let show_queue_depth = screen.db_queue_depth > 0;
-    let queue_depth_height = if show_queue_depth { 1 } else { 0 };
+    let queue_depth_height = 1; // Always 1 to stabilize layout
 
     // Detailed timing stats (behind timing guard)
     let show_stats = crate::config::is_timing_enabled();

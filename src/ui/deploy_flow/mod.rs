@@ -5,5 +5,7 @@
 //! for commit/cancel.
 
 pub mod preview;
+pub mod types;
 
 pub use preview::{DeploymentPreviewAction, DeploymentPreviewState};
+pub use types::{DeployConfirmModal, DeployModalData, DeploySummary};

@@ -10,7 +10,8 @@ use rusqlite::params;
 
 use crate::config::log_message;
 use crate::corpus::computations::helpers::{
-    clear_file_signal_if_present, ensure_file_signal_if_missing, get_configured_library_names,
+    clear_file_signal_if_present, ensure_file_signal_if_missing,
+    ensure_file_signal_with_metadata_if_missing, get_configured_library_names,
     parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
@@ -896,7 +897,8 @@ pub fn execute_derive_deploy_health_signals(
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
             clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryLeftover, &leftover_key, witness);
 
-            let is_stale = if let Ok(Some(track)) = read_only_db.get_track_by_path(corpus_path) {
+            // Check if stale and capture metadata for the signal
+            let stale_metadata = if let Ok(Some(track)) = read_only_db.get_track_by_path(corpus_path) {
                 if let Some(track_id) = track.id {
                     let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
                     let tag_map: std::collections::HashMap<String, String> = tags
@@ -907,17 +909,34 @@ pub fn execute_derive_deploy_health_signals(
                     let expected_relative = compute_deployment_path_with_tags(&track, &tag_map);
                     let expected_path = library_root.join(&expected_relative);
 
-                    library_path != &expected_path
+                    if library_path != &expected_path {
+                        // Stale: store all needed info in metadata
+                        Some(serde_json::json!({
+                            "library_path": library_path.to_string_lossy(),
+                            "expected_path": expected_path.to_string_lossy(),
+                            "corpus_path": corpus_path,
+                            "track_id": track_id
+                        }))
+                    } else {
+                        None
+                    }
                 } else {
-                    false
+                    None
                 }
             } else {
-                false
+                None
             };
 
-            if is_stale {
+            if let Some(metadata) = stale_metadata {
                 stale_count += 1;
-                ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
+                ensure_file_signal_with_metadata_if_missing(
+                    read_only_db,
+                    &sender,
+                    FileSignalType::LibraryStale,
+                    &stale_key,
+                    &metadata.to_string(),
+                    witness,
+                );
             } else {
                 healthy_count += 1;
                 clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);

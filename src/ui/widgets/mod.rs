@@ -14,14 +14,16 @@
 mod controls;
 mod layout;
 mod modal;
+pub mod signal_info_pane;
+pub mod tabbed_signal_list;
 mod text_input;
 mod titlebar;
 
 // Layout widgets
-pub use layout::{PaneConfig, ThreePaneLayout};
+pub use layout::{PaneConfig, TwoPaneLayout, ThreePaneLayout};
 
 // Modal widgets
-pub use modal::{centered_rect, Modal, ModalButton, ModalStyle};
+pub use modal::{centered_rect, ConfirmationModal, Modal, ModalButton, ModalStyle};
 
 // Controls hint widgets
 pub use controls::presets as control_presets;
@@ -31,3 +33,7 @@ pub use titlebar::{LateralView, UnifiedTitleBar};
 
 // Text input widgets
 pub use text_input::TextInputState;
+
+// Deploy signal widgets
+pub use signal_info_pane::{SignalInfo, SignalInfoPane};
+pub use tabbed_signal_list::{DeployTab, TabbedSignalList};

@@ -1043,21 +1043,21 @@ impl Database {
     pub fn get_library_stale_files(&self) -> Result<Vec<crate::corpus::db::types::StaleSignalFile>> {
         use crate::corpus::db::types::StaleSignalFile;
 
-        // library_stale signals: issue_key = library_path, metadata_json contains expected_path and corpus_path
+        // library_stale signals: all fields stored in metadata_json
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                 h.issue_key as library_path,
+                 json_extract(h.metadata_json, '$.library_path') as library_path,
                  json_extract(h.metadata_json, '$.expected_path') as expected_path,
                  json_extract(h.metadata_json, '$.corpus_path') as corpus_path,
                  COALESCE(json_extract(h.metadata_json, '$.track_id'), 0) as track_id
                FROM health_issues h
                WHERE h.issue_type = 'library_stale'
-               ORDER BY h.issue_key"#
+               ORDER BY json_extract(h.metadata_json, '$.library_path')"#
         )?;
 
         let results = stmt.query_map(params![], |row| {
             Ok(StaleSignalFile {
-                library_path: row.get(0)?,
+                library_path: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 expected_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 corpus_path: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 track_id: row.get::<_, i64>(3).unwrap_or(0),

@@ -57,6 +57,12 @@ enum SignalWriteOp {
         signal_type: FileSignalType,
         path: String,
     },
+    /// File signal with metadata (for signals like LibraryStale that need extra context)
+    EnsureFileSignalWithMetadata {
+        signal_type: FileSignalType,
+        key: String,
+        metadata_json: Option<String>,
+    },
     /// Clear a file signal
     ClearFileSignal {
         signal_type: FileSignalType,
@@ -254,6 +260,13 @@ pub struct SignalWriteSender {
 }
 
 impl SignalWriteSender {
+    /// Update queue stats when enqueuing an operation.
+    #[inline]
+    fn mark_enqueued(&self) {
+        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.stats.queue_empty.store(false, Ordering::Release);
+    }
+
     // =========================================================================
     // Type-safe file signal operations (preferred)
     // =========================================================================
@@ -265,11 +278,26 @@ impl SignalWriteSender {
         path: &str,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::EnsureFileSignal {
             signal_type,
             path: path.to_string(),
+        });
+    }
+
+    /// Enqueue a file signal with metadata (for signals needing extra context).
+    pub fn ensure_file_signal_with_metadata(
+        &self,
+        signal_type: FileSignalType,
+        key: &str,
+        metadata_json: Option<&str>,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::EnsureFileSignalWithMetadata {
+            signal_type,
+            key: key.to_string(),
+            metadata_json: metadata_json.map(|s| s.to_string()),
         });
     }
 
@@ -280,8 +308,7 @@ impl SignalWriteSender {
         path: &str,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearFileSignal {
             signal_type,
             path: path.to_string(),
@@ -295,8 +322,7 @@ impl SignalWriteSender {
         signal_type: FileSignalType,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearFileSignalsInDirectory {
             directory: directory.to_path_buf(),
             signal_type,
@@ -315,8 +341,7 @@ impl SignalWriteSender {
         metadata_json: Option<&str>,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::EnsureAggregateSignal {
             signal_type,
             key: key.to_string(),
@@ -326,8 +351,7 @@ impl SignalWriteSender {
 
     /// Replace an aggregate signal (delete + insert).
     pub fn replace_aggregate_signal(&self, signal: AggregateSignal, _witness: &ComputationWitness) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ReplaceAggregateSignal { signal });
     }
 
@@ -338,8 +362,7 @@ impl SignalWriteSender {
         key: &str,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearAggregateSignal {
             signal_type,
             key: key.to_string(),
@@ -352,8 +375,7 @@ impl SignalWriteSender {
 
     /// Clear all scan state for a library before re-scanning.
     pub fn clear_library_scan_state(&self, library_name: &str, _witness: &ComputationWitness) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearLibraryScanState {
             library_name: library_name.to_string(),
         });
@@ -369,8 +391,7 @@ impl SignalWriteSender {
         scanned_at: i64,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::RecordLibraryFile {
             library_name: library_name.to_string(),
             library_root: library_root.to_path_buf(),
@@ -390,8 +411,7 @@ impl SignalWriteSender {
         issue_type: HealthIssueType,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearHealthIssuesByType { issue_type });
     }
 
@@ -403,8 +423,7 @@ impl SignalWriteSender {
         mtime_nanos: i64,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::UpdateScanStateMtime {
             path: path.to_string(),
             mtime_secs,
@@ -421,8 +440,7 @@ impl SignalWriteSender {
         confidence: Option<f64>,
         _witness: &ComputationWitness,
     ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
+        self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::UpsertTagCanonicalization {
             tag_name: tag_name.to_string(),
             canonical_value: canonical_value.to_string(),
@@ -611,6 +629,16 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::EnsureFileSignal { signal_type, path } => {
             with_retry("ensure_file_signal", path, || {
                 db.ensure_file_signal(*signal_type, path, &witness).map(|_| ())
+            });
+        }
+        SignalWriteOp::EnsureFileSignalWithMetadata {
+            signal_type,
+            key,
+            metadata_json,
+        } => {
+            let issue_type = signal_type.to_health_issue_type();
+            with_retry("ensure_file_signal_with_metadata", key, || {
+                db.ensure_signal(issue_type, key, metadata_json.as_deref(), &witness).map(|_| ())
             });
         }
         SignalWriteOp::ClearFileSignal { signal_type, path } => {

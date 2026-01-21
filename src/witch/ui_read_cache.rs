@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use crate::config;
 use crate::corpus::db::types::{CorpusSummary, InsightsData};
 use crate::corpus::db::Database;
+use crate::ui::deploy_flow::DeployModalData;
 
 // ============================================================================
 // CacheEntry<T> - Generic cache slot
@@ -201,6 +202,7 @@ impl<T> Drop for CacheWriter<T> {
 pub struct UiReadCache {
     corpus_summary: CacheEntry<CorpusSummary>,
     insights_data: CacheEntry<InsightsData>,
+    deploy_modal_data: CacheEntry<DeployModalData>,
 }
 
 impl UiReadCache {
@@ -208,12 +210,15 @@ impl UiReadCache {
     const DEFAULT_THROTTLE: Duration = Duration::from_secs(15);
     /// Insights data throttle (30 seconds - heavier computation).
     const INSIGHTS_THROTTLE: Duration = Duration::from_secs(30);
+    /// Deploy modal data throttle (30 seconds - heavier computation, multiple queries).
+    const DEPLOY_MODAL_THROTTLE: Duration = Duration::from_secs(30);
 
     /// Create a new UI read cache with default throttle settings.
     pub fn new() -> Self {
         Self {
             corpus_summary: CacheEntry::new(Self::DEFAULT_THROTTLE),
             insights_data: CacheEntry::new(Self::INSIGHTS_THROTTLE),
+            deploy_modal_data: CacheEntry::new(Self::DEPLOY_MODAL_THROTTLE),
         }
     }
 
@@ -254,6 +259,32 @@ impl UiReadCache {
     }
 
     // -------------------------------------------------------------------------
+    // Deploy Modal Data
+    // -------------------------------------------------------------------------
+
+    /// UI calls this when it wants deploy modal data.
+    ///
+    /// Idempotent - safe to call every frame. Respects throttle.
+    pub fn want_deploy_modal_data(&self) {
+        self.deploy_modal_data.want();
+    }
+
+    /// Read the latest cached deploy modal data.
+    ///
+    /// Returns None if never computed. Never blocks.
+    pub fn deploy_modal_data(&self) -> Option<DeployModalData> {
+        self.deploy_modal_data.get()
+    }
+
+    /// Force-trigger a refresh of deploy modal data.
+    ///
+    /// Called by the Witch after Content computations complete to pre-warm the cache.
+    /// Bypasses the normal throttle since we know the data just changed.
+    pub fn warm_deploy_modal_data(&self) {
+        self.deploy_modal_data.want();
+    }
+
+    // -------------------------------------------------------------------------
     // Witch Integration
     // -------------------------------------------------------------------------
 
@@ -285,6 +316,23 @@ impl UiReadCache {
                 if let Ok(db_path) = config::get_db_path() {
                     if let Ok(db) = Database::open_read_only(&db_path) {
                         if let Ok(data) = db.get_insights_data() {
+                            writer.complete(data);
+                            return;
+                        }
+                    }
+                }
+                // On error, abort (allows retry on next want)
+                writer.abort();
+            });
+        }
+
+        // Deploy modal data refresh
+        if let Some(writer) = self.deploy_modal_data.take_refresh() {
+            rayon::spawn(move || {
+                // Open fresh read-only connection on worker thread
+                if let Ok(db_path) = config::get_db_path() {
+                    if let Ok(db) = Database::open_read_only(&db_path) {
+                        if let Ok(data) = DeployModalData::load(&db) {
                             writer.complete(data);
                             return;
                         }

@@ -30,6 +30,7 @@ use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
 mod execution;
 mod transaction;
 mod types;
+mod ui_read_cache;
 mod worker_stats;
 
 // Re-export public types
@@ -41,10 +42,11 @@ pub use types::{
     PendingTransaction, Task, TaskLabel, TransactionError, TransactionInfo, WitnessedDecision,
     WorkerStats,
 };
+pub use ui_read_cache::UiReadCache;
 
 // Internal imports
 use execution::execute_task;
-use types::TaskResult;
+use types::{ContentAnalysisWitness, TaskResult};
 use worker_stats::SharedWorkerStats;
 
 // ============================================================================
@@ -118,6 +120,10 @@ pub struct TaskDaemon {
     /// Thread-safe worker stats in separate heap allocation.
     /// None when timing instrumentation is disabled.
     worker_stats_shared: Option<Arc<SharedWorkerStats>>,
+
+    /// Background cache for UI read queries.
+    /// UI calls want_*() methods, daemon spawns refresh tasks in tick().
+    ui_read_cache: UiReadCache,
 }
 
 impl TaskDaemon {
@@ -176,6 +182,7 @@ impl TaskDaemon {
             read_only_conn: None,
             db_thread_handle,
             worker_stats_shared,
+            ui_read_cache: UiReadCache::new(),
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
@@ -392,6 +399,9 @@ impl TaskDaemon {
             self.queue_computation_internal(comp, None);
         }
 
+        // Spawn background cache refresh tasks (demand-driven, throttled)
+        self.ui_read_cache.spawn_refreshes();
+
         // Capture current state for status
         let current_in_flight = self.in_flight;
         let current_total_processed = self.total_processed;
@@ -538,7 +548,9 @@ impl TaskDaemon {
             self.queue_awakening_computations();
         }
         if queue_content_analysis_after_reset {
-            self.queue_content_analysis_internal();
+            // Create witness here - this is the ONLY valid call site
+            let witness = ContentAnalysisWitness::new();
+            self.queue_content_analysis(witness);
         }
     }
 
@@ -558,20 +570,14 @@ impl TaskDaemon {
         );
     }
 
-    /// Queue content analysis computations.
+    /// Queue content analysis computations (internal only).
     ///
     /// This queues `ScheduleContentAnalysis` which will spawn bulk detection
     /// computations for FingerprintDuplicate, MissingTag, etc.
     ///
-    /// Called from UI after intake flow completes (Eye is already Awake).
-    pub fn queue_content_analysis(&mut self) {
-        self.queue_content_analysis_internal();
-    }
-
-    /// Internal: Queue content analysis computations.
-    ///
-    /// Used by both the public API and auto-trigger from transition_to_completed.
-    fn queue_content_analysis_internal(&mut self) {
+    /// Only callable from `transition_to_completed` when mutations drain while Awake.
+    /// Sealed by requiring `ContentAnalysisWitness` which can only be created in that context.
+    fn queue_content_analysis(&mut self, _witness: ContentAnalysisWitness) {
         let _ = config::log_message(
             "[STATE] Queueing ScheduleContentAnalysis for content analysis"
         );
@@ -895,6 +901,14 @@ impl TaskDaemon {
         }
 
         Some(stats)
+    }
+
+    /// Get the UI read cache for demand-driven background queries.
+    ///
+    /// UI components call `want_*()` methods to flag demand, then read
+    /// cached values via the corresponding getter methods.
+    pub fn ui_read_cache(&self) -> &UiReadCache {
+        &self.ui_read_cache
     }
 
     /// Check if there's a lingering completed session to display.

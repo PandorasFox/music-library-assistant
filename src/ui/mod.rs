@@ -25,7 +25,6 @@ mod tick;
 mod types;
 
 pub mod app;
-pub mod cache;
 pub mod deploy_flow;
 pub mod eye;
 pub mod flows;
@@ -98,9 +97,6 @@ pub(crate) struct App {
 
     // Eye animation
     eye: EyeAnimation,
-
-    // UI cache - all cached DB results for rendering (never query DB directly in render code)
-    ui_cache: cache::UiCache,
 }
 
 impl App {
@@ -121,7 +117,6 @@ impl App {
             task_daemon: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
-            ui_cache: cache::UiCache::new(),
         }
     }
 
@@ -282,20 +277,6 @@ impl App {
         }
     }
 
-    /// Start content analysis phase (after intake).
-    ///
-    /// Queues content analysis computations and shows the progress screen.
-    pub(super) fn start_content_analysis(&mut self) {
-        let _ = config::log_message("Starting content analysis phase");
-
-        // Queue content analysis computations
-        self.daemon().queue_content_analysis();
-
-        // Create progress screen and transition
-        self.progress_screen = Some(progress_screen::ProgressScreen::new_content_analysis());
-        self.mode = UiMode::Progress;
-    }
-
     pub(super) fn start_tag_search(&mut self) {
         self.tag_search = Some(tag_search::TagSearchState::new());
         self.mode = UiMode::TagSearch;
@@ -351,9 +332,12 @@ impl App {
 // ============================================================================
 
 fn render(f: &mut Frame, app: &mut App) {
-    // Use cached corpus summary to avoid DB queries every frame.
-    // The cache is refreshed in the event loop via ui_cache.refresh().
-    let corpus_summary = app.ui_cache.corpus_summary();
+    // Use cached corpus summary from daemon's background cache.
+    // Never queries DB - just reads whatever was last computed.
+    let corpus_summary = app
+        .task_daemon
+        .as_ref()
+        .and_then(|d| d.ui_read_cache().corpus_summary());
 
     // Fetch DB thread stats (cheap - just reads cached atomic values)
     // Returns None if timing instrumentation is disabled
@@ -504,9 +488,9 @@ fn run_app<B: ratatui::backend::Backend>(
             app.tick_intake_confirmation();
         }
 
-        // Refresh UI cache periodically (avoids per-frame DB queries in render code)
-        if let Some(ref mut daemon) = app.task_daemon {
-            app.ui_cache.refresh(daemon);
+        // Flag demand for cached UI data (daemon spawns background refresh if needed)
+        if let Some(ref daemon) = app.task_daemon {
+            daemon.ui_read_cache().want_corpus_summary();
         }
 
         let draw_start = std::time::Instant::now();

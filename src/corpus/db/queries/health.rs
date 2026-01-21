@@ -19,7 +19,7 @@ use super::Database;
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, HealthIssue,
-    HealthIssueType, HealthSummary, KnownVariant, Track, VariantType,
+    HealthIssueType, HealthSummary, Track,
 };
 
 impl Database {
@@ -765,80 +765,6 @@ impl Database {
     }
 
     // ========================================================================
-    // Known Variant Operations
-    // ========================================================================
-
-    /// Insert a known variant relationship.
-    pub fn insert_known_variant(&self, variant: &KnownVariant) -> Result<i64> {
-        self.conn
-            .execute(
-                r#"INSERT INTO known_variants
-                   (variant_type, canonical_fingerprint, variant_fingerprint,
-                    canonical_track_id, variant_track_id, marked_at, notes)
-                   VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, CURRENT_TIMESTAMP), ?7)"#,
-                params![
-                    variant.variant_type.as_str(),
-                    &variant.canonical_fingerprint,
-                    &variant.variant_fingerprint,
-                    variant.canonical_track_id,
-                    variant.variant_track_id,
-                    &variant.marked_at,
-                    &variant.notes,
-                ],
-            )
-            .context("Failed to insert known variant")?;
-
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    /// Check if a fingerprint is a known variant.
-    pub fn is_known_variant(&self, fingerprint: &str) -> Result<bool> {
-        let count: i64 = self.conn.query_row(
-            r#"SELECT COUNT(*) FROM known_variants
-               WHERE canonical_fingerprint = ?1 OR variant_fingerprint = ?1"#,
-            params![fingerprint],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
-    }
-
-    /// Get known variants for a fingerprint.
-    pub fn get_known_variants_for_fingerprint(&self, fingerprint: &str) -> Result<Vec<KnownVariant>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, variant_type, canonical_fingerprint, variant_fingerprint,
-                      canonical_track_id, variant_track_id, marked_at, notes
-               FROM known_variants
-               WHERE canonical_fingerprint = ?1 OR variant_fingerprint = ?1"#,
-        )?;
-
-        let rows = stmt.query_map(params![fingerprint], Self::row_to_known_variant)?;
-
-        let mut variants = Vec::new();
-        for row in rows {
-            variants.push(row?);
-        }
-        Ok(variants)
-    }
-
-    /// Get all known variants.
-    pub fn get_all_known_variants(&self) -> Result<Vec<KnownVariant>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, variant_type, canonical_fingerprint, variant_fingerprint,
-                      canonical_track_id, variant_track_id, marked_at, notes
-               FROM known_variants
-               ORDER BY variant_type, canonical_fingerprint"#,
-        )?;
-
-        let rows = stmt.query_map(params![], Self::row_to_known_variant)?;
-
-        let mut variants = Vec::new();
-        for row in rows {
-            variants.push(row?);
-        }
-        Ok(variants)
-    }
-
-    // ========================================================================
     // Row Conversion Helpers
     // ========================================================================
 
@@ -854,22 +780,6 @@ impl Database {
             issue_key: row.get(2)?,
             discovered_at: row.get(3)?,
             metadata_json: row.get(4)?,
-        })
-    }
-
-    pub(super) fn row_to_known_variant(row: &rusqlite::Row) -> rusqlite::Result<KnownVariant> {
-        let variant_type_str: String = row.get(1)?;
-
-        Ok(KnownVariant {
-            id: Some(row.get(0)?),
-            variant_type: VariantType::from_str(&variant_type_str)
-                .unwrap_or(VariantType::Rerelease),
-            canonical_fingerprint: row.get(2)?,
-            variant_fingerprint: row.get(3)?,
-            canonical_track_id: row.get(4)?,
-            variant_track_id: row.get(5)?,
-            marked_at: row.get(6)?,
-            notes: row.get(7)?,
         })
     }
 }

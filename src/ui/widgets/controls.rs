@@ -200,62 +200,6 @@ impl ControlsHint {
 pub mod presets {
     use super::{ControlsHint, KeyBinding};
 
-    /// Navigation controls for list views
-    pub fn list_navigation() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Up/Down", "Navigate"))
-            .binding(KeyBinding::new("Enter", "Select"))
-            .binding(KeyBinding::new("Esc", "Back"))
-    }
-
-    /// Navigation for three-pane layouts
-    pub fn pane_navigation() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Left/Right", "Switch Pane"))
-            .binding(KeyBinding::new("Up/Down", "Navigate"))
-            .binding(KeyBinding::new("Enter", "Select"))
-    }
-
-    /// Tag editor workflow controls
-    pub fn tag_editor_workflow() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Shift+Up/Down", "Prev/Next Track"))
-            .binding(KeyBinding::new("Tab", "Next Group"))
-            .binding(KeyBinding::new("Up/Down", "Navigate Fields"))
-            .binding(KeyBinding::new("Enter", "Edit"))
-            .binding(KeyBinding::new("Esc", "Review"))
-    }
-
-    /// Tag editor standard controls (non-workflow)
-    pub fn tag_editor_standard() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Tab/Shift+Tab", "Prev/Next Track"))
-            .binding(KeyBinding::new("Up/Down", "Navigate Fields"))
-            .binding(KeyBinding::new("Enter", "Edit"))
-            .binding(KeyBinding::new("Right", "Action Pane"))
-            .binding(KeyBinding::new("Esc", "Exit"))
-    }
-
-    /// Modal confirmation controls
-    pub fn modal_confirm() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Y", "Confirm"))
-            .binding(KeyBinding::new("N", "Cancel"))
-    }
-
-    /// Scrollable content controls
-    pub fn scrollable() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Up/Down", "Scroll"))
-            .binding(KeyBinding::new("PgUp/PgDn", "Page"))
-            .binding(KeyBinding::new("Enter", "Confirm"))
-            .binding(KeyBinding::new("Esc", "Cancel"))
-    }
-
-    // =========================================================================
-    // Mode-specific presets for render.rs footer
-    // =========================================================================
-
     /// Tag editor controls
     pub fn tag_editor() -> ControlsHint {
         ControlsHint::new()
@@ -345,11 +289,4 @@ mod tests {
         assert!(s.contains("Other"));
     }
 
-    #[test]
-    fn test_preset_list_navigation() {
-        let hint = presets::list_navigation();
-        let s = hint.render_string();
-        assert!(s.contains("Up/Down"));
-        assert!(s.contains("Navigate"));
-    }
 }

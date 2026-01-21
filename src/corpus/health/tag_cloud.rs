@@ -4,7 +4,6 @@
 //! and provides efficient collision detection without repeated database queries.
 
 use std::collections::HashMap;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -295,27 +294,6 @@ impl TagCloud {
             track_count,
         }
     }
-}
-
-// ============================================================================
-// Background Operation
-// ============================================================================
-
-/// Spawn a background thread to build the tag cloud.
-/// Returns a receiver that will contain the built cloud.
-pub fn spawn_tag_cloud_build() -> mpsc::Receiver<Result<TagCloud>> {
-    let (tx, rx) = mpsc::channel();
-
-    std::thread::spawn(move || {
-        let result = (|| {
-            let db_path = config::get_db_path()?;
-            let db = Database::open(&db_path)?;
-            TagCloud::build(&db)
-        })();
-        let _ = tx.send(result);
-    });
-
-    rx
 }
 
 #[cfg(test)]

@@ -242,53 +242,7 @@ pub struct DeployMapping {
     pub library_names: Vec<String>,          // Target library names
 }
 
-#[derive(Debug, Clone)]
-pub struct ScanSource {
-    pub name: String,      // Display name
-    pub path: PathBuf,     // File system path
-    pub source_id: String, // DB identifier
-}
-
 impl Config {
-    /// Get all scan sources from the config
-    pub fn get_scan_sources(&self) -> Vec<ScanSource> {
-        let mut sources = vec![ScanSource {
-            name: "corpus".to_string(),
-            path: self.corpus_root.clone(),
-            source_id: "corpus".to_string(),
-        }];
-
-        // Enumerate library subdirectories dynamically
-        if let Ok(entries) = fs::read_dir(&self.libraries_root) {
-            for entry in entries.flatten() {
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.is_dir() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            // Skip hidden directories
-                            if !name.starts_with('.') {
-                                sources.push(ScanSource {
-                                    name: format!("Library: {}", name),
-                                    path: entry.path(),
-                                    source_id: name.to_string(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(legacy) = &self.legacy_library {
-            sources.push(ScanSource {
-                name: "legacy".to_string(),
-                path: legacy.clone(),
-                source_id: "legacy".to_string(),
-            });
-        }
-
-        sources
-    }
-
     /// Get all corpus paths that deploy to a specific library
     ///
     /// Returns absolute paths to corpus directories that are configured

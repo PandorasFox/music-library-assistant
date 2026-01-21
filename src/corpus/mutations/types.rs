@@ -485,51 +485,6 @@ pub struct MutationResult {
     pub duration_ms: u64,
 }
 
-/// Work unit for bulk execution - groups mutations by file.
-#[derive(Debug)]
-pub struct WorkUnit {
-    pub path: PathBuf,
-    pub track_id: Option<i64>,
-    pub mutations: Vec<Mutation>,
-}
-
-/// Progress update during bulk execution.
-#[derive(Debug, Clone)]
-pub struct ExecutionProgress {
-    pub completed: usize,
-    pub total: usize,
-    pub current_file: Option<String>,
-    pub errors: Vec<String>,
-}
-
-/// Final result of bulk execution.
-#[derive(Debug)]
-pub struct ExecutionResult {
-    pub total: usize,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub results: Vec<MutationResult>,
-    pub duration_ms: u64,
-}
-
-impl ExecutionResult {
-    /// Create an empty result.
-    pub fn empty() -> Self {
-        Self {
-            total: 0,
-            succeeded: 0,
-            failed: 0,
-            results: Vec::new(),
-            duration_ms: 0,
-        }
-    }
-
-    /// Check if all mutations succeeded.
-    pub fn all_succeeded(&self) -> bool {
-        self.failed == 0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

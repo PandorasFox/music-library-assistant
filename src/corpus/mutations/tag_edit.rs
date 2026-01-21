@@ -13,57 +13,7 @@ use crate::corpus::metadata;
 use crate::daemon::MutationExecutionWitness;
 
 use super::sealed::MutationToken;
-use super::types::{Mutation, MutationResult, TagEdit, WorkUnit};
-
-/// Execute a batch of tag mutations for a single file (work unit).
-///
-/// This is the primary entry point for tag editing operations.
-/// It handles reading current tags, applying edits, and writing back.
-pub fn execute_batch(db: &Database, work_unit: &WorkUnit, session_id: &str) -> Vec<MutationResult> {
-    let mut results = Vec::new();
-
-    for mutation in &work_unit.mutations {
-        let start = std::time::Instant::now();
-
-        let result = match mutation {
-            Mutation::TagEditDb {
-                track_id,
-                tag_name,
-                old_value,
-                new_value,
-            } => execute_db_only(db, *track_id, tag_name, old_value.as_deref(), new_value.as_deref()),
-
-            Mutation::TagFlushToDisk { path, tags } => execute_disk_only(path, tags),
-
-            Mutation::TagEditAndFlush {
-                track_id,
-                path,
-                edits,
-            } => execute_combined(db, *track_id, path, edits, session_id),
-
-            _ => {
-                // Non-tag mutations shouldn't be in this batch
-                Err(anyhow::anyhow!(
-                    "Unexpected mutation type in tag edit batch"
-                ))
-            }
-        };
-
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(e.to_string())),
-        };
-
-        results.push(MutationResult {
-            mutation: mutation.clone(),
-            success,
-            error,
-            duration_ms: start.elapsed().as_millis() as u64,
-        });
-    }
-
-    results
-}
+use super::types::{Mutation, MutationResult, TagEdit};
 
 /// Execute a database-only tag edit (no disk write).
 fn execute_db_only(

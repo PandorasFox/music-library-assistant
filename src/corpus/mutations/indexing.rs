@@ -341,18 +341,6 @@ pub fn execute_single(
     }
 }
 
-/// Execute a batch of indexing mutations.
-///
-/// Processes multiple indexing operations, typically for bulk scanning.
-/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
-pub fn execute_batch(
-    db: &Database,
-    mutations: &[Mutation],
-    witness: &MutationExecutionWitness,
-) -> Vec<MutationResult> {
-    mutations.iter().map(|m| execute_single(db, m, witness)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

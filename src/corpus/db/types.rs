@@ -217,19 +217,6 @@ impl HealthIssueType {
 // Signal Types (Type-Safe Signal System)
 // ============================================================================
 
-/// A health signal - either file-based or aggregate.
-///
-/// Uses Rust's type system to enforce:
-/// - File signals have no metadata (path is the key)
-/// - Aggregate signals have metadata (grouping key + details)
-#[derive(Debug, Clone)]
-pub enum Signal {
-    /// File-based signal (key = path, no metadata)
-    File(FileSignal),
-    /// Aggregate signal (key = grouping key, has metadata)
-    Aggregate(AggregateSignal),
-}
-
 /// File-based health signal.
 ///
 /// The path uniquely identifies the signal. No metadata needed.
@@ -391,32 +378,6 @@ pub struct HealthIssue {
     pub metadata_json: Option<String>,
 }
 
-impl HealthIssue {
-    /// Convert to the new Signal type.
-    pub fn to_signal(&self) -> Option<Signal> {
-        // Try file signal first
-        if let Some(file_type) = FileSignalType::from_str(self.issue_type.as_str()) {
-            return Some(Signal::File(FileSignal {
-                id: self.id,
-                signal_type: file_type,
-                path: self.issue_key.clone(),
-                discovered_at: self.discovered_at.clone(),
-            }));
-        }
-        // Try aggregate signal
-        if let Some(agg_type) = AggregateSignalType::from_str(self.issue_type.as_str()) {
-            return Some(Signal::Aggregate(AggregateSignal {
-                id: self.id,
-                signal_type: agg_type,
-                key: self.issue_key.clone(),
-                discovered_at: self.discovered_at.clone(),
-                metadata_json: self.metadata_json.clone(),
-            }));
-        }
-        None
-    }
-}
-
 impl From<FileSignal> for HealthIssue {
     fn from(sig: FileSignal) -> Self {
         Self {
@@ -441,91 +402,6 @@ impl From<AggregateSignal> for HealthIssue {
             metadata_json: sig.metadata_json,
         }
     }
-}
-
-/// Role of a track in a health issue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrackRole {
-    /// Track selected to keep in resolution
-    Winner,
-    /// Track to be removed/stashed in resolution
-    Loser,
-    /// General member of the issue (unresolved)
-    Member,
-    /// Canonical version (for artist canonicalization)
-    Canonical,
-    /// Variant version (for artist canonicalization)
-    Variant,
-}
-
-impl TrackRole {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Winner => "winner",
-            Self::Loser => "loser",
-            Self::Member => "member",
-            Self::Canonical => "canonical",
-            Self::Variant => "variant",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "winner" => Some(Self::Winner),
-            "loser" => Some(Self::Loser),
-            "member" => Some(Self::Member),
-            "canonical" => Some(Self::Canonical),
-            "variant" => Some(Self::Variant),
-            _ => None,
-        }
-    }
-}
-
-/// Type of known variant relationship.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VariantType {
-    /// Same recording released on different albums
-    Rerelease,
-    /// Remix of the original
-    Remix,
-    /// Remastered version
-    Remaster,
-    /// Live recording of studio track
-    Live,
-}
-
-impl VariantType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Rerelease => "re-release",
-            Self::Remix => "remix",
-            Self::Remaster => "remaster",
-            Self::Live => "live",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "re-release" => Some(Self::Rerelease),
-            "remix" => Some(Self::Remix),
-            "remaster" => Some(Self::Remaster),
-            "live" => Some(Self::Live),
-            _ => None,
-        }
-    }
-}
-
-/// A known variant relationship between tracks.
-#[derive(Debug, Clone)]
-pub struct KnownVariant {
-    pub id: Option<i64>,
-    pub variant_type: VariantType,
-    pub canonical_fingerprint: String,
-    pub variant_fingerprint: Option<String>,
-    pub canonical_track_id: Option<i64>,
-    pub variant_track_id: Option<i64>,
-    pub marked_at: Option<String>,
-    pub notes: Option<String>,
 }
 
 /// A canonical tag value mapping (unified for artist, album_artist, genre, album).
@@ -591,37 +467,3 @@ pub struct CorpusSummary {
     pub duplicate_inodes: usize,
 }
 
-// ============================================================================
-// Album Artist Collation and Population Types
-// ============================================================================
-
-/// An album with multiple distinct artist values that may need collation.
-/// Used in the Album Artist Collation flow to suggest "Various Artists" unification.
-#[derive(Debug, Clone)]
-pub struct AlbumArtistCollation {
-    /// The album name
-    pub album_name: String,
-    /// Artists found on this album with track counts: (artist_name, track_count)
-    pub artists: Vec<(String, usize)>,
-    /// Total tracks in this album
-    pub total_tracks: usize,
-    /// Existing album_artist value if any tracks have it set
-    pub existing_album_artist: Option<String>,
-    /// Suggested album_artist (single artist if uniform, "Various Artists" if mixed)
-    pub suggested_album_artist: Option<String>,
-}
-
-/// A group of tracks missing album_artist tags, grouped for bulk population.
-#[derive(Debug, Clone)]
-pub struct AlbumArtistPopulationGroup {
-    /// Album name if tracks share an album tag
-    pub album_name: Option<String>,
-    /// Directory path if tracks are grouped by directory (no album tag)
-    pub directory: Option<String>,
-    /// Artists found in this group with track counts: (artist_name, track_count)
-    pub artists: Vec<(String, usize)>,
-    /// Total tracks in this group
-    pub total_tracks: usize,
-    /// Suggested album_artist (single artist if uniform, "Various Artists" if mixed)
-    pub suggested_album_artist: Option<String>,
-}

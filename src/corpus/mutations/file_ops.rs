@@ -105,58 +105,6 @@ pub fn execute_delete(db: Option<&Database>, path: &Path, track_id: Option<i64>)
     Ok(())
 }
 
-/// Execute a MoveToStash mutation.
-///
-/// Moves a file to the stash directory, preserving relative structure.
-pub fn execute_move_to_stash(
-    db: Option<&Database>,
-    path: &Path,
-    track_id: Option<i64>,
-    stash_name: &str,
-    stash_root: &Path,
-) -> Result<()> {
-    // Build stash destination path
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("Invalid file path: {}", path.display()))?;
-
-    let stash_dir = stash_root.join(stash_name);
-    let destination = stash_dir.join(file_name);
-
-    // Handle name collisions by appending counter
-    let final_destination = if destination.exists() {
-        let stem = destination
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("file");
-        let ext = destination
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-
-        let mut counter = 1;
-        loop {
-            let new_name = if ext.is_empty() {
-                format!("{}_{}", stem, counter)
-            } else {
-                format!("{}_{}.{}", stem, counter, ext)
-            };
-            let new_path = stash_dir.join(new_name);
-            if !new_path.exists() {
-                break new_path;
-            }
-            counter += 1;
-        }
-    } else {
-        destination
-    };
-
-    // Move to stash
-    execute_move(db, path, &final_destination, track_id)?;
-
-    Ok(())
-}
-
 /// Execute a HardLink mutation.
 ///
 /// Creates a hard link from source to destination (for deployment).
@@ -261,19 +209,6 @@ pub fn execute_single(
         error,
         duration_ms: start.elapsed().as_millis() as u64,
     }
-}
-
-/// Execute a batch of file operation mutations.
-/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
-pub fn execute_batch(
-    db: Option<&Database>,
-    mutations: &[Mutation],
-    witness: &MutationExecutionWitness,
-) -> Vec<MutationResult> {
-    mutations
-        .iter()
-        .map(|m| execute_single(db, m, witness))
-        .collect()
 }
 
 #[cfg(test)]

@@ -15,7 +15,8 @@ use crate::corpus::computations::helpers::{
     parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSignalType, HealthIssueType};
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, LibraryFileSignalType, HealthIssueType};
+use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::Database;
 use crate::db_thread;
 
@@ -659,7 +660,7 @@ pub fn execute_verify_out_of_band_changes(
         let track = match read_only_db.get_track_by_path(path) {
             Ok(Some(t)) => t,
             Ok(None) => {
-                sender.clear_file_signal(FileSignalType::CorpusFileModifiedOutOfBand, path, witness);
+                sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), path, witness);
                 continue;
             }
             Err(_) => continue,
@@ -690,10 +691,10 @@ pub fn execute_verify_out_of_band_changes(
 
         if mismatch_count > 0 {
             tag_change_count += 1;
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::OutOfBandTagChange, path, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagChange.into(), path, witness);
         } else {
             mtime_only_count += 1;
-            sender.clear_file_signal(FileSignalType::CorpusFileModifiedOutOfBand, path, witness);
+            sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), path, witness);
 
             let file_path = Path::new(path);
             if let Ok(metadata) = std::fs::metadata(file_path) {
@@ -895,7 +896,7 @@ pub fn execute_derive_deploy_health_signals(
         );
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryLeftover, &leftover_key, witness);
+            clear_file_signal_if_present(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
 
             // Check if stale and capture metadata for the signal
             let stale_metadata = if let Ok(Some(track)) = read_only_db.get_track_by_path(corpus_path) {
@@ -932,19 +933,19 @@ pub fn execute_derive_deploy_health_signals(
                 ensure_file_signal_with_metadata_if_missing(
                     read_only_db,
                     &sender,
-                    FileSignalType::LibraryStale,
+                    LibraryFileSignalType::LibraryStale.into(),
                     &stale_key,
                     &metadata.to_string(),
                     witness,
                 );
             } else {
                 healthy_count += 1;
-                clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
+                clear_file_signal_if_present(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
             }
         } else {
             leftover_count += 1;
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::LibraryLeftover, &leftover_key, witness);
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
+            clear_file_signal_if_present(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
         }
     }
 
@@ -1050,25 +1051,26 @@ pub fn execute_derive_corpus_deploy_status(
             clear_file_signal_if_present(
                 read_only_db,
                 &sender,
-                FileSignalType::DeployReady,
+                LibraryFileSignalType::DeployReady.into(),
                 corpus_path,
                 witness,
             );
             clear_file_signal_if_present(
                 read_only_db,
                 &sender,
-                FileSignalType::DeployedHealthy,
+                LibraryFileSignalType::DeployedHealthy.into(),
                 corpus_path,
                 witness,
             );
             continue;
         }
 
-        // Get the track's inode
-        let inode = match read_only_db.get_track_by_path(corpus_path) {
-            Ok(Some(track)) => track.inode,
+        // Get the track (we need inode and track_id for tags lookup)
+        let track = match read_only_db.get_track_by_path(corpus_path) {
+            Ok(Some(t)) => t,
             _ => continue, // Skip if track not found
         };
+        let inode = track.inode;
 
         // Check if this inode is deployed anywhere and not stale
         let is_deployed = deployed_inodes.contains(&inode);
@@ -1080,31 +1082,52 @@ pub fn execute_derive_corpus_deploy_status(
             ensure_file_signal_if_missing(
                 read_only_db,
                 &sender,
-                FileSignalType::DeployedHealthy,
+                LibraryFileSignalType::DeployedHealthy.into(),
                 corpus_path,
                 witness,
             );
             clear_file_signal_if_present(
                 read_only_db,
                 &sender,
-                FileSignalType::DeployReady,
+                LibraryFileSignalType::DeployReady.into(),
                 corpus_path,
                 witness,
             );
         } else {
             // File is not deployed (or deployed but stale)
             deploy_ready_count += 1;
-            ensure_file_signal_if_missing(
+
+            // Compute the deploy path for this track
+            let deploy_path = if let Some(track_id) = track.id {
+                // Get track tags and build tag_map
+                let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
+                let tag_map: HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                    .collect();
+                // Compute relative deploy path and make absolute
+                let relative_path = compute_deployment_path_with_tags(&track, &tag_map);
+                config.libraries_root.join(&relative_path)
+            } else {
+                // Fallback: no track_id, use empty path (shouldn't happen)
+                std::path::PathBuf::new()
+            };
+
+            let metadata = serde_json::json!({
+                "deploy_path": deploy_path.to_string_lossy(),
+            });
+            ensure_file_signal_with_metadata_if_missing(
                 read_only_db,
                 &sender,
-                FileSignalType::DeployReady,
+                LibraryFileSignalType::DeployReady.into(),
                 corpus_path,
+                &metadata.to_string(),
                 witness,
             );
             clear_file_signal_if_present(
                 read_only_db,
                 &sender,
-                FileSignalType::DeployedHealthy,
+                LibraryFileSignalType::DeployedHealthy.into(),
                 corpus_path,
                 witness,
             );

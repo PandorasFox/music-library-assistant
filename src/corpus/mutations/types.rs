@@ -148,12 +148,6 @@ pub enum Mutation {
         destination: PathBuf,
     },
 
-    /// Delete a file.
-    Delete {
-        path: PathBuf,
-        track_id: Option<i64>,
-    },
-
     /// Move a file to the stash directory.
     MoveToStash {
         path: PathBuf,
@@ -166,6 +160,15 @@ pub enum Mutation {
     // ========================================================================
     /// Create a hard link from source to destination.
     HardLink {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+
+    /// Move a file within a library (e.g., stale file to correct location).
+    ///
+    /// Unlike corpus Move, this operates only on library paths and triggers
+    /// library signal updates (clears LibraryStale for old path).
+    LibraryMove {
         source: PathBuf,
         destination: PathBuf,
     },
@@ -222,7 +225,6 @@ pub enum MutationCategory {
     Indexing,
     FileMove,
     FileCopy,
-    FileDelete,
     Deployment,
     Migration,
 }
@@ -248,9 +250,7 @@ impl Mutation {
 
             Mutation::Copy { .. } => MutationCategory::FileCopy,
 
-            Mutation::Delete { .. } => MutationCategory::FileDelete,
-
-            Mutation::HardLink { .. } => MutationCategory::Deployment,
+            Mutation::HardLink { .. } | Mutation::LibraryMove { .. } => MutationCategory::Deployment,
 
             Mutation::DbMigration { .. } => MutationCategory::Migration,
         }
@@ -266,9 +266,9 @@ impl Mutation {
             | Mutation::UpdateScanState { path, .. }
             | Mutation::Move { source: path, .. }
             | Mutation::Copy { source: path, .. }
-            | Mutation::Delete { path, .. }
             | Mutation::MoveToStash { path, .. }
-            | Mutation::HardLink { source: path, .. } => Some(path),
+            | Mutation::HardLink { source: path, .. }
+            | Mutation::LibraryMove { source: path, .. } => Some(path),
 
             Mutation::TagEditDb { .. }
             | Mutation::CleanupStaleScanState { .. }
@@ -320,9 +320,9 @@ impl Mutation {
             | Mutation::DropFromIndex { .. }
             | Mutation::Move { .. }
             | Mutation::Copy { .. }
-            | Mutation::Delete { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::HardLink { .. }
+            | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. } => None,
         }
     }
@@ -378,14 +378,14 @@ impl Mutation {
                     dirs.push(parent.to_path_buf());
                 }
             }
-            Mutation::Delete { path, .. } | Mutation::MoveToStash { path, .. } => {
+            Mutation::MoveToStash { path, .. } => {
                 if let Some(parent) = path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
 
             // Deployment operations happen outside corpus, don't affect corpus signals
-            Mutation::HardLink { .. } => {}
+            Mutation::HardLink { .. } | Mutation::LibraryMove { .. } => {}
 
             // Path updates affect both old and new directories
             Mutation::UpdateTrackPath { old_path, new_path, .. } => {
@@ -442,11 +442,12 @@ impl Mutation {
             // File operations: source and destination
             Mutation::Move { source, destination, .. }
             | Mutation::Copy { source, destination }
-            | Mutation::HardLink { source, destination } => {
+            | Mutation::HardLink { source, destination }
+            | Mutation::LibraryMove { source, destination } => {
                 vec![source.clone(), destination.clone()]
             }
 
-            Mutation::Delete { path, .. } | Mutation::MoveToStash { path, .. } => {
+            Mutation::MoveToStash { path, .. } => {
                 vec![path.clone()]
             }
 

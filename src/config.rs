@@ -359,7 +359,9 @@ impl Config {
                 e
             );
         }
-        let _ = fs::remove_file(&link_path); // Cleanup
+        // Cleanup: move test artifact to /tmp/ instead of deleting
+        let cleanup_path = std::path::PathBuf::from("/tmp").join(&link_name);
+        let _ = fs::rename(&link_path, &cleanup_path);
 
         // Step 5: Test atomic move capability (corpus → stash)
         if let Some(stash_path) = &self.stash_dir {
@@ -379,8 +381,9 @@ impl Config {
             let move_path = stash_path.join(&move_name);
 
             if let Err(e) = fs::rename(&source_path, &move_path) {
-                // Cleanup source file if rename failed
-                let _ = fs::remove_file(&source_path);
+                // Cleanup: move source file to /tmp/ instead of deleting
+                let cleanup_path = std::path::PathBuf::from("/tmp").join(source_path.file_name().unwrap_or_default());
+                let _ = fs::rename(&source_path, &cleanup_path);
 
                 anyhow::bail!(
                     "Validation failed: Cannot atomically move files\n\
@@ -401,7 +404,9 @@ impl Config {
                     e
                 );
             }
-            let _ = fs::remove_file(&move_path); // Cleanup
+            // Cleanup: move test artifact to /tmp/ instead of deleting
+            let cleanup_path = std::path::PathBuf::from("/tmp").join(&move_name);
+            let _ = fs::rename(&move_path, &cleanup_path);
         }
 
         // Step 6: Log success

@@ -28,6 +28,7 @@ use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, FileSignalType, HealthIssueType,
 };
 use crate::corpus::db::Database;
+use crate::witch::MutationExecutionWitness;
 use crate::config;
 
 // ============================================================================
@@ -307,6 +308,20 @@ impl SignalWriteSender {
         signal_type: FileSignalType,
         path: &str,
         _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearFileSignal {
+            signal_type,
+            path: path.to_string(),
+        });
+    }
+
+    /// Clear a file signal from mutation context (idempotent delete).
+    pub fn clear_file_signal_for_mutation(
+        &self,
+        signal_type: FileSignalType,
+        path: &str,
+        _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearFileSignal {

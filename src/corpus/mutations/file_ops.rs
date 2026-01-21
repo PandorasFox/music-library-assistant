@@ -3,9 +3,9 @@
 //! Handles execution of file-related mutations:
 //! - Move: Move a file from source to destination
 //! - Copy: Copy a file to a new location
-//! - Delete: Delete a file
 //! - MoveToStash: Move a file to the stash directory
 //! - HardLink: Create a hard link (for deployment)
+//! - LibraryMove: Move a file within a library
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -86,24 +86,6 @@ pub fn execute_copy(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Execute a Delete mutation.
-///
-/// Deletes a file and optionally removes it from the database.
-pub fn execute_delete(db: Option<&Database>, path: &Path, track_id: Option<i64>) -> Result<()> {
-    // Delete the file if it exists
-    if path.exists() {
-        fs::remove_file(path)
-            .with_context(|| format!("Failed to delete file: {}", path.display()))?;
-    }
-
-    // Remove from database if track_id provided
-    if let (Some(db), Some(_track_id)) = (db, track_id) {
-        let _ = db.delete_track_by_path(&path.to_string_lossy());
-    }
-
-    Ok(())
-}
-
 /// Execute a HardLink mutation.
 ///
 /// Creates a hard link from source to destination (for deployment).
@@ -122,16 +104,41 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
-    // Remove existing file at destination if present
+    // Fail if destination already exists - MLA never overwrites files
     if destination.exists() {
-        fs::remove_file(destination)
-            .with_context(|| format!("Failed to remove existing file: {}", destination.display()))?;
+        return Err(anyhow::anyhow!(
+            "Destination already exists: {}",
+            destination.display()
+        ));
     }
 
     // Create hard link
     fs::hard_link(source, destination).with_context(|| {
         format!(
             "Failed to create hard link from {} to {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+/// Execute a LibraryMove mutation.
+///
+/// Moves a file within a library (e.g., stale file to correct location).
+/// Unlike corpus moves, this does not update any database records.
+fn execute_library_move(source: &Path, destination: &Path) -> Result<()> {
+    // Create parent directories if needed
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    }
+
+    // Move the file
+    fs::rename(source, destination).with_context(|| {
+        format!(
+            "Failed to move library file from {} to {}",
             source.display(),
             destination.display()
         )
@@ -164,8 +171,6 @@ pub fn execute_single(
             destination,
         } => execute_copy(source, destination),
 
-        Mutation::Delete { path, track_id } => execute_delete(db, path, *track_id),
-
         Mutation::MoveToStash { path, .. } => {
             // MoveToStash requires stash_root which isn't in the mutation
             // This should be handled by a higher-level executor with config access
@@ -179,6 +184,11 @@ pub fn execute_single(
             source,
             destination,
         } => execute_hard_link(source, destination),
+
+        Mutation::LibraryMove {
+            source,
+            destination,
+        } => execute_library_move(source, destination),
 
         _ => Err(anyhow::anyhow!("Not a file operation mutation")),
     };

@@ -14,7 +14,8 @@
 //!
 //! - `ScheduleSecondLevelDerivations` - Orchestrator: spawns per-directory work
 //! - `DeriveDirectorySignals` - Derive signals for a single directory
-//! - `UpdateFileSignals` - Lightweight per-file signal update (post-mutation)
+//! - `UpdateCorpusFileSignals` - Lightweight per-file corpus signal update (post-mutation)
+//! - `UpdateLibraryFileSignals` - Lightweight per-file library signal update (post-mutation)
 //! - `WalkLibrary` - Enumerate library directories for scanning
 //! - `ScanLibraryDirectory` - Scan library directory, store results in DB
 
@@ -48,11 +49,19 @@ pub enum Computation {
     /// - Track with FileInCorpus → HealthyFile
     DeriveDirectorySignals { directory: PathBuf },
 
-    /// Update signals for a single file after mutation.
+    /// Update corpus signals for a single file after mutation.
     ///
-    /// Lightweight per-file computation that ensures signals reflect
+    /// Lightweight per-file computation that ensures corpus signals reflect
     /// the current state of a file after a mutation modifies it.
-    UpdateFileSignals { path: PathBuf },
+    /// Only valid for paths within the corpus directory.
+    UpdateCorpusFileSignals { path: PathBuf },
+
+    /// Update library signals for a single file after mutation.
+    ///
+    /// Ensures library signals (LibraryLeftover, etc.) are updated
+    /// when a library file is modified or removed.
+    /// Only valid for paths within library directories.
+    UpdateLibraryFileSignals { path: PathBuf },
 
     /// Walk a library directory tree.
     ///
@@ -91,7 +100,8 @@ impl Computation {
         match self {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
             Computation::DeriveDirectorySignals { .. } => "Deriving signals",
-            Computation::UpdateFileSignals { .. } => "Updating file signals",
+            Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
+            Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
             Computation::WalkLibrary { .. } => "Walking library",
             Computation::ScanLibraryDirectory { .. } => "Scanning library directory",
             Computation::UpdateDeploySignals { .. } => "Updating deploy signals",
@@ -103,7 +113,8 @@ impl Computation {
         match self {
             Computation::ScheduleSecondLevelDerivations => None,
             Computation::DeriveDirectorySignals { directory } => Some(directory),
-            Computation::UpdateFileSignals { path } => Some(path),
+            Computation::UpdateCorpusFileSignals { path } => Some(path),
+            Computation::UpdateLibraryFileSignals { path } => Some(path),
             Computation::WalkLibrary { library_root, .. } => Some(library_root),
             Computation::ScanLibraryDirectory { directory, .. } => Some(directory),
             Computation::UpdateDeploySignals { library_path, .. } => Some(library_path),

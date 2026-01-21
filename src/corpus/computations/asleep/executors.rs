@@ -13,11 +13,49 @@ use crate::corpus::computations::helpers::{
     ensure_file_signal_if_missing,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::FileSignalType;
+use crate::corpus::db::types::{CorpusFileSignalType, HealthIssueType};
 use crate::corpus::db::Database;
 use crate::db_thread;
 
 use super::{Computation, Result};
+
+// ============================================================================
+// Phase 0: Clear Existing Observation State
+// ============================================================================
+
+/// Phase 0: Clear all FileInCorpus signals before a fresh corpus scan.
+///
+/// This ensures deleted files don't retain stale signals that would cause them
+/// to appear as "healthy" instead of "missing" in DeriveDirectorySignals.
+pub fn execute_clear_existing_observation_state(
+    _read_only_db: &Database,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let _ = log_message("[COMPUTE] ClearExistingObservationState: clearing FileInCorpus signals");
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                Computation::ClearExistingObservationState,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Clear all FileInCorpus signals - they'll be rebuilt during the corpus walk
+    sender.clear_health_issues_by_type(HealthIssueType::FileInCorpus, witness);
+
+    let _ = log_message("[COMPUTE] ClearExistingObservationState: complete");
+
+    Result::success(
+        Computation::ClearExistingObservationState,
+        start.elapsed().as_millis() as u64,
+        Vec::new(), // No spawn - WalkCorpus is queued separately
+    )
+}
 
 // ============================================================================
 // Phase 1: Walk Corpus
@@ -136,6 +174,11 @@ pub fn execute_scan_corpus_directory(
     for (inode, path, disk_mtime_s, disk_mtime_ns) in &disk_state {
         let path_str = path.to_string_lossy().to_string();
 
+        // Create FileInCorpus signal for every file on disk
+        // (ClearExistingObservationState cleared all stale signals at start of observation)
+        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
+
+        // Check if file is indexed and needs mtime verification
         if let Some(entry) = indexed_by_inode.get(inode) {
             // File is indexed - check if mtime changed
             if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
@@ -153,9 +196,6 @@ pub fn execute_scan_corpus_directory(
                     expected_mtime_nanos: entry.mtime_nanos,
                 });
             }
-        } else {
-            // File not indexed - create a FileInCorpus signal for this file
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
         }
     }
 
@@ -312,7 +352,7 @@ fn create_missing_file_issues(
     };
 
     for path in missing_paths {
-        ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::MissingFile, path, witness);
+        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
     }
 }
 
@@ -327,7 +367,7 @@ fn create_unindexed_file_issues(
     };
 
     for path in missing_paths {
-        ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::UnindexedFile, path, witness);
+        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), path, witness);
     }
 }
 

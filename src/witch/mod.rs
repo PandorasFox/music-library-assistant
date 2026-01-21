@@ -293,6 +293,12 @@ impl Witch {
         corpus_root: &std::path::Path,
         legacy: Option<&std::path::Path>,
     ) {
+        // Clear stale observation state first - ensures deleted files get MissingFile signals
+        self.queue_computation_with_label(
+            Computation::Asleep(asleep::Computation::ClearExistingObservationState),
+            Some("Clearing observation state".to_string()),
+        );
+
         // Queue corpus walk
         self.queue_computation_with_label(
             Computation::Asleep(asleep::Computation::WalkCorpus {

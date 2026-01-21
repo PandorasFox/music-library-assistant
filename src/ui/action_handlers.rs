@@ -430,6 +430,10 @@ impl App {
 
         // New files: create hard links
         for file in &data.new {
+            // Skip files with empty deploy_path (data integrity check)
+            if file.deploy_path.is_empty() {
+                continue;
+            }
             mutations.push(Mutation::HardLink {
                 source: PathBuf::from(&file.corpus_path),
                 destination: PathBuf::from(&file.deploy_path),
@@ -438,10 +442,9 @@ impl App {
 
         // Stale files: move from wrong path to correct path
         for file in &data.stale {
-            mutations.push(Mutation::Move {
+            mutations.push(Mutation::LibraryMove {
                 source: PathBuf::from(&file.library_path),
                 destination: PathBuf::from(&file.expected_path),
-                track_id: None, // Library file, not corpus - no track to update
             });
         }
 

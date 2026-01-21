@@ -84,7 +84,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             (r.success, r.error)
         }
         MutationCategory::FileMove | MutationCategory::FileCopy |
-        MutationCategory::FileDelete | MutationCategory::Deployment => {
+        MutationCategory::Deployment => {
             let r = file_ops::execute_single(Some(&db), &mutation, &witness);
             (r.success, r.error)
         }
@@ -107,11 +107,29 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Queue per-file signal updates for affected paths
     // This ensures signals like UnindexedFile → HealthyFile are updated
     // Mutations can ONLY spawn awakening-phase computations (phase boundary enforcement)
+    //
+    // Path-aware spawning: corpus paths → UpdateCorpusFileSignals,
+    // library paths → UpdateLibraryFileSignals, others → skip
     let mut spawn: Vec<Computation> = if success {
+        let config = config::load_config().ok();
         mutation
             .affected_paths()
             .into_iter()
-            .map(|path| Computation::Awakening(awakening::Computation::UpdateFileSignals { path }))
+            .filter_map(|path| {
+                if let Some(ref cfg) = config {
+                    if path.starts_with(&cfg.corpus_root) {
+                        Some(Computation::Awakening(awakening::Computation::UpdateCorpusFileSignals { path }))
+                    } else if path.starts_with(&cfg.libraries_root) {
+                        Some(Computation::Awakening(awakening::Computation::UpdateLibraryFileSignals { path }))
+                    } else {
+                        // Path outside corpus/library - skip
+                        None
+                    }
+                } else {
+                    // No config - skip to be safe
+                    None
+                }
+            })
             .collect()
     } else {
         Vec::new()
@@ -119,12 +137,16 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     // For deploy mutations, also spawn deploy signal updates
     if success {
-        match mutation {
+        match &mutation {
             Mutation::HardLink { source, destination } => {
                 spawn.push(Computation::Awakening(awakening::Computation::UpdateDeploySignals {
                     corpus_path: source.clone(),
                     library_path: destination.clone(),
                 }));
+            }
+            Mutation::LibraryMove { source, .. } => {
+                // Clear LibraryStale signals for the old (source) path
+                clear_library_stale_signals(&db, source, &witness);
             }
             _ => {}
         }
@@ -196,5 +218,39 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
         duration_ms: start.elapsed().as_millis() as u64,
         queue_wait_ms,
         thread_stats: None, // Migrations don't use thread-local stats
+    }
+}
+
+/// Clear LibraryStale signals for a library path after a LibraryMove.
+///
+/// LibraryStale signals use compound keys like "library_stale:{name}:{path}",
+/// so we query existing signals and clear matching ones.
+fn clear_library_stale_signals(
+    db: &Database,
+    library_path: &std::path::Path,
+    witness: &MutationExecutionWitness,
+) {
+    use crate::corpus::db::types::{LibraryFileSignalType, HealthIssueType};
+    use crate::db_thread;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    let library_path_str = library_path.to_string_lossy();
+
+    // Query LibraryStale signals and clear those matching this path
+    if let Ok(signals) = db.get_health_signals(Some(HealthIssueType::LibraryStale)) {
+        for signal in signals {
+            // Key format: "library_stale:{name}:{path}"
+            if signal.issue_key.ends_with(&format!(":{}", library_path_str)) {
+                sender.clear_file_signal_for_mutation(
+                    LibraryFileSignalType::LibraryStale.into(),
+                    &signal.issue_key,
+                    witness,
+                );
+            }
+        }
     }
 }

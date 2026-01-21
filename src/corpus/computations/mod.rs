@@ -183,6 +183,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             // Asleep phase computations
             Computation::Asleep(c) => {
                 let result = match c {
+                    asleep::Computation::ClearExistingObservationState => {
+                        asleep::execute_clear_existing_observation_state(read_only_db, &witness, start)
+                    }
                     asleep::Computation::WalkCorpus { root, source } => {
                         asleep::execute_walk_corpus(read_only_db, root, source, start)
                     }
@@ -211,8 +214,11 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awakening::Computation::DeriveDirectorySignals { directory } => {
                         awakening::execute_derive_directory_signals(read_only_db, directory, &witness, start)
                     }
-                    awakening::Computation::UpdateFileSignals { path } => {
-                        awakening::execute_update_file_signals(read_only_db, path, &witness, start)
+                    awakening::Computation::UpdateCorpusFileSignals { path } => {
+                        awakening::execute_update_corpus_file_signals(read_only_db, path, &witness, start)
+                    }
+                    awakening::Computation::UpdateLibraryFileSignals { path } => {
+                        awakening::execute_update_library_file_signals(read_only_db, path, &witness, start)
                     }
                     awakening::Computation::WalkLibrary { library_root, library_name, corpus_path_prefixes } => {
                         awakening::execute_walk_library(read_only_db, library_root, library_name, corpus_path_prefixes, &witness, start)

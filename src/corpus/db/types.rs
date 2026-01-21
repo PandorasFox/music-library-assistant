@@ -197,9 +197,11 @@ pub struct FileSignal {
     pub discovered_at: Option<String>,
 }
 
-/// Types of file-based signals.
+/// Types of corpus file signals.
+///
+/// These signals track the state of files in the corpus directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FileSignalType {
+pub enum CorpusFileSignalType {
     /// File exists in corpus directory
     FileInCorpus,
     /// File in corpus but not in index
@@ -214,17 +216,9 @@ pub enum FileSignalType {
     MovedFile,
     /// Tags on disk differ from indexed tags
     OutOfBandTagChange,
-    /// Library file without corpus backing
-    LibraryLeftover,
-    /// Library file at wrong path
-    LibraryStale,
-    /// Healthy corpus file ready for deployment (not yet in any library)
-    DeployReady,
-    /// Healthy corpus file deployed at correct library path
-    DeployedHealthy,
 }
 
-impl FileSignalType {
+impl CorpusFileSignalType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::FileInCorpus => "file_in_corpus",
@@ -234,10 +228,6 @@ impl FileSignalType {
             Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
             Self::MovedFile => "moved_file",
             Self::OutOfBandTagChange => "oob_tag",
-            Self::LibraryLeftover => "library_leftover",
-            Self::LibraryStale => "library_stale",
-            Self::DeployReady => "deploy_ready",
-            Self::DeployedHealthy => "deployed_healthy",
         }
     }
 
@@ -250,16 +240,10 @@ impl FileSignalType {
             "corpus_file_modified_oob" | "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
             "moved_file" | "file_relocated" => Some(Self::MovedFile),
             "oob_tag" => Some(Self::OutOfBandTagChange),
-            "library_leftover" => Some(Self::LibraryLeftover),
-            "library_stale" => Some(Self::LibraryStale),
-            "deploy_ready" => Some(Self::DeployReady),
-            "deployed_healthy" => Some(Self::DeployedHealthy),
             _ => None,
         }
     }
 
-    /// Convert to HealthIssueType for signals that need metadata.
-    /// Panics for DeployReady/DeployedHealthy which use different storage.
     pub fn to_health_issue_type(&self) -> HealthIssueType {
         match self {
             Self::FileInCorpus => HealthIssueType::FileInCorpus,
@@ -269,12 +253,113 @@ impl FileSignalType {
             Self::CorpusFileModifiedOutOfBand => HealthIssueType::CorpusFileModifiedOutOfBand,
             Self::MovedFile => HealthIssueType::MovedFile,
             Self::OutOfBandTagChange => HealthIssueType::OutOfBandTagChange,
+        }
+    }
+}
+
+impl std::fmt::Display for CorpusFileSignalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Types of library file signals.
+///
+/// These signals track the state of files in library directories (deployment targets).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LibraryFileSignalType {
+    /// Library file without corpus backing
+    LibraryLeftover,
+    /// Library file at wrong path (tags changed since deploy)
+    LibraryStale,
+    /// Healthy corpus file ready for deployment (not yet in any library)
+    DeployReady,
+    /// Healthy corpus file deployed at correct library path
+    DeployedHealthy,
+}
+
+impl LibraryFileSignalType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::LibraryLeftover => "library_leftover",
+            Self::LibraryStale => "library_stale",
+            Self::DeployReady => "deploy_ready",
+            Self::DeployedHealthy => "deployed_healthy",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "library_leftover" => Some(Self::LibraryLeftover),
+            "library_stale" => Some(Self::LibraryStale),
+            "deploy_ready" => Some(Self::DeployReady),
+            "deployed_healthy" => Some(Self::DeployedHealthy),
+            _ => None,
+        }
+    }
+
+    pub fn to_health_issue_type(&self) -> HealthIssueType {
+        match self {
             Self::LibraryLeftover => HealthIssueType::LibraryLeftover,
             Self::LibraryStale => HealthIssueType::LibraryStale,
+            // DeployReady/DeployedHealthy don't have HealthIssueType equivalents
             Self::DeployReady | Self::DeployedHealthy => {
                 panic!("DeployReady/DeployedHealthy should not use to_health_issue_type")
             }
         }
+    }
+}
+
+impl std::fmt::Display for LibraryFileSignalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Unified file signal type for database storage compatibility.
+///
+/// This enum wraps both corpus and library signal types for cases where
+/// we need to handle both in a unified way (e.g., database queries).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileSignalType {
+    Corpus(CorpusFileSignalType),
+    Library(LibraryFileSignalType),
+}
+
+impl FileSignalType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Corpus(t) => t.as_str(),
+            Self::Library(t) => t.as_str(),
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        if let Some(t) = CorpusFileSignalType::from_str(s) {
+            return Some(Self::Corpus(t));
+        }
+        if let Some(t) = LibraryFileSignalType::from_str(s) {
+            return Some(Self::Library(t));
+        }
+        None
+    }
+}
+
+impl std::fmt::Display for FileSignalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<CorpusFileSignalType> for FileSignalType {
+    fn from(t: CorpusFileSignalType) -> Self {
+        Self::Corpus(t)
+    }
+}
+
+impl From<LibraryFileSignalType> for FileSignalType {
+    fn from(t: LibraryFileSignalType) -> Self {
+        Self::Library(t)
     }
 }
 

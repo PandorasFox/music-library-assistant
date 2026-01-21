@@ -247,7 +247,6 @@ impl TaskLabel {
             },
             MutationCategory::FileMove => "File moves",
             MutationCategory::FileCopy => "File copies",
-            MutationCategory::FileDelete => "File deletions",
             MutationCategory::Deployment => "Deployment",
             MutationCategory::Migration => "Migrations",
         };

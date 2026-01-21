@@ -14,7 +14,7 @@ use crate::corpus::computations::helpers::{
     get_configured_library_names, is_audio_file,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{FileSignalType, HealthIssueType};
+use crate::corpus::db::types::{CorpusFileSignalType, LibraryFileSignalType, HealthIssueType};
 use crate::corpus::db::Database;
 use crate::db_thread;
 
@@ -153,7 +153,7 @@ pub fn execute_derive_directory_signals(
     {
         for signal in existing_unindexed {
             if !corpus_paths.contains(&signal.issue_key) {
-                sender.clear_file_signal(FileSignalType::UnindexedFile, &signal.issue_key, witness);
+                sender.clear_file_signal(CorpusFileSignalType::UnindexedFile.into(), &signal.issue_key, witness);
             }
         }
     }
@@ -161,21 +161,21 @@ pub fn execute_derive_directory_signals(
     // Process files in corpus
     for corpus_path in &corpus_paths {
         if indexed_paths.contains_key(corpus_path) {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::UnindexedFile, corpus_path, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), corpus_path, witness);
         } else {
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::UnindexedFile, corpus_path, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), corpus_path, witness);
         }
     }
 
     // Process indexed tracks
     for (path, _track) in &indexed_paths {
         if corpus_paths.contains(path) {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::MissingFile, path, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::HealthyFile, path, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
             // NOTE: Deploy conflicts are handled in bulk by DetectDeployConflicts in Awake phase
         } else {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::HealthyFile, path, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::MissingFile, path, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
         }
     }
 
@@ -186,14 +186,16 @@ pub fn execute_derive_directory_signals(
     )
 }
 
-/// Update signals for a single file after a mutation.
-pub fn execute_update_file_signals(
+/// Update corpus signals for a single file after a mutation.
+///
+/// Only valid for paths within the corpus directory.
+pub fn execute_update_corpus_file_signals(
     read_only_db: &Database,
     path: &Path,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    let computation = Computation::UpdateFileSignals {
+    let computation = Computation::UpdateCorpusFileSignals {
         path: path.to_path_buf(),
     };
 
@@ -213,29 +215,69 @@ pub fn execute_update_file_signals(
     let is_indexed = read_only_db.get_track_by_path(&path_str).ok().flatten().is_some();
 
     if file_exists {
-        ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
+        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
 
         if is_indexed {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::UnindexedFile, &path_str, witness);
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::MissingFile, &path_str, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::HealthyFile, &path_str, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
         } else {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::HealthyFile, &path_str, witness);
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::MissingFile, &path_str, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::UnindexedFile, &path_str, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
         }
     } else {
-        clear_file_signal_if_present(read_only_db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
-        clear_file_signal_if_present(read_only_db, &sender, FileSignalType::UnindexedFile, &path_str, witness);
+        clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
+        clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
 
         if is_indexed {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::HealthyFile, &path_str, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::MissingFile, &path_str, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
         } else {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::HealthyFile, &path_str, witness);
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::MissingFile, &path_str, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
         }
     }
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Update library signals for a single file after a mutation.
+///
+/// Only valid for paths within library directories.
+/// Handles LibraryLeftover signals when files are added/removed from libraries.
+pub fn execute_update_library_file_signals(
+    read_only_db: &Database,
+    path: &Path,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = Computation::UpdateLibraryFileSignals {
+        path: path.to_path_buf(),
+    };
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+
+    // For library files, we check if the file exists and clear any leftover/stale signals
+    // The full library health is recomputed during the Awake phase
+    if path.exists() && is_audio_file(path) {
+        // File exists - clear any LibraryLeftover/LibraryStale for this path
+        // These use compound keys, so we search and clear matching ones
+        clear_library_signals_for_path(read_only_db, &sender, &path_str, witness);
+    }
+    // If file doesn't exist, LibraryLeftover signals will be created during
+    // the next full library scan in the Awake phase
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
@@ -425,7 +467,7 @@ pub fn execute_update_deploy_signals(
     clear_file_signal_if_present(
         read_only_db,
         &sender,
-        FileSignalType::DeployReady,
+        LibraryFileSignalType::DeployReady.into(),
         &corpus_path_str,
         witness,
     );
@@ -437,7 +479,7 @@ pub fn execute_update_deploy_signals(
     ensure_file_signal_with_metadata_if_missing(
         read_only_db,
         &sender,
-        FileSignalType::DeployedHealthy,
+        LibraryFileSignalType::DeployedHealthy.into(),
         &corpus_path_str,
         &metadata.to_string(),
         witness,
@@ -461,7 +503,7 @@ fn clear_library_signals_for_path(
         for signal in signals {
             // Key format: "library_leftover:{name}:{path}"
             if signal.issue_key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_file_signal(FileSignalType::LibraryLeftover, &signal.issue_key, witness);
+                sender.clear_file_signal(LibraryFileSignalType::LibraryLeftover.into(), &signal.issue_key, witness);
             }
         }
     }
@@ -471,7 +513,7 @@ fn clear_library_signals_for_path(
         for signal in signals {
             // Key format: "library_stale:{name}:{path}"
             if signal.issue_key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_file_signal(FileSignalType::LibraryStale, &signal.issue_key, witness);
+                sender.clear_file_signal(LibraryFileSignalType::LibraryStale.into(), &signal.issue_key, witness);
             }
         }
     }

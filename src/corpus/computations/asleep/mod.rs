@@ -12,6 +12,7 @@
 //!
 //! ## Computations
 //!
+//! - `ClearExistingObservationState` - Clear stale FileInCorpus signals before fresh scan
 //! - `WalkCorpus` - Enumerate directories, spawn per-directory scans
 //! - `ScanCorpusDirectory` - Scan single directory, emit FileInCorpus signals
 //! - `CompareInodes` - Compare disk vs index inodes (no longer used, vestigial)
@@ -35,6 +36,13 @@ pub use executors::*;
 /// spawn other Asleep computations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Computation {
+    /// Phase 0: Clear existing observation state before fresh scan.
+    ///
+    /// Clears all FileInCorpus signals so they can be rebuilt from scratch
+    /// during the corpus walk. This ensures deleted files don't retain stale
+    /// signals that would cause them to appear as "healthy" instead of "missing".
+    ClearExistingObservationState,
+
     /// Phase 1: Walk corpus directory tree to collect file state.
     ///
     /// Enumerates top-level directories under root and spawns per-directory scans.
@@ -87,6 +95,7 @@ impl Computation {
     /// Get a human-readable label for this computation.
     pub fn label(&self) -> &'static str {
         match self {
+            Computation::ClearExistingObservationState => "Clearing observation state",
             Computation::WalkCorpus { .. } => "Observing",
             Computation::ScanCorpusDirectory { .. } => "Scanning directory",
             Computation::CompareInodes { .. } => "Comparing inodes",
@@ -98,6 +107,7 @@ impl Computation {
     /// Get the primary file path affected by this computation, if any.
     pub fn primary_path(&self) -> Option<&std::path::Path> {
         match self {
+            Computation::ClearExistingObservationState => None,
             Computation::WalkCorpus { root, .. } => Some(root),
             Computation::ScanCorpusDirectory { directory, .. } => Some(directory),
             Computation::CompareInodes { .. } => None,

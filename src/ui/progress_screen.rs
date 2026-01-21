@@ -30,7 +30,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::witch::{DaemonStateSnapshot, DaemonStatus, EyeState, Witch, WorkerStats};
+use crate::witch::{TaskExecutionStateSnapshot, DaemonStatus, EyeState, Witch, WorkerStats};
 use crate::db_thread::DbThreadStats;
 use super::app::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
@@ -250,7 +250,7 @@ impl ProgressScreen {
                     // assume work already completed before we started watching
                     let is_idle = status.pending == 0 && matches!(
                         status.state,
-                        DaemonStateSnapshot::Idle | DaemonStateSnapshot::Completed
+                        TaskExecutionStateSnapshot::Idle | TaskExecutionStateSnapshot::Completed
                     );
                     if is_idle {
                         self.consecutive_idle_ticks = self.consecutive_idle_ticks.saturating_add(1);

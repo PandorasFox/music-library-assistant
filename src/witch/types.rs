@@ -14,7 +14,7 @@ use crate::corpus::mutations::Mutation;
 
 /// High-level Witch state for simple O(1) checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DaemonState {
+pub enum TaskExecutionState {
     /// No tasks, no lingering status
     Idle,
     /// Tasks are queued/executing
@@ -300,7 +300,7 @@ impl CompletedSession {
 #[derive(Debug, Clone, Default)]
 pub struct DaemonStatus {
     /// Current high-level state
-    pub state: DaemonStateSnapshot,
+    pub state: TaskExecutionStateSnapshot,
     /// Tasks waiting to be processed (in queue or in-flight)
     pub pending: usize,
     /// Tasks completed in this tick cycle
@@ -323,19 +323,19 @@ pub struct DaemonStatus {
 
 /// Snapshot of Witch state for status reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DaemonStateSnapshot {
+pub enum TaskExecutionStateSnapshot {
     #[default]
     Idle,
     Working,
     Completed,
 }
 
-impl From<DaemonState> for DaemonStateSnapshot {
-    fn from(state: DaemonState) -> Self {
+impl From<TaskExecutionState> for TaskExecutionStateSnapshot {
+    fn from(state: TaskExecutionState) -> Self {
         match state {
-            DaemonState::Idle => DaemonStateSnapshot::Idle,
-            DaemonState::Working => DaemonStateSnapshot::Working,
-            DaemonState::Completed => DaemonStateSnapshot::Completed,
+            TaskExecutionState::Idle => TaskExecutionStateSnapshot::Idle,
+            TaskExecutionState::Working => TaskExecutionStateSnapshot::Working,
+            TaskExecutionState::Completed => TaskExecutionStateSnapshot::Completed,
         }
     }
 }

@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use crate::witch::{DaemonStateSnapshot, Witch};
+use crate::witch::{TaskExecutionStateSnapshot, Witch};
 
 /// Helper for waiting on Witch work completion.
 ///
@@ -86,7 +86,7 @@ impl WaitState {
         let status = witch.status();
 
         // Track when the Witch starts working
-        if status.state == DaemonStateSnapshot::Working {
+        if status.state == TaskExecutionStateSnapshot::Working {
             self.seen_working = true;
         }
 
@@ -96,11 +96,11 @@ impl WaitState {
         // - The Witch is now Idle or Completed
         if self.seen_working && status.pending == 0 {
             match status.state {
-                DaemonStateSnapshot::Idle | DaemonStateSnapshot::Completed => {
+                TaskExecutionStateSnapshot::Idle | TaskExecutionStateSnapshot::Completed => {
                     self.waiting = false;
                     return true; // Complete!
                 }
-                DaemonStateSnapshot::Working => {
+                TaskExecutionStateSnapshot::Working => {
                     // Still working, not complete
                 }
             }
@@ -122,7 +122,7 @@ impl WaitState {
         let db_queue_empty = witch.db_queue_depth() == 0;
 
         // Track when the Witch starts working
-        if status.state == DaemonStateSnapshot::Working {
+        if status.state == TaskExecutionStateSnapshot::Working {
             self.seen_working = true;
         }
 
@@ -133,11 +133,11 @@ impl WaitState {
         // - The Witch is now Idle or Completed
         if self.seen_working && status.pending == 0 && db_queue_empty {
             match status.state {
-                DaemonStateSnapshot::Idle | DaemonStateSnapshot::Completed => {
+                TaskExecutionStateSnapshot::Idle | TaskExecutionStateSnapshot::Completed => {
                     self.waiting = false;
                     return true; // Complete!
                 }
-                DaemonStateSnapshot::Working => {
+                TaskExecutionStateSnapshot::Working => {
                     // Still working, not complete
                 }
             }

@@ -5,7 +5,7 @@
 //! daemon interactions, and modal displays.
 
 use crate::config;
-use crate::ui::{insights_view, tag_search, tree_browser, tag_editor, deploy_flow, startup};
+use crate::ui::{insights_view, progress_screen, tag_search, tree_browser, tag_editor, deploy_flow, startup};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -117,19 +117,21 @@ impl App {
                 }
             }
             startup::IntakeConfirmationAction::Skipped => {
-                // User skipped - proceed to metadata analysis without indexing
+                // User skipped - no mutations ran, skip content analysis entirely
                 // UnindexedFile signals remain for later handling
-                let _ = config::log_message("IntakeConfirmation: user skipped indexing");
+                let _ = config::log_message("IntakeConfirmation: user skipped indexing, going to Insights");
 
                 self.intake_confirmation = None;
-                self.start_content_analysis();
+                self.start_insights_view();
             }
             startup::IntakeConfirmationAction::ProcessingComplete => {
-                // Indexing complete - proceed to metadata analysis
-                let _ = config::log_message("IntakeConfirmation: indexing complete, proceeding to metadata analysis");
+                // Indexing complete - daemon auto-queued content analysis via transition_to_completed
+                // Just show progress screen to wait for it to finish
+                let _ = config::log_message("IntakeConfirmation: indexing complete, showing content analysis progress");
 
                 self.intake_confirmation = None;
-                self.start_content_analysis();
+                self.progress_screen = Some(progress_screen::ProgressScreen::new_content_analysis());
+                self.mode = UiMode::Progress;
             }
         }
     }

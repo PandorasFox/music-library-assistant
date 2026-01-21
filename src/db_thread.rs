@@ -77,23 +77,6 @@ enum SignalWriteOp {
         directory: PathBuf,
         signal_type: FileSignalType,
     },
-    // Legacy operations (for migration)
-    EnsureSignal {
-        issue_type: HealthIssueType,
-        issue_key: String,
-        metadata_json: Option<String>,
-    },
-    ClearSignal {
-        issue_type: HealthIssueType,
-        issue_key: String,
-    },
-    ReplaceSignal {
-        issue: HealthIssue,
-    },
-    ClearSignalsInDirectory {
-        directory: PathBuf,
-        issue_type: HealthIssueType,
-    },
 }
 
 /// Index write operations (track mutations) - Phase 2 placeholder.
@@ -304,67 +287,6 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::ReplaceAggregateSignal { signal });
     }
 
-    // =========================================================================
-    // Legacy operations (for migration compatibility)
-    // =========================================================================
-
-    /// Legacy: Enqueue an ensure_signal operation.
-    #[deprecated(note = "Use ensure_file_signal or ensure_aggregate_signal instead")]
-    pub fn ensure_signal(
-        &self,
-        issue_type: HealthIssueType,
-        issue_key: &str,
-        metadata_json: Option<&str>,
-        _witness: &ComputationWitness,
-    ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
-        let _ = self.tx.send(SignalWriteOp::EnsureSignal {
-            issue_type,
-            issue_key: issue_key.to_string(),
-            metadata_json: metadata_json.map(|s| s.to_string()),
-        });
-    }
-
-    /// Legacy: Enqueue a clear_signal operation.
-    #[deprecated(note = "Use clear_file_signal instead")]
-    pub fn clear_signal(
-        &self,
-        issue_type: HealthIssueType,
-        issue_key: &str,
-        _witness: &ComputationWitness,
-    ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
-        let _ = self.tx.send(SignalWriteOp::ClearSignal {
-            issue_type,
-            issue_key: issue_key.to_string(),
-        });
-    }
-
-    /// Legacy: Enqueue a replace_signal operation.
-    #[deprecated(note = "Use replace_aggregate_signal instead")]
-    pub fn replace_signal(&self, issue: HealthIssue, _witness: &ComputationWitness) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
-        let _ = self.tx.send(SignalWriteOp::ReplaceSignal { issue });
-    }
-
-    /// Legacy: Enqueue a clear_signals_in_directory operation.
-    #[deprecated(note = "Use clear_file_signals_in_directory instead")]
-    pub fn clear_signals_in_directory(
-        &self,
-        directory: &std::path::Path,
-        issue_type: HealthIssueType,
-        _witness: &ComputationWitness,
-    ) {
-        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.stats.queue_empty.store(false, Ordering::Release);
-        let _ = self.tx.send(SignalWriteOp::ClearSignalsInDirectory {
-            directory: directory.to_path_buf(),
-            issue_type,
-        });
-    }
 }
 
 /// Sender for index write operations (Phase 2 placeholder).
@@ -579,37 +501,5 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        // Legacy operations
-        SignalWriteOp::EnsureSignal {
-            issue_type,
-            issue_key,
-            metadata_json,
-        } => {
-            with_retry("ensure_signal", issue_key, || {
-                db.ensure_signal(*issue_type, issue_key, metadata_json.as_deref(), &witness).map(|_| ())
-            });
-        }
-        SignalWriteOp::ClearSignal {
-            issue_type,
-            issue_key,
-        } => {
-            with_retry("clear_signal", issue_key, || {
-                db.clear_signal(*issue_type, issue_key, &witness).map(|_| ())
-            });
-        }
-        SignalWriteOp::ReplaceSignal { issue } => {
-            with_retry("replace_signal", &issue.issue_key, || {
-                db.replace_signal(issue, &witness).map(|_| ())
-            });
-        }
-        SignalWriteOp::ClearSignalsInDirectory {
-            directory,
-            issue_type,
-        } => {
-            let ctx = format!("{:?} in {}", issue_type, directory.display());
-            with_retry("clear_signals_in_directory", &ctx, || {
-                db.clear_signals_in_directory(directory, *issue_type, &witness).map(|_| ())
-            });
-        }
     }
 }

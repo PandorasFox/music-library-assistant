@@ -69,7 +69,7 @@ pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str) ->
         duration_ms: track.duration_ms,
         bitrate_kbps: track.bitrate_kbps,
         sample_rate: track.sample_rate,
-        fingerprint: None,
+        fingerprint: track.fingerprint,
         tags,
     };
 

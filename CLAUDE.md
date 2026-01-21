@@ -6,6 +6,8 @@ Do not spawn threads, ever. Only the task daemon should spawn new threads for ba
 
 Do not try to "refresh" signals. MLA is designed around precisely recomputing relevant signals in real-time. You keep adding unused (!) refresh hooks that then only get misused, because they're not things we need or want architecturally. They are expensive.
 
+We use 0-byte Witness objects as guarantees for some compile-time guarantees about correctness and operational intents. Do not ever instantiate a Witness object - do a todo!() instead so that a panic happens and *I* can decide if a Witness is appropriately instantiable there, or not.
+
 ### Database Access Patterns
 
 MLA enforces strict separation between read-only UI queries and write mutations:

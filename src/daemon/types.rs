@@ -161,8 +161,26 @@ pub mod sealed {
             Self(())
         }
     }
+
+    /// A zero-sized token proving content analysis is being queued from a valid context.
+    ///
+    /// Content analysis can only be triggered from `transition_to_completed` when
+    /// mutations drain while the Eye is Awake. This prevents accidental queueing
+    /// from UI code or other invalid contexts.
+    ///
+    /// Cannot be constructed outside the daemon's `transition_to_completed()` function.
+    #[derive(Clone, Copy)]
+    pub struct ContentAnalysisWitness(());
+
+    impl ContentAnalysisWitness {
+        /// Internal constructor - only callable from transition_to_completed()
+        pub(in crate::daemon) fn new() -> Self {
+            Self(())
+        }
+    }
 }
 
+pub use sealed::ContentAnalysisWitness;
 pub use sealed::DecisionWitness;
 pub use sealed::MigrationWitness;
 pub use sealed::MutationExecutionWitness;

@@ -55,16 +55,12 @@ impl App {
                     } else {
                         let check_duration = transition_start.elapsed();
                         let _ = config::log_message(&format!(
-                            "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files",
+                            "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to Insights",
                             check_duration.as_millis()
                         ));
-                        // No unindexed files - skip intake, proceed to content analysis
-                        let analysis_start = std::time::Instant::now();
-                        self.start_content_analysis();
-                        let _ = config::log_message(&format!(
-                            "[TRANSITION] start_content_analysis took {}ms",
-                            analysis_start.elapsed().as_millis()
-                        ));
+                        // No unindexed files, no mutations - skip content analysis entirely
+                        // Corpus is unchanged from last session, signals are still valid
+                        self.start_insights_view();
                     }
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {

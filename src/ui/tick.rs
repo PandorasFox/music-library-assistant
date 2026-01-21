@@ -4,7 +4,7 @@
 //! (progress screen, tag search).
 
 use crate::config;
-use crate::ui::{progress_screen::ProgressPhase, startup, types::UiMode};
+use crate::ui::{progress_screen::{ProgressPhase, ProgressScreen}, startup, types::UiMode};
 use super::App;
 
 impl App {
@@ -54,13 +54,24 @@ impl App {
                         self.mode = UiMode::IntakeConfirmation;
                     } else {
                         let check_duration = transition_start.elapsed();
-                        let _ = config::log_message(&format!(
-                            "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to Insights",
-                            check_duration.as_millis()
-                        ));
-                        // No unindexed files, no mutations - skip content analysis entirely
-                        // Corpus is unchanged from last session, signals are still valid
-                        self.start_insights_view();
+                        // Check if the Witch has pending work (e.g., freshen latch triggered content analysis)
+                        if self.witch().has_pending() {
+                            let _ = config::log_message(&format!(
+                                "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files but Witch has pending work - showing content analysis progress",
+                                check_duration.as_millis()
+                            ));
+                            // Show content analysis progress screen for the pending work
+                            self.progress_screen = Some(ProgressScreen::new_content_analysis());
+                            self.mode = UiMode::Progress;
+                        } else {
+                            let _ = config::log_message(&format!(
+                                "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to Insights",
+                                check_duration.as_millis()
+                            ));
+                            // No unindexed files, no mutations - skip content analysis entirely
+                            // Corpus is unchanged from last session, signals are still valid
+                            self.start_insights_view();
+                        }
                     }
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {

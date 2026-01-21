@@ -765,6 +765,176 @@ impl Database {
     }
 
     // ========================================================================
+    // Insights Data
+    // ========================================================================
+
+    /// Get InsightsData for the Insights view.
+    ///
+    /// Computes all bucket data via SQL queries. Called by UiReadCache.
+    pub fn get_insights_data(&self) -> Result<crate::corpus::db::types::InsightsData> {
+        use crate::corpus::db::types::*;
+
+        Ok(InsightsData {
+            bucket_corpus: self.compute_corpus_files_bucket()?,
+            bucket_placeholder: PlaceholderBucket::default(),
+            bucket_library: self.compute_library_deploy_bucket()?,
+            bucket_other: self.compute_other_signals_bucket()?,
+        })
+    }
+
+    fn compute_corpus_files_bucket(&self) -> Result<crate::corpus::db::types::CorpusFilesBucket> {
+        use crate::corpus::db::types::*;
+
+        // OOB signals (highest priority)
+        let modified_oob = self.count_signal_type("corpus_file_modified_oob")?;
+        let tags_changed_oob = self.count_signal_type("oob_tag")?;
+
+        // Standard corpus file signals
+        let files_in_corpus = self.count_signal_type("file_in_corpus")?;
+        let files_indexed = self.get_track_count(Some("corpus")).unwrap_or(0);
+        let files_unindexed = self.count_signal_type("unindexed_file")?;
+        let files_missing = self.count_signal_type("missing_file")?;
+        let files_relocated = self.count_signal_type("moved_file")?;
+
+        // File type breakdown
+        let file_type_breakdown = self.get_file_type_breakdown()?;
+
+        // Directory breakdown for FileInCorpus signals
+        let directory_breakdown = self.get_directory_breakdown("file_in_corpus")?;
+
+        Ok(CorpusFilesBucket {
+            modified_oob,
+            tags_changed_oob,
+            files_in_corpus,
+            files_indexed,
+            files_unindexed,
+            files_missing,
+            files_relocated,
+            file_type_breakdown,
+            directory_breakdown,
+        })
+    }
+
+    fn compute_library_deploy_bucket(&self) -> Result<crate::corpus::db::types::LibraryDeployBucket> {
+        use crate::corpus::db::types::*;
+
+        let library_stale = self.count_signal_type("library_stale")?;
+        let library_leftover = self.count_signal_type("library_leftover")?;
+        let deploy_ready = self.count_signal_type("deploy_ready")?;
+        let deployed_healthy = self.count_signal_type("deployed_healthy")?;
+
+        Ok(LibraryDeployBucket {
+            library_stale,
+            library_leftover,
+            deploy_ready,
+            deployed_healthy,
+        })
+    }
+
+    fn compute_other_signals_bucket(&self) -> Result<crate::corpus::db::types::OtherSignalsBucket> {
+        use crate::corpus::db::types::*;
+
+        let mut entries = Vec::new();
+
+        // Aggregate signals with affected counts
+        for (signal_type, label) in [
+            ("fingerprint_dup", "Fingerprint Duplicates"),
+            ("metadata_dup", "Metadata Duplicates"),
+            ("duplicate_inode", "Duplicate Inodes"),
+            ("missing_tag", "Missing Tags"),
+            ("deploy_conflict", "Deploy Conflicts"),
+        ] {
+            let count = self.count_signal_type(signal_type)?;
+            if count > 0 {
+                let affected = self.count_affected_by_signal(signal_type)?;
+                entries.push(OtherSignalEntry {
+                    signal_type: signal_type.to_string(),
+                    display_label: label.to_string(),
+                    count,
+                    affected_count: if affected > 0 { Some(affected) } else { None },
+                });
+            }
+        }
+
+        // Sort by count descending
+        entries.sort_by(|a, b| b.count.cmp(&a.count));
+
+        Ok(OtherSignalsBucket { entries })
+    }
+
+    /// Count signals of a specific type by string.
+    fn count_signal_type(&self, signal_type: &str) -> Result<usize> {
+        let count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = ?1",
+            params![signal_type],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Count tracks affected by aggregate signals (sum of track_count in metadata).
+    fn count_affected_by_signal(&self, signal_type: &str) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            r#"SELECT COALESCE(SUM(
+                 json_extract(metadata_json, '$.track_count')
+               ), 0)
+               FROM health_issues
+               WHERE issue_type = ?1"#,
+            params![signal_type],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        Ok(count as usize)
+    }
+
+    /// Get file type breakdown from tracks table.
+    fn get_file_type_breakdown(&self) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT file_type, COUNT(*) as cnt FROM tracks WHERE source = 'corpus'
+             GROUP BY file_type ORDER BY cnt DESC"
+        )?;
+
+        let results = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(results)
+    }
+
+    /// Get directory breakdown for a signal type.
+    fn get_directory_breakdown(&self, signal_type: &str) -> Result<crate::corpus::db::types::DirectoryBreakdown> {
+        use crate::corpus::db::types::*;
+
+        // Extract parent directory from issue_key (file path) and count
+        // Using SQLite's string manipulation to get directory
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                 CASE
+                   WHEN instr(issue_key, '/') > 0
+                   THEN substr(issue_key, 1, length(issue_key) - length(replace(issue_key, '/', '')) -
+                        length(substr(issue_key, length(issue_key) - length(replace(issue_key, '/', '')) + 1)))
+                   ELSE ''
+                 END as dir,
+                 COUNT(*) as cnt
+               FROM health_issues
+               WHERE issue_type = ?1
+               GROUP BY dir
+               ORDER BY cnt DESC
+               LIMIT 50"#
+        )?;
+
+        let entries = stmt.query_map(params![signal_type], |row| {
+            Ok(DirectoryBreakdownEntry {
+                directory: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(DirectoryBreakdown { entries })
+    }
+
+    // ========================================================================
     // Row Conversion Helpers
     // ========================================================================
 

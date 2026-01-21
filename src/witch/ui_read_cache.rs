@@ -27,7 +27,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::corpus::db::types::CorpusSummary;
+use crate::corpus::db::types::{CorpusSummary, InsightsData};
 use crate::corpus::db::Database;
 
 // ============================================================================
@@ -200,16 +200,20 @@ impl<T> Drop for CacheWriter<T> {
 /// and `*()` methods to read cached values.
 pub struct UiReadCache {
     corpus_summary: CacheEntry<CorpusSummary>,
+    insights_data: CacheEntry<InsightsData>,
 }
 
 impl UiReadCache {
     /// Default throttle duration for cache entries (15 seconds).
     const DEFAULT_THROTTLE: Duration = Duration::from_secs(15);
+    /// Insights data throttle (30 seconds - heavier computation).
+    const INSIGHTS_THROTTLE: Duration = Duration::from_secs(30);
 
     /// Create a new UI read cache with default throttle settings.
     pub fn new() -> Self {
         Self {
             corpus_summary: CacheEntry::new(Self::DEFAULT_THROTTLE),
+            insights_data: CacheEntry::new(Self::INSIGHTS_THROTTLE),
         }
     }
 
@@ -232,6 +236,24 @@ impl UiReadCache {
     }
 
     // -------------------------------------------------------------------------
+    // Insights Data
+    // -------------------------------------------------------------------------
+
+    /// UI calls this when it wants insights data.
+    ///
+    /// Idempotent - safe to call every frame. Respects throttle.
+    pub fn want_insights_data(&self) {
+        self.insights_data.want();
+    }
+
+    /// Read the latest cached insights data.
+    ///
+    /// Returns None if never computed. Never blocks.
+    pub fn insights_data(&self) -> Option<InsightsData> {
+        self.insights_data.get()
+    }
+
+    // -------------------------------------------------------------------------
     // Witch Integration
     // -------------------------------------------------------------------------
 
@@ -247,6 +269,23 @@ impl UiReadCache {
                     if let Ok(db) = Database::open_read_only(&db_path) {
                         if let Ok(summary) = db.get_corpus_summary() {
                             writer.complete(summary);
+                            return;
+                        }
+                    }
+                }
+                // On error, abort (allows retry on next want)
+                writer.abort();
+            });
+        }
+
+        // Insights data refresh
+        if let Some(writer) = self.insights_data.take_refresh() {
+            rayon::spawn(move || {
+                // Open fresh read-only connection on worker thread
+                if let Ok(db_path) = config::get_db_path() {
+                    if let Ok(db) = Database::open_read_only(&db_path) {
+                        if let Ok(data) = db.get_insights_data() {
+                            writer.complete(data);
                             return;
                         }
                     }

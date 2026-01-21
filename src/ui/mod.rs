@@ -471,10 +471,11 @@ fn run_app<B: ratatui::backend::Backend>(
         let can_animate = app.witch().eye_state() == crate::witch::EyeState::Awake;
         app.eye.update(can_animate);
 
-        // Update insights view with the Witch's status
+        // Update insights view with the Witch's status and cached data
         if let Some(ref mut view) = app.insights_view {
             let status = app.witch.as_ref().map(|d| d.status());
-            view.update(status.as_ref());
+            let insights_data = app.witch.as_ref().and_then(|w| w.ui_read_cache().insights_data());
+            view.update(status.as_ref(), insights_data);
         }
 
         // Tick progress screen if active (startup eyeballing, content analysis, etc.)
@@ -485,6 +486,10 @@ fn run_app<B: ratatui::backend::Backend>(
         // Flag demand for cached UI data (the Witch spawns background refresh if needed)
         if let Some(ref the_witch) = app.witch {
             the_witch.ui_read_cache().want_corpus_summary();
+            // Request insights data when viewing insights
+            if app.mode == UiMode::Insights {
+                the_witch.ui_read_cache().want_insights_data();
+            }
         }
 
         let draw_start = std::time::Instant::now();

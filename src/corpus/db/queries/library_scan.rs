@@ -84,4 +84,41 @@ impl Database {
 
         Ok(entries)
     }
+
+    /// Get all files across all libraries.
+    ///
+    /// Returns all files discovered during library scans, for corpus-side deploy status.
+    pub fn get_library_scan_files_all(&self) -> Result<Vec<LibraryScanEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT file_path, inode FROM library_scan_state ORDER BY file_path",
+        )?;
+
+        let entries = stmt
+            .query_map(params![], |row| {
+                Ok(LibraryScanEntry {
+                    file_path: PathBuf::from(row.get::<_, String>(0)?),
+                    inode: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to query all library scan files")?;
+
+        Ok(entries)
+    }
+
+    /// Get all inodes that are deployed in any library.
+    ///
+    /// Returns a HashSet for O(1) lookup when checking if a corpus file is deployed.
+    pub fn get_all_library_scan_inodes(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT inode FROM library_scan_state")?;
+
+        let inodes = stmt
+            .query_map(params![], |row| row.get(0))?
+            .collect::<Result<std::collections::HashSet<i64>, _>>()
+            .context("Failed to query library scan inodes")?;
+
+        Ok(inodes)
+    }
 }

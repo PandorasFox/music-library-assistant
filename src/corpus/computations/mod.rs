@@ -257,13 +257,16 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awake::Computation::DeriveDeployHealthSignals { library_name, library_root, corpus_path_prefixes } => {
                         awake::execute_derive_deploy_health_signals(read_only_db, library_name, library_root, corpus_path_prefixes, &witness, start)
                     }
+                    awake::Computation::DeriveCorpusDeployStatus => {
+                        awake::execute_derive_corpus_deploy_status(read_only_db, &witness, start)
+                    }
                 };
                 ComputationResult::from_awake(result)
             }
         };
 
-        // Log timing (only on first access when connection is opened)
-        if db_access_ms > 1 {
+        // Log timing (only on first access when connection is opened, and only if timing instrumentation enabled)
+        if db_access_ms > 1 && config::is_timing_enabled() {
             let _ = config::log_message(&format!(
                 "[PERF] {} db_access={}ms (thread-local init)",
                 computation.label(),

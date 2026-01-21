@@ -119,6 +119,7 @@ impl Computation {
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::CheckDeployConflicts { .. } => "Checking deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
+            Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
         }
     }
 

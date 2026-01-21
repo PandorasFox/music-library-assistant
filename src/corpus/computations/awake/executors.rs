@@ -39,6 +39,7 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectTagCanonicalizations,
         Computation::VerifyOutOfBandChanges,
         Computation::DetectDeployConflicts,
+        Computation::DeriveCorpusDeployStatus,
     ];
 
     // Also spawn DeriveDeployHealthSignals for each configured library
@@ -935,6 +936,132 @@ pub fn execute_derive_deploy_health_signals(
         healthy_count,
         stale_count,
         leftover_count,
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Corpus Deploy Status
+// ============================================================================
+
+/// Execute DeriveCorpusDeployStatus - derive corpus-side deployment signals.
+///
+/// For each HealthyFile signal, checks if the file's inode exists in any library
+/// (via library_scan_state) and emits:
+/// - DeployReady: healthy file not in any library
+/// - DeployedHealthy: healthy file correctly deployed (in library, not stale)
+pub fn execute_derive_corpus_deploy_status(
+    read_only_db: &Database,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = Computation::DeriveCorpusDeployStatus;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Get all HealthyFile signals
+    let healthy_signals = read_only_db
+        .get_health_signals(Some(HealthIssueType::HealthyFile))
+        .unwrap_or_default();
+
+    // Build set of deployed inodes from library_scan_state
+    let deployed_inodes = read_only_db.get_all_library_scan_inodes().unwrap_or_default();
+
+    // Get set of stale library paths (files in library but at wrong path)
+    // LibraryStale keys have format "library_stale:{library_name}:{library_path}"
+    let stale_signals = read_only_db
+        .get_health_signals(Some(HealthIssueType::LibraryStale))
+        .unwrap_or_default();
+
+    // Build set of inodes that are deployed but stale
+    let mut stale_inodes: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    if let Ok(all_library_files) = read_only_db.get_library_scan_files_all() {
+        for entry in all_library_files {
+            // Check if this library file has a stale signal
+            let is_stale = stale_signals.iter().any(|s| {
+                // Parse the stale key to get library_path
+                let parts: Vec<&str> = s.issue_key.splitn(3, ':').collect();
+                if parts.len() >= 3 {
+                    let stale_library_path = parts[2];
+                    entry.file_path.to_string_lossy() == stale_library_path
+                } else {
+                    false
+                }
+            });
+            if is_stale {
+                stale_inodes.insert(entry.inode);
+            }
+        }
+    }
+
+    let mut deploy_ready_count = 0usize;
+    let mut deployed_healthy_count = 0usize;
+
+    for signal in &healthy_signals {
+        let corpus_path = &signal.issue_key;
+
+        // Get the track's inode
+        let inode = match read_only_db.get_track_by_path(corpus_path) {
+            Ok(Some(track)) => track.inode,
+            _ => continue, // Skip if track not found
+        };
+
+        // Check if this inode is deployed anywhere and not stale
+        let is_deployed = deployed_inodes.contains(&inode);
+        let is_stale = stale_inodes.contains(&inode);
+
+        if is_deployed && !is_stale {
+            // File is correctly deployed
+            deployed_healthy_count += 1;
+            ensure_file_signal_if_missing(
+                read_only_db,
+                &sender,
+                FileSignalType::DeployedHealthy,
+                corpus_path,
+                witness,
+            );
+            clear_file_signal_if_present(
+                read_only_db,
+                &sender,
+                FileSignalType::DeployReady,
+                corpus_path,
+                witness,
+            );
+        } else {
+            // File is not deployed (or deployed but stale)
+            deploy_ready_count += 1;
+            ensure_file_signal_if_missing(
+                read_only_db,
+                &sender,
+                FileSignalType::DeployReady,
+                corpus_path,
+                witness,
+            );
+            clear_file_signal_if_present(
+                read_only_db,
+                &sender,
+                FileSignalType::DeployedHealthy,
+                corpus_path,
+                witness,
+            );
+        }
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy",
+        healthy_signals.len(),
+        deploy_ready_count,
+        deployed_healthy_count,
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

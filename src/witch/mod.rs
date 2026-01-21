@@ -40,7 +40,7 @@ mod worker_stats;
 #[allow(unused_imports)] // Re-exports for public API
 pub use types::{
     confirm_decision, confirm_startup_migration, CommitSummary, CompletedSession,
-    CorpusObservationState, DaemonState, DaemonStateSnapshot, DaemonStatus, DecisionWitness,
+    CorpusObservationState, TaskExecutionState, TaskExecutionStateSnapshot, DaemonStatus, DecisionWitness,
     DiscardSummary, EyeState, Migration, MigrationWitness, MutationExecutionWitness,
     PendingTransaction, Task, TaskLabel, TransactionError, TransactionInfo, WitnessedDecision,
     WorkerStats,
@@ -70,7 +70,7 @@ pub struct Witch {
     launch_time: DateTime<Utc>,
 
     // State machine
-    state: DaemonState,
+    state: TaskExecutionState,
 
     // Eye and corpus observation state
     eye_state: EyeState,
@@ -172,7 +172,7 @@ impl Witch {
             result_tx,
             result_rx,
             launch_time: Utc::now(),
-            state: DaemonState::Idle,
+            state: TaskExecutionState::Idle,
             eye_state: EyeState::Closed,
             observation_state: CorpusObservationState::Unseen,
             accepting_mutations: false,
@@ -226,7 +226,7 @@ impl Witch {
     // -------------------------------------------------------------------------
 
     /// O(1) state check - returns current Witch state.
-    pub fn state(&self) -> DaemonState {
+    pub fn state(&self) -> TaskExecutionState {
         self.state
     }
 
@@ -424,10 +424,10 @@ impl Witch {
     /// Update state machine based on in-flight tasks and timing.
     fn update_state(&mut self) {
         match self.state {
-            DaemonState::Idle => {
+            TaskExecutionState::Idle => {
                 // Idle → Working: handled in queue methods
             }
-            DaemonState::Working => {
+            TaskExecutionState::Working => {
                 // Working → Completed: when all work finishes (no in-flight tasks AND
                 // db_thread queue empty). Uses centralized has_pending() for consistency
                 // with exit handlers and UI state display.
@@ -435,7 +435,7 @@ impl Witch {
                     self.transition_to_completed();
                 }
             }
-            DaemonState::Completed => {
+            TaskExecutionState::Completed => {
                 // Completed → Idle: after linger timeout
                 if let Some(completed_at) = self.completed_at {
                     if completed_at.elapsed() >= Self::LINGER_DURATION {
@@ -467,77 +467,91 @@ impl Witch {
         });
 
         self.completed_at = Some(Instant::now());
-        self.state = DaemonState::Completed;
+        self.state = TaskExecutionState::Completed;
 
-        // Handle observing completion (first-level computations)
-        if self.is_observing() {
-            self.observation_state = CorpusObservationState::Complete;
-
-            match self.eye_state {
-                EyeState::Closed => {
-                    // Observing complete - enter Awakening for directory derivations
-                    let _ = config::log_message(&format!(
-                        "[STATE] Observing complete. Transitioning Closed → Awakening. \
-                         Processed {} tasks.",
-                        self.total_processed
-                    ));
-                    self.eye_state = EyeState::Awakening;
-                    // Flag to queue awakening computations AFTER session reset
-                    // (avoids off-by-one: task queued before reset, completed after)
-                    queue_awakening_after_reset = true;
-                }
-                EyeState::Awake => {
-                    let _ = config::log_message(
-                        "[STATE] Re-observing complete while Awake. NOP."
-                    );
-                }
-                EyeState::Awakening => {
-                    // Invalid: can't complete observing while already awakening
-                    panic!("Invalid state: observing completed while eye is Awakening");
-                }
-            }
-        }
-        // Handle awakening completion - transition directly to Awake
-        // ContentAnalysis is triggered separately via queue_content_analysis() after intake
-        else if self.eye_state == EyeState::Awakening {
-            let _ = config::log_message(&format!(
-                "[STATE] Awakening complete. Transitioning Awakening → Awake. \
-                 Processed {} tasks.",
-                self.total_processed
-            ));
-            self.eye_state = EyeState::Awake;
-
-            // Enable mutations - ONE-TIME transition from read-only init to read-write operation
-            if !self.read_only_mode {
-                self.accepting_mutations = true;
-                let _ = config::log_message(
-                    "[STATE] Mutations now enabled (read-write mode)."
-                );
-            }
-        }
-        // Handle post-mutation completion when eye is Awake
-        // Auto-trigger content analysis after mutations + awakening work drains
-        // Also trigger if freshen_last_stage_at_startup latch is set (one-shot, clears after use)
-        else if self.eye_state == EyeState::Awake {
-            if had_mutations || self.freshen_last_stage_at_startup {
-                let reason = if self.freshen_last_stage_at_startup && !had_mutations {
-                    "freshen_last_stage_at_startup (one-shot)"
-                } else {
-                    "post-mutation"
-                };
+        // State transition based on (observing, eye_state) tuple
+        // All combinations explicitly handled; invalid states panic
+        match (self.is_observing(), self.eye_state) {
+            // Observing completed while Closed: begin Awakening
+            (true, EyeState::Closed) => {
+                self.observation_state = CorpusObservationState::Complete;
                 let _ = config::log_message(&format!(
-                    "[STATE] Session complete (Awake, {}). Auto-triggering content analysis. \
+                    "[STATE] Observing complete. Transitioning Closed -> Awakening. \
                      Processed {} tasks.",
-                    reason, self.total_processed
+                    self.total_processed
                 ));
-                queue_content_analysis_after_reset = true;
-                // Clear the one-shot latch so it doesn't trigger again
-                if self.freshen_last_stage_at_startup {
-                    self.freshen_last_stage_at_startup = false;
-                    let _ = config::log_message(
-                        "[DAEMON] freshen_last_stage_at_startup latch cleared (one-shot complete)"
-                    );
+                self.eye_state = EyeState::Awakening;
+                queue_awakening_after_reset = true;
+            }
+
+            // Re-observing completed while Awake: sync signals via awakening
+            (true, EyeState::Awake) => {
+                self.observation_state = CorpusObservationState::Complete;
+                let _ = config::log_message(&format!(
+                    "[STATE] Re-observing complete while Awake. Queueing awakening to sync signals. \
+                     Processed {} tasks.",
+                    self.total_processed
+                ));
+                queue_awakening_after_reset = true;
+            }
+
+            // Invalid: cannot complete observing while in the middle of awakening
+            (true, EyeState::Awakening) => {
+                panic!("Invalid state: observing completed while eye is Awakening");
+            }
+
+            // Awakening completed: transition to Awake
+            (false, EyeState::Awakening) => {
+                let _ = config::log_message(&format!(
+                    "[STATE] Awakening complete. Transitioning Awakening -> Awake. \
+                     Processed {} tasks.",
+                    self.total_processed
+                ));
+                self.eye_state = EyeState::Awake;
+
+                if !self.read_only_mode {
+                    self.accepting_mutations = true;
+                    let _ = config::log_message("[STATE] Mutations now enabled (read-write mode).");
                 }
+
+                if self.freshen_last_stage_at_startup {
+                    let _ = config::log_message(
+                        "[STATE] freshen_last_stage_at_startup set - queueing content analysis"
+                    );
+                    queue_content_analysis_after_reset = true;
+                    self.freshen_last_stage_at_startup = false;
+                }
+            }
+
+            // Normal operation: work completed while Awake
+            (false, EyeState::Awake) => {
+                if had_mutations || self.freshen_last_stage_at_startup {
+                    let reason = if self.freshen_last_stage_at_startup && !had_mutations {
+                        "freshen_last_stage_at_startup (one-shot)"
+                    } else {
+                        "post-mutation"
+                    };
+                    let _ = config::log_message(&format!(
+                        "[STATE] Session complete (Awake, {}). Auto-triggering content analysis. \
+                         Processed {} tasks.",
+                        reason, self.total_processed
+                    ));
+                    queue_content_analysis_after_reset = true;
+                    if self.freshen_last_stage_at_startup {
+                        self.freshen_last_stage_at_startup = false;
+                        let _ = config::log_message(
+                            "[DAEMON] freshen_last_stage_at_startup latch cleared (one-shot complete)"
+                        );
+                    }
+                }
+            }
+
+            // Invalid: cannot have non-observing work complete while Closed
+            (false, EyeState::Closed) => {
+                panic!(
+                    "Invalid state: non-observing work completed while eye is Closed. \
+                     The only work while Closed should be observing."
+                );
             }
         }
 
@@ -599,7 +613,7 @@ impl Witch {
     }
 
     fn transition_to_idle(&mut self) {
-        self.state = DaemonState::Idle;
+        self.state = TaskExecutionState::Idle;
         self.completed_session = None;
         self.completed_at = None;
     }
@@ -608,7 +622,7 @@ impl Witch {
         if self.session_start.is_none() {
             self.session_start = Some(Instant::now());
         }
-        self.state = DaemonState::Working;
+        self.state = TaskExecutionState::Working;
     }
 
     // -------------------------------------------------------------------------
@@ -922,7 +936,7 @@ impl Witch {
 
     /// Check if there's a lingering completed session to display.
     pub fn has_completed_session(&self) -> bool {
-        self.state == DaemonState::Completed
+        self.state == TaskExecutionState::Completed
     }
 
     /// Cancel all pending tasks.

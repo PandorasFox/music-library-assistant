@@ -1,0 +1,31 @@
+---
+title: Witch State Machine - Overview
+---
+  stateDiagram-v2
+      direction TB
+
+      state "DaemonState - Work Lifecycle" as DS {
+          [*] --> Idle
+          Idle --> Working : queue_task()
+          Working --> Completed : work drains
+          Completed --> Idle : 30s linger timeout
+          Completed --> Working : queue_task()
+      }
+
+      state "EyeState - UI Lifecycle" as ES {
+          [*] --> Closed
+          Closed --> Awakening : observing completes
+          Awakening --> Awake : awakening completes
+      }
+
+      state "CorpusObservationState" as COS {
+          [*] --> Unseen
+          Unseen --> Observing : start_observing()
+          Observing --> Complete : work drains
+          Complete --> Observing : re-observe
+      }
+
+      state "accepting_mutations - One Shot Latch" as AM {
+          [*] --> Blocked
+          Blocked --> Enabled : Awake and not read_only
+      }

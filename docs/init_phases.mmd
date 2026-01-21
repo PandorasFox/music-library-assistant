@@ -1,0 +1,68 @@
+---
+  title: Init Phases and Gates
+---
+  flowchart TB
+      subgraph Init["INITIALIZATION"]
+          I1["DaemonState = Idle"]
+          I2["EyeState = Closed"]
+          I3["ObservationState = Unseen"]
+          I4["accepting_mutations = false"]
+      end
+
+      subgraph Phase1["PHASE 1: Observing"]
+          P1A["start_observing called"]
+          P1B["ObservationState → Observing"]
+          P1C["DaemonState → Working"]
+          P1D["WalkCorpus computations execute"]
+      end
+
+      subgraph Gate1["GATE: Observing Complete"]
+          G1A{"is_observing?"}
+          G1B["ObservationState → Complete"]
+          G1C{"EyeState?"}
+          G1D["EyeState → Awakening"]
+          G1E["Queue ScheduleSecondLevelDerivations"]
+      end
+
+      subgraph Phase2["PHASE 2: Awakening"]
+          P2A["Awakening computations run"]
+          P2B["DaemonState cycles: Working → Completed"]
+      end
+
+      subgraph Gate2["GATE: Awakening Complete"]
+          G2A{"EyeState == Awakening?"}
+          G2B["EyeState → Awake"]
+          G2C{"not read_only_mode?"}
+          G2D["accepting_mutations → true"]
+          G2E["LATCH SET"]
+      end
+
+      subgraph Operational["OPERATIONAL MODE"]
+          O1["UI unlocked"]
+          O2["Mutations accepted"]
+          O3["User queues mutations via transaction"]
+          O4["DaemonState → Working"]
+          O5["Mutation executes"]
+          O6["DaemonState → Completed"]
+          O7["Auto-queue ContentAnalysis"]
+      end
+
+      Init --> P1A
+      P1A --> P1B --> P1C --> P1D
+      P1D --> G1A
+      G1A -->|yes| G1B
+      G1B --> G1C
+      G1C -->|Closed| G1D
+      G1D --> G1E
+      G1E --> P2A
+      P2A --> P2B
+      P2B --> G2A
+      G2A -->|yes| G2B
+      G2B --> G2C
+      G2C -->|yes| G2D
+      G2D --> G2E
+      G2E --> O1
+      O1 --> O2
+      O2 --> O3
+      O3 --> O4 --> O5 --> O6 --> O7
+      O7 -.->|next mutation| O3

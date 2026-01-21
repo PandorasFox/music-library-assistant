@@ -483,11 +483,6 @@ fn run_app<B: ratatui::backend::Backend>(
             app.tick_progress_screen();
         }
 
-        // Tick intake confirmation if processing
-        if app.intake_confirmation.as_ref().map(|s| s.is_processing()).unwrap_or(false) {
-            app.tick_intake_confirmation();
-        }
-
         // Flag demand for cached UI data (daemon spawns background refresh if needed)
         if let Some(ref daemon) = app.task_daemon {
             daemon.ui_read_cache().want_corpus_summary();

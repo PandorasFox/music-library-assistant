@@ -1,7 +1,7 @@
 //! Per-Frame Update Logic
 //!
 //! Tick functions run each frame for views that need continuous updates
-//! (progress screen, intake confirmation, tag search).
+//! (progress screen, tag search).
 
 use crate::config;
 use crate::ui::{progress_screen::ProgressPhase, startup, types::UiMode};
@@ -70,35 +70,6 @@ impl App {
             }
         } else {
             self.progress_screen = Some(progress);
-        }
-    }
-
-    /// Tick intake confirmation while processing.
-    ///
-    /// Called each frame while intake_confirmation is in processing mode.
-    /// When indexing completes, triggers transition to metadata analysis.
-    pub(super) fn tick_intake_confirmation(&mut self) {
-        // Take intake_confirmation temporarily to avoid borrow conflicts
-        let mut state = match self.intake_confirmation.take() {
-            Some(s) => s,
-            None => return,
-        };
-
-        // Tick progress - it checks daemon state for completion
-        let completed = state.tick(self.daemon());
-        if completed {
-            let status = self.daemon().status();
-            let _ = config::log_message(&format!(
-                "Intake indexing complete: {} processed",
-                status.total_processed
-            ));
-            // Handle completion via action
-            self.intake_confirmation = Some(state);
-            self.handle_intake_confirmation_action(startup::IntakeConfirmationAction::ProcessingComplete);
-        } else {
-            // Update stats for display
-            self.update_progress_stats(&mut state);
-            self.intake_confirmation = Some(state);
         }
     }
 

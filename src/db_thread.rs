@@ -72,6 +72,11 @@ enum SignalWriteOp {
     ReplaceAggregateSignal {
         signal: AggregateSignal,
     },
+    /// Clear an aggregate signal
+    ClearAggregateSignal {
+        signal_type: AggregateSignalType,
+        key: String,
+    },
     /// Clear signals in a directory (for file signals)
     ClearFileSignalsInDirectory {
         directory: PathBuf,

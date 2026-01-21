@@ -87,16 +87,20 @@ impl App {
         match action {
             startup::IntakeConfirmationAction::None => {}
             startup::IntakeConfirmationAction::Confirmed => {
-                // User confirmed - create IndexTrack mutations and start processing
-                // Extract mutations first to avoid borrow conflicts
+                // User confirmed - create IndexTrack mutations and immediately transition to progress screen
                 let mutations = self.intake_confirmation
                     .as_ref()
                     .map(|s| s.create_index_mutations())
                     .unwrap_or_default();
 
-                if !mutations.is_empty() {
-                    let count = mutations.len();
+                self.intake_confirmation = None;
 
+                if mutations.is_empty() {
+                    // No files to index (all deleted since detection?) - skip to Insights
+                    let _ = config::log_message("IntakeConfirmation: no mutations to queue, skipping to Insights");
+                    self.start_insights_view();
+                } else {
+                    let count = mutations.len();
                     let _ = config::log_message(&format!(
                         "IntakeConfirmation: user confirmed, queuing {} IndexTrack mutations",
                         count
@@ -110,10 +114,9 @@ impl App {
                         let _ = daemon.confirm_transaction(&witness);
                     }
 
-                    // Start processing mode - stay on this screen until complete
-                    if let Some(ref mut state) = self.intake_confirmation {
-                        state.start_processing();
-                    }
+                    // Transition to progress screen to wait for indexing + content analysis
+                    self.progress_screen = Some(progress_screen::ProgressScreen::new_content_analysis());
+                    self.mode = UiMode::Progress;
                 }
             }
             startup::IntakeConfirmationAction::Skipped => {
@@ -123,15 +126,6 @@ impl App {
 
                 self.intake_confirmation = None;
                 self.start_insights_view();
-            }
-            startup::IntakeConfirmationAction::ProcessingComplete => {
-                // Indexing complete - daemon auto-queued content analysis via transition_to_completed
-                // Just show progress screen to wait for it to finish
-                let _ = config::log_message("IntakeConfirmation: indexing complete, showing content analysis progress");
-
-                self.intake_confirmation = None;
-                self.progress_screen = Some(progress_screen::ProgressScreen::new_content_analysis());
-                self.mode = UiMode::Progress;
             }
         }
     }

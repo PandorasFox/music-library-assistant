@@ -30,7 +30,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::daemon::{DaemonStatus, EyeState, TaskDaemon, WorkerStats};
+use crate::daemon::{DaemonStateSnapshot, DaemonStatus, EyeState, TaskDaemon, WorkerStats};
 use crate::db_thread::DbThreadStats;
 use super::app::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
@@ -105,6 +105,8 @@ pub struct ProgressScreen {
     worker_stats: Option<WorkerStats>,
     /// Pending DB writes (always tracked).
     db_queue_depth: u64,
+    /// Consecutive ticks where daemon was idle (safety valve for missed work).
+    consecutive_idle_ticks: u8,
 }
 
 impl ProgressScreen {
@@ -122,6 +124,7 @@ impl ProgressScreen {
             db_stats: None,
             worker_stats: None,
             db_queue_depth: 0,
+            consecutive_idle_ticks: 0,
         }
     }
 
@@ -139,6 +142,7 @@ impl ProgressScreen {
             db_stats: None,
             worker_stats: None,
             db_queue_depth: 0,
+            consecutive_idle_ticks: 0,
         };
         screen.wait_state.start();
         screen
@@ -158,6 +162,7 @@ impl ProgressScreen {
             db_stats: None,
             worker_stats: None,
             db_queue_depth: 0,
+            consecutive_idle_ticks: 0,
         };
         screen.wait_state.start();
         screen
@@ -240,6 +245,21 @@ impl ProgressScreen {
                 // Use WaitState for completion detection
                 if self.wait_state.tick(daemon) {
                     self.complete = true;
+                } else {
+                    // Safety valve: if daemon has been idle for 3 consecutive ticks,
+                    // assume work already completed before we started watching
+                    let is_idle = status.pending == 0 && matches!(
+                        status.state,
+                        DaemonStateSnapshot::Idle | DaemonStateSnapshot::Completed
+                    );
+                    if is_idle {
+                        self.consecutive_idle_ticks = self.consecutive_idle_ticks.saturating_add(1);
+                        if self.consecutive_idle_ticks >= 3 {
+                            self.complete = true;
+                        }
+                    } else {
+                        self.consecutive_idle_ticks = 0;
+                    }
                 }
             }
         }

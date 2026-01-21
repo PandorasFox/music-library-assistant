@@ -65,10 +65,7 @@ impl DeploymentPreviewState {
     pub fn handle_key(&mut self, key: KeyEvent) -> DeploymentPreviewAction {
         // If confirmation dialog is open, handle its keys
         if self.confirm_modal.is_some() {
-            let was_confirm_selected = self.confirm_modal.as_ref()
-                .map(|m| m.is_confirm_selected())
-                .unwrap_or(false);
-            return self.handle_confirm_key(key, was_confirm_selected);
+            return self.handle_confirm_key(key);
         }
 
         match key.code {
@@ -108,42 +105,61 @@ impl DeploymentPreviewState {
                 DeploymentPreviewAction::None
             }
 
-            // Open confirmation dialog
+            // Open confirmation dialog (wanting to confirm - default to Cancel for safety)
             KeyCode::Enter => {
                 let summary = self.cached_data.summary();
-                self.confirm_modal = Some(DeployConfirmModal::new(summary));
+                self.confirm_modal = Some(DeployConfirmModal::for_confirm(summary));
                 DeploymentPreviewAction::None
             }
 
-            // Return to Insights
-            KeyCode::Esc => DeploymentPreviewAction::Cancel,
+            // Open confirmation dialog (wanting to leave - default to Discard, changes are trivial to re-stage)
+            KeyCode::Esc => {
+                let summary = self.cached_data.summary();
+                self.confirm_modal = Some(DeployConfirmModal::for_escape(summary));
+                DeploymentPreviewAction::None
+            }
 
             _ => DeploymentPreviewAction::None,
         }
     }
 
-    fn handle_confirm_key(&mut self, key: KeyEvent, was_confirm_selected: bool) -> DeploymentPreviewAction {
+    fn handle_confirm_key(&mut self, key: KeyEvent) -> DeploymentPreviewAction {
         match key.code {
-            // Toggle button selection
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+            // Navigate button selection
+            KeyCode::Left | KeyCode::BackTab => {
                 if let Some(ref mut modal) = self.confirm_modal {
-                    modal.toggle_button();
+                    modal.select_prev();
+                }
+                DeploymentPreviewAction::None
+            }
+            KeyCode::Right | KeyCode::Tab => {
+                if let Some(ref mut modal) = self.confirm_modal {
+                    modal.select_next();
                 }
                 DeploymentPreviewAction::None
             }
 
-            // Confirm selection
+            // Execute selected button action
             KeyCode::Enter => {
-                if was_confirm_selected {
-                    DeploymentPreviewAction::Confirm
-                } else {
-                    // Cancel selected
-                    self.confirm_modal = None;
-                    DeploymentPreviewAction::None
+                let selected = self.confirm_modal.as_ref()
+                    .map(|m| m.selected_button);
+                self.confirm_modal = None;
+
+                match selected {
+                    Some(super::types::DeployConfirmButton::Confirm) => {
+                        DeploymentPreviewAction::Confirm
+                    }
+                    Some(super::types::DeployConfirmButton::Discard) => {
+                        DeploymentPreviewAction::Cancel
+                    }
+                    Some(super::types::DeployConfirmButton::Cancel) | None => {
+                        // Cancel = go back to preview (don't close)
+                        DeploymentPreviewAction::None
+                    }
                 }
             }
 
-            // Close dialog
+            // Close dialog without action (same as Cancel button)
             KeyCode::Esc => {
                 self.confirm_modal = None;
                 DeploymentPreviewAction::None
@@ -320,9 +336,9 @@ impl DeploymentPreviewState {
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {
         let controls = if self.confirm_modal.is_some() {
-            "[Left/Right] Select  [Enter] Confirm  [Esc] Cancel"
+            "[←/→] Select  [Enter] Execute  [Esc] Back to preview"
         } else {
-            "[Tab/Arrows] Switch Tab  [Up/Down] Scroll  [Enter] Deploy  [Esc] Back"
+            "[Tab/Arrows] Switch Tab  [Up/Down] Scroll  [Enter] Deploy  [Esc] Leave"
         };
 
         let paragraph = Paragraph::new(controls)
@@ -333,7 +349,10 @@ impl DeploymentPreviewState {
     }
 
     fn render_confirm_dialog(&self, f: &mut Frame, area: Rect, modal: &DeployConfirmModal) {
-        let DeployConfirmModal::Review { summary, selected_button } = modal;
+        use super::types::DeployConfirmButton;
+
+        let summary = &modal.summary;
+        let selected = modal.selected_button;
 
         // Build message lines
         let mut lines = vec![
@@ -390,23 +409,21 @@ impl DeploymentPreviewState {
         )));
         lines.push(Line::from(""));
 
-        // Buttons
-        let cancel_style = if *selected_button == 0 {
-            Style::default().fg(Color::Black).bg(Color::White)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-
-        let confirm_style = if *selected_button == 1 {
-            Style::default().fg(Color::Black).bg(Color::Green)
-        } else {
-            Style::default().fg(Color::DarkGray)
+        // Button styles: selected gets highlighted, others are dim
+        let style_for = |btn: DeployConfirmButton, color: Color| {
+            if selected == btn {
+                Style::default().fg(Color::Black).bg(color)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            }
         };
 
         lines.push(Line::from(vec![
-            Span::styled(" [Cancel] ", cancel_style),
+            Span::styled(" Cancel ", style_for(DeployConfirmButton::Cancel, Color::Gray)),
             Span::raw("  "),
-            Span::styled(" [Confirm] ", confirm_style),
+            Span::styled(" Confirm ", style_for(DeployConfirmButton::Confirm, Color::Green)),
+            Span::raw("  "),
+            Span::styled(" Discard ", style_for(DeployConfirmButton::Discard, Color::Red)),
         ]));
 
         // Render as centered modal

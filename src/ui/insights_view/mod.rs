@@ -26,8 +26,9 @@
 mod render;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Color;
 
-use crate::corpus::db::types::InsightsData;
+use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, LibraryDeployBucket, PlaceholderBucket, OtherSignalsBucket};
 use crate::witch::DaemonStatus;
 
 pub use render::render_insights_view;
@@ -114,6 +115,264 @@ pub struct BucketSelection {
     pub scroll: usize,
 }
 
+// ============================================================================
+// Unified Bucket Entry System
+// ============================================================================
+
+/// Unique identifier for each insight type across all buckets.
+/// Enables type-safe action dispatch and detail rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsightType {
+    // Corpus bucket entries
+    CorpusModifiedOob,
+    CorpusTagsChangedOob,
+    CorpusFilesInCorpus,
+    CorpusFilesIndexed,
+    CorpusFilesUnindexed,
+    CorpusFilesMissing,
+    CorpusFilesRelocated,
+    // Placeholder bucket
+    Placeholder,
+    // Library bucket entries
+    LibraryStale,
+    LibraryLeftover,
+    LibraryDeployReady,
+    LibraryDeployedHealthy,
+    // Other bucket - dynamic entries identified by index
+    OtherSignal { index: usize },
+}
+
+/// Actions that can be launched from specific insight types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsightAction {
+    /// Launch deployment preview flow
+    LaunchDeploymentPreview,
+    /// Launch missing file resolution flow
+    LaunchMissingFileResolution,
+    /// Flow not yet implemented
+    NotImplemented,
+    /// Informational only - no action available
+    Informational,
+}
+
+/// A single rendered entry in an insights bucket.
+/// Contains all information needed for rendering, selection, and action dispatch.
+#[derive(Debug, Clone)]
+pub struct BucketEntry {
+    /// Unique type identifier
+    pub insight_type: InsightType,
+    /// Display label
+    pub label: String,
+    /// Count value (None for placeholder)
+    pub count: Option<usize>,
+    /// Pre-computed color based on count and entry type
+    pub color: Color,
+    /// Sorting rank within bucket (lower = higher priority)
+    pub rank: u8,
+    /// Action available for this entry
+    pub action: InsightAction,
+}
+
+impl BucketEntry {
+    /// Create a corpus entry
+    fn corpus(
+        insight_type: InsightType,
+        label: &str,
+        count: usize,
+        rank: u8,
+        color: Color,
+        action: InsightAction,
+    ) -> Self {
+        Self {
+            insight_type,
+            label: label.to_string(),
+            count: Some(count),
+            color,
+            rank,
+            action,
+        }
+    }
+
+    /// Create a library entry
+    fn library(insight_type: InsightType, label: &str, count: usize, color: Color) -> Self {
+        Self {
+            insight_type,
+            label: label.to_string(),
+            count: Some(count),
+            color,
+            rank: 0, // Library uses count for sorting, not rank
+            action: InsightAction::LaunchDeploymentPreview,
+        }
+    }
+
+    /// Create placeholder entry
+    fn placeholder(description: &str) -> Self {
+        Self {
+            insight_type: InsightType::Placeholder,
+            label: description.to_string(),
+            count: None,
+            color: Color::Gray,
+            rank: 0,
+            action: InsightAction::Informational,
+        }
+    }
+
+    /// Create "other signal" entry
+    fn other(index: usize, label: &str, count: usize) -> Self {
+        Self {
+            insight_type: InsightType::OtherSignal { index },
+            label: label.to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::Green },
+            rank: 0, // Pre-sorted from database
+            action: InsightAction::NotImplemented,
+        }
+    }
+}
+
+/// Pre-sorted entries for all buckets.
+/// Built once when InsightsData changes, used everywhere.
+#[derive(Debug, Clone, Default)]
+pub struct CachedBucketEntries {
+    pub corpus: Vec<BucketEntry>,
+    pub placeholder: Vec<BucketEntry>,
+    pub library: Vec<BucketEntry>,
+    pub other: Vec<BucketEntry>,
+}
+
+impl CachedBucketEntries {
+    /// Build from InsightsData, applying all sorting logic once
+    pub fn from_insights_data(data: &InsightsData) -> Self {
+        Self {
+            corpus: Self::build_corpus_entries(&data.bucket_corpus),
+            placeholder: Self::build_placeholder_entries(&data.bucket_placeholder),
+            library: Self::build_library_entries(&data.bucket_library),
+            other: Self::build_other_entries(&data.bucket_other),
+        }
+    }
+
+    fn build_corpus_entries(corpus: &CorpusFilesBucket) -> Vec<BucketEntry> {
+        let mut entries = vec![
+            BucketEntry::corpus(
+                InsightType::CorpusModifiedOob,
+                "Modified out-of-band",
+                corpus.modified_oob,
+                if corpus.modified_oob > 0 { 0 } else { 2 },
+                if corpus.modified_oob > 0 { Color::Red } else { Color::DarkGray },
+                InsightAction::NotImplemented, // Future: OOB resolution
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusTagsChangedOob,
+                "Tags changed out-of-band",
+                corpus.tags_changed_oob,
+                if corpus.tags_changed_oob > 0 { 0 } else { 2 },
+                if corpus.tags_changed_oob > 0 { Color::Red } else { Color::DarkGray },
+                InsightAction::NotImplemented, // Future: OOB resolution
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusFilesInCorpus,
+                "Files in corpus",
+                corpus.files_in_corpus,
+                1,
+                Color::Yellow,
+                InsightAction::Informational,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusFilesIndexed,
+                "Files indexed",
+                corpus.files_indexed,
+                1,
+                Color::Green,
+                InsightAction::Informational,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusFilesUnindexed,
+                "Files unindexed",
+                corpus.files_unindexed,
+                1,
+                if corpus.files_unindexed > 0 { Color::Yellow } else { Color::Green },
+                InsightAction::NotImplemented, // Future: indexing flow
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusFilesMissing,
+                "Files missing",
+                corpus.files_missing,
+                1,
+                if corpus.files_missing > 0 { Color::Red } else { Color::Green },
+                InsightAction::LaunchMissingFileResolution,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusFilesRelocated,
+                "Files relocated",
+                corpus.files_relocated,
+                1,
+                if corpus.files_relocated > 0 { Color::Yellow } else { Color::Green },
+                InsightAction::Informational,
+            ),
+        ];
+
+        // Sort by rank (0=top, 1=middle, 2=bottom), preserving relative order
+        entries.sort_by_key(|e| e.rank);
+        entries
+    }
+
+    fn build_library_entries(library: &LibraryDeployBucket) -> Vec<BucketEntry> {
+        let mut entries = vec![
+            BucketEntry::library(
+                InsightType::LibraryStale,
+                "Library stale",
+                library.library_stale,
+                if library.library_stale > 0 { Color::Yellow } else { Color::Green },
+            ),
+            BucketEntry::library(
+                InsightType::LibraryLeftover,
+                "Library leftover",
+                library.library_leftover,
+                if library.library_leftover > 0 { Color::Yellow } else { Color::Green },
+            ),
+            BucketEntry::library(
+                InsightType::LibraryDeployReady,
+                "Ready to deploy",
+                library.deploy_ready,
+                if library.deploy_ready > 0 { Color::Cyan } else { Color::Green },
+            ),
+            BucketEntry::library(
+                InsightType::LibraryDeployedHealthy,
+                "Deployed healthy",
+                library.deployed_healthy,
+                Color::Green,
+            ),
+        ];
+
+        // Sort by count descending
+        entries.sort_by(|a, b| b.count.unwrap_or(0).cmp(&a.count.unwrap_or(0)));
+        entries
+    }
+
+    fn build_placeholder_entries(placeholder: &PlaceholderBucket) -> Vec<BucketEntry> {
+        vec![BucketEntry::placeholder(placeholder.description)]
+    }
+
+    fn build_other_entries(other: &OtherSignalsBucket) -> Vec<BucketEntry> {
+        // Entries come pre-sorted from database
+        other.entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| BucketEntry::other(idx, &entry.display_label, entry.count))
+            .collect()
+    }
+
+    /// Get entries for a specific bucket
+    pub fn entries_for(&self, bucket: FocusedBucket) -> &[BucketEntry] {
+        match bucket {
+            FocusedBucket::Corpus => &self.corpus,
+            FocusedBucket::Placeholder => &self.placeholder,
+            FocusedBucket::Library => &self.library,
+            FocusedBucket::Other => &self.other,
+        }
+    }
+}
+
 /// State for the insights view
 pub struct InsightsViewState {
     /// Modal state tracking Witch busy status
@@ -124,6 +383,8 @@ pub struct InsightsViewState {
     pub bucket_selections: [BucketSelection; 4],
     /// Cached insights data from UiReadCache
     pub cached_data: Option<InsightsData>,
+    /// Pre-computed sorted entries - rebuilt when cached_data changes
+    pub cached_entries: CachedBucketEntries,
 }
 
 impl Default for InsightsViewState {
@@ -133,6 +394,7 @@ impl Default for InsightsViewState {
             focused_bucket: FocusedBucket::default(),
             bucket_selections: Default::default(),
             cached_data: None,
+            cached_entries: CachedBucketEntries::default(),
         }
     }
 }
@@ -155,10 +417,23 @@ impl InsightsViewState {
             InsightsModal::Ready
         };
 
-        // Update cached data if new data available
-        if insights_data.is_some() {
-            self.cached_data = insights_data;
+        // Update cached data and rebuild sorted entries when new data available
+        if let Some(data) = insights_data {
+            self.cached_entries = CachedBucketEntries::from_insights_data(&data);
+            self.cached_data = Some(data);
         }
+    }
+
+    /// Get the currently selected entry (unified across all buckets)
+    pub fn selected_entry(&self) -> Option<&BucketEntry> {
+        let entries = self.cached_entries.entries_for(self.focused_bucket);
+        let selected_idx = self.bucket_selections[self.focused_bucket.index()].selected;
+        entries.get(selected_idx)
+    }
+
+    /// Get the action for the currently selected entry
+    pub fn selected_action(&self) -> Option<InsightAction> {
+        self.selected_entry().map(|e| e.action)
     }
 
     /// Check if the Witch is busy (actions should be blocked)
@@ -166,30 +441,9 @@ impl InsightsViewState {
         matches!(self.modal, InsightsModal::NotReady_WitchBusy)
     }
 
-    /// Check if a deploy-related insight is currently selected.
-    ///
-    /// Returns true if the Library bucket is focused (any of: stale, leftover, deploy_ready, deployed_healthy)
-    pub fn is_deploy_insight_selected(&self) -> bool {
-        self.focused_bucket == FocusedBucket::Library
-    }
-
     /// Get the entry count for a specific bucket
     pub fn get_bucket_entry_count(&self, bucket: FocusedBucket) -> usize {
-        match bucket {
-            // Corpus bucket: OOB modified, OOB tags, files in corpus, indexed, unindexed, missing, relocated
-            FocusedBucket::Corpus => 7,
-            // Placeholder bucket: single entry
-            FocusedBucket::Placeholder => 1,
-            // Library bucket: stale, leftover, deploy ready, deployed healthy
-            FocusedBucket::Library => 4,
-            // Other bucket: dynamic based on cached data
-            FocusedBucket::Other => {
-                self.cached_data
-                    .as_ref()
-                    .map(|d| d.bucket_other.entries.len())
-                    .unwrap_or(0)
-            }
-        }
+        self.cached_entries.entries_for(bucket).len()
     }
 
     /// Get current bucket's selection state
@@ -322,6 +576,44 @@ impl InsightsViewState {
 mod tests {
     use super::*;
 
+    /// Create a test InsightsData with standard bucket sizes
+    fn mock_insights_data() -> InsightsData {
+        InsightsData {
+            bucket_corpus: CorpusFilesBucket {
+                modified_oob: 0,
+                tags_changed_oob: 0,
+                files_in_corpus: 100,
+                files_indexed: 90,
+                files_unindexed: 5,
+                files_missing: 3,
+                files_relocated: 2,
+                file_type_breakdown: vec![],
+                directory_breakdown: Default::default(),
+            },
+            bucket_placeholder: PlaceholderBucket {
+                description: ":)",
+            },
+            bucket_library: LibraryDeployBucket {
+                library_stale: 1,
+                library_leftover: 2,
+                deploy_ready: 10,
+                deployed_healthy: 80,
+            },
+            bucket_other: OtherSignalsBucket {
+                entries: vec![],
+            },
+        }
+    }
+
+    /// Create a state with populated cached_entries for navigation tests
+    fn state_with_data() -> InsightsViewState {
+        let mut state = InsightsViewState::new();
+        let data = mock_insights_data();
+        state.cached_entries = CachedBucketEntries::from_insights_data(&data);
+        state.cached_data = Some(data);
+        state
+    }
+
     #[test]
     fn test_insights_action_exit() {
         let mut state = InsightsViewState::new();
@@ -384,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_bucket_navigation() {
-        let mut state = InsightsViewState::new();
+        let mut state = state_with_data();
 
         // Start at Corpus bucket, item 0
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
@@ -415,7 +707,7 @@ mod tests {
 
     #[test]
     fn test_navigate_to_start_and_end() {
-        let mut state = InsightsViewState::new();
+        let mut state = state_with_data();
 
         // Move around a bit
         state.focused_bucket = FocusedBucket::Library;
@@ -426,7 +718,7 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 0);
 
-        // Navigate to end (Library bucket has 4 items, so last is index 3)
+        // Navigate to end - with no Other entries, Library is last bucket (4 items, so last is index 3)
         state.navigate_to_end();
         assert_eq!(state.focused_bucket, FocusedBucket::Library);
         assert_eq!(state.current_selection().selected, 3);

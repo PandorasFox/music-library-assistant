@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-/// Compute a centered rectangle within an area.
+/// Compute a centered rectangle within an area (percentage-based).
 ///
 /// This is the foundation for modal positioning.
 pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -31,6 +31,20 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Compute a centered rectangle with fixed dimensions (in characters).
+///
+/// Use this for modals with static content that shouldn't shrink.
+pub fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    // Clamp to available area
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+
+    Rect::new(x, y, width, height)
 }
 
 /// Style configuration for modals
@@ -88,25 +102,40 @@ impl ModalStyle {
     }
 }
 
+/// Sizing mode for modals
+#[derive(Clone, Copy)]
+enum ModalSizing {
+    /// Percentage of parent area
+    Percent { width: u16, height: u16 },
+    /// Fixed character dimensions (won't shrink with small windows)
+    Fixed { width: u16, height: u16 },
+}
+
 /// A basic modal dialog that renders content in a centered popup.
 ///
 /// # Example
 /// ```ignore
 /// Modal::new()
 ///     .title("Confirmation")
-///     .size(50, 30)
+///     .size(50, 30)  // 50% width, 30% height
 ///     .content(vec![
 ///         Line::from("Are you sure?"),
 ///         Line::from(""),
 ///         Line::from("Press Y to confirm, N to cancel"),
 ///     ])
 ///     .render(f, area);
+///
+/// // Or use fixed sizing for static content:
+/// Modal::new()
+///     .title("Exit")
+///     .fixed_size(40, 12)  // 40 chars wide, 12 lines tall
+///     .content(...)
+///     .render(f, area);
 /// ```
 pub struct Modal<'a> {
     title: String,
     content: Vec<Line<'a>>,
-    width_percent: u16,
-    height_percent: u16,
+    sizing: ModalSizing,
     style: ModalStyle,
     alignment: Alignment,
 }
@@ -122,8 +151,7 @@ impl<'a> Modal<'a> {
         Self {
             title: String::new(),
             content: Vec::new(),
-            width_percent: 50,
-            height_percent: 30,
+            sizing: ModalSizing::Percent { width: 50, height: 30 },
             style: ModalStyle::default(),
             alignment: Alignment::Left,
         }
@@ -139,9 +167,16 @@ impl<'a> Modal<'a> {
         self
     }
 
+    /// Set size as percentage of parent area (dynamic sizing).
     pub fn size(mut self, width_percent: u16, height_percent: u16) -> Self {
-        self.width_percent = width_percent;
-        self.height_percent = height_percent;
+        self.sizing = ModalSizing::Percent { width: width_percent, height: height_percent };
+        self
+    }
+
+    /// Set size as fixed character dimensions (static sizing).
+    /// Use this for modals with static content that shouldn't shrink.
+    pub fn fixed_size(mut self, width: u16, height: u16) -> Self {
+        self.sizing = ModalSizing::Fixed { width, height };
         self
     }
 
@@ -157,7 +192,10 @@ impl<'a> Modal<'a> {
 
     /// Render the modal to the frame
     pub fn render(self, f: &mut Frame, area: Rect) {
-        let popup_area = centered_rect(self.width_percent, self.height_percent, area);
+        let popup_area = match self.sizing {
+            ModalSizing::Percent { width, height } => centered_rect(width, height, area),
+            ModalSizing::Fixed { width, height } => centered_rect_fixed(width, height, area),
+        };
 
         // Clear the area behind the modal
         f.render_widget(Clear, popup_area);
@@ -178,7 +216,10 @@ impl<'a> Modal<'a> {
 
     /// Get the computed popup area (useful for sub-layouts)
     pub fn compute_area(&self, area: Rect) -> Rect {
-        centered_rect(self.width_percent, self.height_percent, area)
+        match self.sizing {
+            ModalSizing::Percent { width, height } => centered_rect(width, height, area),
+            ModalSizing::Fixed { width, height } => centered_rect_fixed(width, height, area),
+        }
     }
 }
 

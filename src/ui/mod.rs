@@ -30,6 +30,7 @@ pub mod eye;
 pub mod flows;
 pub mod helpers;
 pub mod insights_view;
+pub mod missing_file_flow;
 pub mod progress_screen;
 pub mod render;
 pub mod startup;
@@ -76,6 +77,8 @@ pub(crate) struct App {
     pub(super) mode: UiMode,
     pub(super) tree_browser: Option<tree_browser::TreeBrowserState>,
     pub(super) deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
+    // Missing file resolution modal
+    pub(super) missing_file_preview: Option<missing_file_flow::MissingFilePreviewState>,
     // Unified tag editor (transaction-based)
     pub(super) unified_tag_editor: Option<tag_editor::UnifiedTagEditorState>,
     // Exit confirmation modal
@@ -108,6 +111,7 @@ impl App {
             mode: UiMode::Insights,
             tree_browser: None,
             deployment_preview: None,
+            missing_file_preview: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
             progress_screen: None,
@@ -200,6 +204,12 @@ impl App {
                 if let Some(ref mut search) = self.tag_search {
                     let action = search.handle_key(key);
                     self.handle_tag_search_action(action);
+                }
+            }
+            UiMode::MissingFileResolution => {
+                if let Some(ref mut preview) = self.missing_file_preview {
+                    let action = preview.handle_key(key);
+                    self.handle_missing_file_preview_action(action);
                 }
             }
         }
@@ -364,6 +374,7 @@ fn render(f: &mut Frame, app: &mut App) {
         status_message: app.status_message.as_deref(),
         tree_browser: app.tree_browser.as_mut(),
         deployment_preview: app.deployment_preview.as_mut(),
+        missing_file_preview: app.missing_file_preview.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         progress_screen: app.progress_screen.as_ref(),
         insights_view: app.insights_view.as_mut(),

@@ -1174,4 +1174,24 @@ impl Database {
 
         Ok(results)
     }
+
+    // ========================================================================
+    // Missing File Resolution Queries
+    // ========================================================================
+
+    /// Get all corpus paths with MissingFile signals.
+    ///
+    /// Returns the issue_key (corpus path) for each missing_file signal.
+    /// Used by the missing file resolution modal to categorize files.
+    pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT issue_key FROM health_issues WHERE issue_type = 'missing_file' ORDER BY issue_key"
+        )?;
+
+        let results = stmt
+            .query_map(params![], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+
+        Ok(results)
+    }
 }

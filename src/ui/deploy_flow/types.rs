@@ -154,39 +154,68 @@ impl DeploySummary {
     }
 }
 
-/// State for the confirmation dialog.
-#[derive(Debug, Clone)]
-pub enum DeployConfirmModal {
-    /// Review summary before confirming.
-    Review {
-        summary: DeploySummary,
-        /// 0 = Cancel, 1 = Confirm
-        selected_button: usize,
-    },
+/// Buttons on the deploy confirmation modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeployConfirmButton {
+    /// Go back to editing/preview (safe default for Enter-triggered modal)
+    Cancel,
+    /// Execute the deployment
+    Confirm,
+    /// Discard staged changes and return to insights (safe default for Esc-triggered modal)
+    Discard,
 }
 
-impl DeployConfirmModal {
-    /// Create a new review modal with the given summary.
-    pub fn new(summary: DeploySummary) -> Self {
-        Self::Review {
-            summary,
-            selected_button: 1, // Default to Confirm
+impl DeployConfirmButton {
+    /// Cycle to next button (left direction).
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Cancel => Self::Discard,
+            Self::Confirm => Self::Cancel,
+            Self::Discard => Self::Confirm,
         }
     }
 
-    /// Toggle button selection.
-    pub fn toggle_button(&mut self) {
-        let Self::Review { selected_button, .. } = self;
-        *selected_button = if *selected_button == 0 { 1 } else { 0 };
+    /// Cycle to next button (right direction).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Cancel => Self::Confirm,
+            Self::Confirm => Self::Discard,
+            Self::Discard => Self::Cancel,
+        }
+    }
+}
+
+/// State for the confirmation dialog.
+#[derive(Debug, Clone)]
+pub struct DeployConfirmModal {
+    pub summary: DeploySummary,
+    pub selected_button: DeployConfirmButton,
+}
+
+impl DeployConfirmModal {
+    /// Create modal for Enter key (wanting to confirm) - defaults to Cancel (safe).
+    pub fn for_confirm(summary: DeploySummary) -> Self {
+        Self {
+            summary,
+            selected_button: DeployConfirmButton::Cancel,
+        }
     }
 
-    /// Check if Confirm is selected.
-    pub fn is_confirm_selected(&self) -> bool {
-        matches!(self, Self::Review { selected_button: 1, .. })
+    /// Create modal for Esc key (wanting to leave) - defaults to Discard (safe, changes are trivial to re-stage).
+    pub fn for_escape(summary: DeploySummary) -> Self {
+        Self {
+            summary,
+            selected_button: DeployConfirmButton::Discard,
+        }
     }
 
-    /// Check if Cancel is selected.
-    pub fn is_cancel_selected(&self) -> bool {
-        matches!(self, Self::Review { selected_button: 0, .. })
+    /// Navigate button selection left.
+    pub fn select_prev(&mut self) {
+        self.selected_button = self.selected_button.prev();
+    }
+
+    /// Navigate button selection right.
+    pub fn select_next(&mut self) {
+        self.selected_button = self.selected_button.next();
     }
 }

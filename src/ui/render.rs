@@ -18,7 +18,7 @@ use crate::config::{self, Config};
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{deploy_flow, insights_view, tag_editor, tag_search, tree_browser};
+use super::{deploy_flow, insights_view, missing_file_flow, tag_editor, tag_search, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -28,6 +28,7 @@ pub struct RenderContext<'a> {
     pub status_message: Option<&'a str>,
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
+    pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
     pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub progress_screen: Option<&'a super::progress_screen::ProgressScreen>,
@@ -153,6 +154,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::IntakeConfirmation => Some("Intake Confirmation"),
         super::UiMode::TagSearch => Some("Tag Search"),
         super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
+        super::UiMode::MissingFileResolution => Some("Missing File Resolution"),
     };
 
     let title = match suffix {
@@ -224,6 +226,12 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             view_name = "unified_tag_editor";
             if let Some(ref mut editor) = ctx.unified_tag_editor {
                 editor.render(f, area, ctx.status_message);
+            }
+        }
+        super::UiMode::MissingFileResolution => {
+            view_name = "missing_file_resolution";
+            if let Some(ref preview) = ctx.missing_file_preview {
+                preview.render(f, area);
             }
         }
     }
@@ -346,7 +354,7 @@ fn render_exit_confirm_modal(
         Modal::new()
             .title(" Warning ")
             .content(content)
-            .size(50, 35)
+            .fixed_size(50, 16)
             .style(ModalStyle::warning())
             .centered()
             .render(f, area);
@@ -363,7 +371,7 @@ fn render_exit_confirm_modal(
         Modal::new()
             .title(" Exit ")
             .content(content)
-            .size(35, 20)
+            .fixed_size(40, 9)
             .style(ModalStyle::info())
             .centered()
             .render(f, area);
@@ -690,6 +698,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::TagSearch => control_presets::tag_search(),
         super::UiMode::IntakeConfirmation => control_presets::empty(), // Modal handles its own hints
         super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
+        super::UiMode::MissingFileResolution => control_presets::empty(), // Modal handles its own hints
     };
     lines.push(controls.render_line());
 

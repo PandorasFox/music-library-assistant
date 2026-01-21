@@ -149,6 +149,8 @@ pub enum UnifiedTagEditorModal {
     UnsavedChanges {
         /// Where the user is trying to go
         destination: UnsavedChangesDestination,
+        /// Selected button (defaults to KeepEditing for safety)
+        selected_button: UnsavedChangesButton,
     },
     /// Review all staged decisions before final commit
     TransactionReview {
@@ -187,15 +189,25 @@ pub enum UnsavedChangesDestination {
     PrevSibling,
 }
 
+/// Buttons on the unsaved changes modal
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnsavedChangesButton {
+    /// Keep editing (safe default - stuck Enter won't discard)
+    #[default]
+    KeepEditing,
+    /// Discard changes and proceed with navigation
+    DiscardAndProceed,
+}
+
 /// Buttons on the transaction review modal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransactionReviewButton {
     /// Commit all staged decisions
-    #[default]
     CommitAll,
     /// Discard all staged decisions
     DiscardAll,
-    /// Go back to editing
+    /// Go back to editing (safe default - stuck Enter won't commit)
+    #[default]
     BackToEditing,
 }
 

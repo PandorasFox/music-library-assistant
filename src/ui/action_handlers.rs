@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::config;
-use crate::ui::{insights_view, progress_screen, tag_search, tree_browser, tag_editor, deploy_flow, startup};
+use crate::ui::{insights_view, missing_file_flow, progress_screen, tag_search, tree_browser, tag_editor, deploy_flow, startup};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -62,17 +62,20 @@ impl App {
                 self.start_corpus_browser();
             }
             insights_view::InsightsAction::LaunchFlow => {
-                // Check if deploy insight is selected - launch deploy modal
-                let is_deploy = self.insights_view.as_ref()
-                    .map(|v| v.is_deploy_insight_selected())
-                    .unwrap_or(false);
-
-                if is_deploy {
-                    // Load deploy modal data and start preview
-                    self.start_deployment_preview_from_insights();
-                } else {
-                    // Other flows not yet implemented
-                    self.status_message = Some("Flows not yet implemented".to_string());
+                // Use selected_action() to dispatch to appropriate flow
+                match self.insights_view.as_ref().and_then(|v| v.selected_action()) {
+                    Some(insights_view::InsightAction::LaunchDeploymentPreview) => {
+                        self.start_deployment_preview_from_insights();
+                    }
+                    Some(insights_view::InsightAction::LaunchMissingFileResolution) => {
+                        self.start_missing_file_resolution();
+                    }
+                    Some(insights_view::InsightAction::NotImplemented) => {
+                        self.status_message = Some("Flow not yet implemented".to_string());
+                    }
+                    Some(insights_view::InsightAction::Informational) | None => {
+                        // Informational entries have no action
+                    }
                 }
             }
         }
@@ -484,5 +487,85 @@ impl App {
         }
 
         count
+    }
+
+    // =========================================================================
+    // Missing File Resolution
+    // =========================================================================
+
+    /// Start missing file resolution modal from Insights view.
+    fn start_missing_file_resolution(&mut self) {
+        // Load categorized missing file data
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let db = w.read_only_db();
+                missing_file_flow::MissingFileModalData::load(db).ok()
+            })
+            .unwrap_or_default();
+
+        if data.total_count() == 0 {
+            self.status_message = Some("No missing files to resolve".to_string());
+            return;
+        }
+
+        // Create preview state with cached data
+        let preview = missing_file_flow::MissingFilePreviewState::new(data);
+        self.missing_file_preview = Some(preview);
+        self.mode = UiMode::MissingFileResolution;
+    }
+
+    /// Handle missing file preview actions.
+    pub(super) fn handle_missing_file_preview_action(&mut self, action: missing_file_flow::MissingFilePreviewAction) {
+        match action {
+            missing_file_flow::MissingFilePreviewAction::None => {}
+            missing_file_flow::MissingFilePreviewAction::ConfirmRestore => {
+                // Generate and queue restore mutations (HardLink)
+                if let Some(ref preview) = self.missing_file_preview {
+                    let mutations = preview.cached_data.restore_mutations();
+                    let count = mutations.len();
+                    if count > 0 {
+                        self.execute_missing_file_mutations(mutations, "Restore missing files");
+                        self.missing_file_preview = None;
+                        self.transition_to_progress_after_mutations(progress_screen::ProgressPhase::SignalRefresh);
+                    } else {
+                        self.status_message = Some("No files to restore".to_string());
+                    }
+                }
+            }
+            missing_file_flow::MissingFilePreviewAction::ConfirmDrop => {
+                // Generate and queue drop mutations (DropFromIndex)
+                if let Some(ref preview) = self.missing_file_preview {
+                    let mutations = preview.cached_data.drop_mutations();
+                    let count = mutations.len();
+                    if count > 0 {
+                        self.execute_missing_file_mutations(mutations, "Drop non-restorable files");
+                        self.missing_file_preview = None;
+                        self.transition_to_progress_after_mutations(progress_screen::ProgressPhase::SignalRefresh);
+                    } else {
+                        self.status_message = Some("No files to drop".to_string());
+                    }
+                }
+            }
+            missing_file_flow::MissingFilePreviewAction::Cancel => {
+                let _ = config::log_message("Missing file resolution cancelled");
+                self.missing_file_preview = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Execute missing file mutations.
+    fn execute_missing_file_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+        use crate::witch::confirm_decision;
+
+        let Some(ref mut witch) = self.witch else {
+            return;
+        };
+
+        let witness = confirm_decision();
+        if witch.start_transaction(label).is_ok() {
+            let _ = witch.add_decision(0, &witness, label, mutations);
+            let _ = witch.confirm_transaction(&witness);
+        }
     }
 }

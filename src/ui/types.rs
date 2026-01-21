@@ -55,6 +55,8 @@ pub(crate) enum UiMode {
     TagSearch,
     /// Unified tag editor with transaction support (replaces TagEditor and DirectoryTagEditor)
     UnifiedTagEditor,
+    /// Missing file resolution modal
+    MissingFileResolution,
 }
 
 // ============================================================================

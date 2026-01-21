@@ -692,34 +692,55 @@ impl UnifiedTagEditorState {
                     _ => UnifiedTagEditorAction::None,
                 }
             }
-            Some(UnifiedTagEditorModal::UnsavedChanges { destination }) => {
+            Some(UnifiedTagEditorModal::UnsavedChanges { destination, selected_button }) => {
                 match key.code {
-                    KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        // Discard current item's changes and proceed
-                        let dest = *destination;
-                        self.drop_changes_for_current_item();
-                        self.modal = None;
-                        match dest {
-                            super::types::UnsavedChangesDestination::Exit => {
-                                UnifiedTagEditorAction::DiscardTransaction
+                    KeyCode::Enter => {
+                        // Execute selected button action
+                        match selected_button {
+                            super::types::UnsavedChangesButton::KeepEditing => {
+                                self.modal = None;
+                                UnifiedTagEditorAction::CloseModal
                             }
-                            super::types::UnsavedChangesDestination::NextItem => {
-                                UnifiedTagEditorAction::NextItem
-                            }
-                            super::types::UnsavedChangesDestination::PrevItem => {
-                                UnifiedTagEditorAction::PrevItem
-                            }
-                            super::types::UnsavedChangesDestination::NextSibling => {
-                                UnifiedTagEditorAction::NextSibling
-                            }
-                            super::types::UnsavedChangesDestination::PrevSibling => {
-                                UnifiedTagEditorAction::PrevSibling
+                            super::types::UnsavedChangesButton::DiscardAndProceed => {
+                                let dest = *destination;
+                                self.drop_changes_for_current_item();
+                                self.modal = None;
+                                match dest {
+                                    super::types::UnsavedChangesDestination::Exit => {
+                                        UnifiedTagEditorAction::DiscardTransaction
+                                    }
+                                    super::types::UnsavedChangesDestination::NextItem => {
+                                        UnifiedTagEditorAction::NextItem
+                                    }
+                                    super::types::UnsavedChangesDestination::PrevItem => {
+                                        UnifiedTagEditorAction::PrevItem
+                                    }
+                                    super::types::UnsavedChangesDestination::NextSibling => {
+                                        UnifiedTagEditorAction::NextSibling
+                                    }
+                                    super::types::UnsavedChangesDestination::PrevSibling => {
+                                        UnifiedTagEditorAction::PrevSibling
+                                    }
+                                }
                             }
                         }
                     }
-                    KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    KeyCode::Esc => {
+                        // Escape always cancels (keeps editing)
                         self.modal = None;
                         UnifiedTagEditorAction::CloseModal
+                    }
+                    KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                        // Toggle button selection
+                        *selected_button = match selected_button {
+                            super::types::UnsavedChangesButton::KeepEditing => {
+                                super::types::UnsavedChangesButton::DiscardAndProceed
+                            }
+                            super::types::UnsavedChangesButton::DiscardAndProceed => {
+                                super::types::UnsavedChangesButton::KeepEditing
+                            }
+                        };
+                        UnifiedTagEditorAction::None
                     }
                     _ => UnifiedTagEditorAction::None,
                 }
@@ -866,6 +887,7 @@ impl UnifiedTagEditorState {
                 } else if self.has_changes_for_current_item() {
                     self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
                         destination: super::types::UnsavedChangesDestination::Exit,
+                        selected_button: super::types::UnsavedChangesButton::default(),
                     });
                     UnifiedTagEditorAction::None
                 } else {
@@ -942,6 +964,7 @@ impl UnifiedTagEditorState {
                 if self.has_changes_for_current_item() && !self.changes_match_staged() {
                     self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
                         destination: super::types::UnsavedChangesDestination::PrevSibling,
+                        selected_button: super::types::UnsavedChangesButton::default(),
                     });
                     UnifiedTagEditorAction::None
                 } else {
@@ -1919,8 +1942,8 @@ impl UnifiedTagEditorState {
             UnifiedTagEditorModal::ChangePreview { changes, single_changes, scroll } => {
                 self.render_change_preview_modal(f, area, changes, single_changes, *scroll);
             }
-            UnifiedTagEditorModal::UnsavedChanges { destination } => {
-                self.render_unsaved_changes_modal(f, area, *destination);
+            UnifiedTagEditorModal::UnsavedChanges { destination, selected_button } => {
+                self.render_unsaved_changes_modal(f, area, *destination, *selected_button);
             }
             UnifiedTagEditorModal::TransactionReview { decisions, scroll, selected_button } => {
                 self.render_transaction_review_modal(f, area, decisions, *scroll, *selected_button);
@@ -2035,6 +2058,7 @@ impl UnifiedTagEditorState {
         f: &mut Frame,
         area: Rect,
         destination: super::types::UnsavedChangesDestination,
+        selected_button: super::types::UnsavedChangesButton,
     ) {
         let modal_area = crate::ui::helpers::centered_rect(60, 30, area);
         f.render_widget(Clear, modal_area);
@@ -2056,16 +2080,33 @@ impl UnifiedTagEditorState {
             super::types::UnsavedChangesDestination::PrevSibling => "go to the previous sibling",
         };
 
+        // Style buttons based on selection state (safe option selected by default)
+        let (keep_style, discard_style) = match selected_button {
+            super::types::UnsavedChangesButton::KeepEditing => (
+                Style::default().fg(Color::Black).bg(Color::Green),
+                Style::default().fg(Color::Red),
+            ),
+            super::types::UnsavedChangesButton::DiscardAndProceed => (
+                Style::default().fg(Color::Green),
+                Style::default().fg(Color::Black).bg(Color::Red),
+            ),
+        };
+
         let lines = vec![
             Line::from(""),
             Line::from("You have unsaved changes."),
             Line::from(format!("Discard changes and {}?", dest_text)),
             Line::from(""),
             Line::from(vec![
-                Span::styled("[ Y/Enter = Discard ]", Style::default().fg(Color::Red)),
-                Span::raw("  "),
-                Span::styled("[ N/Esc = Cancel ]", Style::default().fg(Color::Green)),
+                Span::styled(" Keep Editing ", keep_style),
+                Span::raw("    "),
+                Span::styled(" Discard ", discard_style),
             ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "←/→/Tab to switch  •  Enter to confirm  •  Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
 
         let paragraph = Paragraph::new(lines)

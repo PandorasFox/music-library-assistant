@@ -1,0 +1,333 @@
+//! Missing File Resolution Preview UI
+//!
+//! Shows categorized missing files (restorable vs non-restorable) with
+//! action buttons for restore/drop operations.
+//!
+//! - Tab: Switch between lists
+//! - Up/Down: Scroll within focused list
+//! - Left/Right: Move between action buttons
+//! - Enter: Execute selected button action
+//! - Escape: Cancel
+
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    Frame,
+};
+
+use super::types::{MissingFileModalData, SelectedButton};
+use crate::ui::helpers::truncate_left;
+
+/// Actions returned from the missing file preview.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissingFilePreviewAction {
+    /// No action needed.
+    None,
+    /// User confirmed restore action - generate HardLink mutations.
+    ConfirmRestore,
+    /// User confirmed drop action - generate DropFromIndex mutations.
+    ConfirmDrop,
+    /// Cancel and return to Insights view.
+    Cancel,
+}
+
+/// State for the missing file resolution modal.
+#[derive(Debug)]
+pub struct MissingFilePreviewState {
+    /// Cached modal data (loaded once on init).
+    pub cached_data: MissingFileModalData,
+    /// Which list has focus (0 = restorable, 1 = non-restorable).
+    pub focused_list: usize,
+    /// Scroll position for each list.
+    pub scroll: [usize; 2],
+    /// Which button is selected.
+    pub selected_button: SelectedButton,
+}
+
+impl MissingFilePreviewState {
+    /// Create a new preview state with cached data.
+    pub fn new(cached_data: MissingFileModalData) -> Self {
+        // Focus the list that has items
+        let focused_list = if cached_data.has_restorable() {
+            0
+        } else if cached_data.has_non_restorable() {
+            1
+        } else {
+            0
+        };
+
+        Self {
+            cached_data,
+            focused_list,
+            scroll: [0, 0],
+            selected_button: SelectedButton::Cancel,
+        }
+    }
+
+    /// Handle key input.
+    pub fn handle_key(&mut self, key: KeyEvent) -> MissingFilePreviewAction {
+        let has_restorable = self.cached_data.has_restorable();
+        let has_non_restorable = self.cached_data.has_non_restorable();
+
+        match key.code {
+            // Switch between lists
+            KeyCode::Tab | KeyCode::BackTab => {
+                if has_restorable && has_non_restorable {
+                    self.focused_list = 1 - self.focused_list;
+                }
+                MissingFilePreviewAction::None
+            }
+
+            // Scroll within focused list
+            KeyCode::Up => {
+                self.scroll[self.focused_list] = self.scroll[self.focused_list].saturating_sub(1);
+                MissingFilePreviewAction::None
+            }
+            KeyCode::Down => {
+                let max = self.max_scroll_for_list(self.focused_list);
+                if self.scroll[self.focused_list] < max {
+                    self.scroll[self.focused_list] += 1;
+                }
+                MissingFilePreviewAction::None
+            }
+            KeyCode::PageUp => {
+                self.scroll[self.focused_list] = self.scroll[self.focused_list].saturating_sub(10);
+                MissingFilePreviewAction::None
+            }
+            KeyCode::PageDown => {
+                let max = self.max_scroll_for_list(self.focused_list);
+                self.scroll[self.focused_list] = (self.scroll[self.focused_list] + 10).min(max);
+                MissingFilePreviewAction::None
+            }
+
+            // Button navigation
+            KeyCode::Left => {
+                self.selected_button.left(has_restorable, has_non_restorable);
+                MissingFilePreviewAction::None
+            }
+            KeyCode::Right => {
+                self.selected_button.right(has_restorable, has_non_restorable);
+                MissingFilePreviewAction::None
+            }
+
+            // Execute selected button
+            KeyCode::Enter => match self.selected_button {
+                SelectedButton::RestoreAll if has_restorable => {
+                    MissingFilePreviewAction::ConfirmRestore
+                }
+                SelectedButton::DropLost if has_non_restorable => {
+                    MissingFilePreviewAction::ConfirmDrop
+                }
+                SelectedButton::Cancel => MissingFilePreviewAction::Cancel,
+                _ => MissingFilePreviewAction::None,
+            },
+
+            // Cancel
+            KeyCode::Esc => MissingFilePreviewAction::Cancel,
+
+            _ => MissingFilePreviewAction::None,
+        }
+    }
+
+    fn max_scroll_for_list(&self, list_idx: usize) -> usize {
+        let count = if list_idx == 0 {
+            self.cached_data.restorable.len()
+        } else {
+            self.cached_data.non_restorable.len()
+        };
+        count.saturating_sub(1)
+    }
+
+    /// Render the missing file resolution modal.
+    pub fn render(&self, f: &mut Frame, area: Rect) {
+        // Clear background
+        f.render_widget(Clear, area);
+
+        // Layout: title + content + controls
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Title
+                Constraint::Min(10),   // Content
+                Constraint::Length(2), // Controls
+            ])
+            .split(area);
+
+        self.render_title(f, main_chunks[0]);
+        self.render_content(f, main_chunks[1]);
+        self.render_controls(f, main_chunks[2]);
+    }
+
+    fn render_title(&self, f: &mut Frame, area: Rect) {
+        let total = self.cached_data.total_count();
+        let restorable = self.cached_data.restorable.len();
+        let non_restorable = self.cached_data.non_restorable.len();
+
+        let title = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " Missing File Resolution ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({} total: {} restorable, {} lost)", total, restorable, non_restorable),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]))
+        .block(Block::default().borders(Borders::ALL));
+
+        f.render_widget(title, area);
+    }
+
+    fn render_content(&self, f: &mut Frame, area: Rect) {
+        // Split into two panes for the two lists
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        self.render_restorable_list(f, chunks[0]);
+        self.render_non_restorable_list(f, chunks[1]);
+    }
+
+    fn render_restorable_list(&self, f: &mut Frame, area: Rect) {
+        let focused = self.focused_list == 0;
+        let count = self.cached_data.restorable.len();
+
+        let border_style = if focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let title = format!(" Restorable from Library ({}) ", count);
+        let block = Block::default()
+            .title(title)
+            .title_style(Style::default().fg(if count > 0 { Color::Green } else { Color::DarkGray }))
+            .borders(Borders::ALL)
+            .border_style(border_style);
+
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        if self.cached_data.restorable.is_empty() {
+            let empty = Paragraph::new("No restorable files")
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(empty, inner);
+            return;
+        }
+
+        // Calculate visible lines based on inner area height
+        let visible_lines = inner.height as usize;
+        let scroll = self.scroll[0];
+
+        let items: Vec<ListItem> = self
+            .cached_data
+            .restorable
+            .iter()
+            .skip(scroll)
+            .take(visible_lines)
+            .map(|file| {
+                let path = truncate_left(&file.corpus_path, inner.width.saturating_sub(2) as usize);
+                ListItem::new(path).style(Style::default().fg(Color::White))
+            })
+            .collect();
+
+        let list = List::new(items);
+        f.render_widget(list, inner);
+    }
+
+    fn render_non_restorable_list(&self, f: &mut Frame, area: Rect) {
+        let focused = self.focused_list == 1;
+        let count = self.cached_data.non_restorable.len();
+
+        let border_style = if focused {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let title = format!(" Non-Restorable / Data Lost ({}) ", count);
+        let block = Block::default()
+            .title(title)
+            .title_style(Style::default().fg(if count > 0 { Color::Red } else { Color::DarkGray }))
+            .borders(Borders::ALL)
+            .border_style(border_style);
+
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        if self.cached_data.non_restorable.is_empty() {
+            let empty = Paragraph::new("No non-restorable files")
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(empty, inner);
+            return;
+        }
+
+        // Calculate visible lines based on inner area height
+        let visible_lines = inner.height as usize;
+        let scroll = self.scroll[1];
+
+        let items: Vec<ListItem> = self
+            .cached_data
+            .non_restorable
+            .iter()
+            .skip(scroll)
+            .take(visible_lines)
+            .map(|file| {
+                let path = truncate_left(&file.corpus_path, inner.width.saturating_sub(2) as usize);
+                ListItem::new(path).style(Style::default().fg(Color::White))
+            })
+            .collect();
+
+        let list = List::new(items);
+        f.render_widget(list, inner);
+    }
+
+    fn render_controls(&self, f: &mut Frame, area: Rect) {
+        let has_restorable = self.cached_data.has_restorable();
+        let has_non_restorable = self.cached_data.has_non_restorable();
+
+        // Build button line
+        let mut buttons = Vec::new();
+
+        // Restore All button
+        let restore_style = if !has_restorable {
+            Style::default().fg(Color::DarkGray)
+        } else if self.selected_button == SelectedButton::RestoreAll {
+            Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        buttons.push(Span::styled(" Restore All ", restore_style));
+        buttons.push(Span::raw("  "));
+
+        // Drop Lost button
+        let drop_style = if !has_non_restorable {
+            Style::default().fg(Color::DarkGray)
+        } else if self.selected_button == SelectedButton::DropLost {
+            Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Red)
+        };
+        buttons.push(Span::styled(" Drop Lost ", drop_style));
+        buttons.push(Span::raw("  "));
+
+        // Cancel button
+        let cancel_style = if self.selected_button == SelectedButton::Cancel {
+            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        buttons.push(Span::styled(" Cancel ", cancel_style));
+
+        let controls = Paragraph::new(Line::from(buttons))
+            .block(Block::default().borders(Borders::TOP));
+
+        f.render_widget(controls, area);
+    }
+}

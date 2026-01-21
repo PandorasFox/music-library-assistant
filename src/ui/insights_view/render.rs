@@ -18,7 +18,7 @@ use ratatui::{
 
 use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
-use super::{FocusedBucket, InsightsViewState};
+use super::{BucketEntry, FocusedBucket, InsightType, InsightsViewState};
 
 /// Render the full insights view
 pub fn render_insights_view(f: &mut Frame, area: Rect, state: &InsightsViewState) {
@@ -60,11 +60,11 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &InsightsViewState) {
 
     let mut items: Vec<ListItem> = Vec::new();
 
-    // Build list items from all buckets
-    items.extend(corpus_bucket_items(state, busy));
-    items.extend(placeholder_bucket_items(state, busy));
-    items.extend(library_bucket_items(state, busy));
-    items.extend(other_bucket_items(state, busy));
+    // Build list items from all buckets using cached entries
+    items.extend(bucket_items("Corpus Files", &state.cached_entries.corpus, FocusedBucket::Corpus, state, busy));
+    items.extend(bucket_items("Placeholder", &state.cached_entries.placeholder, FocusedBucket::Placeholder, state, busy));
+    items.extend(bucket_items("Library / Deploy", &state.cached_entries.library, FocusedBucket::Library, state, busy));
+    items.extend(bucket_items_other("Other Signals", &state.cached_entries.other, state, busy));
 
     let list = List::new(items);
     f.render_widget(list, inner);
@@ -121,201 +121,57 @@ fn insight_line_no_count(label: &str, selected: bool, busy: bool, color: Color) 
     ListItem::new(Line::from(Span::styled(text, style)))
 }
 
-/// Build list items for the Corpus Files bucket
-/// OOB signals with count > 0 appear at top; OOB signals with count == 0 sink to bottom
-fn corpus_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListItem<'static>> {
-    let focused = state.focused_bucket == FocusedBucket::Corpus;
-    let selected_idx = state.bucket_selections[FocusedBucket::Corpus.index()].selected;
+/// Build list items from pre-sorted bucket entries (unified function)
+fn bucket_items(
+    title: &str,
+    entries: &[BucketEntry],
+    bucket: FocusedBucket,
+    state: &InsightsViewState,
+    busy: bool,
+) -> Vec<ListItem<'static>> {
+    let focused = state.focused_bucket == bucket;
+    let selected_idx = state.bucket_selections[bucket.index()].selected;
 
-    let data = state.cached_data.as_ref();
+    let mut items = vec![bucket_header(title, focused, busy)];
 
-    let modified_oob = data.map(|d| d.bucket_corpus.modified_oob).unwrap_or(0);
-    let tags_oob = data.map(|d| d.bucket_corpus.tags_changed_oob).unwrap_or(0);
-    let files_in_corpus = data.map(|d| d.bucket_corpus.files_in_corpus).unwrap_or(0);
-    let indexed = data.map(|d| d.bucket_corpus.files_indexed).unwrap_or(0);
-    let unindexed = data.map(|d| d.bucket_corpus.files_unindexed).unwrap_or(0);
-    let missing = data.map(|d| d.bucket_corpus.files_missing).unwrap_or(0);
-    let relocated = data.map(|d| d.bucket_corpus.files_relocated).unwrap_or(0);
-
-    // Rank: 0 = top (active OOB), 1 = middle (standard), 2 = bottom (inactive OOB)
-    struct CorpusEntry {
-        label: &'static str,
-        count: usize,
-        color: Color,
-        rank: u8,
-    }
-
-    let mut entries = vec![
-        CorpusEntry {
-            label: "Modified out-of-band",
-            count: modified_oob,
-            color: if modified_oob > 0 { Color::Red } else { Color::DarkGray },
-            rank: if modified_oob > 0 { 0 } else { 2 },
-        },
-        CorpusEntry {
-            label: "Tags changed out-of-band",
-            count: tags_oob,
-            color: if tags_oob > 0 { Color::Red } else { Color::DarkGray },
-            rank: if tags_oob > 0 { 0 } else { 2 },
-        },
-        CorpusEntry {
-            label: "Files in corpus",
-            count: files_in_corpus,
-            color: Color::Yellow,
-            rank: 1,
-        },
-        CorpusEntry {
-            label: "Files indexed",
-            count: indexed,
-            color: Color::Green,
-            rank: 1,
-        },
-        CorpusEntry {
-            label: "Files unindexed",
-            count: unindexed,
-            color: if unindexed > 0 { Color::Yellow } else { Color::Green },
-            rank: 1,
-        },
-        CorpusEntry {
-            label: "Files missing",
-            count: missing,
-            color: if missing > 0 { Color::Red } else { Color::Green },
-            rank: 1,
-        },
-        CorpusEntry {
-            label: "Files relocated",
-            count: relocated,
-            color: if relocated > 0 { Color::Yellow } else { Color::Green },
-            rank: 1,
-        },
-    ];
-
-    // Sort by rank (0=top, 1=middle, 2=bottom), preserving relative order within ranks
-    entries.sort_by_key(|e| e.rank);
-
-    let mut items = vec![bucket_header("Corpus Files", focused, busy)];
     for (idx, entry) in entries.iter().enumerate() {
-        items.push(insight_line(
-            entry.label,
-            entry.count,
-            focused && selected_idx == idx,
-            busy,
-            entry.color,
-        ));
-    }
-
-    items
-}
-
-/// Build list items for the Placeholder bucket
-fn placeholder_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListItem<'static>> {
-    let focused = state.focused_bucket == FocusedBucket::Placeholder;
-    let selected_idx = state.bucket_selections[FocusedBucket::Placeholder.index()].selected;
-
-    let data = state.cached_data.as_ref();
-    let description = data
-        .map(|d| d.bucket_placeholder.description)
-        .unwrap_or(":)");
-
-    vec![
-        bucket_header("Placeholder", focused, busy),
-        insight_line_no_count(
-            description,
-            focused && selected_idx == 0,
-            busy,
-            Color::Gray,
-        ),
-    ]
-}
-
-/// Build list items for the Library/Deploy bucket
-/// Sorted by count descending (biggest first)
-fn library_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListItem<'static>> {
-    let focused = state.focused_bucket == FocusedBucket::Library;
-    let selected_idx = state.bucket_selections[FocusedBucket::Library.index()].selected;
-
-    let data = state.cached_data.as_ref();
-
-    let stale = data.map(|d| d.bucket_library.library_stale).unwrap_or(0);
-    let leftover = data.map(|d| d.bucket_library.library_leftover).unwrap_or(0);
-    let deploy_ready = data.map(|d| d.bucket_library.deploy_ready).unwrap_or(0);
-    let deployed = data.map(|d| d.bucket_library.deployed_healthy).unwrap_or(0);
-
-    // Build entries with their color logic, then sort by count descending
-    struct DeployEntry {
-        label: &'static str,
-        count: usize,
-        color: Color,
-    }
-
-    let mut entries = vec![
-        DeployEntry {
-            label: "Library stale",
-            count: stale,
-            color: if stale > 0 { Color::Yellow } else { Color::Green },
-        },
-        DeployEntry {
-            label: "Library leftover",
-            count: leftover,
-            color: if leftover > 0 { Color::Yellow } else { Color::Green },
-        },
-        DeployEntry {
-            label: "Ready to deploy",
-            count: deploy_ready,
-            color: if deploy_ready > 0 { Color::Cyan } else { Color::Green },
-        },
-        DeployEntry {
-            label: "Deployed healthy",
-            count: deployed,
-            color: Color::Green,
-        },
-    ];
-
-    // Sort by count descending (biggest first)
-    entries.sort_by(|a, b| b.count.cmp(&a.count));
-
-    let mut items = vec![bucket_header("Library / Deploy", focused, busy)];
-    for (idx, entry) in entries.iter().enumerate() {
-        items.push(insight_line(
-            entry.label,
-            entry.count,
-            focused && selected_idx == idx,
-            busy,
-            entry.color,
-        ));
-    }
-
-    items
-}
-
-/// Build list items for the Other Signals bucket
-fn other_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListItem<'static>> {
-    let focused = state.focused_bucket == FocusedBucket::Other;
-    let selected_idx = state.bucket_selections[FocusedBucket::Other.index()].selected;
-
-    let mut items = vec![bucket_header("Other Signals", focused, busy)];
-
-    if let Some(data) = state.cached_data.as_ref() {
-        for (idx, entry) in data.bucket_other.entries.iter().enumerate() {
-            let color = if entry.count > 0 { Color::Yellow } else { Color::Green };
-            items.push(insight_line(
-                &entry.display_label,
-                entry.count,
-                focused && selected_idx == idx,
-                busy,
-                color,
-            ));
+        let selected = focused && selected_idx == idx;
+        match entry.count {
+            Some(count) => items.push(insight_line(&entry.label, count, selected, busy, entry.color)),
+            None => items.push(insight_line_no_count(&entry.label, selected, busy, entry.color)),
         }
     }
 
-    // If no entries, show a placeholder
-    if items.len() == 1 {
+    items
+}
+
+/// Build list items for the Other bucket (with empty fallback)
+fn bucket_items_other(
+    title: &str,
+    entries: &[BucketEntry],
+    state: &InsightsViewState,
+    busy: bool,
+) -> Vec<ListItem<'static>> {
+    let focused = state.focused_bucket == FocusedBucket::Other;
+    let selected_idx = state.bucket_selections[FocusedBucket::Other.index()].selected;
+
+    let mut items = vec![bucket_header(title, focused, busy)];
+
+    if entries.is_empty() {
         items.push(insight_line_no_count(
             "(no other signals)",
             focused && selected_idx == 0,
             busy,
             Color::DarkGray,
         ));
+    } else {
+        for (idx, entry) in entries.iter().enumerate() {
+            let selected = focused && selected_idx == idx;
+            match entry.count {
+                Some(count) => items.push(insight_line(&entry.label, count, selected, busy, entry.color)),
+                None => items.push(insight_line_no_count(&entry.label, selected, busy, entry.color)),
+            }
+        }
     }
 
     items
@@ -334,62 +190,28 @@ fn render_insight_details(f: &mut Frame, area: Rect, state: &InsightsViewState) 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let lines = match state.focused_bucket {
-        FocusedBucket::Corpus => corpus_detail_lines(state, busy),
-        FocusedBucket::Placeholder => placeholder_detail_lines(busy),
-        FocusedBucket::Library => library_detail_lines(state, busy),
-        FocusedBucket::Other => other_detail_lines(state, busy),
+    let lines = match state.selected_entry() {
+        Some(entry) => detail_lines_for_entry(entry, state, busy),
+        None => vec![Line::from(Span::styled(
+            "No insight selected.",
+            Style::default().fg(Color::DarkGray),
+        ))],
     };
 
     let paragraph = Paragraph::new(lines);
     f.render_widget(paragraph, inner);
 }
 
-/// Corpus entry types for detail matching after sorting
-#[derive(Clone, Copy, PartialEq)]
-enum CorpusEntryType {
-    ModifiedOob,
-    TagsChangedOob,
-    FilesInCorpus,
-    FilesIndexed,
-    FilesUnindexed,
-    FilesMissing,
-    FilesRelocated,
-}
-
-/// Detail lines for corpus bucket items
-fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'static>> {
-    let selected_idx = state.bucket_selections[FocusedBucket::Corpus.index()].selected;
+/// Generate detail lines for a bucket entry, matching on InsightType
+fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: bool) -> Vec<Line<'static>> {
     let text_color = if busy { Color::DarkGray } else { Color::White };
     let header_color = if busy { Color::DarkGray } else { Color::Cyan };
 
-    let data = state.cached_data.as_ref();
-
-    // Recreate the same sorting logic as corpus_bucket_items to find which entry is selected
-    let modified_oob = data.map(|d| d.bucket_corpus.modified_oob).unwrap_or(0);
-    let tags_oob = data.map(|d| d.bucket_corpus.tags_changed_oob).unwrap_or(0);
-
-    // Rank: 0 = top (active OOB), 1 = middle (standard), 2 = bottom (inactive OOB)
-    let mut entries: Vec<(CorpusEntryType, u8)> = vec![
-        (CorpusEntryType::ModifiedOob, if modified_oob > 0 { 0 } else { 2 }),
-        (CorpusEntryType::TagsChangedOob, if tags_oob > 0 { 0 } else { 2 }),
-        (CorpusEntryType::FilesInCorpus, 1),
-        (CorpusEntryType::FilesIndexed, 1),
-        (CorpusEntryType::FilesUnindexed, 1),
-        (CorpusEntryType::FilesMissing, 1),
-        (CorpusEntryType::FilesRelocated, 1),
-    ];
-
-    // Sort by rank (same as corpus_bucket_items)
-    entries.sort_by_key(|(_, rank)| *rank);
-
-    // Find which entry type is at the selected index
-    let selected_type = entries.get(selected_idx).map(|(t, _)| *t);
-
     let mut lines = Vec::new();
 
-    match selected_type {
-        Some(CorpusEntryType::ModifiedOob) => {
+    match entry.insight_type {
+        // Corpus bucket entries
+        InsightType::CorpusModifiedOob => {
             lines.push(Line::from(Span::styled(
                 "Modified Out-of-Band",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -408,7 +230,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        Some(CorpusEntryType::TagsChangedOob) => {
+        InsightType::CorpusTagsChangedOob => {
             lines.push(Line::from(Span::styled(
                 "Tags Changed Out-of-Band",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -423,7 +245,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        Some(CorpusEntryType::FilesInCorpus) => {
+        InsightType::CorpusFilesInCorpus => {
             lines.push(Line::from(Span::styled(
                 "Files in Corpus",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -455,7 +277,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 )));
             }
         }
-        Some(CorpusEntryType::FilesIndexed) => {
+        InsightType::CorpusFilesIndexed => {
             lines.push(Line::from(Span::styled(
                 "Files Indexed",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -470,7 +292,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        Some(CorpusEntryType::FilesUnindexed) => {
+        InsightType::CorpusFilesUnindexed => {
             lines.push(Line::from(Span::styled(
                 "Files Unindexed",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -485,7 +307,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        Some(CorpusEntryType::FilesMissing) => {
+        InsightType::CorpusFilesMissing => {
             lines.push(Line::from(Span::styled(
                 "Files Missing",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -504,7 +326,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        Some(CorpusEntryType::FilesRelocated) => {
+        InsightType::CorpusFilesRelocated => {
             lines.push(Line::from(Span::styled(
                 "Files Relocated",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -519,65 +341,18 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        None => {}
-    }
 
-    lines
-}
+        // Placeholder bucket
+        InsightType::Placeholder => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Reserved for future use.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Gray }),
+            )));
+        }
 
-/// Detail lines for placeholder bucket
-fn placeholder_detail_lines(busy: bool) -> Vec<Line<'static>> {
-    let text_color = if busy { Color::DarkGray } else { Color::Gray };
-
-    vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Reserved for future use.",
-            Style::default().fg(text_color),
-        )),
-    ]
-}
-
-/// Library entry types for detail matching after sorting
-#[derive(Clone, Copy, PartialEq)]
-enum LibraryEntryType {
-    LibraryStale,
-    LibraryLeftover,
-    ReadyToDeploy,
-    DeployedHealthy,
-}
-
-/// Detail lines for library bucket items
-fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'static>> {
-    let selected_idx = state.bucket_selections[FocusedBucket::Library.index()].selected;
-    let text_color = if busy { Color::DarkGray } else { Color::White };
-    let header_color = if busy { Color::DarkGray } else { Color::Cyan };
-
-    let data = state.cached_data.as_ref();
-
-    // Recreate the same sorting logic as library_bucket_items to find which entry is selected
-    let stale = data.map(|d| d.bucket_library.library_stale).unwrap_or(0);
-    let leftover = data.map(|d| d.bucket_library.library_leftover).unwrap_or(0);
-    let deploy_ready = data.map(|d| d.bucket_library.deploy_ready).unwrap_or(0);
-    let deployed = data.map(|d| d.bucket_library.deployed_healthy).unwrap_or(0);
-
-    let mut entries: Vec<(LibraryEntryType, usize)> = vec![
-        (LibraryEntryType::LibraryStale, stale),
-        (LibraryEntryType::LibraryLeftover, leftover),
-        (LibraryEntryType::ReadyToDeploy, deploy_ready),
-        (LibraryEntryType::DeployedHealthy, deployed),
-    ];
-
-    // Sort by count descending (same as library_bucket_items)
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
-
-    // Find which entry type is at the selected index
-    let selected_type = entries.get(selected_idx).map(|(t, _)| *t);
-
-    let mut lines = Vec::new();
-
-    match selected_type {
-        Some(LibraryEntryType::LibraryStale) => {
+        // Library bucket entries
+        InsightType::LibraryStale => {
             lines.push(Line::from(Span::styled(
                 "Library Stale",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -592,7 +367,7 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        Some(LibraryEntryType::LibraryLeftover) => {
+        InsightType::LibraryLeftover => {
             lines.push(Line::from(Span::styled(
                 "Library Leftover",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -607,7 +382,7 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        Some(LibraryEntryType::ReadyToDeploy) => {
+        InsightType::LibraryDeployReady => {
             lines.push(Line::from(Span::styled(
                 "Ready to Deploy",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -622,7 +397,7 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        Some(LibraryEntryType::DeployedHealthy) => {
+        InsightType::LibraryDeployedHealthy => {
             lines.push(Line::from(Span::styled(
                 "Deployed Healthy",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -641,45 +416,45 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        None => {}
-    }
 
-    lines
-}
+        // Other bucket - dynamic entries
+        InsightType::OtherSignal { index } => {
+            // Get extended info from cached_data if available
+            if let Some(data) = state.cached_data.as_ref() {
+                if let Some(signal_entry) = data.bucket_other.entries.get(index) {
+                    lines.push(Line::from(Span::styled(
+                        signal_entry.display_label.clone(),
+                        Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("Count: {}", signal_entry.count),
+                        Style::default().fg(text_color),
+                    )));
+                    if let Some(affected) = signal_entry.affected_count {
+                        lines.push(Line::from(Span::styled(
+                            format!("Affected tracks: {}", affected),
+                            Style::default().fg(text_color),
+                        )));
+                    }
+                }
+            }
 
-/// Detail lines for other signals bucket items
-fn other_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'static>> {
-    let selected_idx = state.bucket_selections[FocusedBucket::Other.index()].selected;
-    let text_color = if busy { Color::DarkGray } else { Color::White };
-    let header_color = if busy { Color::DarkGray } else { Color::Cyan };
-
-    let mut lines = Vec::new();
-
-    if let Some(data) = state.cached_data.as_ref() {
-        if let Some(entry) = data.bucket_other.entries.get(selected_idx) {
-            lines.push(Line::from(Span::styled(
-                entry.display_label.clone(),
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!("Count: {}", entry.count),
-                Style::default().fg(text_color),
-            )));
-            if let Some(affected) = entry.affected_count {
+            // Fallback if data not available
+            if lines.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    format!("Affected tracks: {}", affected),
-                    Style::default().fg(text_color),
+                    entry.label.clone(),
+                    Style::default().fg(header_color).add_modifier(Modifier::BOLD),
                 )));
+                lines.push(Line::from(""));
+                if let Some(count) = entry.count {
+                    lines.push(Line::from(Span::styled(
+                        format!("Count: {}", count),
+                        Style::default().fg(text_color),
+                    )));
+                }
             }
         }
-    }
-
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No signal selected.",
-            Style::default().fg(Color::DarkGray),
-        )));
     }
 
     lines

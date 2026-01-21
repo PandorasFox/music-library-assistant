@@ -134,14 +134,13 @@ impl DeploymentPreviewState {
 
             // Confirm selection
             KeyCode::Enter => {
-                let action = if was_confirm_selected && !self.cached_data.has_conflicts() {
+                if was_confirm_selected {
                     DeploymentPreviewAction::Confirm
                 } else {
-                    // Cancel or blocked by conflicts
+                    // Cancel selected
                     self.confirm_modal = None;
                     DeploymentPreviewAction::None
-                };
-                action
+                }
             }
 
             // Close dialog
@@ -373,14 +372,14 @@ impl DeploymentPreviewState {
 
         lines.push(Line::from(""));
 
-        // Show conflict warning if blocked
+        // Show conflict info (auto-resolved by picking first alphabetical)
         if summary.conflict_count > 0 {
             lines.push(Line::from(Span::styled(
                 format!(
-                    "WARNING: {} conflicts must be resolved first!",
+                    "{} conflicts (first alphabetical path wins)",
                     summary.conflict_count
                 ),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Yellow),
             )));
             lines.push(Line::from(""));
         }
@@ -398,10 +397,8 @@ impl DeploymentPreviewState {
             Style::default().fg(Color::DarkGray)
         };
 
-        let confirm_style = if *selected_button == 1 && summary.conflict_count == 0 {
+        let confirm_style = if *selected_button == 1 {
             Style::default().fg(Color::Black).bg(Color::Green)
-        } else if summary.conflict_count > 0 {
-            Style::default().fg(Color::DarkGray)
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -409,22 +406,11 @@ impl DeploymentPreviewState {
         lines.push(Line::from(vec![
             Span::styled(" [Cancel] ", cancel_style),
             Span::raw("  "),
-            Span::styled(
-                if summary.conflict_count > 0 {
-                    " [Blocked] "
-                } else {
-                    " [Confirm] "
-                },
-                confirm_style,
-            ),
+            Span::styled(" [Confirm] ", confirm_style),
         ]));
 
         // Render as centered modal
-        let modal_style = if summary.conflict_count > 0 {
-            ModalStyle::error()
-        } else {
-            ModalStyle::info()
-        };
+        let modal_style = ModalStyle::info();
 
         let block = Block::default()
             .borders(Borders::ALL)

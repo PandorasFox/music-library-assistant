@@ -636,9 +636,8 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             key,
             metadata_json,
         } => {
-            let issue_type = signal_type.to_health_issue_type();
             with_retry("ensure_file_signal_with_metadata", key, || {
-                db.ensure_signal(issue_type, key, metadata_json.as_deref(), &witness).map(|_| ())
+                db.ensure_file_signal_with_metadata(*signal_type, key, metadata_json.as_deref(), &witness).map(|_| ())
             });
         }
         SignalWriteOp::ClearFileSignal { signal_type, path } => {

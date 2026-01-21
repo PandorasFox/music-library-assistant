@@ -440,6 +440,30 @@ impl Database {
         Ok(self.conn.changes() > 0)
     }
 
+    /// Ensure a file signal exists with metadata (idempotent).
+    ///
+    /// Works for all FileSignalType variants including DeployReady/DeployedHealthy.
+    pub fn ensure_file_signal_with_metadata(
+        &self,
+        signal_type: FileSignalType,
+        key: &str,
+        metadata_json: Option<&str>,
+        _witness: &ComputationWitness,
+    ) -> Result<bool> {
+        self.conn
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO health_issues
+                (issue_type, issue_key, discovered_at, metadata_json)
+                VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
+                "#,
+                params![signal_type.as_str(), key, metadata_json],
+            )
+            .context("Failed to ensure file signal with metadata")?;
+
+        Ok(self.conn.changes() > 0)
+    }
+
     /// Clear a file signal (idempotent delete).
     pub fn clear_file_signal(
         &self,
@@ -1074,18 +1098,25 @@ impl Database {
     pub fn get_library_leftover_files(&self) -> Result<Vec<crate::corpus::db::types::LeftoverSignalFile>> {
         use crate::corpus::db::types::LeftoverSignalFile;
 
-        // library_leftover signals: issue_key = library_path
+        // library_leftover signals: issue_key = "library_leftover:{library_name}:{library_path}"
+        // We need to extract just the library_path portion (after the second colon)
         let mut stmt = self.conn.prepare(
-            r#"SELECT issue_key as library_path
+            r#"SELECT issue_key
                FROM health_issues
                WHERE issue_type = 'library_leftover'
                ORDER BY issue_key"#
         )?;
 
         let results = stmt.query_map(params![], |row| {
-            Ok(LeftoverSignalFile {
-                library_path: row.get(0)?,
-            })
+            let issue_key: String = row.get(0)?;
+            // Extract library_path from "library_leftover:{library_name}:{library_path}"
+            // Library paths start with '/', so find ":/" to locate the path portion
+            let library_path = if let Some(path_start) = issue_key.find(":/") {
+                issue_key[path_start + 1..].to_string()
+            } else {
+                issue_key // Fallback: return full key if format unexpected
+            };
+            Ok(LeftoverSignalFile { library_path })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 

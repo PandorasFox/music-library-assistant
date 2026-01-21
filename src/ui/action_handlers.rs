@@ -436,22 +436,36 @@ impl App {
             });
         }
 
-        // Stale files: unlink old, create new
+        // Stale files: move from wrong path to correct path
         for file in &data.stale {
-            mutations.push(Mutation::Unlink {
-                path: PathBuf::from(&file.library_path),
-            });
-            mutations.push(Mutation::HardLink {
-                source: PathBuf::from(&file.corpus_path),
+            mutations.push(Mutation::Move {
+                source: PathBuf::from(&file.library_path),
                 destination: PathBuf::from(&file.expected_path),
+                track_id: None, // Library file, not corpus - no track to update
             });
         }
 
-        // Leftover files: unlink
+        // Leftover files: move to stash (preserve data, never destroy)
         for file in &data.leftover {
-            mutations.push(Mutation::Unlink {
+            mutations.push(Mutation::MoveToStash {
                 path: PathBuf::from(&file.library_path),
+                track_id: None, // No corpus backing
+                stash_name: "library_leftovers".to_string(),
             });
+        }
+
+        // Conflicts: pick first alphabetical corpus path and deploy it
+        for group in &data.conflicts {
+            if let Some((corpus_path, _track_id)) = group
+                .conflicting_files
+                .iter()
+                .min_by(|a, b| a.0.cmp(&b.0))
+            {
+                mutations.push(Mutation::HardLink {
+                    source: PathBuf::from(corpus_path),
+                    destination: PathBuf::from(&group.deploy_path),
+                });
+            }
         }
 
         let count = mutations.len();

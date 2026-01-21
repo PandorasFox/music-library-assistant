@@ -73,6 +73,16 @@ pub enum Computation {
         library_root: PathBuf,
         corpus_path_prefixes: Vec<PathBuf>,
     },
+
+    /// Update deploy signals after a HardLink mutation.
+    ///
+    /// Clears DeployReady, ensures DeployedHealthy, clears library leftovers.
+    UpdateDeploySignals {
+        /// Corpus path (source of HardLink)
+        corpus_path: PathBuf,
+        /// Library path (destination of HardLink)
+        library_path: PathBuf,
+    },
 }
 
 impl Computation {
@@ -84,6 +94,7 @@ impl Computation {
             Computation::UpdateFileSignals { .. } => "Updating file signals",
             Computation::WalkLibrary { .. } => "Walking library",
             Computation::ScanLibraryDirectory { .. } => "Scanning library directory",
+            Computation::UpdateDeploySignals { .. } => "Updating deploy signals",
         }
     }
 
@@ -95,6 +106,7 @@ impl Computation {
             Computation::UpdateFileSignals { path } => Some(path),
             Computation::WalkLibrary { library_root, .. } => Some(library_root),
             Computation::ScanLibraryDirectory { directory, .. } => Some(directory),
+            Computation::UpdateDeploySignals { library_path, .. } => Some(library_path),
         }
     }
 }

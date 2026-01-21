@@ -6,7 +6,6 @@
 //! - Delete: Delete a file
 //! - MoveToStash: Move a file to the stash directory
 //! - HardLink: Create a hard link (for deployment)
-//! - Unlink: Remove a deployed link
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -141,18 +140,6 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Execute an Unlink mutation.
-///
-/// Removes a deployed link (regular file deletion).
-pub fn execute_unlink(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_file(path)
-            .with_context(|| format!("Failed to unlink file: {}", path.display()))?;
-    }
-
-    Ok(())
-}
-
 /// Execute a single file operation mutation.
 ///
 /// Note: MoveToStash requires a stash_root parameter not available in the mutation,
@@ -192,8 +179,6 @@ pub fn execute_single(
             source,
             destination,
         } => execute_hard_link(source, destination),
-
-        Mutation::Unlink { path } => execute_unlink(path),
 
         _ => Err(anyhow::anyhow!("Not a file operation mutation")),
     };

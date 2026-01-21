@@ -220,6 +220,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awakening::Computation::ScanLibraryDirectory { directory, library_name, library_root, corpus_path_prefixes } => {
                         awakening::execute_scan_library_directory(read_only_db, directory, library_name, library_root, corpus_path_prefixes, &witness, start)
                     }
+                    awakening::Computation::UpdateDeploySignals { corpus_path, library_path } => {
+                        awakening::execute_update_deploy_signals(read_only_db, corpus_path, library_path, &witness, start)
+                    }
                 };
                 ComputationResult::from_awakening(result)
             }

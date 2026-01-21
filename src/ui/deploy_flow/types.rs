@@ -119,11 +119,6 @@ impl DeployModalData {
         )
     }
 
-    /// Check if there are any conflicts blocking deployment.
-    pub fn has_conflicts(&self) -> bool {
-        !self.conflicts.is_empty()
-    }
-
     /// Get summary for confirmation dialog.
     pub fn summary(&self) -> DeploySummary {
         DeploySummary {
@@ -153,13 +148,9 @@ pub struct DeploySummary {
 
 impl DeploySummary {
     /// Total operations that will be performed (excluding healthy).
+    /// Conflicts are auto-resolved by picking first alphabetical path.
     pub fn total_operations(&self) -> usize {
-        self.new_count + self.stale_count + self.leftover_count
-    }
-
-    /// Check if deployment is blocked by conflicts.
-    pub fn is_blocked(&self) -> bool {
-        self.conflict_count > 0
+        self.new_count + self.stale_count + self.leftover_count + self.conflict_count
     }
 }
 

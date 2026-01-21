@@ -345,17 +345,51 @@ fn render_insight_details(f: &mut Frame, area: Rect, state: &InsightsViewState) 
     f.render_widget(paragraph, inner);
 }
 
+/// Corpus entry types for detail matching after sorting
+#[derive(Clone, Copy, PartialEq)]
+enum CorpusEntryType {
+    ModifiedOob,
+    TagsChangedOob,
+    FilesInCorpus,
+    FilesIndexed,
+    FilesUnindexed,
+    FilesMissing,
+    FilesRelocated,
+}
+
 /// Detail lines for corpus bucket items
 fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'static>> {
     let selected_idx = state.bucket_selections[FocusedBucket::Corpus.index()].selected;
     let text_color = if busy { Color::DarkGray } else { Color::White };
     let header_color = if busy { Color::DarkGray } else { Color::Cyan };
 
+    let data = state.cached_data.as_ref();
+
+    // Recreate the same sorting logic as corpus_bucket_items to find which entry is selected
+    let modified_oob = data.map(|d| d.bucket_corpus.modified_oob).unwrap_or(0);
+    let tags_oob = data.map(|d| d.bucket_corpus.tags_changed_oob).unwrap_or(0);
+
+    // Rank: 0 = top (active OOB), 1 = middle (standard), 2 = bottom (inactive OOB)
+    let mut entries: Vec<(CorpusEntryType, u8)> = vec![
+        (CorpusEntryType::ModifiedOob, if modified_oob > 0 { 0 } else { 2 }),
+        (CorpusEntryType::TagsChangedOob, if tags_oob > 0 { 0 } else { 2 }),
+        (CorpusEntryType::FilesInCorpus, 1),
+        (CorpusEntryType::FilesIndexed, 1),
+        (CorpusEntryType::FilesUnindexed, 1),
+        (CorpusEntryType::FilesMissing, 1),
+        (CorpusEntryType::FilesRelocated, 1),
+    ];
+
+    // Sort by rank (same as corpus_bucket_items)
+    entries.sort_by_key(|(_, rank)| *rank);
+
+    // Find which entry type is at the selected index
+    let selected_type = entries.get(selected_idx).map(|(t, _)| *t);
+
     let mut lines = Vec::new();
 
-    match selected_idx {
-        0 => {
-            // Modified out-of-band
+    match selected_type {
+        Some(CorpusEntryType::ModifiedOob) => {
             lines.push(Line::from(Span::styled(
                 "Modified Out-of-Band",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -374,8 +408,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        1 => {
-            // Tags changed out-of-band
+        Some(CorpusEntryType::TagsChangedOob) => {
             lines.push(Line::from(Span::styled(
                 "Tags Changed Out-of-Band",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -390,8 +423,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        2 => {
-            // Files in corpus - show filetype breakdown
+        Some(CorpusEntryType::FilesInCorpus) => {
             lines.push(Line::from(Span::styled(
                 "Files in Corpus",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -423,8 +455,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 )));
             }
         }
-        3 => {
-            // Files indexed
+        Some(CorpusEntryType::FilesIndexed) => {
             lines.push(Line::from(Span::styled(
                 "Files Indexed",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -439,8 +470,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        4 => {
-            // Files unindexed
+        Some(CorpusEntryType::FilesUnindexed) => {
             lines.push(Line::from(Span::styled(
                 "Files Unindexed",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -455,8 +485,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        5 => {
-            // Files missing
+        Some(CorpusEntryType::FilesMissing) => {
             lines.push(Line::from(Span::styled(
                 "Files Missing",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -475,8 +504,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        6 => {
-            // Files relocated
+        Some(CorpusEntryType::FilesRelocated) => {
             lines.push(Line::from(Span::styled(
                 "Files Relocated",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -491,7 +519,7 @@ fn corpus_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stati
                 Style::default().fg(text_color),
             )));
         }
-        _ => {}
+        None => {}
     }
 
     lines
@@ -510,17 +538,46 @@ fn placeholder_detail_lines(busy: bool) -> Vec<Line<'static>> {
     ]
 }
 
+/// Library entry types for detail matching after sorting
+#[derive(Clone, Copy, PartialEq)]
+enum LibraryEntryType {
+    LibraryStale,
+    LibraryLeftover,
+    ReadyToDeploy,
+    DeployedHealthy,
+}
+
 /// Detail lines for library bucket items
 fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'static>> {
     let selected_idx = state.bucket_selections[FocusedBucket::Library.index()].selected;
     let text_color = if busy { Color::DarkGray } else { Color::White };
     let header_color = if busy { Color::DarkGray } else { Color::Cyan };
 
+    let data = state.cached_data.as_ref();
+
+    // Recreate the same sorting logic as library_bucket_items to find which entry is selected
+    let stale = data.map(|d| d.bucket_library.library_stale).unwrap_or(0);
+    let leftover = data.map(|d| d.bucket_library.library_leftover).unwrap_or(0);
+    let deploy_ready = data.map(|d| d.bucket_library.deploy_ready).unwrap_or(0);
+    let deployed = data.map(|d| d.bucket_library.deployed_healthy).unwrap_or(0);
+
+    let mut entries: Vec<(LibraryEntryType, usize)> = vec![
+        (LibraryEntryType::LibraryStale, stale),
+        (LibraryEntryType::LibraryLeftover, leftover),
+        (LibraryEntryType::ReadyToDeploy, deploy_ready),
+        (LibraryEntryType::DeployedHealthy, deployed),
+    ];
+
+    // Sort by count descending (same as library_bucket_items)
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Find which entry type is at the selected index
+    let selected_type = entries.get(selected_idx).map(|(t, _)| *t);
+
     let mut lines = Vec::new();
 
-    match selected_idx {
-        0 => {
-            // Library stale
+    match selected_type {
+        Some(LibraryEntryType::LibraryStale) => {
             lines.push(Line::from(Span::styled(
                 "Library Stale",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -535,8 +592,7 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        1 => {
-            // Library leftover
+        Some(LibraryEntryType::LibraryLeftover) => {
             lines.push(Line::from(Span::styled(
                 "Library Leftover",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -551,8 +607,7 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        2 => {
-            // Ready to deploy
+        Some(LibraryEntryType::ReadyToDeploy) => {
             lines.push(Line::from(Span::styled(
                 "Ready to Deploy",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -567,8 +622,7 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        3 => {
-            // Deployed healthy
+        Some(LibraryEntryType::DeployedHealthy) => {
             lines.push(Line::from(Span::styled(
                 "Deployed Healthy",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
@@ -587,7 +641,7 @@ fn library_detail_lines(state: &InsightsViewState, busy: bool) -> Vec<Line<'stat
                 Style::default().fg(text_color),
             )));
         }
-        _ => {}
+        None => {}
     }
 
     lines

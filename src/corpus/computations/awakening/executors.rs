@@ -9,7 +9,8 @@ use std::time::Instant;
 
 use crate::config::log_message;
 use crate::corpus::computations::helpers::{
-    clear_file_signal_if_present, ensure_file_signal_if_missing, enumerate_all_directories,
+    clear_file_signal_if_present, ensure_file_signal_if_missing,
+    ensure_file_signal_with_metadata_if_missing, enumerate_all_directories,
     get_configured_library_names, is_audio_file,
 };
 use crate::corpus::computations::types::ComputationWitness;
@@ -379,4 +380,99 @@ pub fn execute_scan_library_directory(
     let _ = corpus_path_prefixes; // Suppress unused warning - needed for logging/future use
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Deploy Signal Updates (Post-Mutation)
+// ============================================================================
+
+/// Update deploy signals after a HardLink mutation.
+///
+/// - Clears DeployReady for corpus_path
+/// - Ensures DeployedHealthy for corpus_path (with library_path metadata)
+/// - Clears any LibraryLeftover/LibraryStale for library_path
+pub fn execute_update_deploy_signals(
+    read_only_db: &Database,
+    corpus_path: &Path,
+    library_path: &Path,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = Computation::UpdateDeploySignals {
+        corpus_path: corpus_path.to_path_buf(),
+        library_path: library_path.to_path_buf(),
+    };
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let library_path_str = library_path.to_string_lossy().to_string();
+    let corpus_path_str = corpus_path.to_string_lossy().to_string();
+
+    // Clear library-side signals for this path (any library name)
+    // These use keys like "library_leftover:{name}:{path}" so we need to find and clear them
+    clear_library_signals_for_path(read_only_db, &sender, &library_path_str, witness);
+
+    // Clear DeployReady for corpus file
+    clear_file_signal_if_present(
+        read_only_db,
+        &sender,
+        FileSignalType::DeployReady,
+        &corpus_path_str,
+        witness,
+    );
+
+    // Ensure DeployedHealthy with library_path in metadata
+    let metadata = serde_json::json!({
+        "library_path": library_path_str,
+    });
+    ensure_file_signal_with_metadata_if_missing(
+        read_only_db,
+        &sender,
+        FileSignalType::DeployedHealthy,
+        &corpus_path_str,
+        &metadata.to_string(),
+        witness,
+    );
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Clear library-side signals (LibraryLeftover, LibraryStale) for a library path.
+///
+/// These signals use compound keys like "library_leftover:{name}:{path}",
+/// so we query existing signals and clear matching ones.
+fn clear_library_signals_for_path(
+    read_only_db: &Database,
+    sender: &db_thread::SignalWriteSender,
+    library_path: &str,
+    witness: &ComputationWitness,
+) {
+    // Check for LibraryLeftover signals matching this path
+    if let Ok(signals) = read_only_db.get_health_signals(Some(HealthIssueType::LibraryLeftover)) {
+        for signal in signals {
+            // Key format: "library_leftover:{name}:{path}"
+            if signal.issue_key.ends_with(&format!(":{}", library_path)) {
+                sender.clear_file_signal(FileSignalType::LibraryLeftover, &signal.issue_key, witness);
+            }
+        }
+    }
+
+    // Check for LibraryStale signals matching this path
+    if let Ok(signals) = read_only_db.get_health_signals(Some(HealthIssueType::LibraryStale)) {
+        for signal in signals {
+            // Key format: "library_stale:{name}:{path}"
+            if signal.issue_key.ends_with(&format!(":{}", library_path)) {
+                sender.clear_file_signal(FileSignalType::LibraryStale, &signal.issue_key, witness);
+            }
+        }
+    }
 }

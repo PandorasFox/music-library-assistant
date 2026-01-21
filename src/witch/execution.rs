@@ -107,7 +107,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Queue per-file signal updates for affected paths
     // This ensures signals like UnindexedFile → HealthyFile are updated
     // Mutations can ONLY spawn awakening-phase computations (phase boundary enforcement)
-    let spawn: Vec<Computation> = if success {
+    let mut spawn: Vec<Computation> = if success {
         mutation
             .affected_paths()
             .into_iter()
@@ -116,6 +116,19 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     } else {
         Vec::new()
     };
+
+    // For deploy mutations, also spawn deploy signal updates
+    if success {
+        match mutation {
+            Mutation::HardLink { source, destination } => {
+                spawn.push(Computation::Awakening(awakening::Computation::UpdateDeploySignals {
+                    corpus_path: source.clone(),
+                    library_path: destination.clone(),
+                }));
+            }
+            _ => {}
+        }
+    }
 
     TaskResult {
         success,

@@ -1023,11 +1023,46 @@ pub fn execute_derive_corpus_deploy_status(
         }
     }
 
+    // Get deploy-configured corpus paths to filter healthy files
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
+        Err(_) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "Failed to load config".to_string(),
+            );
+        }
+    };
+
     let mut deploy_ready_count = 0usize;
     let mut deployed_healthy_count = 0usize;
+    let mut skipped_not_configured = 0usize;
 
     for signal in &healthy_signals {
         let corpus_path = &signal.issue_key;
+        let corpus_path_buf = std::path::Path::new(corpus_path);
+
+        // Skip files not configured for deployment
+        if !config.is_path_configured_for_deploy(corpus_path_buf) {
+            skipped_not_configured += 1;
+            // Clear any stale deploy signals for unconfigured files
+            clear_file_signal_if_present(
+                read_only_db,
+                &sender,
+                FileSignalType::DeployReady,
+                corpus_path,
+                witness,
+            );
+            clear_file_signal_if_present(
+                read_only_db,
+                &sender,
+                FileSignalType::DeployedHealthy,
+                corpus_path,
+                witness,
+            );
+            continue;
+        }
 
         // Get the track's inode
         let inode = match read_only_db.get_track_by_path(corpus_path) {
@@ -1077,10 +1112,11 @@ pub fn execute_derive_corpus_deploy_status(
     }
 
     let _ = log_message(&format!(
-        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy",
+        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} not configured",
         healthy_signals.len(),
         deploy_ready_count,
         deployed_healthy_count,
+        skipped_not_configured,
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

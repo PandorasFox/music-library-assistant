@@ -254,6 +254,32 @@ impl Config {
         paths
     }
 
+    /// Get all corpus paths configured for deployment (any library).
+    ///
+    /// Returns absolute paths to all corpus directories that have any deploy mapping.
+    pub fn get_all_deploy_corpus_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        for mapping in &self.deploy_mappings {
+            for corpus_relative_path in &mapping.corpus_relative_paths {
+                paths.push(self.corpus_root.join(corpus_relative_path));
+            }
+        }
+        paths
+    }
+
+    /// Check if a file path is configured for deployment.
+    ///
+    /// Returns true if the path starts with any configured deploy corpus path.
+    pub fn is_path_configured_for_deploy(&self, path: &std::path::Path) -> bool {
+        let deploy_paths = self.get_all_deploy_corpus_paths();
+        for prefix in &deploy_paths {
+            if path.starts_with(prefix) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Validate that all configured paths exist and support required operations
     /// Tests hard link capability for deployment and atomic moves to stash
     pub fn validate_same_filesystem(&self) -> Result<()> {

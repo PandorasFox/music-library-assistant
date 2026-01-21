@@ -170,9 +170,6 @@ pub enum Mutation {
         destination: PathBuf,
     },
 
-    /// Remove a deployed link.
-    Unlink { path: PathBuf },
-
     // ========================================================================
     // Database Migration Operations
     // ========================================================================
@@ -253,7 +250,7 @@ impl Mutation {
 
             Mutation::Delete { .. } => MutationCategory::FileDelete,
 
-            Mutation::HardLink { .. } | Mutation::Unlink { .. } => MutationCategory::Deployment,
+            Mutation::HardLink { .. } => MutationCategory::Deployment,
 
             Mutation::DbMigration { .. } => MutationCategory::Migration,
         }
@@ -271,8 +268,7 @@ impl Mutation {
             | Mutation::Copy { source: path, .. }
             | Mutation::Delete { path, .. }
             | Mutation::MoveToStash { path, .. }
-            | Mutation::HardLink { source: path, .. }
-            | Mutation::Unlink { path, .. } => Some(path),
+            | Mutation::HardLink { source: path, .. } => Some(path),
 
             Mutation::TagEditDb { .. }
             | Mutation::CleanupStaleScanState { .. }
@@ -327,7 +323,6 @@ impl Mutation {
             | Mutation::Delete { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::HardLink { .. }
-            | Mutation::Unlink { .. }
             | Mutation::DbMigration { .. } => None,
         }
     }
@@ -390,7 +385,7 @@ impl Mutation {
             }
 
             // Deployment operations happen outside corpus, don't affect corpus signals
-            Mutation::HardLink { .. } | Mutation::Unlink { .. } => {}
+            Mutation::HardLink { .. } => {}
 
             // Path updates affect both old and new directories
             Mutation::UpdateTrackPath { old_path, new_path, .. } => {
@@ -470,8 +465,7 @@ impl Mutation {
             Mutation::TagEditDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. }
-            | Mutation::Unlink { .. } => Vec::new(),
+            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
         }
     }
 }

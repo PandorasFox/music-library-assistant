@@ -130,10 +130,6 @@ impl Default for ReReleaseOpinions {
 /// Opinions for startup behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupOpinions {
-    /// Verify in-file tags match database at startup (default: true)
-    /// This is "paranoid" mode - catches out-of-band tag edits by external tools
-    pub paranoid_tag_verification: bool,
-
     /// Run last-stage content analysis once at startup, even without mutations (default: false).
     /// Useful after fixing broken computations to force re-derivation of signals.
     /// This is a one-shot latch: triggers once at startup, then auto-clears.
@@ -143,7 +139,6 @@ pub struct StartupOpinions {
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
-            paranoid_tag_verification: true,
             freshen_last_stage_at_startup: false,
         }
     }
@@ -548,13 +543,6 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "paranoid-tag-verification" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.paranoid_tag_verification = val;
-                        }
-                    }
-                }
                 "freshen-last-stage" => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {

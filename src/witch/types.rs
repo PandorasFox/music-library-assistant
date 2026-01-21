@@ -47,17 +47,15 @@ pub enum EyeState {
 /// Corpus observation state - tracks whether the corpus has been seen.
 ///
 /// Controls whether mutations are accepted:
-/// - Unseen/Lazy/Paranoid → Mutations rejected
+/// - Unseen/Observing → Mutations rejected
 /// - Complete → Mutations accepted
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CorpusObservationState {
     /// Initial unknown state (launch only). Corpus has never been eyeballed.
     #[default]
     Unseen,
-    /// Lazy eyeballing in progress (non-paranoid, runtime re-scan).
-    Lazy,
-    /// Paranoid eyeballing in progress (full verification).
-    Paranoid,
+    /// Eyeballing in progress.
+    Observing,
     /// Eyeballing complete. Ready to accept mutations.
     Complete,
 }

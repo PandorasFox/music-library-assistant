@@ -401,18 +401,13 @@ pub fn run_menu(config: Config) -> Result<()> {
 
     let mut app = App::new(config);
 
-    // Eyeballing ALWAYS runs at startup (only paranoid mode is configurable)
-    // Create progress screen and queue initial eyeballing via the Witch
+    // Observing ALWAYS runs at startup
+    // Create progress screen and queue initial observing via the Witch
     let corpus_root = app.config.corpus_root.clone();
     let legacy_library = app.config.legacy_library.clone();
-    let paranoid = app.config.opinions.startup.paranoid_tag_verification;
 
-    // Start eyeballing via the Witch - this sets observation_state and queues work
-    if paranoid {
-        app.witch().start_paranoid_eyeball(&corpus_root, legacy_library.as_deref());
-    } else {
-        app.witch().start_lazy_eyeball(&corpus_root, legacy_library.as_deref());
-    }
+    // Start observing via the Witch - this sets observation_state and queues work
+    app.witch().start_observing(&corpus_root, legacy_library.as_deref());
 
     app.progress_screen = Some(progress_screen::ProgressScreen::new_eyeballing());
     app.mode = UiMode::Progress;

@@ -28,13 +28,11 @@ pub fn execute_walk_corpus(
     _read_only_db: &Database,
     root: &Path,
     source: &str,
-    paranoid: bool,
     start: Instant,
 ) -> Result {
     let computation = Computation::WalkCorpus {
         root: root.to_path_buf(),
         source: source.to_string(),
-        paranoid,
     };
 
     if !root.exists() {
@@ -66,7 +64,6 @@ pub fn execute_walk_corpus(
         .map(|directory| Computation::ScanCorpusDirectory {
             directory,
             source: source.to_string(),
-            paranoid,
         })
         .collect();
 
@@ -86,14 +83,12 @@ pub fn execute_scan_corpus_directory(
     read_only_db: &Database,
     directory: &Path,
     source: &str,
-    paranoid: bool,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = Computation::ScanCorpusDirectory {
         directory: directory.to_path_buf(),
         source: source.to_string(),
-        paranoid,
     };
 
     // Get signal sender for async writes
@@ -142,21 +137,15 @@ pub fn execute_scan_corpus_directory(
         let path_str = path.to_string_lossy().to_string();
 
         if let Some(entry) = indexed_by_inode.get(inode) {
-            // File is indexed - check if we need to verify mtime or tags
-            let track = match read_only_db.get_track_by_path(&path_str) {
-                Ok(Some(t)) => t,
-                _ => continue,
-            };
-            let Some(track_id) = track.id else { continue };
+            // File is indexed - check if mtime changed
+            if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
+                let track = match read_only_db.get_track_by_path(&path_str) {
+                    Ok(Some(t)) => t,
+                    _ => continue,
+                };
+                let Some(track_id) = track.id else { continue };
 
-            if paranoid {
-                // Paranoid mode: verify tags for ALL indexed files
-                spawn.push(Computation::VerifyTags {
-                    track_id,
-                    path: path.clone(),
-                });
-            } else if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
-                // Non-paranoid: only verify if mtime mismatched
+                // Mtime mismatched - verify tags
                 spawn.push(Computation::VerifyMtime {
                     track_id,
                     path: path.clone(),
@@ -216,7 +205,6 @@ pub fn execute_compare_inodes(
     read_only_db: &Database,
     source: &str,
     disk_state: &[(i64, PathBuf, i64, i64)],
-    paranoid: bool,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -229,7 +217,6 @@ pub fn execute_compare_inodes(
     let computation = Computation::CompareInodes {
         source: source.to_string(),
         disk_state: disk_state.to_vec(),
-        paranoid,
     };
 
     // Build disk inode set and lookup maps
@@ -284,36 +271,27 @@ pub fn execute_compare_inodes(
             continue;
         };
 
-        // Get track_id for this path
-        let track = match read_only_db.get_track_by_path(&path.to_string_lossy()) {
-            Ok(Some(t)) => t,
-            _ => continue,
-        };
-        let Some(track_id) = track.id else { continue };
+        // Only verify if mtime mismatched
+        if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
+            // Get track_id for this path
+            let track = match read_only_db.get_track_by_path(&path.to_string_lossy()) {
+                Ok(Some(t)) => t,
+                _ => continue,
+            };
+            let Some(track_id) = track.id else { continue };
 
-        if paranoid {
-            // Paranoid mode: verify tags for ALL indexed files
-            spawn.push(Computation::VerifyTags {
+            spawn.push(Computation::VerifyMtime {
                 track_id,
                 path: path.clone(),
+                expected_mtime_secs: entry.mtime_secs,
+                expected_mtime_nanos: entry.mtime_nanos,
             });
-        } else {
-            // Non-paranoid: only verify if mtime mismatched
-            if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
-                spawn.push(Computation::VerifyMtime {
-                    track_id,
-                    path: path.clone(),
-                    expected_mtime_secs: entry.mtime_secs,
-                    expected_mtime_nanos: entry.mtime_nanos,
-                });
-            }
         }
     }
 
     let _ = log_message(&format!(
-        "[COMPUTE] CompareInodes: spawning {} follow-up computations ({})",
-        spawn.len(),
-        if paranoid { "paranoid tag verify" } else { "mtime verify" }
+        "[COMPUTE] CompareInodes: spawning {} mtime verifications",
+        spawn.len()
     ));
 
     Result::success(

@@ -41,7 +41,6 @@ pub enum Computation {
     WalkCorpus {
         root: PathBuf,
         source: String,
-        paranoid: bool,
     },
 
     /// Walk and scan a single directory subtree.
@@ -52,7 +51,6 @@ pub enum Computation {
     ScanCorpusDirectory {
         directory: PathBuf,
         source: String,
-        paranoid: bool,
     },
 
     /// Phase 2: Compare disk state to database index.
@@ -63,7 +61,6 @@ pub enum Computation {
     CompareInodes {
         source: String,
         disk_state: Vec<(i64, PathBuf, i64, i64)>,
-        paranoid: bool,
     },
 
     /// Phase 3: Verify single file mtime.
@@ -90,10 +87,8 @@ impl Computation {
     /// Get a human-readable label for this computation.
     pub fn label(&self) -> &'static str {
         match self {
-            Computation::WalkCorpus { paranoid: true, .. } => "Eyeballing (paranoid)",
-            Computation::WalkCorpus { paranoid: false, .. } => "Eyeballing",
-            Computation::ScanCorpusDirectory { paranoid: true, .. } => "Scanning directory (paranoid)",
-            Computation::ScanCorpusDirectory { paranoid: false, .. } => "Scanning directory",
+            Computation::WalkCorpus { .. } => "Observing",
+            Computation::ScanCorpusDirectory { .. } => "Scanning directory",
             Computation::CompareInodes { .. } => "Comparing inodes",
             Computation::VerifyMtime { .. } => "Verifying mtime",
             Computation::VerifyTags { .. } => "Tag verification",

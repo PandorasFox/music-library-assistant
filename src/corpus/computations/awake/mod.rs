@@ -97,6 +97,12 @@ pub enum Computation {
         library_root: PathBuf,
         corpus_path_prefixes: Vec<PathBuf>,
     },
+
+    /// Derive corpus-side deployment status signals.
+    ///
+    /// For each HealthyFile, emits DeployReady (not in any library) or
+    /// DeployedHealthy (correctly deployed). Runs after DeriveDeployHealthSignals.
+    DeriveCorpusDeployStatus,
 }
 
 impl Computation {

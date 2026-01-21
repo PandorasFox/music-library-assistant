@@ -7,7 +7,7 @@
 //! ## Overview
 //!
 //! - **Startup**: Eyeballing ALWAYS runs before the Eye opens
-//! - **Runtime**: Lazy eyeballing triggered by Eye blink rolls (roll of 13)
+//! - **Runtime**: Eyeballing triggered by Eye blink rolls (roll of 13)
 //!
 //! ## Computation Chain
 //!
@@ -19,5 +19,4 @@
 //!             UnindexedFile
 //! ```
 //!
-//! Eyeballing is queued via `Witch::start_lazy_eyeball()` or
-//! `Witch::start_paranoid_eyeball()`.
+//! Eyeballing is queued via `Witch::start_observing()`.

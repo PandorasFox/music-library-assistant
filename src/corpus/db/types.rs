@@ -218,6 +218,10 @@ pub enum FileSignalType {
     LibraryLeftover,
     /// Library file at wrong path
     LibraryStale,
+    /// Healthy corpus file ready for deployment (not yet in any library)
+    DeployReady,
+    /// Healthy corpus file deployed at correct library path
+    DeployedHealthy,
 }
 
 impl FileSignalType {
@@ -232,6 +236,8 @@ impl FileSignalType {
             Self::OutOfBandTagChange => "oob_tag",
             Self::LibraryLeftover => "library_leftover",
             Self::LibraryStale => "library_stale",
+            Self::DeployReady => "deploy_ready",
+            Self::DeployedHealthy => "deployed_healthy",
         }
     }
 
@@ -246,6 +252,8 @@ impl FileSignalType {
             "oob_tag" => Some(Self::OutOfBandTagChange),
             "library_leftover" => Some(Self::LibraryLeftover),
             "library_stale" => Some(Self::LibraryStale),
+            "deploy_ready" => Some(Self::DeployReady),
+            "deployed_healthy" => Some(Self::DeployedHealthy),
             _ => None,
         }
     }
@@ -430,5 +438,91 @@ pub struct CorpusSummary {
     pub tags_changed_oob: usize,
     /// Multiple index entries sharing same inode
     pub duplicate_inodes: usize,
+}
+
+// ============================================================================
+// Insights View Data Types
+// ============================================================================
+
+/// Insights data for the bucketed Insights view.
+/// Computed at cache refresh time, never in render.
+#[derive(Debug, Clone, Default)]
+pub struct InsightsData {
+    pub bucket_corpus: CorpusFilesBucket,
+    pub bucket_placeholder: PlaceholderBucket,
+    pub bucket_library: LibraryDeployBucket,
+    pub bucket_other: OtherSignalsBucket,
+}
+
+/// Bucket 1: Corpus Files - file state overview
+#[derive(Debug, Clone, Default)]
+pub struct CorpusFilesBucket {
+    // OOB signals at top - highest priority within bucket
+    pub modified_oob: usize,
+    pub tags_changed_oob: usize,
+    // Standard corpus file signals
+    pub files_in_corpus: usize,
+    pub files_indexed: usize,
+    pub files_unindexed: usize,
+    pub files_missing: usize,
+    pub files_relocated: usize,
+    /// Filetype breakdown for files_in_corpus
+    pub file_type_breakdown: Vec<(String, usize)>,
+    /// Directory-level aggregation for selected signal
+    pub directory_breakdown: DirectoryBreakdown,
+}
+
+/// Bucket 2: Placeholder
+#[derive(Debug, Clone)]
+pub struct PlaceholderBucket {
+    pub description: &'static str,
+}
+
+impl Default for PlaceholderBucket {
+    fn default() -> Self {
+        Self { description: ":)" }
+    }
+}
+
+/// Bucket 3: Library/Deploy state
+#[derive(Debug, Clone, Default)]
+pub struct LibraryDeployBucket {
+    pub library_stale: usize,
+    pub library_leftover: usize,
+    /// Healthy files NOT in any library (DeployReady signals)
+    pub deploy_ready: usize,
+    /// Healthy files with correct library match (DeployedHealthy signals)
+    pub deployed_healthy: usize,
+}
+
+/// Bucket 4: Other signals (sorted by magnitude)
+#[derive(Debug, Clone, Default)]
+pub struct OtherSignalsBucket {
+    /// Sorted descending by count
+    pub entries: Vec<OtherSignalEntry>,
+}
+
+/// Entry for other signals bucket
+#[derive(Debug, Clone)]
+pub struct OtherSignalEntry {
+    pub signal_type: String,
+    pub display_label: String,
+    pub count: usize,
+    /// For aggregate signals that track affected files/tracks
+    pub affected_count: Option<usize>,
+}
+
+/// Directory breakdown for detail pane
+#[derive(Debug, Clone, Default)]
+pub struct DirectoryBreakdown {
+    /// Sorted by count descending
+    pub entries: Vec<DirectoryBreakdownEntry>,
+}
+
+/// Single entry in directory breakdown
+#[derive(Debug, Clone)]
+pub struct DirectoryBreakdownEntry {
+    pub directory: String,
+    pub count: usize,
 }
 

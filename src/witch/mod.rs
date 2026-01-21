@@ -76,7 +76,7 @@ pub struct Witch {
     eye_state: EyeState,
     observation_state: CorpusObservationState,
 
-    /// Whether mutations are accepted. Only becomes true when eyeballing completes,
+    /// Whether mutations are accepted. Only becomes true when observing completes,
     /// and only if read_only_mode opinion is false. Never reverts to false.
     accepting_mutations: bool,
 
@@ -254,7 +254,7 @@ impl Witch {
 
     /// Check if the Witch is accepting mutations.
     ///
-    /// Only becomes true after first eyeballing completes, and only if
+    /// Only becomes true after first observing completes, and only if
     /// read_only_mode is false. Never reverts to false.
     pub fn is_accepting_mutations(&self) -> bool {
         self.accepting_mutations
@@ -265,63 +265,41 @@ impl Witch {
         self.read_only_mode
     }
 
-    /// Check if eyeballing is currently in progress (Lazy or Paranoid).
-    pub fn is_eyeballing(&self) -> bool {
-        matches!(
-            self.observation_state,
-            CorpusObservationState::Lazy | CorpusObservationState::Paranoid
-        )
+    /// Check if observing is currently in progress.
+    pub fn is_observing(&self) -> bool {
+        matches!(self.observation_state, CorpusObservationState::Observing)
     }
 
-    /// Start lazy eyeballing. Returns false if eyeballing already in progress.
+    /// Start observing. Returns false if observing already in progress.
     ///
     /// Queues WalkCorpus computations for corpus and optional legacy library.
-    pub fn start_lazy_eyeball(
+    pub fn start_observing(
         &mut self,
         corpus_root: &std::path::Path,
         legacy: Option<&std::path::Path>,
     ) -> bool {
-        if self.is_eyeballing() {
+        if self.is_observing() {
             return false;
         }
 
-        self.observation_state = CorpusObservationState::Lazy;
-        self.queue_eyeballing_computations(corpus_root, legacy, false);
+        self.observation_state = CorpusObservationState::Observing;
+        self.queue_observing_computations(corpus_root, legacy);
         true
     }
 
-    /// Start paranoid eyeballing. Returns false if eyeballing already in progress.
-    ///
-    /// Queues WalkCorpus computations with paranoid=true flag.
-    pub fn start_paranoid_eyeball(
+    /// Queue observing computations (internal helper).
+    fn queue_observing_computations(
         &mut self,
         corpus_root: &std::path::Path,
         legacy: Option<&std::path::Path>,
-    ) -> bool {
-        if self.is_eyeballing() {
-            return false;
-        }
-
-        self.observation_state = CorpusObservationState::Paranoid;
-        self.queue_eyeballing_computations(corpus_root, legacy, true);
-        true
-    }
-
-    /// Queue eyeballing computations (internal helper).
-    fn queue_eyeballing_computations(
-        &mut self,
-        corpus_root: &std::path::Path,
-        legacy: Option<&std::path::Path>,
-        paranoid: bool,
     ) {
         // Queue corpus walk
         self.queue_computation_with_label(
             Computation::Asleep(asleep::Computation::WalkCorpus {
                 root: corpus_root.to_path_buf(),
                 source: "corpus".to_string(),
-                paranoid,
             }),
-            Some("Eyeballing corpus".to_string()),
+            Some("Observing corpus".to_string()),
         );
 
         // Queue legacy library walk if configured
@@ -330,9 +308,8 @@ impl Witch {
                 Computation::Asleep(asleep::Computation::WalkCorpus {
                     root: legacy_path.to_path_buf(),
                     source: "legacy".to_string(),
-                    paranoid,
                 }),
-                Some("Eyeballing legacy".to_string()),
+                Some("Observing legacy".to_string()),
             );
         }
     }
@@ -492,15 +469,15 @@ impl Witch {
         self.completed_at = Some(Instant::now());
         self.state = DaemonState::Completed;
 
-        // Handle eyeballing completion (first-level computations)
-        if self.is_eyeballing() {
+        // Handle observing completion (first-level computations)
+        if self.is_observing() {
             self.observation_state = CorpusObservationState::Complete;
 
             match self.eye_state {
                 EyeState::Closed => {
-                    // Eyeballing complete - enter Awakening for directory derivations
+                    // Observing complete - enter Awakening for directory derivations
                     let _ = config::log_message(&format!(
-                        "[STATE] Eyeballing complete. Transitioning Closed → Awakening. \
+                        "[STATE] Observing complete. Transitioning Closed → Awakening. \
                          Processed {} tasks.",
                         self.total_processed
                     ));
@@ -511,12 +488,12 @@ impl Witch {
                 }
                 EyeState::Awake => {
                     let _ = config::log_message(
-                        "[STATE] Re-eyeballing complete while Awake. NOP."
+                        "[STATE] Re-observing complete while Awake. NOP."
                     );
                 }
                 EyeState::Awakening => {
-                    // Invalid: can't complete eyeballing while already awakening
-                    panic!("Invalid state: eyeballing completed while eye is Awakening");
+                    // Invalid: can't complete observing while already awakening
+                    panic!("Invalid state: observing completed while eye is Awakening");
                 }
             }
         }
@@ -792,7 +769,7 @@ impl Witch {
     /// Queue a single migration for execution.
     ///
     /// Migrations require a [`DecisionWitness`] (user approval) but bypass the
-    /// `accepting_mutations` gate. They can run before eyeballing completes.
+    /// `accepting_mutations` gate. They can run before observing completes.
     pub fn queue_migration(&mut self, migration: Migration, _witness: &DecisionWitness) {
         self.queue_migration_internal(migration, None);
     }

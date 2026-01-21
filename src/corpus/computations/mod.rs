@@ -183,14 +183,14 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             // Asleep phase computations
             Computation::Asleep(c) => {
                 let result = match c {
-                    asleep::Computation::WalkCorpus { root, source, paranoid } => {
-                        asleep::execute_walk_corpus(read_only_db, root, source, *paranoid, start)
+                    asleep::Computation::WalkCorpus { root, source } => {
+                        asleep::execute_walk_corpus(read_only_db, root, source, start)
                     }
-                    asleep::Computation::ScanCorpusDirectory { directory, source, paranoid } => {
-                        asleep::execute_scan_corpus_directory(read_only_db, directory, source, *paranoid, &witness, start)
+                    asleep::Computation::ScanCorpusDirectory { directory, source } => {
+                        asleep::execute_scan_corpus_directory(read_only_db, directory, source, &witness, start)
                     }
-                    asleep::Computation::CompareInodes { source, disk_state, paranoid } => {
-                        asleep::execute_compare_inodes(read_only_db, source, disk_state, *paranoid, &witness, start)
+                    asleep::Computation::CompareInodes { source, disk_state } => {
+                        asleep::execute_compare_inodes(read_only_db, source, disk_state, &witness, start)
                     }
                     asleep::Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
                         asleep::execute_verify_mtime(read_only_db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)

@@ -27,7 +27,7 @@
 //! - **Healthy**: Deployed files at correct paths
 //! - **Not Deployed**: Corpus files missing from library
 //! - **Stale Deployments**: Tag changes caused incorrect library paths
-//! - **Orphans**: Library files without corpus backing
+//! - **Leftovers**: Library files without corpus backing
 //! - **Deployment Conflicts**: Multiple corpus files would deploy to same path
 
 pub mod album_normalization;
@@ -36,9 +36,3 @@ pub mod collision;
 mod detection;
 pub mod filter;
 pub mod normalization;
-pub mod tag_cloud;
-
-
-// TODO: Canonicalization detection should be reimplemented with direct SQL queries
-// against the read-only db accessor on the task daemon, replacing the TagCloud approach.
-// See: canonicalization.rs, tag_cloud.rs, collision.rs

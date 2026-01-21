@@ -738,7 +738,7 @@ impl Database {
     // ========================================================================
 
     /// Update track path (for relocated files).
-    /// Used by FileRelocated signal handler.
+    /// Used by MovedFile signal handler.
     pub fn update_track_path(&self, track_id: i64, new_path: &str) -> Result<()> {
         self.conn
             .execute(
@@ -751,7 +751,7 @@ impl Database {
 
     /// Delete track by ID.
     /// Cascades to dependent tables (duplicate_group_members, tag_edit_history).
-    /// Used by MissingFromDisk signal handler.
+    /// Used by MissingFile signal handler.
     pub fn delete_track(&self, track_id: i64) -> Result<bool> {
         // Delete from dependent tables first (foreign key constraints)
         self.conn
@@ -779,7 +779,7 @@ impl Database {
 
     /// Update track metadata (full replace for out-of-band changes).
     /// Preserves the track ID but replaces all other fields.
-    /// Used by OutOfBandFileChange signal handler.
+    /// Used by CorpusFileModifiedOutOfBand signal handler.
     /// Note: This only updates the tracks table, not track_tags.
     pub fn update_track_metadata(&self, track_id: i64, track: &Track) -> Result<()> {
         self.conn

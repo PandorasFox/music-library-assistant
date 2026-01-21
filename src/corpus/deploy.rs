@@ -14,7 +14,7 @@
 //! - `DeploymentPlan`, `DeploymentAction`, `LostFileAction` structs
 //! - `create_deployment_plan`, `execute_deployment_plan`
 //! - `FullDeploymentStatus`, stale detection, conflict detection
-//! - Stash operations for orphaned files
+//! - Stash operations for leftover files
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -1,12 +1,14 @@
 //! Tag Collision Detection
 //!
-//! Functions for detecting and reporting tag value collisions from a TagCloud.
-//! Provides both full collision details for triage UI and quick boolean checks
-//! for health indexing.
+//! Detects tag value collisions (multiple spellings that normalize to the same key)
+//! using efficient SQL queries against the track_tags table.
 
 use std::collections::HashMap;
 
-use super::tag_cloud::TagCloud;
+use anyhow::Result;
+
+use super::normalization::{normalize_album, normalize_album_artist, normalize_artist, normalize_genre};
+use crate::corpus::db::Database;
 
 /// A detected collision between tag values.
 #[derive(Debug, Clone)]
@@ -53,139 +55,136 @@ impl TagCollision {
             confidence,
         }
     }
-
 }
 
 // ============================================================================
-// Core collision detection (returns full collision info for triage)
+// Collision detection using database queries
 // ============================================================================
 
-/// Get all artist name collisions from the tag cloud.
-///
-/// Example: "nervous_testpilot" vs "Nervous Testpilot" -> collision
-pub fn get_artist_collisions(cloud: &TagCloud) -> Vec<TagCollision> {
-    cloud
-        .artist_keys()
-        .filter_map(|key| {
-            let variants = cloud.artist_variants(key)?;
-            if variants.len() > 1 {
-                Some(TagCollision::from_variants("artist", key, variants))
-            } else {
-                None
-            }
-        })
-        .collect()
+/// Detect artist name collisions from the database.
+pub fn get_artist_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+    let values = db.get_distinct_tag_values("artist")?;
+
+    // Group by normalized key
+    let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    for (value, count) in values {
+        let normalized = normalize_artist(&value);
+        buckets
+            .entry(normalized)
+            .or_default()
+            .insert(value, count);
+    }
+
+    // Convert buckets with multiple variants to collisions
+    Ok(buckets
+        .into_iter()
+        .filter(|(_, variants)| variants.len() > 1)
+        .map(|(key, variants)| TagCollision::from_variants("artist", &key, &variants))
+        .collect())
 }
 
-/// Get all album_artist collisions from the tag cloud.
-pub fn get_album_artist_collisions(cloud: &TagCloud) -> Vec<TagCollision> {
-    cloud
-        .album_artist_keys()
-        .filter_map(|key| {
-            let variants = cloud.album_artist_variants(key)?;
-            if variants.len() > 1 {
-                Some(TagCollision::from_variants("album_artist", key, variants))
-            } else {
-                None
-            }
-        })
-        .collect()
+/// Detect album_artist collisions from the database.
+pub fn get_album_artist_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+    let values = db.get_distinct_tag_values("album_artist")?;
+
+    // Group by normalized key
+    let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    for (value, count) in values {
+        let normalized = normalize_album_artist(&value);
+        buckets
+            .entry(normalized)
+            .or_default()
+            .insert(value, count);
+    }
+
+    // Convert buckets with multiple variants to collisions
+    Ok(buckets
+        .into_iter()
+        .filter(|(_, variants)| variants.len() > 1)
+        .map(|(key, variants)| TagCollision::from_variants("album_artist", &key, &variants))
+        .collect())
 }
 
-/// Get album collisions, ONLY for albums with same artist/album_artist context.
+/// Detect album collisions from the database.
 ///
-/// Different artists with same album name are NOT collisions.
-/// This prevents false positives like "Greatest Hits" by different artists.
-pub fn get_album_collisions(cloud: &TagCloud) -> Vec<TagCollision> {
-    cloud
-        .album_keys()
-        .filter_map(|(artist_context, normalized_album)| {
-            let variants = cloud.album_variants(artist_context, normalized_album)?;
-            if variants.len() > 1 {
-                // Include artist context in the key for clarity
-                let key = format!("{} :: {}", artist_context, normalized_album);
-                Some(TagCollision::from_variants("album", &key, variants))
-            } else {
-                None
-            }
+/// Albums are keyed by artist context to avoid false positives
+/// (e.g., "Greatest Hits" by different artists are NOT collisions).
+pub fn get_album_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+    let values = db.get_album_values_with_artist_context()?;
+
+    // Group by (normalized_artist, normalized_album)
+    let mut buckets: HashMap<(String, String), HashMap<String, usize>> = HashMap::new();
+    for (album, artist_context, count) in values {
+        let normalized_artist = normalize_artist(&artist_context);
+        let normalized_album = normalize_album(&album);
+        let key = (normalized_artist, normalized_album);
+        buckets
+            .entry(key)
+            .or_default()
+            .insert(album, count);
+    }
+
+    // Convert buckets with multiple variants to collisions
+    Ok(buckets
+        .into_iter()
+        .filter(|(_, variants)| variants.len() > 1)
+        .map(|((artist_ctx, album_key), variants)| {
+            let key = format!("{} :: {}", artist_ctx, album_key);
+            TagCollision::from_variants("album", &key, &variants)
         })
-        .collect()
+        .collect())
 }
 
-/// Get genre collisions from the tag cloud.
-///
-/// Example: "Hip Hop" vs "Hip-Hop" vs "HipHop" -> collision
-pub fn get_genre_collisions(cloud: &TagCloud) -> Vec<TagCollision> {
-    cloud
-        .genre_keys()
-        .filter_map(|key| {
-            let variants = cloud.genre_variants(key)?;
-            if variants.len() > 1 {
-                Some(TagCollision::from_variants("genre", key, variants))
-            } else {
-                None
-            }
-        })
-        .collect()
+/// Detect genre collisions from the database.
+pub fn get_genre_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+    let values = db.get_distinct_tag_values("genre")?;
+
+    // Group by normalized key
+    let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    for (value, count) in values {
+        let normalized = normalize_genre(&value);
+        buckets
+            .entry(normalized)
+            .or_default()
+            .insert(value, count);
+    }
+
+    // Convert buckets with multiple variants to collisions
+    Ok(buckets
+        .into_iter()
+        .filter(|(_, variants)| variants.len() > 1)
+        .map(|(key, variants)| TagCollision::from_variants("genre", &key, &variants))
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_test_cloud() -> TagCloud {
-        let mut artists: HashMap<String, HashMap<String, usize>> = HashMap::new();
-
-        // Artist collision: "nervous_testpilot" vs "Nervous Testpilot"
-        let mut nervous = HashMap::new();
-        nervous.insert("nervous_testpilot".to_string(), 3);
-        nervous.insert("Nervous Testpilot".to_string(), 7);
-        artists.insert("nervous testpilot".to_string(), nervous);
-
-        // No collision - single variant
-        let mut single = HashMap::new();
-        single.insert("Artist A".to_string(), 5);
-        artists.insert("artist a".to_string(), single);
-
-        let mut genres: HashMap<String, HashMap<String, usize>> = HashMap::new();
-
-        // Genre collision: "Hip Hop" vs "Hip-Hop"
-        let mut hiphop = HashMap::new();
-        hiphop.insert("Hip Hop".to_string(), 10);
-        hiphop.insert("Hip-Hop".to_string(), 5);
-        genres.insert("hip-hop".to_string(), hiphop);
-
-        TagCloud::new_test(
-            artists,
-            HashMap::new(), // album_artists
-            HashMap::new(), // albums
-            genres,
-            25, // track_count
-        )
-    }
-
     #[test]
-    fn test_get_artist_collisions() {
-        let cloud = make_test_cloud();
-        let collisions = get_artist_collisions(&cloud);
+    fn test_collision_from_variants() {
+        let mut variants = HashMap::new();
+        variants.insert("nervous_testpilot".to_string(), 3);
+        variants.insert("Nervous Testpilot".to_string(), 7);
 
-        assert_eq!(collisions.len(), 1);
-        let collision = &collisions[0];
+        let collision = TagCollision::from_variants("artist", "nervous testpilot", &variants);
+
         assert_eq!(collision.tag_name, "artist");
         assert_eq!(collision.variants.len(), 2);
         assert_eq!(collision.canonical, "Nervous Testpilot"); // More common
-        assert!(collision.confidence > 0.5); // 7 out of 10
+        assert!((collision.confidence - 0.7).abs() < 0.01); // 7 out of 10
     }
 
     #[test]
-    fn test_get_genre_collisions() {
-        let cloud = make_test_cloud();
-        let collisions = get_genre_collisions(&cloud);
+    fn test_collision_confidence() {
+        let mut variants = HashMap::new();
+        variants.insert("Hip Hop".to_string(), 10);
+        variants.insert("Hip-Hop".to_string(), 5);
+        variants.insert("HipHop".to_string(), 5);
 
-        assert_eq!(collisions.len(), 1);
-        let collision = &collisions[0];
-        assert_eq!(collision.tag_name, "genre");
-        assert_eq!(collision.canonical, "Hip Hop"); // More common
+        let collision = TagCollision::from_variants("genre", "hip-hop", &variants);
+
+        assert_eq!(collision.canonical, "Hip Hop");
+        assert!((collision.confidence - 0.5).abs() < 0.01); // 10 out of 20
     }
-
 }

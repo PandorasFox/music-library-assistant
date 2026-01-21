@@ -75,8 +75,8 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
 
-        let library_orphan: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'library_orphan'",
+        let library_leftover: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'library_leftover'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
@@ -149,7 +149,7 @@ impl Database {
             missing_files,
             moved_files,
             library_stale,
-            library_orphan,
+            library_leftover,
             modified_oob,
             tags_changed_oob,
             duplicate_inodes,

@@ -96,9 +96,9 @@ pub enum HealthIssueType {
     /// Library file exists but deployed at wrong path (tags changed since deploy)
     /// issue_key: "library_stale:{library_name}:{library_path}"
     LibraryStale,
-    /// Library file exists without corpus backing (orphan)
-    /// issue_key: "library_orphan:{library_name}:{library_path}"
-    LibraryOrphan,
+    /// Library file exists without corpus backing (leftover)
+    /// issue_key: "library_leftover:{library_name}:{library_path}"
+    LibraryLeftover,
 
     // =========================================================================
     // Content-level signals (tag and fingerprint analysis)
@@ -107,35 +107,15 @@ pub enum HealthIssueType {
     FingerprintDuplicate,
     /// Same metadata (artist/album/title) across multiple files
     MetadataDuplicate,
-    /// Tag value variants that should be canonicalized (artist, genre, album, album_artist)
-    /// The specific tag is stored in metadata_json.tag_name
-    TagCanonical,
     /// Missing required tags (e.g., album_artist)
     MissingTag,
     /// Tags on disk differ from indexed tags (out-of-band tag change)
     OutOfBandTagChange,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
-
-    // =========================================================================
-    // Legacy types (kept for DB compatibility, will be migrated)
-    // =========================================================================
-    /// Legacy: renamed to MissingFile
-    #[deprecated(note = "Use MissingFile instead")]
-    MissingFromDisk,
-    /// Legacy: renamed to FileInCorpus + UnindexedFile derivation
-    #[deprecated(note = "Use FileInCorpus/UnindexedFile instead")]
-    MissingFromIndex,
-    /// Legacy: renamed to MovedFile
-    #[deprecated(note = "Use MovedFile instead")]
-    FileRelocated,
-    /// Legacy: renamed to CorpusFileModifiedOutOfBand
-    #[deprecated(note = "Use CorpusFileModifiedOutOfBand instead")]
-    OutOfBandFileChange,
 }
 
 impl HealthIssueType {
-    #[allow(deprecated)]
     pub fn as_str(&self) -> &'static str {
         match self {
             // First-level signals
@@ -153,25 +133,17 @@ impl HealthIssueType {
 
             // Library deployment health signals
             Self::LibraryStale => "library_stale",
-            Self::LibraryOrphan => "library_orphan",
+            Self::LibraryLeftover => "library_leftover",
 
             // Content-level signals
             Self::FingerprintDuplicate => "fingerprint_dup",
             Self::MetadataDuplicate => "metadata_dup",
-            Self::TagCanonical => "tag_canon",
             Self::MissingTag => "missing_tag",
             Self::OutOfBandTagChange => "oob_tag",
             Self::DuplicateInode => "duplicate_inode",
-
-            // Legacy types (write using new names for forwards compatibility)
-            Self::MissingFromDisk => "missing_file",
-            Self::MissingFromIndex => "file_in_corpus",
-            Self::FileRelocated => "moved_file",
-            Self::OutOfBandFileChange => "corpus_file_modified_oob",
         }
     }
 
-    #[allow(deprecated)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             // First-level signals
@@ -189,14 +161,11 @@ impl HealthIssueType {
 
             // Library deployment health signals
             "library_stale" => Some(Self::LibraryStale),
-            "library_orphan" => Some(Self::LibraryOrphan),
+            "library_leftover" => Some(Self::LibraryLeftover),
 
             // Content-level signals
             "fingerprint_dup" => Some(Self::FingerprintDuplicate),
             "metadata_dup" => Some(Self::MetadataDuplicate),
-            "tag_canon" => Some(Self::TagCanonical),
-            "canon" => Some(Self::TagCanonical),        // Legacy
-            "genre_canon" => Some(Self::TagCanonical),  // Legacy
             "missing_tag" => Some(Self::MissingTag),
             "oob_tag" => Some(Self::OutOfBandTagChange),
             "duplicate_inode" => Some(Self::DuplicateInode),
@@ -246,7 +215,7 @@ pub enum FileSignalType {
     /// Tags on disk differ from indexed tags
     OutOfBandTagChange,
     /// Library file without corpus backing
-    LibraryOrphan,
+    LibraryLeftover,
     /// Library file at wrong path
     LibraryStale,
 }
@@ -261,7 +230,7 @@ impl FileSignalType {
             Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
             Self::MovedFile => "moved_file",
             Self::OutOfBandTagChange => "oob_tag",
-            Self::LibraryOrphan => "library_orphan",
+            Self::LibraryLeftover => "library_leftover",
             Self::LibraryStale => "library_stale",
         }
     }
@@ -275,7 +244,7 @@ impl FileSignalType {
             "corpus_file_modified_oob" | "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
             "moved_file" | "file_relocated" => Some(Self::MovedFile),
             "oob_tag" => Some(Self::OutOfBandTagChange),
-            "library_orphan" => Some(Self::LibraryOrphan),
+            "library_leftover" => Some(Self::LibraryLeftover),
             "library_stale" => Some(Self::LibraryStale),
             _ => None,
         }
@@ -331,8 +300,6 @@ pub enum AggregateSignalType {
     DuplicateInode,
     /// Tracks missing a required tag
     MissingTag,
-    /// Tag value variants that should be canonicalized
-    TagCanonical,
     /// Multiple corpus files deploy to same library path
     DeployConflict,
 }
@@ -344,7 +311,6 @@ impl AggregateSignalType {
             Self::MetadataDuplicate => "metadata_dup",
             Self::DuplicateInode => "duplicate_inode",
             Self::MissingTag => "missing_tag",
-            Self::TagCanonical => "tag_canon",
             Self::DeployConflict => "deploy_conflict",
         }
     }
@@ -355,7 +321,6 @@ impl AggregateSignalType {
             "metadata_dup" => Some(Self::MetadataDuplicate),
             "duplicate_inode" => Some(Self::DuplicateInode),
             "missing_tag" => Some(Self::MissingTag),
-            "tag_canon" | "canon" | "genre_canon" => Some(Self::TagCanonical),
             "deploy_conflict" => Some(Self::DeployConflict),
             _ => None,
         }
@@ -455,8 +420,8 @@ pub struct CorpusSummary {
     // Library deployment signals
     /// Library files that are stale (deployed from wrong source)
     pub library_stale: usize,
-    /// Library files that are orphans (no corpus backing)
-    pub library_orphan: usize,
+    /// Library files that are leftovers (no corpus backing)
+    pub library_leftover: usize,
 
     // Out-of-band change signals
     /// Files with mtime changed outside MLA

@@ -3,7 +3,6 @@
 use anyhow::{Context, Result};
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use super::Database;
 use crate::corpus::db::types::ScanStateEntry;
@@ -12,48 +11,6 @@ impl Database {
     // ========================================================================
     // Scan State Operations
     // ========================================================================
-
-    pub fn clear_scan_state(&self, source: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM scan_state WHERE source = ?1", params![source])
-            .context("Failed to clear scan state")?;
-        Ok(())
-    }
-
-    /// Clean up scan_state entries where the file no longer exists on disk.
-    /// This handles orphaned entries (in scan_state but not in tracks).
-    /// Returns the number of entries deleted.
-    pub fn cleanup_missing_scan_state_entries(&self, source: &str) -> Result<usize> {
-        // Get all scan_state entries for this source
-        let mut stmt = self
-            .conn
-            .prepare("SELECT path FROM scan_state WHERE source = ?1")?;
-
-        let paths: Vec<String> = stmt
-            .query_map(params![source], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        // Find which paths no longer exist
-        let missing_paths: Vec<String> = paths
-            .into_iter()
-            .filter(|p| !Path::new(p).exists())
-            .collect();
-
-        if missing_paths.is_empty() {
-            return Ok(0);
-        }
-
-        // Delete orphaned entries
-        let mut deleted = 0;
-        for path in &missing_paths {
-            deleted += self
-                .conn
-                .execute("DELETE FROM scan_state WHERE path = ?1", params![path])?;
-        }
-
-        Ok(deleted)
-    }
 
     pub fn get_scan_state_batch(
         &self,
@@ -185,23 +142,6 @@ impl Database {
         Ok(inodes)
     }
 
-    /// Get the path for a specific inode from scan_state (used for relocation detection)
-    pub fn get_scan_state_path_for_inode(
-        &self,
-        source: &str,
-        inode: i64,
-    ) -> Result<Option<String>> {
-        let path: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT path FROM scan_state WHERE source = ?1 AND inode = ?2",
-                params![source, inode],
-                |row| row.get(0),
-            )
-            .ok();
-        Ok(path)
-    }
-
     /// Get paths for specific inodes from scan_state (used for logging missing files)
     pub fn get_scan_state_paths_for_inodes(
         &self,
@@ -241,7 +181,7 @@ impl Database {
     // ========================================================================
 
     /// Update scan state path for a relocated file.
-    /// Used by FileRelocated signal handler.
+    /// Used by MovedFile signal handler.
     pub fn update_scan_state_path(
         &self,
         source: &str,
@@ -258,7 +198,7 @@ impl Database {
     }
 
     /// Delete scan state entry by inode.
-    /// Used by MissingFromDisk signal handler.
+    /// Used by MissingFile signal handler.
     pub fn delete_scan_state_by_inode(&self, source: &str, inode: i64) -> Result<bool> {
         let deleted = self
             .conn

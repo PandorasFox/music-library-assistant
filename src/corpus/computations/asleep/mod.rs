@@ -58,8 +58,8 @@ pub enum Computation {
     /// Phase 2: Compare disk state to database index.
     ///
     /// Creates signals for:
-    /// - MissingFromDisk: indexed files not on disk
-    /// - MissingFromIndex: disk files not indexed
+    /// - MissingFile: indexed files not on disk
+    /// - UnindexedFile: disk files not indexed
     CompareInodes {
         source: String,
         disk_state: Vec<(i64, PathBuf, i64, i64)>,

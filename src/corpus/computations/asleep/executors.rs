@@ -254,21 +254,21 @@ pub fn execute_compare_inodes(
         missing_from_index.len()
     ));
 
-    // Create MissingFromDisk signals
+    // Create MissingFile signals (indexed files not on disk)
     if !missing_from_disk.is_empty() {
         if let Ok(missing_paths) = read_only_db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
-            create_missing_from_disk_issues(read_only_db, &missing_paths, witness);
+            create_missing_file_issues(read_only_db, &missing_paths, witness);
         }
     }
 
-    // Create MissingFromIndex signals
+    // Create UnindexedFile signals (disk files not indexed)
     if !missing_from_index.is_empty() {
         let missing_paths: Vec<String> = missing_from_index
             .iter()
             .filter_map(|inode| disk_inode_to_state.get(inode))
             .map(|(path, _, _)| path.to_string_lossy().to_string())
             .collect();
-        create_missing_from_index_issues(read_only_db, &missing_paths, witness);
+        create_unindexed_file_issues(read_only_db, &missing_paths, witness);
     }
 
     // Spawn follow-up computations for mtime verification
@@ -279,7 +279,7 @@ pub fn execute_compare_inodes(
     let indexed_by_inode = read_only_db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
     for (inode, path, disk_mtime_s, disk_mtime_ns) in disk_state {
-        // Skip files not in index (already reported as MissingFromIndex)
+        // Skip files not in index (already reported as UnindexedFile)
         let Some(entry) = indexed_by_inode.get(inode) else {
             continue;
         };
@@ -324,7 +324,7 @@ pub fn execute_compare_inodes(
 }
 
 /// Create MissingFile signals for files in index but missing from disk.
-fn create_missing_from_disk_issues(
+fn create_missing_file_issues(
     read_only_db: &Database,
     missing_paths: &[String],
     witness: &ComputationWitness,
@@ -339,7 +339,7 @@ fn create_missing_from_disk_issues(
 }
 
 /// Create UnindexedFile signals for files on disk but not in index.
-fn create_missing_from_index_issues(
+fn create_unindexed_file_issues(
     read_only_db: &Database,
     missing_paths: &[String],
     witness: &ComputationWitness,

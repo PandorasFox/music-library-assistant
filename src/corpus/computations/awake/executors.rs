@@ -827,7 +827,7 @@ pub fn execute_check_deploy_conflicts(
 /// Execute DeriveDeployHealthSignals - derive library health from scan data.
 ///
 /// Reads library scan data from library_scan_state table and compares against
-/// corpus index to identify orphans and stale deployments.
+/// corpus index to identify leftovers and stale deployments.
 pub fn execute_derive_deploy_health_signals(
     read_only_db: &Database,
     library_name: &str,
@@ -878,11 +878,11 @@ pub fn execute_derive_deploy_health_signals(
 
     let mut healthy_count: usize = 0;
     let mut stale_count: usize = 0;
-    let mut orphan_count: usize = 0;
+    let mut leftover_count: usize = 0;
 
     for (library_path, library_inode) in &library_files {
-        let orphan_key = format!(
-            "library_orphan:{}:{}",
+        let leftover_key = format!(
+            "library_leftover:{}:{}",
             library_name,
             library_path.display()
         );
@@ -893,7 +893,7 @@ pub fn execute_derive_deploy_health_signals(
         );
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
+            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryLeftover, &leftover_key, witness);
 
             let is_stale = if let Ok(Some(track)) = read_only_db.get_track_by_path(corpus_path) {
                 if let Some(track_id) = track.id {
@@ -922,19 +922,19 @@ pub fn execute_derive_deploy_health_signals(
                 clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
             }
         } else {
-            orphan_count += 1;
-            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
+            leftover_count += 1;
+            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::LibraryLeftover, &leftover_key, witness);
             clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
         }
     }
 
     let _ = log_message(&format!(
-        "[COMPUTE] DeriveDeployHealthSignals '{}': {} files, {} healthy, {} stale, {} orphan",
+        "[COMPUTE] DeriveDeployHealthSignals '{}': {} files, {} healthy, {} stale, {} leftover",
         library_name,
         library_files.len(),
         healthy_count,
         stale_count,
-        orphan_count,
+        leftover_count,
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

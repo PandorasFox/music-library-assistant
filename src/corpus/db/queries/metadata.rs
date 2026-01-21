@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
-use std::collections::HashMap;
 
 use super::Database;
 use crate::corpus::db::types::TagCanonicalization;
@@ -141,453 +140,6 @@ impl Database {
             )?
         };
         Ok(count as usize)
-    }
-
-    // ========================================================================
-    // Backwards-Compatible Artist Canonicalization Wrappers
-    // ========================================================================
-
-    /// Get canonical artist name for a variant (convenience wrapper).
-    pub fn get_canonical_artist(&self, variant_name: &str) -> Result<Option<String>> {
-        self.get_canonical_tag_value("artist", variant_name)
-    }
-
-    /// Get all variants for a canonical artist name (convenience wrapper).
-    pub fn get_artist_variants(&self, canonical_name: &str) -> Result<Vec<String>> {
-        self.get_tag_variants("artist", canonical_name)
-    }
-
-    /// Get artist names grouped by normalized form, with track counts.
-    /// Returns only buckets with 2+ unique variants.
-    /// Each bucket contains: (normalized_key, [(variant_name, track_count), ...])
-    /// Variants are sorted descending by track count within each bucket.
-    pub fn get_artist_canonicalization_buckets(
-        &self,
-    ) -> Result<Vec<(String, Vec<(String, usize)>)>> {
-        // First, get all artist names with their counts from corpus tracks
-        let mut stmt = self.conn.prepare(
-            r#"SELECT artist, COUNT(*) as track_count
-               FROM tracks
-               WHERE source = 'corpus' AND artist IS NOT NULL AND artist != ''
-               GROUP BY artist
-               ORDER BY track_count DESC"#,
-        )?;
-
-        let rows = stmt.query_map(params![], |row| {
-            let artist: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            Ok((artist, count as usize))
-        })?;
-
-        // Collect all artist -> count pairs
-        let mut artist_counts: Vec<(String, usize)> = Vec::new();
-        for row in rows {
-            artist_counts.push(row?);
-        }
-
-        // Group by normalized form
-        let mut buckets: HashMap<String, Vec<(String, usize)>> = HashMap::new();
-
-        for (artist, count) in artist_counts {
-            let normalized = artist.to_lowercase().trim().to_string();
-            buckets.entry(normalized).or_default().push((artist, count));
-        }
-
-        // Filter to buckets with 2+ unique variants and sort each bucket
-        let mut result: Vec<(String, Vec<(String, usize)>)> = buckets
-            .into_iter()
-            .filter(|(_, variants)| variants.len() >= 2)
-            .map(|(key, mut variants)| {
-                // Sort by count descending
-                variants.sort_by(|a, b| b.1.cmp(&a.1));
-                (key, variants)
-            })
-            .collect();
-
-        // Sort buckets by total track count descending (most impactful first)
-        result.sort_by(|a, b| {
-            let a_total: usize = a.1.iter().map(|(_, c)| c).sum();
-            let b_total: usize = b.1.iter().map(|(_, c)| c).sum();
-            b_total.cmp(&a_total)
-        });
-
-        Ok(result)
-    }
-
-    /// Get track IDs for a specific artist name (exact match, corpus only).
-    pub fn get_track_ids_by_artist(&self, artist_name: &str) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM tracks WHERE artist = ?1 AND source = 'corpus'",
-        )?;
-
-        let rows = stmt.query_map(params![artist_name], |row| row.get(0))?;
-
-        let mut ids = Vec::new();
-        for row in rows {
-            ids.push(row?);
-        }
-        Ok(ids)
-    }
-
-    /// Bulk update artist name for multiple tracks.
-    /// Returns the number of tracks updated.
-    pub fn update_artist_for_tracks(&self, track_ids: &[i64], new_artist: &str) -> Result<usize> {
-        if track_ids.is_empty() {
-            return Ok(0);
-        }
-
-        // Build parameterized query for the IN clause
-        let placeholders: Vec<String> = (1..=track_ids.len())
-            .map(|i| format!("?{}", i + 1))
-            .collect();
-        let sql = format!(
-            "UPDATE tracks SET artist = ?1 WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-
-        // Build params vector
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(new_artist.to_string())];
-        for id in track_ids {
-            params_vec.push(Box::new(*id));
-        }
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
-        let updated = self
-            .conn
-            .execute(&sql, params_refs.as_slice())
-            .context("Failed to update artist for tracks")?;
-
-        Ok(updated)
-    }
-
-    // ========================================================================
-    // Album Artist Canonicalization
-    // ========================================================================
-
-    /// Get album_artist names grouped by normalized form, with track counts.
-    /// Returns only buckets with 2+ unique variants.
-    /// Each bucket contains: (normalized_key, [(variant_name, track_count), ...])
-    /// Variants are sorted descending by track count within each bucket.
-    pub fn get_album_artist_canonicalization_buckets(
-        &self,
-    ) -> Result<Vec<(String, Vec<(String, usize)>)>> {
-        // Get all album_artist names with their counts from corpus tracks
-        let mut stmt = self.conn.prepare(
-            r#"SELECT album_artist, COUNT(*) as track_count
-               FROM tracks
-               WHERE source = 'corpus' AND album_artist IS NOT NULL AND album_artist != ''
-               GROUP BY album_artist
-               ORDER BY track_count DESC"#,
-        )?;
-
-        let rows = stmt.query_map(params![], |row| {
-            let album_artist: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            Ok((album_artist, count as usize))
-        })?;
-
-        // Collect all album_artist -> count pairs
-        let mut artist_counts: Vec<(String, usize)> = Vec::new();
-        for row in rows {
-            artist_counts.push(row?);
-        }
-
-        // Group by normalized form
-        let mut buckets: HashMap<String, Vec<(String, usize)>> = HashMap::new();
-
-        for (album_artist, count) in artist_counts {
-            let normalized = album_artist.to_lowercase().trim().to_string();
-            buckets.entry(normalized).or_default().push((album_artist, count));
-        }
-
-        // Filter to buckets with 2+ unique variants and sort each bucket
-        let mut result: Vec<(String, Vec<(String, usize)>)> = buckets
-            .into_iter()
-            .filter(|(_, variants)| variants.len() >= 2)
-            .map(|(key, mut variants)| {
-                // Sort by count descending
-                variants.sort_by(|a, b| b.1.cmp(&a.1));
-                (key, variants)
-            })
-            .collect();
-
-        // Sort buckets by total track count descending (most impactful first)
-        result.sort_by(|a, b| {
-            let a_total: usize = a.1.iter().map(|(_, c)| c).sum();
-            let b_total: usize = b.1.iter().map(|(_, c)| c).sum();
-            b_total.cmp(&a_total)
-        });
-
-        Ok(result)
-    }
-
-    /// Get track IDs for a specific album_artist name (exact match, corpus only).
-    pub fn get_track_ids_by_album_artist(&self, album_artist_name: &str) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM tracks WHERE album_artist = ?1 AND source = 'corpus'",
-        )?;
-
-        let rows = stmt.query_map(params![album_artist_name], |row| row.get(0))?;
-
-        let mut ids = Vec::new();
-        for row in rows {
-            ids.push(row?);
-        }
-        Ok(ids)
-    }
-
-    /// Bulk update album_artist name for multiple tracks.
-    /// Returns the number of tracks updated.
-    pub fn update_album_artist_for_tracks(&self, track_ids: &[i64], new_album_artist: &str) -> Result<usize> {
-        if track_ids.is_empty() {
-            return Ok(0);
-        }
-
-        // Build parameterized query for the IN clause
-        let placeholders: Vec<String> = (1..=track_ids.len())
-            .map(|i| format!("?{}", i + 1))
-            .collect();
-        let sql = format!(
-            "UPDATE tracks SET album_artist = ?1 WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-
-        // Build params vector
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(new_album_artist.to_string())];
-        for id in track_ids {
-            params_vec.push(Box::new(*id));
-        }
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
-        let updated = self
-            .conn
-            .execute(&sql, params_refs.as_slice())
-            .context("Failed to update album_artist for tracks")?;
-
-        Ok(updated)
-    }
-
-    /// Get full tracks for a specific album_artist name (for quality analysis).
-    pub fn get_tracks_by_album_artist(&self, album_artist_name: &str) -> Result<Vec<crate::corpus::db::types::Track>> {
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, path, source, inode, file_size, file_type,
-                      artist, album, album_artist, title, track_number, genre,
-                      duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
-               FROM tracks
-               WHERE album_artist = ?1 AND source = 'corpus'"#,
-        )?;
-
-        let rows = stmt.query_map(params![album_artist_name], Self::row_to_track)?;
-
-        let mut tracks = Vec::new();
-        for row in rows {
-            tracks.push(row?);
-        }
-        Ok(tracks)
-    }
-
-    /// Get full tracks for multiple album_artist names (for bulk quality analysis).
-    pub fn get_tracks_by_album_artists(&self, album_artist_names: &[String]) -> Result<Vec<crate::corpus::db::types::Track>> {
-        if album_artist_names.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // TODO: This query pattern (17-column SELECT for row_to_track) is duplicated across
-        // multiple files. Consider extracting a constant or helper for the column list.
-        let placeholders: Vec<String> = (1..=album_artist_names.len())
-            .map(|i| format!("?{}", i))
-            .collect();
-        let sql = format!(
-            r#"SELECT id, path, source, inode, file_size, file_type,
-                      artist, album, album_artist, title, track_number, genre,
-                      duration_ms, bitrate_kbps, sample_rate, fingerprint, isrc
-               FROM tracks
-               WHERE album_artist IN ({}) AND source = 'corpus'"#,
-            placeholders.join(", ")
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-
-        let params: Vec<&dyn rusqlite::ToSql> = album_artist_names
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
-
-        let rows = stmt.query_map(params.as_slice(), Self::row_to_track)?;
-
-        let mut tracks = Vec::new();
-        for row in rows {
-            tracks.push(row?);
-        }
-        Ok(tracks)
-    }
-
-    // ========================================================================
-    // Album Canonicalization
-    // ========================================================================
-
-    /// Get album names grouped by normalized form, with track counts.
-    /// Uses album normalization to detect EP/LP and edition variants.
-    /// Returns only buckets with 2+ unique variants.
-    pub fn get_album_canonicalization_buckets(
-        &self,
-    ) -> Result<Vec<(String, Vec<(String, usize)>)>> {
-        use crate::corpus::health::album_normalization::normalize_album;
-
-        // Get all album names with their counts from corpus tracks
-        let mut stmt = self.conn.prepare(
-            r#"SELECT album, COUNT(*) as track_count
-               FROM tracks
-               WHERE source = 'corpus' AND album IS NOT NULL AND album != ''
-               GROUP BY album
-               ORDER BY track_count DESC"#,
-        )?;
-
-        let rows = stmt.query_map(params![], |row| {
-            let album: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            Ok((album, count as usize))
-        })?;
-
-        // Collect all album -> count pairs
-        let mut album_counts: Vec<(String, usize)> = Vec::new();
-        for row in rows {
-            album_counts.push(row?);
-        }
-
-        // Group by normalized base name
-        let mut buckets: HashMap<String, Vec<(String, usize)>> = HashMap::new();
-
-        for (album, count) in album_counts {
-            let normalized = normalize_album(&album);
-            let key = normalized.base_name.to_lowercase();
-            buckets.entry(key).or_default().push((album, count));
-        }
-
-        // Filter to buckets with 2+ unique variants and sort each bucket
-        let mut result: Vec<(String, Vec<(String, usize)>)> = buckets
-            .into_iter()
-            .filter(|(_, variants)| variants.len() >= 2)
-            .map(|(key, mut variants)| {
-                // Sort by count descending
-                variants.sort_by(|a, b| b.1.cmp(&a.1));
-                (key, variants)
-            })
-            .collect();
-
-        // Sort buckets by total track count descending (most impactful first)
-        result.sort_by(|a, b| {
-            let a_total: usize = a.1.iter().map(|(_, c)| c).sum();
-            let b_total: usize = b.1.iter().map(|(_, c)| c).sum();
-            b_total.cmp(&a_total)
-        });
-
-        Ok(result)
-    }
-
-    /// Get detailed info for a specific album name: artists, directories, and file types.
-    /// Used to enhance album variant display with richer context.
-    pub fn get_album_variant_details(
-        &self,
-        album_name: &str,
-    ) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
-        // Get distinct artists
-        let mut artist_stmt = self.conn.prepare(
-            r#"SELECT DISTINCT artist FROM tracks
-               WHERE source = 'corpus' AND album = ?1 AND artist IS NOT NULL AND artist != ''
-               ORDER BY artist"#,
-        )?;
-        let artists: Vec<String> = artist_stmt
-            .query_map(params![album_name], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        // Get distinct parent directories (extract from path)
-        let mut dir_stmt = self.conn.prepare(
-            r#"SELECT DISTINCT
-                  CASE
-                    WHEN INSTR(path, '/') > 0
-                    THEN SUBSTR(path, 1, LENGTH(path) - LENGTH(REPLACE(path, '/', '')) - LENGTH(SUBSTR(path, LENGTH(path) - LENGTH(REPLACE(path, '/', '')) + 1)))
-                    ELSE path
-                  END as dir
-               FROM tracks
-               WHERE source = 'corpus' AND album = ?1
-               ORDER BY dir"#,
-        )?;
-        let directories: Vec<String> = dir_stmt
-            .query_map(params![album_name], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .take(5) // Limit to 5 directories for display
-            .collect();
-
-        // Get distinct file extensions
-        let mut ext_stmt = self.conn.prepare(
-            r#"SELECT DISTINCT
-                  LOWER(SUBSTR(path, LENGTH(path) - INSTR(REVERSE(path), '.') + 2)) as ext
-               FROM tracks
-               WHERE source = 'corpus' AND album = ?1
-               ORDER BY ext"#,
-        )?;
-        let file_types: Vec<String> = ext_stmt
-            .query_map(params![album_name], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok((artists, directories, file_types))
-    }
-
-    /// Get track IDs for a specific album name (exact match, corpus only).
-    pub fn get_track_ids_by_album(&self, album_name: &str) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM tracks WHERE album = ?1 AND source = 'corpus'",
-        )?;
-
-        let rows = stmt.query_map(params![album_name], |row| row.get(0))?;
-
-        let mut ids = Vec::new();
-        for row in rows {
-            ids.push(row?);
-        }
-        Ok(ids)
-    }
-
-    /// Bulk update album name for multiple tracks.
-    /// Returns the number of tracks updated.
-    pub fn update_album_for_tracks(&self, track_ids: &[i64], new_album: &str) -> Result<usize> {
-        if track_ids.is_empty() {
-            return Ok(0);
-        }
-
-        // Build parameterized query for the IN clause
-        let placeholders: Vec<String> = (1..=track_ids.len())
-            .map(|i| format!("?{}", i + 1))
-            .collect();
-        let sql = format!(
-            "UPDATE tracks SET album = ?1 WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-
-        // Build params vector
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(new_album.to_string())];
-        for id in track_ids {
-            params_vec.push(Box::new(*id));
-        }
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
-        let updated = self
-            .conn
-            .execute(&sql, params_refs.as_slice())
-            .context("Failed to update album for tracks")?;
-
-        Ok(updated)
     }
 
     // ========================================================================
@@ -737,6 +289,72 @@ impl Database {
                 row.get::<_, Option<String>>(2)?,
             ))
         })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    // ========================================================================
+    // Tag Collision Detection Queries (for canonicalization)
+    // ========================================================================
+
+    /// Query distinct tag values with track counts from track_tags table.
+    /// Returns Vec of (tag_value, track_count).
+    pub fn get_distinct_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT tag_value, COUNT(DISTINCT track_id) as track_count
+               FROM track_tags
+               WHERE LOWER(tag_name) = LOWER(?1) AND tag_value IS NOT NULL AND tag_value != ''
+               GROUP BY tag_value
+               ORDER BY track_count DESC"#,
+        )?;
+
+        let rows = stmt.query_map(params![tag_name], |row| {
+            let value: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((value, count as usize))
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Query album values with artist context for collision detection.
+    /// Albums are keyed by (artist_context, album) to avoid false positives
+    /// like "Greatest Hits" by different artists.
+    /// Returns Vec of (album_value, artist_context, track_count).
+    pub fn get_album_values_with_artist_context(&self) -> Result<Vec<(String, String, usize)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                   album.tag_value as album,
+                   COALESCE(album_artist.tag_value, artist.tag_value, '') as artist_context,
+                   COUNT(DISTINCT album.track_id) as track_count
+               FROM track_tags album
+               LEFT JOIN track_tags album_artist
+                   ON album.track_id = album_artist.track_id
+                   AND LOWER(album_artist.tag_name) = 'album_artist'
+               LEFT JOIN track_tags artist
+                   ON album.track_id = artist.track_id
+                   AND LOWER(artist.tag_name) = 'artist'
+               WHERE LOWER(album.tag_name) = 'album'
+                   AND album.tag_value IS NOT NULL
+                   AND album.tag_value != ''
+               GROUP BY album.tag_value, artist_context
+               ORDER BY track_count DESC"#,
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            let album: String = row.get(0)?;
+            let artist_context: String = row.get(1)?;
+            let count: i64 = row.get(2)?;
+            Ok((album, artist_context, count as usize))
+        })?;
+
         let mut result = Vec::new();
         for row in rows {
             result.push(row?);

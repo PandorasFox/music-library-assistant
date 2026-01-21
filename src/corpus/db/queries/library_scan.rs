@@ -14,11 +14,8 @@ use super::Database;
 /// A library file discovered during scanning.
 #[derive(Debug, Clone)]
 pub struct LibraryScanEntry {
-    pub library_name: String,
-    pub library_root: PathBuf,
     pub file_path: PathBuf,
     pub inode: i64,
-    pub scanned_at: i64,
 }
 
 impl Database {
@@ -69,7 +66,7 @@ impl Database {
     /// Returns all files discovered during the most recent scan of the library.
     pub fn get_library_scan_files(&self, library_name: &str) -> Result<Vec<LibraryScanEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT library_name, library_root, file_path, inode, scanned_at
+            "SELECT file_path, inode
              FROM library_scan_state
              WHERE library_name = ?1
              ORDER BY file_path",
@@ -78,51 +75,13 @@ impl Database {
         let entries = stmt
             .query_map(params![library_name], |row| {
                 Ok(LibraryScanEntry {
-                    library_name: row.get(0)?,
-                    library_root: PathBuf::from(row.get::<_, String>(1)?),
-                    file_path: PathBuf::from(row.get::<_, String>(2)?),
-                    inode: row.get(3)?,
-                    scanned_at: row.get(4)?,
+                    file_path: PathBuf::from(row.get::<_, String>(0)?),
+                    inode: row.get(1)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
             .context("Failed to query library scan files")?;
 
         Ok(entries)
-    }
-
-    /// Get unique library names that have scan data.
-    ///
-    /// Used by ScheduleContentAnalysis to spawn DeriveDeployHealthSignals
-    /// for each library that was scanned during Awakening.
-    pub fn get_scanned_library_names(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT library_name FROM library_scan_state ORDER BY library_name",
-        )?;
-
-        let names = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<Result<Vec<String>, _>>()
-            .context("Failed to query scanned library names")?;
-
-        Ok(names)
-    }
-
-    /// Get library metadata (root path and corpus prefixes) for a scanned library.
-    ///
-    /// Returns (library_root, corpus_path_prefixes) if the library has scan data.
-    /// The corpus_path_prefixes need to be looked up from config, so this just
-    /// returns the library_root which can be used to find the config entry.
-    pub fn get_library_root(&self, library_name: &str) -> Result<Option<PathBuf>> {
-        let root: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT DISTINCT library_root FROM library_scan_state WHERE library_name = ?1 LIMIT 1",
-                params![library_name],
-                |row| row.get(0),
-            )
-            .ok();
-
-        Ok(root.map(PathBuf::from))
     }
 }

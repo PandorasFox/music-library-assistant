@@ -72,12 +72,12 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
 
     // Lateral views (Tag Search, Corpus Browser, Insights, Deploy) have their own title bar
     // and get the full header+content area
+    // DeploymentPreview is NOT part of the lateral ring anymore - it renders its own title
     let uses_unified_titlebar = matches!(
         ctx.mode,
         super::UiMode::TagSearch
             | super::UiMode::CorpusBrowser
             | super::UiMode::Insights
-            | super::UiMode::DeploymentPreview
     );
 
     if uses_unified_titlebar {
@@ -420,13 +420,19 @@ fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
 }
 
 fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    // Split horizontally: corpus stats | db thread stats
-    let split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
+    // Only split if db_stats is available (timing_instrumentation enabled)
+    let (corpus_area, db_area) = if ctx.db_stats.is_some() {
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (split[0], Some(split[1]))
+    } else {
+        // No DB stats - give full width to corpus
+        (area, None)
+    };
 
-    // Left: Corpus stats
+    // Corpus stats
     let corpus_lines = if let Some(ref summary) = ctx.corpus_summary {
         let mut lines = Vec::new();
 
@@ -527,59 +533,59 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
 
     let corpus_para = Paragraph::new(corpus_lines)
         .block(Block::default().borders(Borders::ALL).title("Corpus"));
-    f.render_widget(corpus_para, split[0]);
+    f.render_widget(corpus_para, corpus_area);
 
-    // Right: DB thread stats
-    let db_lines = if let Some(ref stats) = ctx.db_stats {
-        let rate_str = if stats.writes_per_sec >= 1.0 {
-            format!("{:.0}/s", stats.writes_per_sec)
-        } else if stats.writes_per_sec > 0.0 {
-            format!("{:.1}/s", stats.writes_per_sec)
-        } else {
-            "0/s".to_string()
-        };
+    // Right: DB thread stats (only if timing_instrumentation is enabled)
+    if let Some(db_area) = db_area {
+        if let Some(ref stats) = ctx.db_stats {
+            let rate_str = if stats.writes_per_sec >= 1.0 {
+                format!("{:.0}/s", stats.writes_per_sec)
+            } else if stats.writes_per_sec > 0.0 {
+                format!("{:.1}/s", stats.writes_per_sec)
+            } else {
+                "0/s".to_string()
+            };
 
-        let latency_str = if stats.avg_latency_us > 1000 {
-            format!("{}ms", stats.avg_latency_us / 1000)
-        } else {
-            format!("{}µs", stats.avg_latency_us)
-        };
+            let latency_str = if stats.avg_latency_us > 1000 {
+                format!("{}ms", stats.avg_latency_us / 1000)
+            } else {
+                format!("{}µs", stats.avg_latency_us)
+            };
 
-        vec![
-            Line::from(vec![
-                Span::raw("Writes: "),
-                Span::styled(
-                    stats.total_writes.to_string(),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
-            Line::from(vec![
-                Span::raw("Rate: "),
-                Span::styled(rate_str, Style::default().fg(Color::Green)),
-                Span::raw(" • "),
-                Span::styled(latency_str, Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(vec![
-                Span::raw("Queue: "),
-                Span::styled(
-                    stats.queue_depth.to_string(),
-                    if stats.queue_depth > 100 {
-                        Style::default().fg(Color::Red)
-                    } else if stats.queue_depth > 0 {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default().fg(Color::Green)
-                    },
-                ),
-            ]),
-        ]
-    } else {
-        vec![Line::from("No DB thread").style(Style::default().fg(Color::DarkGray))]
-    };
+            let db_lines = vec![
+                Line::from(vec![
+                    Span::raw("Writes: "),
+                    Span::styled(
+                        stats.total_writes.to_string(),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("Rate: "),
+                    Span::styled(rate_str, Style::default().fg(Color::Green)),
+                    Span::raw(" • "),
+                    Span::styled(latency_str, Style::default().fg(Color::Yellow)),
+                ]),
+                Line::from(vec![
+                    Span::raw("Queue: "),
+                    Span::styled(
+                        stats.queue_depth.to_string(),
+                        if stats.queue_depth > 100 {
+                            Style::default().fg(Color::Red)
+                        } else if stats.queue_depth > 0 {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default().fg(Color::Green)
+                        },
+                    ),
+                ]),
+            ];
 
-    let db_para = Paragraph::new(db_lines)
-        .block(Block::default().borders(Borders::ALL).title("DB Thread"));
-    f.render_widget(db_para, split[1]);
+            let db_para = Paragraph::new(db_lines)
+                .block(Block::default().borders(Borders::ALL).title("DB Thread"));
+            f.render_widget(db_para, db_area);
+        }
+    }
 }
 
 fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {

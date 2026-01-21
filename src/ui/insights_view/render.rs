@@ -122,75 +122,87 @@ fn insight_line_no_count(label: &str, selected: bool, busy: bool, color: Color) 
 }
 
 /// Build list items for the Corpus Files bucket
+/// OOB signals with count > 0 appear at top; OOB signals with count == 0 sink to bottom
 fn corpus_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListItem<'static>> {
     let focused = state.focused_bucket == FocusedBucket::Corpus;
     let selected_idx = state.bucket_selections[FocusedBucket::Corpus.index()].selected;
 
     let data = state.cached_data.as_ref();
 
-    let mut items = vec![bucket_header("Corpus Files", focused, busy)];
-
-    // OOB signals at top (highest priority) - Red/Critical
     let modified_oob = data.map(|d| d.bucket_corpus.modified_oob).unwrap_or(0);
     let tags_oob = data.map(|d| d.bucket_corpus.tags_changed_oob).unwrap_or(0);
-
-    items.push(insight_line(
-        "Modified out-of-band",
-        modified_oob,
-        focused && selected_idx == 0,
-        busy,
-        Color::Red,
-    ));
-    items.push(insight_line(
-        "Tags changed out-of-band",
-        tags_oob,
-        focused && selected_idx == 1,
-        busy,
-        Color::Red,
-    ));
-
-    // Standard corpus file counts - Yellow/Info
     let files_in_corpus = data.map(|d| d.bucket_corpus.files_in_corpus).unwrap_or(0);
     let indexed = data.map(|d| d.bucket_corpus.files_indexed).unwrap_or(0);
     let unindexed = data.map(|d| d.bucket_corpus.files_unindexed).unwrap_or(0);
     let missing = data.map(|d| d.bucket_corpus.files_missing).unwrap_or(0);
     let relocated = data.map(|d| d.bucket_corpus.files_relocated).unwrap_or(0);
 
-    items.push(insight_line(
-        "Files in corpus",
-        files_in_corpus,
-        focused && selected_idx == 2,
-        busy,
-        Color::Yellow,
-    ));
-    items.push(insight_line(
-        "Files indexed",
-        indexed,
-        focused && selected_idx == 3,
-        busy,
-        Color::Green,
-    ));
-    items.push(insight_line(
-        "Files unindexed",
-        unindexed,
-        focused && selected_idx == 4,
-        busy,
-        if unindexed > 0 { Color::Yellow } else { Color::Green },
-    ));
-    items.push(insight_line(
-        "Files missing",
-        missing,
-        focused && selected_idx == 5,
-        busy,
-        if missing > 0 { Color::Red } else { Color::Green },
-    ));
-    items.push(insight_line(
-        "Files relocated",
-        relocated,
-        focused && selected_idx == 6,
-        busy,
-        if relocated > 0 { Color::Yellow } else { Color::Green },
-    ));
+    // Rank: 0 = top (active OOB), 1 = middle (standard), 2 = bottom (inactive OOB)
+    struct CorpusEntry {
+        label: &'static str,
+        count: usize,
+        color: Color,
+        rank: u8,
+    }
+
+    let mut entries = vec![
+        CorpusEntry {
+            label: "Modified out-of-band",
+            count: modified_oob,
+            color: if modified_oob > 0 { Color::Red } else { Color::DarkGray },
+            rank: if modified_oob > 0 { 0 } else { 2 },
+        },
+        CorpusEntry {
+            label: "Tags changed out-of-band",
+            count: tags_oob,
+            color: if tags_oob > 0 { Color::Red } else { Color::DarkGray },
+            rank: if tags_oob > 0 { 0 } else { 2 },
+        },
+        CorpusEntry {
+            label: "Files in corpus",
+            count: files_in_corpus,
+            color: Color::Yellow,
+            rank: 1,
+        },
+        CorpusEntry {
+            label: "Files indexed",
+            count: indexed,
+            color: Color::Green,
+            rank: 1,
+        },
+        CorpusEntry {
+            label: "Files unindexed",
+            count: unindexed,
+            color: if unindexed > 0 { Color::Yellow } else { Color::Green },
+            rank: 1,
+        },
+        CorpusEntry {
+            label: "Files missing",
+            count: missing,
+            color: if missing > 0 { Color::Red } else { Color::Green },
+            rank: 1,
+        },
+        CorpusEntry {
+            label: "Files relocated",
+            count: relocated,
+            color: if relocated > 0 { Color::Yellow } else { Color::Green },
+            rank: 1,
+        },
+    ];
+
+    // Sort by rank (0=top, 1=middle, 2=bottom), preserving relative order within ranks
+    entries.sort_by_key(|e| e.rank);
+
+    let mut items = vec![bucket_header("Corpus Files", focused, busy)];
+    for (idx, entry) in entries.iter().enumerate() {
+        items.push(insight_line(
+            entry.label,
+            entry.count,
+            focused && selected_idx == idx,
+            busy,
+            entry.color,
+        ));
+    }
 
     items
 }
@@ -217,6 +229,7 @@ fn placeholder_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListIt
 }
 
 /// Build list items for the Library/Deploy bucket
+/// Sorted by count descending (biggest first)
 fn library_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListItem<'static>> {
     let focused = state.focused_bucket == FocusedBucket::Library;
     let selected_idx = state.bucket_selections[FocusedBucket::Library.index()].selected;
@@ -228,37 +241,51 @@ fn library_bucket_items(state: &InsightsViewState, busy: bool) -> Vec<ListItem<'
     let deploy_ready = data.map(|d| d.bucket_library.deploy_ready).unwrap_or(0);
     let deployed = data.map(|d| d.bucket_library.deployed_healthy).unwrap_or(0);
 
-    vec![
-        bucket_header("Library / Deploy", focused, busy),
-        insight_line(
-            "Library stale",
-            stale,
-            focused && selected_idx == 0,
+    // Build entries with their color logic, then sort by count descending
+    struct DeployEntry {
+        label: &'static str,
+        count: usize,
+        color: Color,
+    }
+
+    let mut entries = vec![
+        DeployEntry {
+            label: "Library stale",
+            count: stale,
+            color: if stale > 0 { Color::Yellow } else { Color::Green },
+        },
+        DeployEntry {
+            label: "Library leftover",
+            count: leftover,
+            color: if leftover > 0 { Color::Yellow } else { Color::Green },
+        },
+        DeployEntry {
+            label: "Ready to deploy",
+            count: deploy_ready,
+            color: if deploy_ready > 0 { Color::Cyan } else { Color::Green },
+        },
+        DeployEntry {
+            label: "Deployed healthy",
+            count: deployed,
+            color: Color::Green,
+        },
+    ];
+
+    // Sort by count descending (biggest first)
+    entries.sort_by(|a, b| b.count.cmp(&a.count));
+
+    let mut items = vec![bucket_header("Library / Deploy", focused, busy)];
+    for (idx, entry) in entries.iter().enumerate() {
+        items.push(insight_line(
+            entry.label,
+            entry.count,
+            focused && selected_idx == idx,
             busy,
-            if stale > 0 { Color::Yellow } else { Color::Green },
-        ),
-        insight_line(
-            "Library leftover",
-            leftover,
-            focused && selected_idx == 1,
-            busy,
-            if leftover > 0 { Color::Yellow } else { Color::Green },
-        ),
-        insight_line(
-            "Ready to deploy",
-            deploy_ready,
-            focused && selected_idx == 2,
-            busy,
-            if deploy_ready > 0 { Color::Cyan } else { Color::Green },
-        ),
-        insight_line(
-            "Deployed healthy",
-            deployed,
-            focused && selected_idx == 3,
-            busy,
-            Color::Green,
-        ),
-    ]
+            entry.color,
+        ));
+    }
+
+    items
 }
 
 /// Build list items for the Other Signals bucket

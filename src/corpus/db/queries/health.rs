@@ -836,6 +836,13 @@ impl Database {
 
         let mut entries = Vec::new();
 
+        // Get known_variants count to subtract from fingerprint duplicates
+        let known_variants: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM known_variants",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
         // Aggregate signals with affected counts
         for (signal_type, label) in [
             ("fingerprint_dup", "Fingerprint Duplicates"),
@@ -844,9 +851,19 @@ impl Database {
             ("missing_tag", "Missing Tags"),
             ("deploy_conflict", "Deploy Conflicts"),
         ] {
-            let count = self.count_signal_type(signal_type)?;
+            let mut count = self.count_signal_type(signal_type)?;
+
+            // Subtract known variants from fingerprint duplicates
+            if signal_type == "fingerprint_dup" {
+                count = count.saturating_sub(known_variants);
+            }
+
             if count > 0 {
-                let affected = self.count_affected_by_signal(signal_type)?;
+                let mut affected = self.count_affected_by_signal(signal_type)?;
+                // Also subtract known variants from affected count for fingerprint dupes
+                if signal_type == "fingerprint_dup" {
+                    affected = affected.saturating_sub(known_variants);
+                }
                 entries.push(OtherSignalEntry {
                     signal_type: signal_type.to_string(),
                     display_label: label.to_string(),
@@ -951,5 +968,179 @@ impl Database {
             discovered_at: row.get(3)?,
             metadata_json: row.get(4)?,
         })
+    }
+
+    // ========================================================================
+    // Deploy Modal Queries
+    // ========================================================================
+
+    /// Get all deploy-ready files (healthy corpus files not yet in library).
+    ///
+    /// Returns files with their corpus path and computed deploy path.
+    /// Sorted by corpus_path for consistent display.
+    pub fn get_deploy_ready_files(&self) -> Result<Vec<crate::corpus::db::types::DeploySignalFile>> {
+        use crate::corpus::db::types::DeploySignalFile;
+
+        // deploy_ready signals: issue_key = corpus_path, metadata_json contains deploy_path
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                 h.issue_key as corpus_path,
+                 json_extract(h.metadata_json, '$.deploy_path') as deploy_path,
+                 COALESCE(t.id, 0) as track_id
+               FROM health_issues h
+               LEFT JOIN tracks t ON t.path = h.issue_key AND t.source = 'corpus'
+               WHERE h.issue_type = 'deploy_ready'
+               ORDER BY h.issue_key"#
+        )?;
+
+        let results = stmt.query_map(params![], |row| {
+            Ok(DeploySignalFile {
+                corpus_path: row.get(0)?,
+                deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                track_id: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(results)
+    }
+
+    /// Get all deployed healthy files (corpus files correctly deployed to library).
+    ///
+    /// Returns files with their corpus path and library path.
+    /// Sorted by corpus_path for consistent display.
+    pub fn get_deployed_healthy_files(&self) -> Result<Vec<crate::corpus::db::types::DeploySignalFile>> {
+        use crate::corpus::db::types::DeploySignalFile;
+
+        // deployed_healthy signals: issue_key = corpus_path, metadata_json contains library_path
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                 h.issue_key as corpus_path,
+                 json_extract(h.metadata_json, '$.library_path') as library_path,
+                 COALESCE(t.id, 0) as track_id
+               FROM health_issues h
+               LEFT JOIN tracks t ON t.path = h.issue_key AND t.source = 'corpus'
+               WHERE h.issue_type = 'deployed_healthy'
+               ORDER BY h.issue_key"#
+        )?;
+
+        let results = stmt.query_map(params![], |row| {
+            Ok(DeploySignalFile {
+                corpus_path: row.get(0)?,
+                deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                track_id: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(results)
+    }
+
+    /// Get all stale library files (deployed at wrong path due to tag changes).
+    ///
+    /// Returns files with their current library path and expected path.
+    /// Sorted by library_path for consistent display.
+    pub fn get_library_stale_files(&self) -> Result<Vec<crate::corpus::db::types::StaleSignalFile>> {
+        use crate::corpus::db::types::StaleSignalFile;
+
+        // library_stale signals: issue_key = library_path, metadata_json contains expected_path and corpus_path
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                 h.issue_key as library_path,
+                 json_extract(h.metadata_json, '$.expected_path') as expected_path,
+                 json_extract(h.metadata_json, '$.corpus_path') as corpus_path,
+                 COALESCE(json_extract(h.metadata_json, '$.track_id'), 0) as track_id
+               FROM health_issues h
+               WHERE h.issue_type = 'library_stale'
+               ORDER BY h.issue_key"#
+        )?;
+
+        let results = stmt.query_map(params![], |row| {
+            Ok(StaleSignalFile {
+                library_path: row.get(0)?,
+                expected_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                corpus_path: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                track_id: row.get::<_, i64>(3).unwrap_or(0),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(results)
+    }
+
+    /// Get all leftover library files (no corpus backing).
+    ///
+    /// Sorted by library_path for consistent display.
+    pub fn get_library_leftover_files(&self) -> Result<Vec<crate::corpus::db::types::LeftoverSignalFile>> {
+        use crate::corpus::db::types::LeftoverSignalFile;
+
+        // library_leftover signals: issue_key = library_path
+        let mut stmt = self.conn.prepare(
+            r#"SELECT issue_key as library_path
+               FROM health_issues
+               WHERE issue_type = 'library_leftover'
+               ORDER BY issue_key"#
+        )?;
+
+        let results = stmt.query_map(params![], |row| {
+            Ok(LeftoverSignalFile {
+                library_path: row.get(0)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(results)
+    }
+
+    /// Get all deploy conflict groups (multiple corpus files → same library path).
+    ///
+    /// Sorted by deploy_path for consistent display.
+    pub fn get_deploy_conflict_groups(&self) -> Result<Vec<crate::corpus::db::types::ConflictGroup>> {
+        use crate::corpus::db::types::ConflictGroup;
+
+        // deploy_conflict signals: issue_key = deploy_path, metadata_json contains track_ids
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                 h.issue_key as deploy_path,
+                 h.metadata_json
+               FROM health_issues h
+               WHERE h.issue_type = 'deploy_conflict'
+               ORDER BY h.issue_key"#
+        )?;
+
+        let mut results = Vec::new();
+        let rows = stmt.query_map(params![], |row| {
+            let deploy_path: String = row.get(0)?;
+            let metadata_json: Option<String> = row.get(1)?;
+            Ok((deploy_path, metadata_json))
+        })?;
+
+        for row in rows {
+            let (deploy_path, metadata_json) = row?;
+
+            // Extract track_ids from metadata
+            let track_ids: Vec<i64> = metadata_json
+                .as_ref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .and_then(|v| v.get("track_ids").cloned())
+                .and_then(|v| v.as_array().cloned())
+                .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default();
+
+            // Get corpus paths for each track
+            let mut conflicting_files = Vec::new();
+            for track_id in track_ids {
+                if let Ok(Some(track)) = self.get_track_by_id(track_id) {
+                    conflicting_files.push((track.path, track_id));
+                }
+            }
+
+            results.push(ConflictGroup {
+                deploy_path,
+                conflicting_files,
+            });
+        }
+
+        Ok(results)
     }
 }

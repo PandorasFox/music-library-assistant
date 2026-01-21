@@ -5,13 +5,13 @@
 //!
 //! ## Architecture
 //!
-//! Mutations are executed through the TaskDaemon:
+//! Mutations are executed through the Witch:
 //!
 //! ```text
 //! UI Decision (with DecisionWitness)
 //!     │
 //!     ▼
-//! TaskDaemon.queue_mutations()
+//! Witch.queue_mutations()
 //!     │
 //!     ▼
 //! Parallel Worker executes:

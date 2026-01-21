@@ -15,7 +15,7 @@ use std::path::Path;
 
 use crate::corpus::db::Database;
 use crate::corpus::mutations::MigrationRegistry;
-use crate::daemon::confirm_decision;
+use crate::witch::confirm_decision;
 
 /// Handle first-time setup when no database exists.
 ///

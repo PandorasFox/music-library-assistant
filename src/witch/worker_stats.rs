@@ -1,6 +1,6 @@
 //! Thread-safe worker performance statistics.
 //!
-//! This module is part of the daemon subsystem. See `daemon/mod.rs` for overview.
+//! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,7 +18,7 @@ struct WorkerStatsInner {
     thread_stats_map: HashMap<u64, crate::corpus::computations::ThreadStats>,
 }
 
-/// Thread-safe worker statistics, isolated from TaskDaemon struct.
+/// Thread-safe worker statistics, isolated from Witch struct.
 ///
 /// This follows the proven pattern from DbThreadHandle - stats are stored in
 /// a separate heap allocation via Arc, with atomic counters for numeric data

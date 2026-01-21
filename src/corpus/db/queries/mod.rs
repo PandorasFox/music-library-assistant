@@ -96,7 +96,7 @@ impl Database {
     /// - First-time setup (creating new database)
     /// - Worker thread execution contexts (mutations, migrations, computations)
     ///
-    /// UI code should use `TaskDaemon::read_only_db()` instead.
+    /// UI code should use `Witch::read_only_db()` instead.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
 
@@ -326,14 +326,6 @@ impl Database {
             "#
         ).context("Failed to initialize database schema")?;
 
-        Ok(())
-    }
-
-    /// Run VACUUM to compact the database after bulk deletions.
-    pub fn vacuum(&self) -> Result<()> {
-        self.conn
-            .execute("VACUUM", [])
-            .context("Failed to vacuum database")?;
         Ok(())
     }
 

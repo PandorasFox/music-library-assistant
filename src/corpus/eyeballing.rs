@@ -15,9 +15,9 @@
 //! WalkCorpus ──► CompareInodes ──► VerifyMtime ──► VerifyTags
 //!                    │                   │              │
 //!                    ▼                   ▼              ▼
-//!             MissingFromDisk     (spawn next)   OutOfBandTagChange
-//!             MissingFromIndex
+//!             MissingFile         (spawn next)   OutOfBandTagChange
+//!             UnindexedFile
 //! ```
 //!
-//! Eyeballing is queued via `TaskDaemon::start_lazy_eyeball()` or
-//! `TaskDaemon::start_paranoid_eyeball()`.
+//! Eyeballing is queued via `Witch::start_lazy_eyeball()` or
+//! `Witch::start_paranoid_eyeball()`.

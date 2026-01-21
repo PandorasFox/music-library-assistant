@@ -141,7 +141,7 @@ impl App {
         group_context: Option<tag_editor::GroupContext>,
     ) {
         // Start transaction
-        if let Some(daemon) = self.task_daemon.as_mut() {
+        if let Some(the_witch) = self.witch.as_mut() {
             let label = match source {
                 tag_editor::TagEditorSource::CorpusBrowser => "Tag edits",
                 tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
@@ -149,7 +149,7 @@ impl App {
                 tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
                 tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             };
-            let _ = daemon.start_transaction(label);
+            let _ = the_witch.start_transaction(label);
         }
 
         self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::single_file(
@@ -168,7 +168,7 @@ impl App {
         group_context: Option<tag_editor::GroupContext>,
     ) {
         // Start transaction
-        if let Some(daemon) = self.task_daemon.as_mut() {
+        if let Some(the_witch) = self.witch.as_mut() {
             let label = match source {
                 tag_editor::TagEditorSource::CorpusBrowser => "Bulk tag edits",
                 tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
@@ -176,7 +176,7 @@ impl App {
                 tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
                 tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             };
-            let _ = daemon.start_transaction(label);
+            let _ = the_witch.start_transaction(label);
         }
 
         self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::bulk_from_tracks(
@@ -229,8 +229,8 @@ impl App {
         self.tree_browser = None;
 
         // Start transaction for directory edits
-        if let Some(daemon) = self.task_daemon.as_mut() {
-            let _ = daemon.start_transaction("Directory tag edits");
+        if let Some(the_witch) = self.witch.as_mut() {
+            let _ = the_witch.start_transaction("Directory tag edits");
         }
 
         // Use directory_aggregated for aggregated tag view across all files
@@ -313,8 +313,8 @@ impl App {
     /// Start unified tag editor for aggregated bulk editing from tag search results
     pub(super) fn start_unified_tag_editor_for_tracks(&mut self, tracks: Vec<crate::corpus::db::Track>) {
         // Start transaction
-        if let Some(daemon) = self.task_daemon.as_mut() {
-            let _ = daemon.start_transaction("Tag search bulk edit");
+        if let Some(the_witch) = self.witch.as_mut() {
+            let _ = the_witch.start_transaction("Tag search bulk edit");
         }
 
         // Use aggregated mode - all tracks edited as one unit

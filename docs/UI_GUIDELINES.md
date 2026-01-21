@@ -29,8 +29,8 @@ This document codifies patterns and rules for maintaining a clean, consistent UI
 
 **Never call `Database::open()` in UI code.**
 
-- Always use `daemon.read_only_db()` for queries (or the `App::db()` helper)
-- Only daemon worker threads create write connections
+- Always use `witch.read_only_db()` for queries (or the `App::db()` helper)
+- Only the Witch's worker threads create write connections
 - Pre-App startup code (migrations, first-time setup) is the exception
 
 ## Widget Usage Requirements

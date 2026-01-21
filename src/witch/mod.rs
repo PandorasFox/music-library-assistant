@@ -1,4 +1,7 @@
-//! Task Daemon - Background task execution system
+//! The Witch - Background task execution and orderliness enforcement
+//!
+//! The Witch is named such because She enforces orderliness in her domain,
+//! and provides all guarantees for data which flows properly through Her.
 //!
 //! ## Module Organization
 //! - `types.rs` - Core types, enums, witness system
@@ -6,7 +9,7 @@
 //! - `transaction.rs` - Transaction lifecycle management
 //! - `execution.rs` - Task execution (mutations, computations, migrations)
 //!
-//! ## Extending the Daemon
+//! ## Extending the Witch
 //! - New task types: Add variants to `Task` enum in `types.rs`
 //! - New execution logic: Add to `execution.rs`
 //! - Transaction features: Modify `transaction.rs`
@@ -50,16 +53,19 @@ use types::{ContentAnalysisWitness, TaskResult};
 use worker_stats::SharedWorkerStats;
 
 // ============================================================================
-// Task Daemon
+// The Witch
 // ============================================================================
 
-/// Simple parallel task queue with state machine.
-pub struct TaskDaemon {
+/// The Witch - enforcer of orderliness, guarantor of data integrity.
+///
+/// She provides a parallel task queue with state machine semantics,
+/// ensuring all mutations flow through proper witness channels.
+pub struct Witch {
     // Rayon-based task execution with channel for results
     result_tx: Sender<TaskResult>,
     result_rx: Receiver<TaskResult>,
 
-    /// When this daemon instance was created.
+    /// When this Witch instance was created.
     /// Used for signal freshness tracking (`discovered_at > launch_time` = new signal).
     launch_time: DateTime<Utc>,
 
@@ -126,11 +132,11 @@ pub struct TaskDaemon {
     worker_stats_shared: Option<Arc<SharedWorkerStats>>,
 
     /// Background cache for UI read queries.
-    /// UI calls want_*() methods, daemon spawns refresh tasks in tick().
+    /// UI calls want_*() methods, the Witch spawns refresh tasks in tick().
     ui_read_cache: UiReadCache,
 }
 
-impl TaskDaemon {
+impl Witch {
     /// Linger duration for completed session display.
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
@@ -162,7 +168,7 @@ impl TaskDaemon {
             None
         };
 
-        let daemon = Self {
+        let she = Self {
             result_tx,
             result_rx,
             launch_time: Utc::now(),
@@ -191,40 +197,40 @@ impl TaskDaemon {
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
-        if let Some(ref stats) = daemon.worker_stats_shared {
+        if let Some(ref stats) = she.worker_stats_shared {
             let (_tasks, total_qw, max_qw) = stats.debug_values();
             let _ = config::log_message(&format!(
-                "[PERF INIT] TaskDaemon::new() - total_queue_wait_ms={}, max_queue_wait_ms={}, total_processed={}",
-                total_qw, max_qw, daemon.total_processed
+                "[PERF INIT] Witch::new() - total_queue_wait_ms={}, max_queue_wait_ms={}, total_processed={}",
+                total_qw, max_qw, she.total_processed
             ));
         }
 
-        daemon
+        she
     }
 
-    /// Create a new daemon with opinions applied.
+    /// Create a new Witch with opinions applied.
     pub fn with_opinions(read_only_mode: bool, freshen_last_stage_at_startup: bool) -> Self {
-        let mut daemon = Self::new();
-        daemon.read_only_mode = read_only_mode;
-        daemon.freshen_last_stage_at_startup = freshen_last_stage_at_startup;
+        let mut she = Self::new();
+        she.read_only_mode = read_only_mode;
+        she.freshen_last_stage_at_startup = freshen_last_stage_at_startup;
         if freshen_last_stage_at_startup {
             let _ = config::log_message(
-                "[DAEMON] freshen_last_stage_at_startup=true: will run content analysis once after awakening"
+                "[WITCH] freshen_last_stage_at_startup=true: will run content analysis once after awakening"
             );
         }
-        daemon
+        she
     }
 
     // -------------------------------------------------------------------------
     // State Machine API
     // -------------------------------------------------------------------------
 
-    /// O(1) state check - returns current daemon state.
+    /// O(1) state check - returns current Witch state.
     pub fn state(&self) -> DaemonState {
         self.state
     }
 
-    /// Get the timestamp when this daemon was created.
+    /// Get the timestamp when this Witch was created.
     ///
     /// Used for signal freshness tracking: signals with `discovered_at > launch_time`
     /// are new this session.
@@ -246,7 +252,7 @@ impl TaskDaemon {
         self.observation_state
     }
 
-    /// Check if daemon is accepting mutations.
+    /// Check if the Witch is accepting mutations.
     ///
     /// Only becomes true after first eyeballing completes, and only if
     /// read_only_mode is false. Never reverts to false.
@@ -634,7 +640,7 @@ impl TaskDaemon {
 
     /// Spawn a task on the rayon thread pool with panic catching.
     ///
-    /// If the task panics, we still send a failure result so the daemon's
+    /// If the task panics, we still send a failure result so the Witch's
     /// in_flight counter stays accurate and we don't lose tasks silently.
     fn spawn_task(&self, task: Task, label: String, queue_time: Instant) {
         let tx = self.result_tx.clone();
@@ -847,7 +853,7 @@ impl TaskDaemon {
 
     /// Get a read-only database connection for UI queries.
     ///
-    /// This connection is cached for the daemon's lifetime. All UI code
+    /// This connection is cached for the Witch's lifetime. All UI code
     /// should use this instead of creating direct `Database::open()` connections.
     ///
     /// The connection uses `PRAGMA query_only = ON` to prevent any writes,
@@ -878,7 +884,7 @@ impl TaskDaemon {
     // Utility Methods
     // -------------------------------------------------------------------------
 
-    /// Get current daemon status snapshot (readonly, does not advance state).
+    /// Get current Witch status snapshot (readonly, does not advance state).
     ///
     /// Safe to call from render code, utility functions, etc.
     /// Use `tick()` only from the main event loop to advance state.
@@ -953,7 +959,7 @@ impl TaskDaemon {
     }
 }
 
-impl Default for TaskDaemon {
+impl Default for Witch {
     fn default() -> Self {
         Self::new()
     }

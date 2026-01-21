@@ -1,6 +1,6 @@
 //! Transaction lifecycle management for witnessed decisions.
 //!
-//! This module is part of the daemon subsystem. See `daemon/mod.rs` for overview.
+//! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use super::types::{
     CommitSummary, DecisionWitness, DiscardSummary, PendingTransaction,
@@ -9,7 +9,7 @@ use super::types::{
 use crate::corpus::mutations::Mutation;
 use crate::config;
 
-impl super::TaskDaemon {
+impl super::Witch {
     // -------------------------------------------------------------------------
     // Transaction Helpers
     // -------------------------------------------------------------------------

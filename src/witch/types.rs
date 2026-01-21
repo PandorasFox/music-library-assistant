@@ -1,6 +1,6 @@
-//! Core types, enums, and witness system for the daemon.
+//! Core types, enums, and witness system for the Witch.
 //!
-//! This module is part of the daemon subsystem. See `daemon/mod.rs` for overview.
+//! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use crate::corpus::mutations::Mutation;
 // State Machine
 // ============================================================================
 
-/// High-level daemon state for simple O(1) checks.
+/// High-level Witch state for simple O(1) checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonState {
     /// No tasks, no lingering status
@@ -27,7 +27,7 @@ pub enum DaemonState {
 // Eye and Observation State
 // ============================================================================
 
-/// Eye lifecycle state - controlled by the daemon.
+/// Eye lifecycle state - controlled by the Witch.
 ///
 /// The Eye's visual state gates the overall UI mode:
 /// - Closed/Awakening → Splash screen
@@ -107,7 +107,7 @@ pub struct Migration {
 /// # Design Pattern: Decision Witness
 ///
 /// `DecisionWitness` is a zero-sized proof that mutations are being queued from
-/// a user-led Decision context. TaskDaemon's mutation queueing methods require
+/// a user-led Decision context. The Witch's mutation queueing methods require
 /// this token, preventing code from queueing state-altering mutations without
 /// explicit operator decisions.
 ///
@@ -130,34 +130,34 @@ pub mod sealed {
         }
     }
 
-    /// A zero-sized token proving code is executing inside TaskDaemon's mutation worker.
+    /// A zero-sized token proving code is executing inside the Witch's mutation worker.
     ///
     /// All index-mutating database functions require this witness, ensuring they
-    /// can only be called from within the daemon's execution context.
+    /// can only be called from within the Witch's execution context.
     ///
-    /// Cannot be constructed outside the daemon's `execute_mutation()` function.
+    /// Cannot be constructed outside the Witch's `execute_mutation()` function.
     #[derive(Clone, Copy)]
     pub struct MutationExecutionWitness(());
 
     impl MutationExecutionWitness {
         /// Internal constructor - only callable from execute_mutation()
-        pub(in crate::daemon) fn new() -> Self {
+        pub(in crate::witch) fn new() -> Self {
             Self(())
         }
     }
 
-    /// A zero-sized token proving code is executing inside TaskDaemon's migration worker.
+    /// A zero-sized token proving code is executing inside the Witch's migration worker.
     ///
     /// Migration apply functions require this witness, ensuring they can only be
-    /// called from within the daemon's `execute_migration()` function.
+    /// called from within the Witch's `execute_migration()` function.
     ///
-    /// Cannot be constructed outside the daemon's `execute_migration()` function.
+    /// Cannot be constructed outside the Witch's `execute_migration()` function.
     #[derive(Clone, Copy)]
     pub struct MigrationWitness(());
 
     impl MigrationWitness {
         /// Internal constructor - only callable from execute_migration()
-        pub(in crate::daemon) fn new() -> Self {
+        pub(in crate::witch) fn new() -> Self {
             Self(())
         }
     }
@@ -168,13 +168,13 @@ pub mod sealed {
     /// mutations drain while the Eye is Awake. This prevents accidental queueing
     /// from UI code or other invalid contexts.
     ///
-    /// Cannot be constructed outside the daemon's `transition_to_completed()` function.
+    /// Cannot be constructed outside the Witch's `transition_to_completed()` function.
     #[derive(Clone, Copy)]
     pub struct ContentAnalysisWitness(());
 
     impl ContentAnalysisWitness {
         /// Internal constructor - only callable from transition_to_completed()
-        pub(in crate::daemon) fn new() -> Self {
+        pub(in crate::witch) fn new() -> Self {
             Self(())
         }
     }
@@ -189,35 +189,35 @@ pub use sealed::MutationExecutionWitness;
 ///
 /// Call this at the moment of user confirmation (e.g., when user presses Enter
 /// to save tag edits, or confirms deployment). The returned witness can then
-/// be passed to [`TaskDaemon::add_decision`] or [`TaskDaemon::confirm_transaction`].
+/// be passed to [`Witch::add_decision`] or [`Witch::confirm_transaction`].
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Start a transaction when entering a decision flow
-/// daemon.start_transaction("Tag edits")?;
+/// witch.start_transaction("Tag edits")?;
 ///
 /// // User confirms edits for first item
 /// let witness = confirm_decision();
-/// daemon.add_decision(0, &witness, "Track A", mutations)?;
+/// witch.add_decision(0, &witness, "Track A", mutations)?;
 ///
 /// // ... user edits more items ...
 ///
 /// // User commits the transaction
 /// let commit_witness = confirm_decision();
-/// daemon.confirm_transaction(&commit_witness)?;
+/// witch.confirm_transaction(&commit_witness)?;
 /// ```
 pub fn confirm_decision() -> DecisionWitness {
     DecisionWitness::new()
 }
 
-/// Create a MigrationWitness for startup migrations (pre-daemon context).
+/// Create a MigrationWitness for startup migrations (pre-Witch context).
 ///
 /// Call this when the user approves database migrations at startup.
 /// The returned witness can then be passed to [`MigrationRegistry::apply_all_pending`].
 ///
-/// This is separate from the daemon's `execute_migration()` context witness -
-/// it's for migrations that run before the daemon exists.
+/// This is separate from the Witch's `execute_migration()` context witness -
+/// it's for migrations that run before the Witch exists.
 pub fn confirm_startup_migration() -> MigrationWitness {
     MigrationWitness::new()
 }
@@ -276,7 +276,7 @@ impl TaskLabel {
     }
 }
 
-/// Summary of a completed daemon session (for lingering display).
+/// Summary of a completed Witch session (for lingering display).
 #[derive(Debug, Clone)]
 pub struct CompletedSession {
     /// When the session completed
@@ -323,7 +323,7 @@ pub struct DaemonStatus {
     pub completed_session: Option<CompletedSession>,
 }
 
-/// Snapshot of daemon state for status reporting.
+/// Snapshot of Witch state for status reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DaemonStateSnapshot {
     #[default]
@@ -406,7 +406,7 @@ pub enum TransactionError {
     AlreadyActive,
     /// Attempted an operation requiring an active transaction.
     NoActiveTransaction,
-    /// Attempted to confirm transaction but daemon is not accepting mutations.
+    /// Attempted to confirm transaction but the Witch is not accepting mutations.
     /// This happens if eyeballing hasn't completed or read-only mode is enabled.
     NotAcceptingMutations,
 }

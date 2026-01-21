@@ -13,7 +13,7 @@ use ratatui::Terminal;
 use crate::config;
 use crate::corpus::db::Database;
 use crate::corpus::mutations::MigrationRegistry;
-use crate::daemon::confirm_startup_migration;
+use crate::witch::confirm_startup_migration;
 
 /// Check for database migrations and run them with user approval.
 ///

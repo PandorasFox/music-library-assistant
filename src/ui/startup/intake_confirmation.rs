@@ -28,7 +28,7 @@ pub struct IntakeConfirmationState {
     pub file_count: usize,
     /// Total bytes to read (sum of file sizes)
     pub total_bytes: u64,
-    /// Paths to index (gathered from MissingFromIndex issues)
+    /// Paths to index (gathered from UnindexedFile signals)
     pub paths: Vec<PathBuf>,
     /// Source identifier ("corpus" or "legacy")
     pub source: String,

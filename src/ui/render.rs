@@ -36,7 +36,7 @@ pub struct RenderContext<'a> {
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub eye: &'a EyeAnimation,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
-    pub daemon_status: Option<crate::daemon::DaemonStatus>,
+    pub witch_status: Option<crate::witch::DaemonStatus>,
     pub corpus_summary: Option<crate::corpus::db::types::CorpusSummary>,
     pub db_stats: Option<crate::db_thread::DbThreadStats>,
 }
@@ -481,7 +481,7 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
             + hs.missing_tag_issues
             + summary.deploy_conflicts
             + summary.library_stale
-            + summary.library_orphan
+            + summary.library_leftover
             + summary.modified_oob
             + summary.tags_changed_oob
             + summary.duplicate_inodes;
@@ -500,13 +500,14 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
                             Style::default().fg($color),
                         ));
                         signal_parts.push(Span::raw(concat!(" ", $label)));
-                        first = false;
+                        #[allow(unused_assignments)]
+                        { first = false; }
                     }
                 };
             }
 
             add_signal!(summary.library_stale, "stale", Color::Yellow);
-            add_signal!(summary.library_orphan, "orphan", Color::Yellow);
+            add_signal!(summary.library_leftover, "leftover", Color::Yellow);
             add_signal!(hs.missing_tag_issues, "missing-tags", Color::Yellow);
             add_signal!(summary.deploy_conflicts, "conflicts", Color::Red);
             add_signal!(hs.metadata_duplicates, "meta-dups", Color::Yellow);
@@ -584,14 +585,14 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
 fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
     let mut lines = Vec::new();
 
-    let has_daemon_work = ctx.daemon_status.as_ref().map(|s| s.pending > 0).unwrap_or(false);
-    let has_completed_session = ctx.daemon_status.as_ref()
+    let has_witch_work = ctx.witch_status.as_ref().map(|s| s.pending > 0).unwrap_or(false);
+    let has_completed_session = ctx.witch_status.as_ref()
         .and_then(|s| s.completed_session.as_ref())
         .is_some();
 
-    if has_daemon_work {
-        // Show active daemon status
-        if let Some(ref status) = ctx.daemon_status {
+    if has_witch_work {
+        // Show active Witch status
+        if let Some(ref status) = ctx.witch_status {
             // Build task type summary
             let task_summary: String = if !status.task_counts.is_empty() {
                 status.task_counts.iter()
@@ -603,7 +604,7 @@ fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Ren
             };
 
             lines.push(Line::from(vec![
-                Span::styled("Task Daemon ", Style::default().fg(Color::Cyan)),
+                Span::styled("The Witch ", Style::default().fg(Color::Cyan)),
                 Span::styled(task_summary, Style::default().fg(Color::White)),
             ]));
 
@@ -624,7 +625,7 @@ fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Ren
         }
     } else if has_completed_session {
         // Show lingering completed session summary
-        if let Some(ref status) = ctx.daemon_status {
+        if let Some(ref status) = ctx.witch_status {
             if let Some(ref session) = status.completed_session {
                 // Build task type breakdown
                 let task_breakdown: String = session.task_counts.iter()

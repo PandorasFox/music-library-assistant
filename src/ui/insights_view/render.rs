@@ -1,7 +1,7 @@
 //! Insights View Rendering
 //!
 //! Renders the insights view with TODO placeholders for main and details panes.
-//! Dims content when daemon is busy.
+//! Dims content when the Witch is busy.
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -42,7 +42,7 @@ pub fn render_insights_view(f: &mut Frame, area: Rect, state: &InsightsViewState
 
 /// Render the insights list (TODO placeholder)
 fn render_insights_list(f: &mut Frame, area: Rect, state: &InsightsViewState) {
-    let busy = state.is_daemon_busy();
+    let busy = state.is_witch_busy();
     let border_color = if busy { Color::DarkGray } else { Color::Gray };
 
     let block = Block::default()
@@ -63,11 +63,11 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &InsightsViewState) {
         )),
     ];
 
-    // Add busy indicator if daemon is working
+    // Add busy indicator if the Witch is working
     if busy {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "(Daemon busy - actions disabled)",
+            "(The Witch is busy - actions disabled)",
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -78,7 +78,7 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &InsightsViewState) {
 
 /// Render details pane (TODO placeholder)
 fn render_insight_details(f: &mut Frame, area: Rect, state: &InsightsViewState) {
-    let busy = state.is_daemon_busy();
+    let busy = state.is_witch_busy();
     let border_color = if busy { Color::DarkGray } else { Color::Gray };
 
     let block = Block::default()

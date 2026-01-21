@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::corpus::db::{Database, ScanStateEntry, Track};
-use crate::daemon::MutationExecutionWitness;
+use crate::witch::MutationExecutionWitness;
 
 use super::types::{ExtractedMetadata, Mutation, MutationResult};
 

@@ -10,7 +10,7 @@ use std::path::Path;
 
 use crate::corpus::db::Database;
 use crate::corpus::metadata;
-use crate::daemon::MutationExecutionWitness;
+use crate::witch::MutationExecutionWitness;
 
 use super::sealed::MutationToken;
 use super::types::{Mutation, MutationResult, TagEdit};

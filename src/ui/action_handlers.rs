@@ -2,7 +2,7 @@
 //!
 //! Each view (insights, tag search, tree browser, tag editor, etc.) emits
 //! Actions that are handled here. These handlers coordinate state transitions,
-//! daemon interactions, and modal displays.
+//! Witch interactions, and modal displays.
 
 use crate::config;
 use crate::ui::{insights_view, progress_screen, tag_search, tree_browser, tag_editor, deploy_flow, startup};
@@ -82,7 +82,7 @@ impl App {
 
     /// Handle intake confirmation dialog actions.
     pub(super) fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction) {
-        use crate::daemon::confirm_decision;
+        use crate::witch::confirm_decision;
 
         match action {
             startup::IntakeConfirmationAction::None => {}
@@ -107,11 +107,11 @@ impl App {
                     ));
 
                     // Use the transaction API to queue mutations
-                    let daemon = self.daemon();
-                    if daemon.start_transaction("Intake indexing").is_ok() {
+                    let the_witch = self.witch();
+                    if the_witch.start_transaction("Intake indexing").is_ok() {
                         let witness = confirm_decision();
-                        let _ = daemon.add_decision(0, &witness, "Index unindexed files", mutations);
-                        let _ = daemon.confirm_transaction(&witness);
+                        let _ = the_witch.add_decision(0, &witness, "Index unindexed files", mutations);
+                        let _ = the_witch.confirm_transaction(&witness);
                     }
 
                     // Transition to progress screen to wait for indexing + content analysis
@@ -204,9 +204,9 @@ impl App {
 
             UnifiedTagEditorAction::CommitTransaction => {
                 // Commit all staged decisions
-                let witness = crate::daemon::confirm_decision();
-                let commit_message = if let Some(daemon) = self.task_daemon.as_mut() {
-                    match daemon.confirm_transaction(&witness) {
+                let witness = crate::witch::confirm_decision();
+                let commit_message = if let Some(the_witch) = self.witch.as_mut() {
+                    match the_witch.confirm_transaction(&witness) {
                         Ok(summary) => {
                             format!(
                                 "Committed {} decisions ({} mutations)",
@@ -219,7 +219,7 @@ impl App {
                         }
                     }
                 } else {
-                    "No daemon available".to_string()
+                    "The Witch is not available".to_string()
                 };
                 self.unified_tag_editor = None;
                 self.start_insights_view();
@@ -228,9 +228,9 @@ impl App {
 
             UnifiedTagEditorAction::DiscardTransaction => {
                 // Discard all staged decisions
-                let witness = crate::daemon::confirm_decision();
-                if let Some(daemon) = self.task_daemon.as_mut() {
-                    let _ = daemon.discard_transaction(&witness);
+                let witness = crate::witch::confirm_decision();
+                if let Some(the_witch) = self.witch.as_mut() {
+                    let _ = the_witch.discard_transaction(&witness);
                 }
                 self.unified_tag_editor = None;
                 self.start_insights_view();
@@ -302,7 +302,7 @@ impl App {
             }
 
             UnifiedTagEditorAction::RequestTransactionReview => {
-                // Query daemon for staged decisions and populate the review modal
+                // Query the Witch for staged decisions and populate the review modal
                 let decisions = self.gather_transaction_decisions();
 
                 if let Some(ref mut editor) = self.unified_tag_editor {

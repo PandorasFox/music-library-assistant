@@ -1,6 +1,6 @@
 //! Unified Progress Screen
 //!
-//! Full-screen progress modal for all daemon work phases:
+//! Full-screen progress modal for all Witch work phases:
 //! - Eyeballing (startup corpus scan, eye closed)
 //! - ContentAnalysis (metadata analysis, eye awake)
 //! - SignalRefresh (post-mutation signal updates, eye awake)
@@ -10,16 +10,16 @@
 //! ```rust,ignore
 //! // For startup eyeballing
 //! let mut progress = ProgressScreen::new_eyeballing();
-//! daemon.start_paranoid_eyeball(...);
+//! witch.start_paranoid_eyeball(...);
 //!
 //! // Each frame
-//! if progress.tick(daemon) {
+//! if progress.tick(witch) {
 //!     // Eyeballing complete, transition to next phase
 //! }
 //!
 //! // For content analysis
 //! let mut progress = ProgressScreen::new_content_analysis();
-//! daemon.queue_content_analysis();
+//! witch.queue_content_analysis();
 //! ```
 
 use ratatui::{
@@ -30,7 +30,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::daemon::{DaemonStateSnapshot, DaemonStatus, EyeState, TaskDaemon, WorkerStats};
+use crate::witch::{DaemonStateSnapshot, DaemonStatus, EyeState, Witch, WorkerStats};
 use crate::db_thread::DbThreadStats;
 use super::app::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
@@ -84,7 +84,7 @@ impl ProgressPhase {
 
 /// Unified progress screen controller.
 ///
-/// Handles all daemon work phases with a consistent interface.
+/// Handles all Witch work phases with a consistent interface.
 #[derive(Debug)]
 pub struct ProgressScreen {
     /// Current progress phase.
@@ -105,14 +105,14 @@ pub struct ProgressScreen {
     worker_stats: Option<WorkerStats>,
     /// Pending DB writes (always tracked).
     db_queue_depth: u64,
-    /// Consecutive ticks where daemon was idle (safety valve for missed work).
+    /// Consecutive ticks where the Witch was idle (safety valve for missed work).
     consecutive_idle_ticks: u8,
 }
 
 impl ProgressScreen {
     /// Create a progress screen for startup eyeballing.
     ///
-    /// Completes when daemon.eye_state() becomes Awake.
+    /// Completes when witch.eye_state() becomes Awake.
     pub fn new_eyeballing() -> Self {
         Self {
             phase: ProgressPhase::Eyeballing,
@@ -130,7 +130,7 @@ impl ProgressScreen {
 
     /// Create a progress screen for content analysis.
     ///
-    /// Completes when daemon work drains after starting.
+    /// Completes when Witch work drains after starting.
     pub fn new_content_analysis() -> Self {
         let mut screen = Self {
             phase: ProgressPhase::ContentAnalysis,
@@ -150,7 +150,7 @@ impl ProgressScreen {
 
     /// Create a progress screen for post-mutation signal refresh.
     ///
-    /// Completes when daemon work drains after starting.
+    /// Completes when Witch work drains after starting.
     pub fn new_signal_refresh() -> Self {
         let mut screen = Self {
             phase: ProgressPhase::SignalRefresh,
@@ -220,21 +220,21 @@ impl ProgressScreen {
     /// Tick the progress screen state.
     ///
     /// Returns `true` if work is complete.
-    pub fn tick(&mut self, daemon: &TaskDaemon) -> bool {
-        // Update progress from daemon
-        let status = daemon.status();
+    pub fn tick(&mut self, witch: &Witch) -> bool {
+        // Update progress from the Witch
+        let status = witch.status();
         self.update_progress(&status);
 
         // Update stats
-        self.set_db_stats(daemon.db_stats());
-        self.set_worker_stats(daemon.worker_stats());
-        self.set_db_queue_depth(daemon.db_queue_depth());
+        self.set_db_stats(witch.db_stats());
+        self.set_worker_stats(witch.worker_stats());
+        self.set_db_queue_depth(witch.db_queue_depth());
 
         // Phase-specific completion detection
         match self.phase {
             ProgressPhase::Eyeballing => {
                 // Track eye state for rendering
-                self.eye_state = daemon.eye_state();
+                self.eye_state = witch.eye_state();
 
                 // Complete when eye becomes Awake
                 if self.eye_state == EyeState::Awake {
@@ -243,10 +243,10 @@ impl ProgressScreen {
             }
             ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
                 // Use WaitState for completion detection
-                if self.wait_state.tick(daemon) {
+                if self.wait_state.tick(witch) {
                     self.complete = true;
                 } else {
-                    // Safety valve: if daemon has been idle for 3 consecutive ticks,
+                    // Safety valve: if the Witch has been idle for 3 consecutive ticks,
                     // assume work already completed before we started watching
                     let is_idle = status.pending == 0 && matches!(
                         status.state,
@@ -267,7 +267,7 @@ impl ProgressScreen {
         self.complete
     }
 
-    /// Update progress from daemon status.
+    /// Update progress from Witch status.
     fn update_progress(&mut self, status: &DaemonStatus) {
         let completed = status.total_processed;
         let total = status.session_queued;

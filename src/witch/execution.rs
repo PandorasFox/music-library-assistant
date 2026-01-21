@@ -1,6 +1,6 @@
 //! Task execution for mutations, computations, and migrations.
 //!
-//! This module is part of the daemon subsystem. See `daemon/mod.rs` for overview.
+//! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::time::Instant;
 
@@ -63,7 +63,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         mutation.category(), label
     ));
 
-    // Create execution witness - proves we're inside daemon execution context
+    // Create execution witness - proves we're inside the Witch's execution context
     let witness = MutationExecutionWitness::new();
 
     // Open database
@@ -72,7 +72,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         Err(result) => return result,
     };
 
-    let session_id = "daemon";
+    let session_id = "witch";
 
     let (success, error) = match mutation.category() {
         MutationCategory::TagEdit => {
@@ -93,7 +93,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             (r.success, r.error)
         }
         MutationCategory::Migration => {
-            (false, Some("Migrations not supported in daemon".to_string()))
+            (false, Some("Migrations not supported in Witch executor".to_string()))
         }
     };
 
@@ -157,7 +157,7 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
 
     let start = Instant::now();
 
-    // Create migration witness - proves we're inside daemon execution context
+    // Create migration witness - proves we're inside the Witch's execution context
     let witness = MigrationWitness::new();
 
     // Open database

@@ -89,8 +89,8 @@ pub(crate) struct App {
     // Intake confirmation modal
     pub(super) intake_confirmation: Option<startup::IntakeConfirmationState>,
 
-    // Task daemon for mutation execution
-    pub(super) task_daemon: Option<crate::daemon::TaskDaemon>,
+    // The Witch - enforcer of orderliness, handles all mutations and background work
+    pub(super) witch: Option<crate::witch::Witch>,
 
     // Throughput tracking for rolling average (timestamp, bytes_processed)
     throughput_samples: VecDeque<(Instant, u64)>,
@@ -114,7 +114,7 @@ impl App {
             insights_view: None,
             tag_search: None,
             intake_confirmation: None,
-            task_daemon: None,
+            witch: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
         }
@@ -206,9 +206,9 @@ impl App {
     }
 
 
-    /// Check if there are any pending operations (daemon work).
+    /// Check if there are any pending operations (Witch work).
     pub(super) fn has_pending_operations(&self) -> bool {
-        self.task_daemon.as_ref().map(|d| d.has_pending()).unwrap_or(false)
+        self.witch.as_ref().map(|d| d.has_pending()).unwrap_or(false)
     }
 
     /// Start the insights view.
@@ -217,17 +217,17 @@ impl App {
         self.mode = UiMode::Insights;
     }
 
-    /// Stage a decision to the daemon's transaction and update editor state.
+    /// Stage a decision to the Witch's transaction and update editor state.
     ///
     /// Helper for StageDecision, StageDecisionAndNext, and StageDecisionAndReview actions.
     pub(super) fn stage_decision(&mut self, index: usize, mutations: Vec<crate::corpus::mutations::Mutation>) {
-        let witness = crate::daemon::confirm_decision();
-        if let Some(daemon) = self.task_daemon.as_mut() {
+        let witness = crate::witch::confirm_decision();
+        if let Some(the_witch) = self.witch.as_mut() {
             let label = self.unified_tag_editor
                 .as_ref()
                 .map(|e| e.current_item_label())
                 .unwrap_or_else(|| "Tag edit".to_string());
-            let _ = daemon.add_decision(index, &witness, label, mutations.clone());
+            let _ = the_witch.add_decision(index, &witness, label, mutations.clone());
         }
         // Track staged mutations for redundant confirmation skipping
         if let Some(ref mut editor) = self.unified_tag_editor {
@@ -236,15 +236,15 @@ impl App {
         self.status_message = Some(format!("Decision staged (item {})", index + 1));
     }
 
-    /// Gather transaction decisions from daemon for review modal.
+    /// Gather transaction decisions from the Witch for review modal.
     ///
     /// Returns list of (decision_index, label, mutation_count) for all staged decisions.
     pub(super) fn gather_transaction_decisions(&self) -> Vec<(usize, String, usize)> {
-        if let Some(daemon) = self.task_daemon.as_ref() {
-            daemon.decision_indices()
+        if let Some(the_witch) = self.witch.as_ref() {
+            the_witch.decision_indices()
                 .iter()
                 .filter_map(|&idx| {
-                    daemon.get_decision(idx).map(|d| {
+                    the_witch.get_decision(idx).map(|d| {
                         (idx, d.label.clone(), d.mutations.len())
                     })
                 })
@@ -263,17 +263,17 @@ impl App {
         self.start_insights_view();
     }
 
-    /// Update daemon stats on a progress state that implements the stats setter methods.
+    /// Update Witch stats on a progress state that implements the stats setter methods.
     ///
-    /// Helper for updating queue depth, db stats, and worker stats from daemon.
+    /// Helper for updating queue depth, db stats, and worker stats from the Witch.
     pub(super) fn update_progress_stats<T>(&self, state: &mut T)
     where
         T: ProgressStatsUpdater,
     {
-        if let Some(daemon) = &self.task_daemon {
-            state.set_db_queue_depth(daemon.db_queue_depth());
-            state.set_db_stats(daemon.db_stats());
-            state.set_worker_stats(daemon.worker_stats());
+        if let Some(the_witch) = &self.witch {
+            state.set_db_queue_depth(the_witch.db_queue_depth());
+            state.set_db_stats(the_witch.db_stats());
+            state.set_worker_stats(the_witch.worker_stats());
         }
     }
 
@@ -298,11 +298,11 @@ impl App {
         self.mode = UiMode::CorpusBrowser;
     }
 
-    /// Check daemon status and update UI with any failure messages.
-    /// Note: Actual daemon ticking happens in run_app via daemon().tick()
-    fn check_daemon_status(&mut self) {
-        if let Some(ref daemon) = self.task_daemon {
-            let status = daemon.status();
+    /// Check Witch status and update UI with any failure messages.
+    /// Note: Actual Witch ticking happens in run_app via witch().tick()
+    fn check_witch_status(&mut self) {
+        if let Some(ref the_witch) = self.witch {
+            let status = the_witch.status();
             if status.failed > 0 {
                 self.status_message = Some(format!(
                     "Tasks: {} done, {} failed",
@@ -312,21 +312,21 @@ impl App {
         }
     }
 
-    /// Get or create the task daemon.
-    pub(super) fn daemon(&mut self) -> &mut crate::daemon::TaskDaemon {
-        if self.task_daemon.is_none() {
+    /// Get or create the Witch.
+    pub(super) fn witch(&mut self) -> &mut crate::witch::Witch {
+        if self.witch.is_none() {
             // Load startup opinions from config
             let (read_only, force_freshen) = crate::config::load_config()
                 .map(|c| (false, c.opinions.startup.freshen_last_stage_at_startup))
                 .unwrap_or((false, false));
-            self.task_daemon = Some(crate::daemon::TaskDaemon::with_opinions(read_only, force_freshen));
+            self.witch = Some(crate::witch::Witch::with_opinions(read_only, force_freshen));
         }
-        self.task_daemon.as_mut().unwrap()
+        self.witch.as_mut().unwrap()
     }
 
     /// Shorthand for read-only database access.
     pub(super) fn db(&mut self) -> &crate::corpus::db::Database {
-        self.daemon().read_only_db()
+        self.witch().read_only_db()
     }
 
 }
@@ -336,20 +336,20 @@ impl App {
 // ============================================================================
 
 fn render(f: &mut Frame, app: &mut App) {
-    // Use cached corpus summary from daemon's background cache.
+    // Use cached corpus summary from the Witch's background cache.
     // Never queries DB - just reads whatever was last computed.
     let corpus_summary = app
-        .task_daemon
+        .witch
         .as_ref()
         .and_then(|d| d.ui_read_cache().corpus_summary());
 
     // Fetch DB thread stats (cheap - just reads cached atomic values)
     // Returns None if timing instrumentation is disabled
-    let db_stats = app.task_daemon.as_ref().and_then(|d| d.db_stats());
+    let db_stats = app.witch.as_ref().and_then(|d| d.db_stats());
 
-    // Get daemon status WITHOUT ticking again - status() just reads current state
-    let daemon_status = app.task_daemon.as_ref().and_then(|d| {
-        let status = d.status();
+    // Get Witch status WITHOUT ticking again - status() just reads current state
+    let witch_status = app.witch.as_ref().and_then(|w| {
+        let status = w.status();
         // Show if there's pending work OR a lingering completed session
         if status.pending > 0 || status.completed_session.is_some() {
             Some(status)
@@ -372,7 +372,7 @@ fn render(f: &mut Frame, app: &mut App) {
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,
-        daemon_status,
+        witch_status,
         corpus_summary,
         db_stats,
     };
@@ -402,16 +402,16 @@ pub fn run_menu(config: Config) -> Result<()> {
     let mut app = App::new(config);
 
     // Eyeballing ALWAYS runs at startup (only paranoid mode is configurable)
-    // Create progress screen and queue initial eyeballing via daemon
+    // Create progress screen and queue initial eyeballing via the Witch
     let corpus_root = app.config.corpus_root.clone();
     let legacy_library = app.config.legacy_library.clone();
     let paranoid = app.config.opinions.startup.paranoid_tag_verification;
 
-    // Start eyeballing via daemon - this sets observation_state and queues work
+    // Start eyeballing via the Witch - this sets observation_state and queues work
     if paranoid {
-        app.daemon().start_paranoid_eyeball(&corpus_root, legacy_library.as_deref());
+        app.witch().start_paranoid_eyeball(&corpus_root, legacy_library.as_deref());
     } else {
-        app.daemon().start_lazy_eyeball(&corpus_root, legacy_library.as_deref());
+        app.witch().start_lazy_eyeball(&corpus_root, legacy_library.as_deref());
     }
 
     app.progress_screen = Some(progress_screen::ProgressScreen::new_eyeballing());
@@ -458,27 +458,27 @@ fn run_app<B: ratatui::backend::Backend>(
             app.handle_key(esc_key);
         }
 
-        // Tick daemon first - she is the driving system
+        // Tick the Witch first - She is the driving system
         let tick_start = std::time::Instant::now();
-        let tick_status = app.daemon().tick();
+        let tick_status = app.witch().tick();
         let tick_duration = tick_start.elapsed();
         if tick_duration.as_millis() > 16 {
             let _ = config::log_message(&format!(
-                "[FRAME DEBUG] daemon.tick() took {}ms, drained {} results",
+                "[FRAME DEBUG] witch.tick() took {}ms, drained {} results",
                 tick_duration.as_millis(),
                 tick_status.total_processed
             ));
         }
 
-        app.check_daemon_status();
+        app.check_witch_status();
 
-        // Update eye animation - only animate when daemon eye is Awake
-        let can_animate = app.daemon().eye_state() == crate::daemon::EyeState::Awake;
+        // Update eye animation - only animate when the Witch's eye is Awake
+        let can_animate = app.witch().eye_state() == crate::witch::EyeState::Awake;
         app.eye.update(can_animate);
 
-        // Update insights view with daemon status
+        // Update insights view with the Witch's status
         if let Some(ref mut view) = app.insights_view {
-            let status = app.task_daemon.as_ref().map(|d| d.status());
+            let status = app.witch.as_ref().map(|d| d.status());
             view.update(status.as_ref());
         }
 
@@ -487,9 +487,9 @@ fn run_app<B: ratatui::backend::Backend>(
             app.tick_progress_screen();
         }
 
-        // Flag demand for cached UI data (daemon spawns background refresh if needed)
-        if let Some(ref daemon) = app.task_daemon {
-            daemon.ui_read_cache().want_corpus_summary();
+        // Flag demand for cached UI data (the Witch spawns background refresh if needed)
+        if let Some(ref the_witch) = app.witch {
+            the_witch.ui_read_cache().want_corpus_summary();
         }
 
         let draw_start = std::time::Instant::now();

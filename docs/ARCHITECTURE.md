@@ -5,7 +5,7 @@ This document describes the major subsystems of MLA and how they interact. For t
 ## Core Event Loop: ratatui
 
 Ratatui's event loop should:
-- tick the mla daemon subsystem
+- tick the Witch (MLA's background task system)
 - tick the UI modal that is currently active
 - render
 - process inputs
@@ -14,13 +14,13 @@ Ratatui's event loop should:
 
 General library, corpus, and operational state do not exist in UI code. UI code is for user-interaction-logic only.
 
-## Task Daemon
+## The Witch
 
-The task daemon is where all operational logic flows through. To begin:
+The Witch is named such because She enforces orderliness in her domain, and provides all guarantees for data which flows properly through Her. She is where all operational logic flows through. To begin:
 
-- it is responsible for accepting, queueing, and executing Tasks
-- it is responsible for keeping the corpus+index in a read-only state until startup has been finished
-- it is responsible for accumulating state (user Decisions with corpus Mutations) in a transactional format to simplify the UI modals - UI data state can be offloaded to Daemon once finalized, but before being committed
+- She is responsible for accepting, queueing, and executing Tasks
+- She is responsible for keeping the corpus+index in a read-only state until startup has been finished
+- She is responsible for accumulating state (user Decisions with corpus Mutations) in a transactional format to simplify the UI modals - UI data state can be offloaded to Her once finalized, but before being committed
 
 The types of tasks are:
 
@@ -31,7 +31,7 @@ The types of tasks are:
   - mutations can emit computations as side effects. computations can emit other computations as side effects.
   - can be scheduled and executed at any time (and without user decision) as they are purely observational computations (that we record the results of). Ideally, whenever we start up, we basically just confirm that our corpus state on disk has not changed since our last run, and if it has, we generate some signals indicating that the user needs to acknowledge or resolve.
 - Migrations
-  - Special tasks that can only be executed in the very very initial stage of the Task Daemon, before we have even scheduled our first computation to start observing the corpus. They are purely and explicitly for kicking off startup DB migrations, and require a DecisionWitnessed Decision, as they might take some time & the user needs to approve that the timely migration might take place.
+  - Special tasks that can only be executed in the very very initial stage of the Witch's lifecycle, before we have even scheduled our first computation to start observing the corpus. They are purely and explicitly for kicking off startup DB migrations, and require a DecisionWitnessed Decision, as they might take some time & the user needs to approve that the timely migration might take place.
 
 ## Signals
 
@@ -63,13 +63,13 @@ This is what enables the transactions flow and the confirmation review processes
 
 We combine this with rust's type system (namely, Sealed Traits, to only allow for some interfaces to be invoked from certain callsites or modules) so that we have compile-time guarantees that an enter keypress has happened when we're adding a decision to a transaction/confirming a decision. We additionally have other sets of compile-time guarantees that the actual corpus/index mutating function implementations are only invoked from the Task execution callsite (in their new thread).
 
-The combination of all these is what enables the Task Daemon to guarantee all of our operational sanity requirements.
+The combination of all these is what enables the Witch to guarantee all of our operational sanity requirements.
 
 ## The corpus browser/search and tag editor
 
 These are two fundamental tools for any Librarian, as one-off corpus introspection needs nice tools. Additionally, we need them for our own development cycle.
 
-Because the tag editor also *must* use the Task Daemon for dispatching its edits etc, we both *get to leverage* the transaction UX for our UI state machine, and *have to validate* the mutations under a lens, as well. Thus, the tag editor and browsers/searchers are invaluable tools for validating functionality and correctness of mutations and computations in a small and verifiable context before applying them in bulk.
+Because the tag editor also *must* use the Witch for dispatching its edits etc, we both *get to leverage* the transaction UX for our UI state machine, and *have to validate* the mutations under a lens, as well. Thus, the tag editor and browsers/searchers are invaluable tools for validating functionality and correctness of mutations and computations in a small and verifiable context before applying them in bulk.
 
 Additionally, all the UI components we make for the tag editor are necessary for our other UI modals, so the widgets and stuff there are just handy as well.
 

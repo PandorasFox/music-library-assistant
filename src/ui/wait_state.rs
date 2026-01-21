@@ -1,6 +1,6 @@
 //! Wait State Helper
 //!
-//! Standardized pattern for UI components that need to wait for daemon work to complete.
+//! Standardized pattern for UI components that need to wait for Witch work to complete.
 //! Used by progress screens and modals that trigger mutations.
 //!
 //! ## Usage Pattern
@@ -12,13 +12,13 @@
 //! }
 //!
 //! impl MyModal {
-//!     fn trigger_work(&mut self, daemon: &mut TaskDaemon) {
-//!         daemon.queue_computation(...);
+//!     fn trigger_work(&mut self, witch: &mut Witch) {
+//!         witch.queue_computation(...);
 //!         self.wait_state.start();
 //!     }
 //!
-//!     fn tick(&mut self, daemon: &TaskDaemon) -> bool {
-//!         if self.wait_state.tick(daemon) {
+//!     fn tick(&mut self, witch: &Witch) -> bool {
+//!         if self.wait_state.tick(witch) {
 //!             // Work is complete
 //!             return true;
 //!         }
@@ -27,17 +27,17 @@
 //! }
 //! ```
 
-use crate::daemon::{DaemonStateSnapshot, TaskDaemon};
+use crate::witch::{DaemonStateSnapshot, Witch};
 
-/// Helper for waiting on daemon work completion.
+/// Helper for waiting on Witch work completion.
 ///
-/// Tracks whether we've seen the daemon working and detects when work completes.
-/// This avoids false positives from checking daemon state before work starts.
+/// Tracks whether we've seen the Witch working and detects when work completes.
+/// This avoids false positives from checking Witch state before work starts.
 #[derive(Debug, Clone, Default)]
 pub struct WaitState {
     /// Whether we're currently waiting for work to complete.
     waiting: bool,
-    /// Whether we've seen daemon enter Working state (to distinguish idle-before from idle-after).
+    /// Whether we've seen the Witch enter Working state (to distinguish idle-before from idle-after).
     seen_working: bool,
 }
 
@@ -50,9 +50,9 @@ impl WaitState {
         }
     }
 
-    /// Start waiting for daemon work to complete.
+    /// Start waiting for Witch work to complete.
     ///
-    /// Call this after queuing work to the daemon.
+    /// Call this after queuing work to the Witch.
     pub fn start(&mut self) {
         self.waiting = true;
         self.seen_working = false;
@@ -69,23 +69,23 @@ impl WaitState {
         self.waiting
     }
 
-    /// Check if we've seen the daemon working.
+    /// Check if we've seen the Witch working.
     pub fn has_seen_working(&self) -> bool {
         self.seen_working
     }
 
     /// Tick the wait state, checking for completion.
     ///
-    /// Returns `true` when waiting is complete (daemon was working and is now idle/completed).
+    /// Returns `true` when waiting is complete (Witch was working and is now idle/completed).
     /// Call this each frame while waiting.
-    pub fn tick(&mut self, daemon: &TaskDaemon) -> bool {
+    pub fn tick(&mut self, witch: &Witch) -> bool {
         if !self.waiting {
             return false;
         }
 
-        let status = daemon.status();
+        let status = witch.status();
 
-        // Track when daemon starts working
+        // Track when the Witch starts working
         if status.state == DaemonStateSnapshot::Working {
             self.seen_working = true;
         }
@@ -93,7 +93,7 @@ impl WaitState {
         // Check for completion:
         // - Must have seen working state (to avoid false positive from initial idle)
         // - No pending tasks
-        // - Daemon is now Idle or Completed
+        // - The Witch is now Idle or Completed
         if self.seen_working && status.pending == 0 {
             match status.state {
                 DaemonStateSnapshot::Idle | DaemonStateSnapshot::Completed => {
@@ -113,15 +113,15 @@ impl WaitState {
     ///
     /// Like `tick()`, but also waits for the DB write queue to drain.
     /// Use this when you need to ensure all side effects are persisted.
-    pub fn tick_with_db_drain(&mut self, daemon: &TaskDaemon) -> bool {
+    pub fn tick_with_db_drain(&mut self, witch: &Witch) -> bool {
         if !self.waiting {
             return false;
         }
 
-        let status = daemon.status();
-        let db_queue_empty = daemon.db_queue_depth() == 0;
+        let status = witch.status();
+        let db_queue_empty = witch.db_queue_depth() == 0;
 
-        // Track when daemon starts working
+        // Track when the Witch starts working
         if status.state == DaemonStateSnapshot::Working {
             self.seen_working = true;
         }
@@ -130,7 +130,7 @@ impl WaitState {
         // - Must have seen working state
         // - No pending tasks
         // - DB queue is empty
-        // - Daemon is now Idle or Completed
+        // - The Witch is now Idle or Completed
         if self.seen_working && status.pending == 0 && db_queue_empty {
             match status.state {
                 DaemonStateSnapshot::Idle | DaemonStateSnapshot::Completed => {

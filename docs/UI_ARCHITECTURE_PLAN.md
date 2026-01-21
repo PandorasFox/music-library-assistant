@@ -8,7 +8,7 @@ This document outlines the plan to refactor MLA's UI module into a cleaner archi
 2. **Decision Witness at keypress**: Witnesses created at user confirmation
 3. **View Context / View Modal separation**: Routing vs data handling
 4. **Signals → Decision Groups pipeline**: Transform signal collections into actionable groups
-5. **Transaction-backed decisions**: Daemon holds pending decisions, UI drives
+5. **Transaction-backed decisions**: Witch holds pending decisions, UI drives
 
 ## Current Problems
 
@@ -16,7 +16,7 @@ This document outlines the plan to refactor MLA's UI module into a cleaner archi
 2. **Scattered input handling** - each mode has its own key handler pattern
 3. **Witness created far from keypress** - semantic guarantee is weak
 4. **Dual tag editor implementations** - `TagEditorState` + `DirectoryTagEditorState`
-5. **Views hold pending decisions** - should be in daemon transaction
+5. **Views hold pending decisions** - should be in witch transaction
 
 ---
 
@@ -39,7 +39,7 @@ This document outlines the plan to refactor MLA's UI module into a cleaner archi
 │   │  (Data model: tag fields, selection state, edit buffers)      │  │
 │   │                                                               │  │
 │   │  - Receives group_idx from View Context                       │  │
-│   │  - Fetches Decision from daemon transaction (if exists)       │  │
+│   │  - Fetches Decision from witch transaction (if exists)       │  │
 │   │  - Combines signals with logic → decision groups              │  │
 │   │  - Drives mutation collection on operator decisions           │  │
 │   └──────────────────────────────────────────────────────────────┘  │
@@ -65,7 +65,7 @@ Signals (from DB)
        │ on confirm (DecisionWitness)
        ▼
 ┌──────────────────┐
-│  Daemon Txn      │───▶ holds pending decisions by group idx
+│  Witch Txn      │───▶ holds pending decisions by group idx
 └──────────────────┘
        │
        │ on commit (DecisionWitness)
@@ -174,7 +174,7 @@ pub enum ModalAction {
     /// No action
     None,
 
-    /// Stage mutations to the daemon transaction
+    /// Stage mutations to the witch transaction
     StageDecision {
         group_idx: usize,
         mutations: Vec<Mutation>,
@@ -220,7 +220,7 @@ pub enum OverlayModal {
 
 ### 3. Tag Editor Modal (Example Implementation)
 
-The tag editor modal receives its group_idx from the View Context, fetches any existing decision from the daemon, and manages edit state.
+The tag editor modal receives its group_idx from the View Context, fetches any existing decision from the witch, and manages edit state.
 
 ```rust
 // In ui/tag_editor/modal.rs
@@ -266,18 +266,18 @@ pub struct TagEditorModal {
 
 impl TagEditorModal {
     /// Create from View Context signals and group index.
-    /// Fetches existing decision from daemon if present.
+    /// Fetches existing decision from witch if present.
     pub fn from_context(
         signals: &[Signal],
         group_idx: usize,
-        daemon: &TaskDaemon,
+        witch: &Witch,
         db: &Database,
     ) -> Self {
         // Transform signals into tracks for this group
         let tracks = signals_to_tracks_for_group(signals, group_idx, db);
 
-        // Check if daemon has a pending decision for this group
-        let existing_decision = daemon.get_decision(group_idx);
+        // Check if witch has a pending decision for this group
+        let existing_decision = witch.get_decision(group_idx);
 
         // Build initial tag fields
         let mut tag_fields = tracks_to_tag_fields(&tracks);
@@ -315,7 +315,7 @@ impl TagEditorModal {
         match key.code {
             KeyCode::Enter => {
                 // THIS is the decision point - create witness HERE
-                let witness = crate::daemon::confirm_decision();
+                let witness = crate::witch::confirm_decision();
                 let mutations = self.collect_mutations();
 
                 ModalAction::StageDecision {
@@ -335,7 +335,7 @@ impl TagEditorModal {
 
     /// UPDATE: Poll for signal changes
     pub fn update(&mut self, ctx: &UpdateContext) -> Option<ModalAction> {
-        if ctx.daemon_did_work {
+        if ctx.witch_did_work {
             self.refresh_signals(ctx.db);
         }
         None
@@ -420,11 +420,11 @@ fn run_app(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
         // ═══════════════════════════════════════════════════════════════
         // UPDATE TICK
         // ═══════════════════════════════════════════════════════════════
-        let daemon_status = app.daemon.tick();
+        let witch_status = app.witch.tick();
         let update_ctx = UpdateContext {
-            daemon: &app.daemon,
+            witch: &app.witch,
             db: &app.db,
-            daemon_did_work: daemon_status.completed > 0,
+            witch_did_work: witch_status.completed > 0,
         };
 
         // Tick the active modal
@@ -506,8 +506,8 @@ impl App {
             ModalAction::None => {}
 
             ModalAction::StageDecision { group_idx, mutations } => {
-                // Add to daemon transaction
-                self.daemon.stage_decision(group_idx, mutations);
+                // Add to witch transaction
+                self.witch.stage_decision(group_idx, mutations);
             }
 
             ModalAction::NextGroup => {
@@ -526,12 +526,12 @@ impl App {
             }
 
             ModalAction::CommitTransaction { witness } => {
-                self.daemon.commit_transaction(&witness);
+                self.witch.commit_transaction(&witness);
                 self.view_context = ViewContext::new(ModalType::Insights);
             }
 
             ModalAction::DiscardTransaction { witness } => {
-                self.daemon.discard_transaction(&witness);
+                self.witch.discard_transaction(&witness);
                 self.view_context = ViewContext::new(ModalType::Insights);
             }
 
@@ -559,7 +559,7 @@ impl App {
                 self.tag_editor_modal = Some(TagEditorModal::from_context(
                     signals,
                     idx,
-                    &self.daemon,
+                    &self.witch,
                     &self.db,
                 ));
             }
@@ -569,14 +569,14 @@ impl App {
 }
 ```
 
-### 6. Daemon Transaction Interface (Assumed)
+### 6. Witch Transaction Interface (Assumed)
 
-The daemon provides a simple transaction interface. The UI drives, the daemon stores.
+The witch provides a simple transaction interface. The UI drives, the witch stores.
 
 ```rust
-// In daemon.rs (interface only - implementation is straightforward)
+// In witch.rs (interface only - implementation is straightforward)
 
-impl TaskDaemon {
+impl Witch {
     /// Start a new transaction. Only one active at a time.
     pub fn begin_transaction(&mut self, label: &str) -> Result<(), TransactionError>;
 
@@ -671,7 +671,7 @@ pub fn collate_signals(
 
 1. **Create `ui/context.rs`** - ViewContext, ModalType, InputCategory, InputMask
 2. **Create `ui/modal.rs`** - ModalAction enum, OverlayModal enum
-3. **Add transaction interface to daemon** - begin/stage/get/commit/discard
+3. **Add transaction interface to witch** - begin/stage/get/commit/discard
 
 ### Phase 2: View Context Integration
 
@@ -696,7 +696,7 @@ pub fn collate_signals(
 
 1. **Implement `collate_signals()`** - transform health_issues → SignalGroups
 2. **Wire to ViewContext** - fetch signals on flow start
-3. **Add signal refresh** - re-query on daemon work
+3. **Add signal refresh** - re-query on witch work
 
 ### Phase 6: Cleanup
 
@@ -736,7 +736,7 @@ ui/
 ## Key Invariants
 
 1. **DecisionWitness created at Enter keypress** - never elsewhere
-2. **Only one transaction active** - daemon enforces
+2. **Only one transaction active** - witch enforces
 3. **View Context routes, View Modal handles data** - clear separation
 4. **Signals are source of truth** - modals derive from signals + group_idx
-5. **Daemon is passive storage** - UI drives all logic
+5. **Witch is passive storage** - UI drives all logic

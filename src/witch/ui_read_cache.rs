@@ -2,17 +2,17 @@
 //!
 //! This module provides demand-driven, throttled caching for expensive DB queries
 //! that the UI needs. Instead of blocking the UI thread with synchronous queries,
-//! UI components flag "I want this data" and the daemon spawns background refreshes
+//! UI components flag "I want this data" and the Witch spawns background refreshes
 //! on the rayon pool.
 //!
 //! ## Usage Pattern
 //!
 //! ```ignore
 //! // UI code (every frame when data is needed):
-//! daemon.ui_read_cache().want_corpus_summary();
+//! witch.ui_read_cache().want_corpus_summary();
 //!
 //! // Render code (reads latest cached value, never blocks):
-//! let summary = daemon.ui_read_cache().corpus_summary();
+//! let summary = witch.ui_read_cache().corpus_summary();
 //! ```
 //!
 //! ## Design
@@ -84,7 +84,7 @@ impl<T: Clone + Send + Sync + 'static> CacheEntry<T> {
     /// 1. Not already refreshing (in-flight check)
     /// 2. Either never refreshed, or last refresh was >= throttle ago
     ///
-    /// The daemon's tick() will notice the flag and spawn a refresh task.
+    /// The Witch's tick() will notice the flag and spawn a refresh task.
     pub fn want(&self) {
         // Fast path: already refreshing, no need to check timestamp
         if self.shared.refreshing.load(Ordering::Relaxed) {
@@ -115,7 +115,7 @@ impl<T: Clone + Send + Sync + 'static> CacheEntry<T> {
             .and_then(|inner| inner.data.clone())
     }
 
-    /// Daemon calls this to check if a refresh is needed.
+    /// The Witch calls this to check if a refresh is needed.
     ///
     /// Returns a `CacheWriter` handle if:
     /// - wanted flag is set
@@ -196,7 +196,7 @@ impl<T> Drop for CacheWriter<T> {
 
 /// Background cache for UI read queries.
 ///
-/// Owned by TaskDaemon. UI components call `want_*()` methods to flag demand,
+/// Owned by the Witch. UI components call `want_*()` methods to flag demand,
 /// and `*()` methods to read cached values.
 pub struct UiReadCache {
     corpus_summary: CacheEntry<CorpusSummary>,
@@ -232,10 +232,10 @@ impl UiReadCache {
     }
 
     // -------------------------------------------------------------------------
-    // Daemon Integration
+    // Witch Integration
     // -------------------------------------------------------------------------
 
-    /// Daemon calls this in tick() to spawn refresh tasks for flagged entries.
+    /// The Witch calls this in tick() to spawn refresh tasks for flagged entries.
     ///
     /// Spawns rayon tasks for any entries that need refreshing.
     pub(crate) fn spawn_refreshes(&self) {

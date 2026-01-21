@@ -2,7 +2,7 @@
 
 Check the docs/ folder for the Architecture overview and UI guidelines/UX consistency notes.
 
-Do not spawn threads, ever. Only the task daemon should spawn new threads for background work. That is *its* purpose: consistent and clean way for doing background work, with controlled gates for their side effects.
+Do not spawn threads, ever. Only the Witch should spawn new threads for background work. That is *Her* purpose: She enforces orderliness in her domain, providing a consistent and clean way for doing background work, with controlled gates for their side effects. All data that flows properly through Her is guaranteed.
 
 Do not try to "refresh" signals. MLA is designed around precisely recomputing relevant signals in real-time. You keep adding unused (!) refresh hooks that then only get misused, because they're not things we need or want architecturally. They are expensive.
 
@@ -13,19 +13,19 @@ We use 0-byte Witness objects as guarantees for some compile-time guarantees abo
 MLA enforces strict separation between read-only UI queries and write mutations:
 
 **Read-Only Access (UI Code):**
-- All UI code uses `daemon.read_only_db()` for database queries
-- The daemon caches a single read-only connection (`PRAGMA query_only = ON`)
+- All UI code uses `witch.read_only_db()` for database queries
+- The Witch caches a single read-only connection (`PRAGMA query_only = ON`)
 - This prevents accidental writes from UI code paths
 
 **Write Access (Worker Threads Only):**
-- Only daemon worker threads create write connections via `Database::open()`
+- Only the Witch's worker threads create write connections via `Database::open()`
 - Mutations require `MutationExecutionWitness` tokens (zero-sized proof types)
 - Migrations require `DecisionWitness` via explicit operator confirmation
 - Write connections are created inside `execute_mutation()` and `execute_migration()`
 
 **Exceptions:**
 - First-time setup (`startup/first_time_setup.rs`) creates new database with write access
-- Pre-App startup migrations (`check_and_run_migrations`) need write access before daemon exists
+- Pre-App startup migrations (`check_and_run_migrations`) need write access before the Witch exists
 
 **Anti-patterns:**
 - Never call `Database::open()` directly in UI code
@@ -42,12 +42,12 @@ Two caching strategies exist for different use cases:
 
 **1. UiCache (`ui/cache.rs`) - For "lively" data that updates during operation**
 
-Use for data that changes while the user watches: corpus summary, daemon status, health stats.
+Use for data that changes while the user watches: corpus summary, Witch status, health stats.
 
 ```rust
 // In event loop (ui/mod.rs run_app):
-if let Some(ref mut daemon) = app.task_daemon {
-    app.ui_cache.refresh(daemon);  // Refreshes stale cached values
+if let Some(ref mut the_witch) = app.witch {
+    app.ui_cache.refresh(the_witch);  // Refreshes stale cached values
 }
 
 // In render code:
@@ -85,7 +85,7 @@ fn render(&self, f: &mut Frame, area: Rect) {
 ```
 
 **Anti-patterns:**
-- `daemon.read_only_db().get_*()` in render functions
+- `witch.read_only_db().get_*()` in render functions
 - Passing `&Database` to render/display code
 - Any DB query inside `render()` or functions it calls
 
@@ -131,7 +131,7 @@ DecisionWitness and ExecutionWitnesses are our methods of guaranteeing this.
 
 **Good signals:**
 - `UnindexedFile` for path X (one file)
-- `LibraryOrphan` for library file Y (one file)
+- `LibraryLeftover` for library file Y (one file)
 - `FingerprintDuplicate` for fingerprint Z (one group of tracks)
 - `MissingTag` for tag T (one tag type across affected tracks)
 

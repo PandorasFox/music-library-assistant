@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::corpus::db::Database;
-use crate::daemon::MutationExecutionWitness;
+use crate::witch::MutationExecutionWitness;
 
 use super::types::{Mutation, MutationResult};
 

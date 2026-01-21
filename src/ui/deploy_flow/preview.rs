@@ -1,7 +1,7 @@
 //! Deployment Preview UI
 //!
 //! Shows a comprehensive preview of deployment status for all libraries.
-//! Displays healthy, to_deploy, stale, orphan, and conflict counts.
+//! Displays healthy, to_deploy, stale, leftover, and conflict counts.
 //! Allows the librarian to confirm (generate mutations) or cancel.
 //!
 //! TODO: This module is disabled while corpus::deploy is being updated.

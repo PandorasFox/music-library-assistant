@@ -24,9 +24,9 @@ impl App {
         let phase = progress.phase();
 
         // Tick progress screen - it checks daemon state for completion
-        let completed = progress.tick(self.daemon());
+        let completed = progress.tick(self.witch());
         if completed {
-            let status = self.daemon().status();
+            let status = self.witch().status();
             let _ = config::log_message(&format!(
                 "{:?} phase complete: {} processed",
                 phase, status.total_processed
@@ -91,7 +91,7 @@ impl App {
         // Clone corpus_root to avoid borrow conflict with daemon's db reference
         let corpus_root = self.config.corpus_root.clone();
 
-        let eye_state = self.daemon().eye_state();
+        let eye_state = self.witch().eye_state();
         let _ = config::log_message(&format!(
             "check_for_unindexed_files: eye_state={:?}",
             eye_state

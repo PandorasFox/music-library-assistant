@@ -23,7 +23,7 @@
 use anyhow::{Context, Result};
 
 use crate::corpus::db::Database;
-use crate::daemon::MigrationWitness;
+use crate::witch::MigrationWitness;
 
 /// A single database migration.
 pub struct Migration {

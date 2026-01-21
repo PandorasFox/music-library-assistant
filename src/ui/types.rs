@@ -4,7 +4,7 @@
 //! and traits for progress statistics updates.
 
 use crate::db_thread::DbThreadStats;
-use crate::daemon::WorkerStats;
+use crate::witch::WorkerStats;
 
 // ============================================================================
 // Progress Stats Trait
@@ -31,17 +31,6 @@ impl ProgressStatsUpdater for crate::ui::progress_screen::ProgressScreen {
     }
 }
 
-impl ProgressStatsUpdater for crate::ui::startup::IntakeConfirmationState {
-    fn set_db_queue_depth(&mut self, depth: u64) {
-        crate::ui::startup::IntakeConfirmationState::set_db_queue_depth(self, depth);
-    }
-    fn set_db_stats(&mut self, stats: Option<DbThreadStats>) {
-        crate::ui::startup::IntakeConfirmationState::set_db_stats(self, stats);
-    }
-    fn set_worker_stats(&mut self, stats: Option<WorkerStats>) {
-        crate::ui::startup::IntakeConfirmationState::set_worker_stats(self, stats);
-    }
-}
 
 // ============================================================================
 // UI Mode Enum

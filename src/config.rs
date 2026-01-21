@@ -133,12 +133,18 @@ pub struct StartupOpinions {
     /// Verify in-file tags match database at startup (default: true)
     /// This is "paranoid" mode - catches out-of-band tag edits by external tools
     pub paranoid_tag_verification: bool,
+
+    /// Always run last-stage content analysis even without mutations (default: false)
+    /// Useful after fixing broken computations to force re-derivation of signals.
+    /// Set to true temporarily, run once, then set back to false.
+    pub always_freshen_last_stage: bool,
 }
 
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
             paranoid_tag_verification: true,
+            always_freshen_last_stage: false,
         }
     }
 }
@@ -592,6 +598,13 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.paranoid_tag_verification = val;
+                        }
+                    }
+                }
+                "always-freshen-last-stage" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.always_freshen_last_stage = val;
                         }
                     }
                 }

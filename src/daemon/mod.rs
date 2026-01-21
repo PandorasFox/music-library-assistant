@@ -81,6 +81,10 @@ pub struct TaskDaemon {
     /// Used to auto-trigger content analysis after mutations + awakening drain.
     mutations_ran_this_session: bool,
 
+    /// Force last-stage content analysis even without mutations.
+    /// Loaded once from config at startup. Useful after fixing broken computations.
+    force_freshen_last_stage: bool,
+
     // Session tracking
     session_start: Option<Instant>,
     session_queued: usize,
@@ -168,6 +172,7 @@ impl TaskDaemon {
             accepting_mutations: false,
             read_only_mode: false,
             mutations_ran_this_session: false,
+            force_freshen_last_stage: false, // Set via with_opinions()
             session_start: None,
             session_queued: 0,
             total_processed: 0,
@@ -198,9 +203,15 @@ impl TaskDaemon {
     }
 
     /// Create a new daemon with opinions applied.
-    pub fn with_opinions(read_only_mode: bool) -> Self {
+    pub fn with_opinions(read_only_mode: bool, force_freshen_last_stage: bool) -> Self {
         let mut daemon = Self::new();
         daemon.read_only_mode = read_only_mode;
+        daemon.force_freshen_last_stage = force_freshen_last_stage;
+        if force_freshen_last_stage {
+            let _ = config::log_message(
+                "[DAEMON] force_freshen_last_stage=true: will run content analysis even without mutations"
+            );
+        }
         daemon
     }
 
@@ -523,13 +534,21 @@ impl TaskDaemon {
         }
         // Handle post-mutation completion when eye is Awake
         // Auto-trigger content analysis after mutations + awakening work drains
-        else if self.eye_state == EyeState::Awake && had_mutations {
-            let _ = config::log_message(&format!(
-                "[STATE] Post-mutation session complete (Awake). Auto-triggering content analysis. \
-                 Processed {} tasks.",
-                self.total_processed
-            ));
-            queue_content_analysis_after_reset = true;
+        // Also trigger if force_freshen_last_stage is set (useful after fixing broken computations)
+        else if self.eye_state == EyeState::Awake {
+            if had_mutations || self.force_freshen_last_stage {
+                let reason = if self.force_freshen_last_stage && !had_mutations {
+                    "force_freshen_last_stage=true"
+                } else {
+                    "post-mutation"
+                };
+                let _ = config::log_message(&format!(
+                    "[STATE] Session complete (Awake, {}). Auto-triggering content analysis. \
+                     Processed {} tasks.",
+                    reason, self.total_processed
+                ));
+                queue_content_analysis_after_reset = true;
+            }
         }
 
         // Reset session state

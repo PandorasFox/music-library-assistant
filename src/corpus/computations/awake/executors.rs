@@ -11,7 +11,7 @@ use rusqlite::params;
 use crate::config::log_message;
 use crate::corpus::computations::helpers::{
     clear_file_signal_if_present, ensure_file_signal_if_missing, get_configured_library_names,
-    parse_track_ids_csv,
+    parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSignalType, HealthIssueType};
@@ -26,7 +26,7 @@ use super::{Computation, Result};
 
 /// Execute ScheduleContentAnalysis - spawns all content detection computations.
 pub fn execute_schedule_content_analysis(
-    db: &Database,
+    read_only_db: &Database,
     start: Instant,
 ) -> Result {
     let _ = log_message("[COMPUTE] ScheduleContentAnalysis: spawning all detection computations");
@@ -56,8 +56,8 @@ pub fn execute_schedule_content_analysis(
         }
     }
 
-    // Suppress unused db warning - will be used once library_scan_state is implemented
-    let _ = db;
+    // Suppress unused read_only_db warning - will be used once library_scan_state is implemented
+    let _ = read_only_db;
 
     Result::success(
         Computation::ScheduleContentAnalysis,
@@ -72,7 +72,7 @@ pub fn execute_schedule_content_analysis(
 
 /// Execute DetectFingerprintDuplicates - bulk detection of fingerprint duplicates.
 pub fn execute_detect_fingerprint_duplicates(
-    db: &Database,
+    read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -89,23 +89,6 @@ pub fn execute_detect_fingerprint_duplicates(
         }
     };
 
-    // Clear stale FingerprintDuplicate signals
-    let clear_result = db.conn.execute(
-        "DELETE FROM health_issues WHERE issue_type = 'fingerprint_dup'
-         AND issue_key NOT IN (
-             SELECT fingerprint FROM tracks
-             WHERE fingerprint IS NOT NULL
-             GROUP BY fingerprint HAVING COUNT(*) > 1
-         )",
-        params![],
-    );
-    if let Err(e) = clear_result {
-        let _ = log_message(&format!(
-            "[COMPUTE] DetectFingerprintDuplicates: error clearing stale signals: {}",
-            e
-        ));
-    }
-
     // Find all fingerprints with duplicates
     let query = "SELECT fingerprint, GROUP_CONCAT(id) as track_ids
                  FROM tracks
@@ -113,7 +96,7 @@ pub fn execute_detect_fingerprint_duplicates(
                  GROUP BY fingerprint
                  HAVING COUNT(*) > 1";
 
-    let mut stmt = match db.conn.prepare(query) {
+    let mut stmt = match read_only_db.conn.prepare(query) {
         Ok(s) => s,
         Err(e) => {
             return Result::failure(
@@ -139,7 +122,8 @@ pub fn execute_detect_fingerprint_duplicates(
         }
     };
 
-    let mut total_groups = 0;
+    // Build computed signals
+    let mut computed = Vec::new();
     let mut total_tracks = 0;
 
     for row_result in rows {
@@ -155,27 +139,34 @@ pub fn execute_detect_fingerprint_duplicates(
         };
 
         let track_ids = parse_track_ids_csv(&track_ids_str);
-
-        total_groups += 1;
         total_tracks += track_ids.len();
 
-        let signal = AggregateSignal {
-            id: None,
-            signal_type: AggregateSignalType::FingerprintDuplicate,
-            key: fingerprint.clone(),
-            discovered_at: None,
-            metadata_json: Some(serde_json::json!({
-                "fingerprint": fingerprint,
-            }).to_string()),
-        }
-        .with_track_ids(&track_ids);
+        let metadata = serde_json::json!({
+            "fingerprint": &fingerprint,
+            "track_ids": &track_ids,
+        })
+        .to_string();
 
-        sender.replace_aggregate_signal(signal, witness);
+        computed.push(ComputedAggregateSignal {
+            key: fingerprint,
+            track_ids,
+            metadata_json: metadata,
+        });
     }
 
+    // Reconcile with existing signals (handles stale/new/changed/unchanged)
+    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals(
+        read_only_db,
+        &sender,
+        AggregateSignalType::FingerprintDuplicate,
+        computed,
+        witness,
+    );
+
+    let total_groups = new_count + updated + unchanged;
     let _ = log_message(&format!(
-        "[COMPUTE] DetectFingerprintDuplicates: {} groups, {} tracks total",
-        total_groups, total_tracks
+        "[COMPUTE] DetectFingerprintDuplicates: {} groups ({} tracks), cleared={}, new={}, updated={}, unchanged={}",
+        total_groups, total_tracks, cleared, new_count, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -187,7 +178,7 @@ pub fn execute_detect_fingerprint_duplicates(
 
 /// Execute DetectDuplicateInodes - bulk detection of duplicate inodes.
 pub fn execute_detect_duplicate_inodes(
-    db: &Database,
+    read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -204,28 +195,12 @@ pub fn execute_detect_duplicate_inodes(
         }
     };
 
-    // Clear stale DuplicateInode signals
-    let clear_result = db.conn.execute(
-        "DELETE FROM health_issues WHERE issue_type = 'duplicate_inode'
-         AND issue_key NOT IN (
-             SELECT CAST(inode AS TEXT) FROM tracks
-             GROUP BY inode HAVING COUNT(*) > 1
-         )",
-        params![],
-    );
-    if let Err(e) = clear_result {
-        let _ = log_message(&format!(
-            "[COMPUTE] DetectDuplicateInodes: error clearing stale signals: {}",
-            e
-        ));
-    }
-
     let query = "SELECT inode, GROUP_CONCAT(id) as track_ids
                  FROM tracks
                  GROUP BY inode
                  HAVING COUNT(*) > 1";
 
-    let mut stmt = match db.conn.prepare(query) {
+    let mut stmt = match read_only_db.conn.prepare(query) {
         Ok(s) => s,
         Err(e) => {
             return Result::failure(
@@ -251,7 +226,8 @@ pub fn execute_detect_duplicate_inodes(
         }
     };
 
-    let mut total_groups = 0;
+    // Build computed signals
+    let mut computed = Vec::new();
 
     for row_result in rows {
         let (inode, track_ids_str) = match row_result {
@@ -266,25 +242,33 @@ pub fn execute_detect_duplicate_inodes(
         };
 
         let track_ids = parse_track_ids_csv(&track_ids_str);
-        total_groups += 1;
 
-        let signal = AggregateSignal {
-            id: None,
-            signal_type: AggregateSignalType::DuplicateInode,
+        let metadata = serde_json::json!({
+            "inode": inode,
+            "track_ids": &track_ids,
+        })
+        .to_string();
+
+        computed.push(ComputedAggregateSignal {
             key: inode.to_string(),
-            discovered_at: None,
-            metadata_json: Some(serde_json::json!({
-                "inode": inode,
-            }).to_string()),
-        }
-        .with_track_ids(&track_ids);
-
-        sender.replace_aggregate_signal(signal, witness);
+            track_ids,
+            metadata_json: metadata,
+        });
     }
 
+    // Reconcile with existing signals (handles stale/new/changed/unchanged)
+    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals(
+        read_only_db,
+        &sender,
+        AggregateSignalType::DuplicateInode,
+        computed,
+        witness,
+    );
+
+    let total_groups = new_count + updated + unchanged;
     let _ = log_message(&format!(
-        "[COMPUTE] DetectDuplicateInodes: {} duplicate inode groups",
-        total_groups
+        "[COMPUTE] DetectDuplicateInodes: {} groups, cleared={}, new={}, updated={}, unchanged={}",
+        total_groups, cleared, new_count, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -296,7 +280,7 @@ pub fn execute_detect_duplicate_inodes(
 
 /// Execute DetectMissingTags - detect tracks missing required tags.
 pub fn execute_detect_missing_tags(
-    db: &Database,
+    read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -334,11 +318,8 @@ pub fn execute_detect_missing_tags(
         .map(|s| s.to_lowercase())
         .collect();
 
-    // Clear all existing MissingTag signals
-    let _ = db.conn.execute(
-        "DELETE FROM health_issues WHERE issue_type = 'missing_tag'",
-        params![],
-    );
+    // Clear all existing MissingTag signals (routes through db_thread)
+    sender.clear_health_issues_by_type(HealthIssueType::MissingTag, witness);
 
     let query = "
         SELECT t.id, t.path,
@@ -349,7 +330,7 @@ pub fn execute_detect_missing_tags(
         GROUP BY t.id
     ";
 
-    let mut stmt = match db.conn.prepare(query) {
+    let mut stmt = match read_only_db.conn.prepare(query) {
         Ok(s) => s,
         Err(e) => {
             return Result::failure(
@@ -452,7 +433,7 @@ pub fn execute_detect_missing_tags(
 
 /// Execute DetectMetadataDuplicates - detect exact metadata duplicates.
 pub fn execute_detect_metadata_duplicates(
-    db: &Database,
+    read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -469,11 +450,8 @@ pub fn execute_detect_metadata_duplicates(
         }
     };
 
-    // Clear all MetadataDuplicate signals
-    let _ = db.conn.execute(
-        "DELETE FROM health_issues WHERE issue_type = 'metadata_dup'",
-        params![],
-    );
+    // Clear all MetadataDuplicate signals (routes through db_thread)
+    sender.clear_health_issues_by_type(HealthIssueType::MetadataDuplicate, witness);
 
     let query = "
         SELECT t.id, tt.tag_name, tt.tag_value
@@ -482,7 +460,7 @@ pub fn execute_detect_metadata_duplicates(
         ORDER BY t.id, LOWER(tt.tag_name)
     ";
 
-    let mut stmt = match db.conn.prepare(query) {
+    let mut stmt = match read_only_db.conn.prepare(query) {
         Ok(s) => s,
         Err(e) => {
             return Result::failure(
@@ -586,15 +564,38 @@ pub fn md5_hash(s: &str) -> u64 {
 
 /// Execute DetectTagCanonicalizations - detect tag canonicalization opportunities.
 pub fn execute_detect_tag_canonicalizations(
-    db: &Database,
+    read_only_db: &Database,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::health::canonicalization::detect_and_store_canonicalizations;
+    use crate::corpus::health::canonicalization::detect_canonicalizations;
 
     let computation = Computation::DetectTagCanonicalizations;
 
-    match detect_and_store_canonicalizations(db) {
-        Ok(count) => {
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    match detect_canonicalizations(read_only_db) {
+        Ok(canonicalizations) => {
+            let count = canonicalizations.len();
+            // Store canonicalizations via db_thread
+            for canon in canonicalizations {
+                sender.upsert_tag_canonicalization(
+                    &canon.tag_name,
+                    &canon.canonical_value,
+                    &canon.variant_value,
+                    canon.confidence,
+                    witness,
+                );
+            }
             let _ = log_message(&format!(
                 "[COMPUTE] DetectTagCanonicalizations: {} new canonicalization entries",
                 count
@@ -615,7 +616,7 @@ pub fn execute_detect_tag_canonicalizations(
 
 /// Execute VerifyOutOfBandChanges - verify files with modified mtime.
 pub fn execute_verify_out_of_band_changes(
-    db: &Database,
+    read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -635,7 +636,7 @@ pub fn execute_verify_out_of_band_changes(
         }
     };
 
-    let oob_signals = match db.get_health_signals(Some(HealthIssueType::CorpusFileModifiedOutOfBand)) {
+    let oob_signals = match read_only_db.get_health_signals(Some(HealthIssueType::CorpusFileModifiedOutOfBand)) {
         Ok(signals) => signals,
         Err(e) => {
             return Result::failure(
@@ -653,7 +654,7 @@ pub fn execute_verify_out_of_band_changes(
     for signal in oob_signals {
         let path = &signal.issue_key;
 
-        let track = match db.get_track_by_path(path) {
+        let track = match read_only_db.get_track_by_path(path) {
             Ok(Some(t)) => t,
             Ok(None) => {
                 sender.clear_file_signal(FileSignalType::CorpusFileModifiedOutOfBand, path, witness);
@@ -667,7 +668,7 @@ pub fn execute_verify_out_of_band_changes(
             None => continue,
         };
 
-        if let Err(e) = execute_verify_tags(db, track_id, Path::new(path)) {
+        if let Err(e) = execute_verify_tags(read_only_db, track_id, Path::new(path)) {
             let _ = log_message(&format!(
                 "[COMPUTE] VerifyOutOfBandChanges: error verifying {}: {}",
                 path, e
@@ -677,7 +678,7 @@ pub fn execute_verify_out_of_band_changes(
 
         verified_count += 1;
 
-        let mismatch_count: i64 = db.conn
+        let mismatch_count: i64 = read_only_db.conn
             .query_row(
                 "SELECT COUNT(*) FROM tag_mismatches WHERE track_id = ?1",
                 params![track_id],
@@ -687,7 +688,7 @@ pub fn execute_verify_out_of_band_changes(
 
         if mismatch_count > 0 {
             tag_change_count += 1;
-            ensure_file_signal_if_missing(db, &sender, FileSignalType::OutOfBandTagChange, path, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::OutOfBandTagChange, path, witness);
         } else {
             mtime_only_count += 1;
             sender.clear_file_signal(FileSignalType::CorpusFileModifiedOutOfBand, path, witness);
@@ -697,10 +698,8 @@ pub fn execute_verify_out_of_band_changes(
                 let mtime_secs = metadata.mtime();
                 let mtime_nanos = metadata.mtime_nsec() as i64;
 
-                let _ = db.conn.execute(
-                    "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
-                    params![mtime_secs, mtime_nanos, path],
-                );
+                // Routes through db_thread which has write access
+                sender.update_scan_state_mtime(path, mtime_secs, mtime_nanos, witness);
             }
         }
     }
@@ -719,7 +718,7 @@ pub fn execute_verify_out_of_band_changes(
 
 /// Execute DetectDeployConflicts - bulk detection of deploy path collisions.
 pub fn execute_detect_deploy_conflicts(
-    db: &Database,
+    read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -738,13 +737,10 @@ pub fn execute_detect_deploy_conflicts(
         }
     };
 
-    // Clear all existing DeployConflict signals
-    let _ = db.conn.execute(
-        "DELETE FROM health_issues WHERE issue_type = 'deploy_conflict'",
-        params![],
-    );
+    // Clear all existing DeployConflict signals (routes through db_thread)
+    sender.clear_health_issues_by_type(HealthIssueType::DeployConflict, witness);
 
-    let healthy_signals = db
+    let healthy_signals = read_only_db
         .get_health_signals(Some(HealthIssueType::HealthyFile))
         .unwrap_or_default();
 
@@ -752,9 +748,9 @@ pub fn execute_detect_deploy_conflicts(
 
     for signal in &healthy_signals {
         let path = &signal.issue_key;
-        if let Ok(Some(track)) = db.get_track_by_path(path) {
+        if let Ok(Some(track)) = read_only_db.get_track_by_path(path) {
             if let Some(track_id) = track.id {
-                let tags = db.get_track_tags(track_id).unwrap_or_default();
+                let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
                 let tag_map: HashMap<String, String> = tags
                     .into_iter()
                     .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
@@ -808,7 +804,7 @@ pub fn execute_detect_deploy_conflicts(
 /// Placeholder - actual implementation would check a single track's deploy path
 /// against other tracks.
 pub fn execute_check_deploy_conflicts(
-    _db: &Database,
+    _read_only_db: &Database,
     track_id: i64,
     start: Instant,
 ) -> Result {
@@ -833,7 +829,7 @@ pub fn execute_check_deploy_conflicts(
 /// Reads library scan data from library_scan_state table and compares against
 /// corpus index to identify orphans and stale deployments.
 pub fn execute_derive_deploy_health_signals(
-    db: &Database,
+    read_only_db: &Database,
     library_name: &str,
     library_root: &Path,
     corpus_path_prefixes: &[std::path::PathBuf],
@@ -860,7 +856,7 @@ pub fn execute_derive_deploy_health_signals(
     };
 
     // Query library scan data from Awakening phase
-    let library_scan_entries = match db.get_library_scan_files(library_name) {
+    let library_scan_entries = match read_only_db.get_library_scan_files(library_name) {
         Ok(entries) => entries,
         Err(e) => {
             let _ = log_message(&format!(
@@ -878,7 +874,7 @@ pub fn execute_derive_deploy_health_signals(
         .collect();
 
     // Get all corpus track inodes
-    let corpus_inodes = db.get_all_track_inodes().unwrap_or_default();
+    let corpus_inodes = read_only_db.get_all_track_inodes().unwrap_or_default();
 
     let mut healthy_count: usize = 0;
     let mut stale_count: usize = 0;
@@ -897,11 +893,11 @@ pub fn execute_derive_deploy_health_signals(
         );
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            clear_file_signal_if_present(db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
+            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
 
-            let is_stale = if let Ok(Some(track)) = db.get_track_by_path(corpus_path) {
+            let is_stale = if let Ok(Some(track)) = read_only_db.get_track_by_path(corpus_path) {
                 if let Some(track_id) = track.id {
-                    let tags = db.get_track_tags(track_id).unwrap_or_default();
+                    let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
                     let tag_map: std::collections::HashMap<String, String> = tags
                         .into_iter()
                         .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
@@ -920,15 +916,15 @@ pub fn execute_derive_deploy_health_signals(
 
             if is_stale {
                 stale_count += 1;
-                ensure_file_signal_if_missing(db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
+                ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
             } else {
                 healthy_count += 1;
-                clear_file_signal_if_present(db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
+                clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
             }
         } else {
             orphan_count += 1;
-            ensure_file_signal_if_missing(db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
-            clear_file_signal_if_present(db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::LibraryOrphan, &orphan_key, witness);
+            clear_file_signal_if_present(read_only_db, &sender, FileSignalType::LibraryStale, &stale_key, witness);
         }
     }
 

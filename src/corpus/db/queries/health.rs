@@ -530,6 +530,48 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Clear an aggregate signal (idempotent delete).
+    pub fn clear_aggregate_signal(
+        &self,
+        signal_type: AggregateSignalType,
+        key: &str,
+        _witness: &ComputationWitness,
+    ) -> Result<bool> {
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                params![signal_type.as_str(), key],
+            )
+            .context("Failed to clear aggregate signal")?;
+
+        Ok(deleted > 0)
+    }
+
+    /// Get all aggregate signal keys and their metadata for a given type.
+    ///
+    /// Returns (key, metadata_json) pairs for set-difference computations.
+    pub fn get_aggregate_signal_keys_with_metadata(
+        &self,
+        signal_type: AggregateSignalType,
+    ) -> Result<Vec<(String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT issue_key, metadata_json FROM health_issues WHERE issue_type = ?1",
+        )?;
+
+        let rows = stmt.query_map(params![signal_type.as_str()], |row| {
+            let key: String = row.get(0)?;
+            let metadata: Option<String> = row.get(1)?;
+            Ok((key, metadata))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
     // ========================================================================
     // Directory-Level Queries (for chunked computations)
     // ========================================================================

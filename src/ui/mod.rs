@@ -315,7 +315,11 @@ impl App {
     /// Get or create the task daemon.
     pub(super) fn daemon(&mut self) -> &mut crate::daemon::TaskDaemon {
         if self.task_daemon.is_none() {
-            self.task_daemon = Some(crate::daemon::TaskDaemon::new());
+            // Load startup opinions from config
+            let (read_only, force_freshen) = crate::config::load_config()
+                .map(|c| (false, c.opinions.startup.always_freshen_last_stage))
+                .unwrap_or((false, false));
+            self.task_daemon = Some(crate::daemon::TaskDaemon::with_opinions(read_only, force_freshen));
         }
         self.task_daemon.as_mut().unwrap()
     }

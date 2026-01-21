@@ -95,10 +95,14 @@ impl ThreadStats {
 // Thread-Local Storage
 // ============================================================================
 
-// Thread-local cached read-only database connection for computation workers.
+// Thread-local cached READ-ONLY database connection for computation workers.
 // Each worker thread opens once and reuses, eliminating connection overhead.
+//
+// IMPORTANT: This connection has `PRAGMA query_only = ON` set.
+// Any write operations (INSERT, UPDATE, DELETE) will SILENTLY FAIL.
+// All writes from computations must go through `db_thread::signal_sender()`.
 thread_local! {
-    static THREAD_DB: RefCell<Option<crate::corpus::db::Database>> = const { RefCell::new(None) };
+    static THREAD_READ_ONLY_DB: RefCell<Option<crate::corpus::db::Database>> = const { RefCell::new(None) };
     pub(super) static THREAD_STATS: RefCell<ThreadStats> = const { RefCell::new(ThreadStats::new()) };
 }
 
@@ -111,17 +115,25 @@ pub fn get_thread_stats() -> ThreadStats {
     THREAD_STATS.with(|cell| cell.borrow().clone())
 }
 
-/// Execute a function with the thread-local read-only database connection.
+/// Execute a function with the thread-local READ-ONLY database connection.
 /// Opens and caches the connection on first use per thread.
 /// Tracks DB read timing for performance instrumentation (when enabled).
-pub(super) fn with_thread_db<T, F>(f: F) -> Result<T, String>
+///
+/// # IMPORTANT: Read-Only Access
+///
+/// This connection uses `PRAGMA query_only = ON`. All write operations
+/// (INSERT, UPDATE, DELETE) will fail. Computations that need to persist
+/// data must route writes through `db_thread::signal_sender()`.
+///
+/// The `read_only_db` parameter name in executor functions reflects this.
+pub(super) fn with_read_only_db<T, F>(f: F) -> Result<T, String>
 where
     F: FnOnce(&crate::corpus::db::Database) -> T,
 {
     use crate::config;
     use crate::corpus::db::Database;
 
-    THREAD_DB.with(|cell| {
+    THREAD_READ_ONLY_DB.with(|cell| {
         let mut opt = cell.borrow_mut();
         if opt.is_none() {
             let db_path = config::get_db_path().map_err(|e| e.to_string())?;

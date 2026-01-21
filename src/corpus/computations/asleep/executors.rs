@@ -25,7 +25,7 @@ use super::{Computation, Result};
 
 /// Phase 1: Enumerate ALL corpus directories and spawn per-directory scans.
 pub fn execute_walk_corpus(
-    _db: &Database,
+    _read_only_db: &Database,
     root: &Path,
     source: &str,
     paranoid: bool,
@@ -83,7 +83,7 @@ pub fn execute_walk_corpus(
 
 /// Scan a single corpus directory (non-recursive).
 pub fn execute_scan_corpus_directory(
-    db: &Database,
+    read_only_db: &Database,
     directory: &Path,
     source: &str,
     paranoid: bool,
@@ -133,7 +133,7 @@ pub fn execute_scan_corpus_directory(
 
     // Get indexed inodes from scan_state for comparison
     let inode_vec: Vec<i64> = disk_inodes.iter().copied().collect();
-    let indexed_by_inode = db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
+    let indexed_by_inode = read_only_db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
     let mut spawn: Vec<Computation> = Vec::new();
 
@@ -143,7 +143,7 @@ pub fn execute_scan_corpus_directory(
 
         if let Some(entry) = indexed_by_inode.get(inode) {
             // File is indexed - check if we need to verify mtime or tags
-            let track = match db.get_track_by_path(&path_str) {
+            let track = match read_only_db.get_track_by_path(&path_str) {
                 Ok(Some(t)) => t,
                 _ => continue,
             };
@@ -166,7 +166,7 @@ pub fn execute_scan_corpus_directory(
             }
         } else {
             // File not indexed - create a FileInCorpus signal for this file
-            ensure_file_signal_if_missing(db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::FileInCorpus, &path_str, witness);
         }
     }
 
@@ -213,7 +213,7 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
 
 /// Phase 2: Compare disk state to database index.
 pub fn execute_compare_inodes(
-    db: &Database,
+    read_only_db: &Database,
     source: &str,
     disk_state: &[(i64, PathBuf, i64, i64)],
     paranoid: bool,
@@ -240,7 +240,7 @@ pub fn execute_compare_inodes(
         .collect();
 
     // Get indexed inodes from scan_state
-    let indexed_inodes = db.get_all_scan_state_inodes(source).unwrap_or_default();
+    let indexed_inodes = read_only_db.get_all_scan_state_inodes(source).unwrap_or_default();
 
     // Calculate differences
     let missing_from_disk: HashSet<i64> = indexed_inodes.difference(&disk_inodes).cloned().collect();
@@ -256,8 +256,8 @@ pub fn execute_compare_inodes(
 
     // Create MissingFromDisk signals
     if !missing_from_disk.is_empty() {
-        if let Ok(missing_paths) = db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
-            create_missing_from_disk_issues(db, &missing_paths, witness);
+        if let Ok(missing_paths) = read_only_db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
+            create_missing_from_disk_issues(read_only_db, &missing_paths, witness);
         }
     }
 
@@ -268,7 +268,7 @@ pub fn execute_compare_inodes(
             .filter_map(|inode| disk_inode_to_state.get(inode))
             .map(|(path, _, _)| path.to_string_lossy().to_string())
             .collect();
-        create_missing_from_index_issues(db, &missing_paths, witness);
+        create_missing_from_index_issues(read_only_db, &missing_paths, witness);
     }
 
     // Spawn follow-up computations for mtime verification
@@ -276,7 +276,7 @@ pub fn execute_compare_inodes(
 
     // Get scan_state entries for comparison
     let inode_vec: Vec<i64> = indexed_inodes.iter().copied().collect();
-    let indexed_by_inode = db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
+    let indexed_by_inode = read_only_db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
     for (inode, path, disk_mtime_s, disk_mtime_ns) in disk_state {
         // Skip files not in index (already reported as MissingFromIndex)
@@ -285,7 +285,7 @@ pub fn execute_compare_inodes(
         };
 
         // Get track_id for this path
-        let track = match db.get_track_by_path(&path.to_string_lossy()) {
+        let track = match read_only_db.get_track_by_path(&path.to_string_lossy()) {
             Ok(Some(t)) => t,
             _ => continue,
         };
@@ -325,7 +325,7 @@ pub fn execute_compare_inodes(
 
 /// Create MissingFile signals for files in index but missing from disk.
 fn create_missing_from_disk_issues(
-    db: &Database,
+    read_only_db: &Database,
     missing_paths: &[String],
     witness: &ComputationWitness,
 ) {
@@ -334,13 +334,13 @@ fn create_missing_from_disk_issues(
     };
 
     for path in missing_paths {
-        ensure_file_signal_if_missing(db, &sender, FileSignalType::MissingFile, path, witness);
+        ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::MissingFile, path, witness);
     }
 }
 
 /// Create UnindexedFile signals for files on disk but not in index.
 fn create_missing_from_index_issues(
-    db: &Database,
+    read_only_db: &Database,
     missing_paths: &[String],
     witness: &ComputationWitness,
 ) {
@@ -349,7 +349,7 @@ fn create_missing_from_index_issues(
     };
 
     for path in missing_paths {
-        ensure_file_signal_if_missing(db, &sender, FileSignalType::UnindexedFile, path, witness);
+        ensure_file_signal_if_missing(read_only_db, &sender, FileSignalType::UnindexedFile, path, witness);
     }
 }
 
@@ -359,7 +359,7 @@ fn create_missing_from_index_issues(
 
 /// Phase 3: Verify single file mtime.
 pub fn execute_verify_mtime(
-    _db: &Database,
+    _read_only_db: &Database,
     track_id: i64,
     path: &Path,
     expected_mtime_secs: i64,
@@ -412,7 +412,7 @@ pub fn execute_verify_mtime(
 ///
 /// Delegates to the existing verify_tags implementation in indexing module.
 pub fn execute_verify_tags(
-    db: &Database,
+    read_only_db: &Database,
     track_id: i64,
     path: &Path,
     start: Instant,
@@ -424,7 +424,7 @@ pub fn execute_verify_tags(
         path: path.to_path_buf(),
     };
 
-    match indexing::execute_verify_tags(db, track_id, path) {
+    match indexing::execute_verify_tags(read_only_db, track_id, path) {
         Ok(()) => Result::success(
             computation,
             start.elapsed().as_millis() as u64,

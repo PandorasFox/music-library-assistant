@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, FileSignalType, HealthIssue, HealthIssueType,
+    AggregateSignal, AggregateSignalType, FileSignalType, HealthIssueType,
 };
 use crate::corpus::db::Database;
 use crate::config;
@@ -49,7 +49,7 @@ pub fn signal_sender() -> Option<&'static SignalWriteSender> {
 // Message Types
 // ============================================================================
 
-/// Signal write operations (health signals).
+/// Signal write operations (health signals and computation state).
 #[derive(Debug)]
 enum SignalWriteOp {
     /// File signal (no metadata) - type-safe, preferred
@@ -81,6 +81,45 @@ enum SignalWriteOp {
     ClearFileSignalsInDirectory {
         directory: PathBuf,
         signal_type: FileSignalType,
+    },
+
+    // =========================================================================
+    // Library Scan State Operations (Awakening phase)
+    // =========================================================================
+
+    /// Clear all scan state for a library before re-scanning.
+    ClearLibraryScanState {
+        library_name: String,
+    },
+    /// Record a file discovered during library scanning.
+    RecordLibraryFile {
+        library_name: String,
+        library_root: PathBuf,
+        file_path: PathBuf,
+        inode: i64,
+        scanned_at: i64,
+    },
+
+    // =========================================================================
+    // Bulk Operations (Awake phase content analysis)
+    // =========================================================================
+
+    /// Clear all health issues of a specific type (for bulk re-computation).
+    ClearHealthIssuesByType {
+        issue_type: HealthIssueType,
+    },
+    /// Update scan_state mtime for a file (after OOB verification).
+    UpdateScanStateMtime {
+        path: String,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+    },
+    /// Upsert a tag canonicalization entry.
+    UpsertTagCanonicalization {
+        tag_name: String,
+        canonical_value: String,
+        variant_value: String,
+        confidence: Option<f64>,
     },
 }
 
@@ -292,6 +331,105 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::ReplaceAggregateSignal { signal });
     }
 
+    /// Clear an aggregate signal (idempotent delete).
+    pub fn clear_aggregate_signal(
+        &self,
+        signal_type: AggregateSignalType,
+        key: &str,
+        _witness: &ComputationWitness,
+    ) {
+        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.stats.queue_empty.store(false, Ordering::Release);
+        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignal {
+            signal_type,
+            key: key.to_string(),
+        });
+    }
+
+    // =========================================================================
+    // Library Scan State Operations (Awakening phase)
+    // =========================================================================
+
+    /// Clear all scan state for a library before re-scanning.
+    pub fn clear_library_scan_state(&self, library_name: &str, _witness: &ComputationWitness) {
+        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.stats.queue_empty.store(false, Ordering::Release);
+        let _ = self.tx.send(SignalWriteOp::ClearLibraryScanState {
+            library_name: library_name.to_string(),
+        });
+    }
+
+    /// Record a file discovered during library scanning.
+    pub fn record_library_file(
+        &self,
+        library_name: &str,
+        library_root: &std::path::Path,
+        file_path: &std::path::Path,
+        inode: i64,
+        scanned_at: i64,
+        _witness: &ComputationWitness,
+    ) {
+        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.stats.queue_empty.store(false, Ordering::Release);
+        let _ = self.tx.send(SignalWriteOp::RecordLibraryFile {
+            library_name: library_name.to_string(),
+            library_root: library_root.to_path_buf(),
+            file_path: file_path.to_path_buf(),
+            inode,
+            scanned_at,
+        });
+    }
+
+    // =========================================================================
+    // Bulk Operations (Awake phase content analysis)
+    // =========================================================================
+
+    /// Clear all health issues of a specific type (for bulk re-computation).
+    pub fn clear_health_issues_by_type(
+        &self,
+        issue_type: HealthIssueType,
+        _witness: &ComputationWitness,
+    ) {
+        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.stats.queue_empty.store(false, Ordering::Release);
+        let _ = self.tx.send(SignalWriteOp::ClearHealthIssuesByType { issue_type });
+    }
+
+    /// Update scan_state mtime for a file (after OOB verification).
+    pub fn update_scan_state_mtime(
+        &self,
+        path: &str,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        _witness: &ComputationWitness,
+    ) {
+        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.stats.queue_empty.store(false, Ordering::Release);
+        let _ = self.tx.send(SignalWriteOp::UpdateScanStateMtime {
+            path: path.to_string(),
+            mtime_secs,
+            mtime_nanos,
+        });
+    }
+
+    /// Upsert a tag canonicalization entry.
+    pub fn upsert_tag_canonicalization(
+        &self,
+        tag_name: &str,
+        canonical_value: &str,
+        variant_value: &str,
+        confidence: Option<f64>,
+        _witness: &ComputationWitness,
+    ) {
+        self.stats.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.stats.queue_empty.store(false, Ordering::Release);
+        let _ = self.tx.send(SignalWriteOp::UpsertTagCanonicalization {
+            tag_name: tag_name.to_string(),
+            canonical_value: canonical_value.to_string(),
+            variant_value: variant_value.to_string(),
+            confidence,
+        });
+    }
 }
 
 /// Sender for index write operations (Phase 2 placeholder).
@@ -505,6 +643,81 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                 db.replace_aggregate_signal(signal, &witness).map(|_| ())
             });
         }
+        SignalWriteOp::ClearAggregateSignal { signal_type, key } => {
+            with_retry("clear_aggregate_signal", key, || {
+                db.clear_aggregate_signal(*signal_type, key, &witness).map(|_| ())
+            });
+        }
 
+        // Library scan state operations (Awakening phase)
+        SignalWriteOp::ClearLibraryScanState { library_name } => {
+            with_retry("clear_library_scan_state", library_name, || {
+                db.clear_library_scan_state(library_name).map(|_| ())
+            });
+        }
+        SignalWriteOp::RecordLibraryFile {
+            library_name,
+            library_root,
+            file_path,
+            inode,
+            scanned_at,
+        } => {
+            let ctx = file_path.display().to_string();
+            with_retry("record_library_file", &ctx, || {
+                db.record_library_file(library_name, library_root, file_path, *inode, *scanned_at)
+            });
+        }
+
+        // Bulk operations (Awake phase content analysis)
+        SignalWriteOp::ClearHealthIssuesByType { issue_type } => {
+            let issue_type_str = issue_type.as_str();
+            with_retry("clear_health_issues_by_type", issue_type_str, || {
+                use rusqlite::params;
+                db.conn
+                    .execute(
+                        "DELETE FROM health_issues WHERE issue_type = ?1",
+                        params![issue_type_str],
+                    )
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!(e))
+            });
+        }
+        SignalWriteOp::UpdateScanStateMtime {
+            path,
+            mtime_secs,
+            mtime_nanos,
+        } => {
+            with_retry("update_scan_state_mtime", path, || {
+                use rusqlite::params;
+                db.conn
+                    .execute(
+                        "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
+                        params![mtime_secs, mtime_nanos, path],
+                    )
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!(e))
+            });
+        }
+        SignalWriteOp::UpsertTagCanonicalization {
+            tag_name,
+            canonical_value,
+            variant_value,
+            confidence,
+        } => {
+            let ctx = format!("{}:{}->{}", tag_name, variant_value, canonical_value);
+            with_retry("upsert_tag_canonicalization", &ctx, || {
+                use crate::corpus::db::types::TagCanonicalization;
+                let canon_entry = TagCanonicalization {
+                    id: None,
+                    tag_name: tag_name.clone(),
+                    canonical_value: canonical_value.clone(),
+                    variant_value: variant_value.clone(),
+                    confidence: *confidence,
+                    auto_detected: true,
+                    confirmed_at: None,
+                };
+                db.upsert_tag_canonicalization(&canon_entry).map(|_| ())
+            });
+        }
     }
 }

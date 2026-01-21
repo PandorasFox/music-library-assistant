@@ -3,10 +3,11 @@
 //! These helpers are used across multiple computation modules for common tasks
 //! like file type detection, path parsing, signal emission, and configuration access.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
-use crate::corpus::db::types::FileSignalType;
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSignalType};
 use crate::db_thread;
 
 use super::types::ComputationWitness;
@@ -116,13 +117,13 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 /// Uses the read-only DB to check freshness before queueing to the write thread.
 /// This dramatically reduces redundant writes during re-computation.
 pub(super) fn ensure_file_signal_if_missing(
-    db: &crate::corpus::db::Database,
+    read_only_db: &crate::corpus::db::Database,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
     witness: &ComputationWitness,
 ) {
-    if !db.file_signal_exists(signal_type, key) {
+    if !read_only_db.file_signal_exists(signal_type, key) {
         sender.ensure_file_signal(signal_type, key, witness);
     }
 }
@@ -132,13 +133,126 @@ pub(super) fn ensure_file_signal_if_missing(
 /// Uses the read-only DB to check existence before queueing to the write thread.
 /// This dramatically reduces redundant writes during re-computation.
 pub(super) fn clear_file_signal_if_present(
-    db: &crate::corpus::db::Database,
+    read_only_db: &crate::corpus::db::Database,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
     witness: &ComputationWitness,
 ) {
-    if db.file_signal_exists(signal_type, key) {
+    if read_only_db.file_signal_exists(signal_type, key) {
         sender.clear_file_signal(signal_type, key, witness);
     }
+}
+
+// ============================================================================
+// Aggregate Signal Set Logic
+// ============================================================================
+
+/// A computed aggregate signal ready for reconciliation.
+///
+/// Contains the key, track_ids, and optional extra metadata for comparison.
+pub(super) struct ComputedAggregateSignal {
+    pub key: String,
+    pub track_ids: Vec<i64>,
+    pub metadata_json: String,
+}
+
+/// Extract track_ids from metadata JSON string.
+///
+/// Returns empty vec if parsing fails or track_ids not present.
+fn extract_track_ids_from_metadata(metadata_json: Option<&str>) -> Vec<i64> {
+    metadata_json
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.get("track_ids").cloned())
+        .and_then(|arr| serde_json::from_value::<Vec<i64>>(arr).ok())
+        .unwrap_or_default()
+}
+
+/// Reconcile computed signals against existing DB signals.
+///
+/// Computes set differences and queues appropriate operations:
+/// - Stale signals (exist in DB but not computed): cleared
+/// - New signals (computed but not in DB): ensured
+/// - Changed signals (exist in both but track_ids differ): replaced with new timestamp
+/// - Unchanged signals (exist in both, same track_ids): no-op
+///
+/// Returns (cleared_count, new_count, updated_count, unchanged_count).
+pub(super) fn reconcile_aggregate_signals(
+    read_only_db: &crate::corpus::db::Database,
+    sender: &db_thread::SignalWriteSender,
+    signal_type: AggregateSignalType,
+    computed: Vec<ComputedAggregateSignal>,
+    witness: &ComputationWitness,
+) -> (usize, usize, usize, usize) {
+    // Get existing signals from DB
+    let existing = read_only_db
+        .get_aggregate_signal_keys_with_metadata(signal_type)
+        .unwrap_or_default();
+
+    // Build lookup maps
+    let computed_map: HashMap<&str, &ComputedAggregateSignal> =
+        computed.iter().map(|s| (s.key.as_str(), s)).collect();
+
+    let existing_map: HashMap<&str, Option<&str>> = existing
+        .iter()
+        .map(|(k, m)| (k.as_str(), m.as_deref()))
+        .collect();
+
+    let computed_keys: HashSet<&str> = computed_map.keys().copied().collect();
+    let existing_keys: HashSet<&str> = existing_map.keys().copied().collect();
+
+    let mut cleared = 0;
+    let mut new_count = 0;
+    let mut updated = 0;
+    let mut unchanged = 0;
+
+    // Stale signals: exist in DB but not computed -> clear
+    for key in existing_keys.difference(&computed_keys) {
+        sender.clear_aggregate_signal(signal_type, key, witness);
+        cleared += 1;
+    }
+
+    // New signals: computed but not in DB -> ensure
+    for key in computed_keys.difference(&existing_keys) {
+        let signal = computed_map[key];
+        sender.ensure_aggregate_signal(
+            signal_type,
+            &signal.key,
+            Some(&signal.metadata_json),
+            witness,
+        );
+        new_count += 1;
+    }
+
+    // Existing signals: check if track_ids changed
+    for key in computed_keys.intersection(&existing_keys) {
+        let computed_signal = computed_map[key];
+        let existing_metadata = existing_map[key];
+
+        let existing_track_ids = extract_track_ids_from_metadata(existing_metadata);
+
+        // Compare track_ids (sorted for stable comparison)
+        let mut computed_ids = computed_signal.track_ids.clone();
+        let mut existing_ids = existing_track_ids;
+        computed_ids.sort();
+        existing_ids.sort();
+
+        if computed_ids != existing_ids {
+            // Track IDs changed -> replace (updates timestamp)
+            let signal = AggregateSignal {
+                id: None,
+                signal_type,
+                key: computed_signal.key.clone(),
+                discovered_at: None, // Will use CURRENT_TIMESTAMP
+                metadata_json: Some(computed_signal.metadata_json.clone()),
+            };
+            sender.replace_aggregate_signal(signal, witness);
+            updated += 1;
+        } else {
+            // Unchanged
+            unchanged += 1;
+        }
+    }
+
+    (cleared, new_count, updated, unchanged)
 }

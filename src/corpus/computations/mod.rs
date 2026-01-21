@@ -42,7 +42,7 @@ pub use stats::{get_thread_stats, ThreadStats};
 
 // Internal imports for execute functions
 use crate::config;
-use stats::{ensure_thread_id, record_task_stats, with_thread_db};
+use stats::{ensure_thread_id, record_task_stats, with_read_only_db};
 
 // ============================================================================
 // Unified Computation Enum (for daemon's queue)
@@ -172,10 +172,11 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
     // Create witness for signal operations
     let witness = ComputationWitness::new();
 
-    // Use thread-local cached connection
+    // Use thread-local cached READ-ONLY connection
+    // IMPORTANT: All writes must go through db_thread::signal_sender()
     let db_access_start = std::time::Instant::now();
 
-    let result = with_thread_db(|db| {
+    let result = with_read_only_db(|read_only_db| {
         let db_access_ms = db_access_start.elapsed().as_millis();
 
         let compute_result = match computation {
@@ -183,19 +184,19 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             Computation::Asleep(c) => {
                 let result = match c {
                     asleep::Computation::WalkCorpus { root, source, paranoid } => {
-                        asleep::execute_walk_corpus(db, root, source, *paranoid, start)
+                        asleep::execute_walk_corpus(read_only_db, root, source, *paranoid, start)
                     }
                     asleep::Computation::ScanCorpusDirectory { directory, source, paranoid } => {
-                        asleep::execute_scan_corpus_directory(db, directory, source, *paranoid, &witness, start)
+                        asleep::execute_scan_corpus_directory(read_only_db, directory, source, *paranoid, &witness, start)
                     }
                     asleep::Computation::CompareInodes { source, disk_state, paranoid } => {
-                        asleep::execute_compare_inodes(db, source, disk_state, *paranoid, &witness, start)
+                        asleep::execute_compare_inodes(read_only_db, source, disk_state, *paranoid, &witness, start)
                     }
                     asleep::Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
-                        asleep::execute_verify_mtime(db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)
+                        asleep::execute_verify_mtime(read_only_db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)
                     }
                     asleep::Computation::VerifyTags { track_id, path } => {
-                        asleep::execute_verify_tags(db, *track_id, path, start)
+                        asleep::execute_verify_tags(read_only_db, *track_id, path, start)
                     }
                 };
                 ComputationResult::from_asleep(result)
@@ -205,19 +206,19 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             Computation::Awakening(c) => {
                 let result = match c {
                     awakening::Computation::ScheduleSecondLevelDerivations => {
-                        awakening::execute_schedule_second_level_derivations(db, start)
+                        awakening::execute_schedule_second_level_derivations(read_only_db, start)
                     }
                     awakening::Computation::DeriveDirectorySignals { directory } => {
-                        awakening::execute_derive_directory_signals(db, directory, &witness, start)
+                        awakening::execute_derive_directory_signals(read_only_db, directory, &witness, start)
                     }
                     awakening::Computation::UpdateFileSignals { path } => {
-                        awakening::execute_update_file_signals(db, path, &witness, start)
+                        awakening::execute_update_file_signals(read_only_db, path, &witness, start)
                     }
                     awakening::Computation::WalkLibrary { library_root, library_name, corpus_path_prefixes } => {
-                        awakening::execute_walk_library(db, library_root, library_name, corpus_path_prefixes, start)
+                        awakening::execute_walk_library(read_only_db, library_root, library_name, corpus_path_prefixes, &witness, start)
                     }
                     awakening::Computation::ScanLibraryDirectory { directory, library_name, library_root, corpus_path_prefixes } => {
-                        awakening::execute_scan_library_directory(db, directory, library_name, library_root, corpus_path_prefixes, start)
+                        awakening::execute_scan_library_directory(read_only_db, directory, library_name, library_root, corpus_path_prefixes, &witness, start)
                     }
                 };
                 ComputationResult::from_awakening(result)
@@ -227,34 +228,34 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             Computation::Awake(c) => {
                 let result = match c {
                     awake::Computation::ScheduleContentAnalysis => {
-                        awake::execute_schedule_content_analysis(db, start)
+                        awake::execute_schedule_content_analysis(read_only_db, start)
                     }
                     awake::Computation::DetectFingerprintDuplicates => {
-                        awake::execute_detect_fingerprint_duplicates(db, &witness, start)
+                        awake::execute_detect_fingerprint_duplicates(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectDuplicateInodes => {
-                        awake::execute_detect_duplicate_inodes(db, &witness, start)
+                        awake::execute_detect_duplicate_inodes(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectMissingTags => {
-                        awake::execute_detect_missing_tags(db, &witness, start)
+                        awake::execute_detect_missing_tags(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectMetadataDuplicates => {
-                        awake::execute_detect_metadata_duplicates(db, &witness, start)
+                        awake::execute_detect_metadata_duplicates(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectTagCanonicalizations => {
-                        awake::execute_detect_tag_canonicalizations(db, start)
+                        awake::execute_detect_tag_canonicalizations(read_only_db, &witness, start)
                     }
                     awake::Computation::VerifyOutOfBandChanges => {
-                        awake::execute_verify_out_of_band_changes(db, &witness, start)
+                        awake::execute_verify_out_of_band_changes(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectDeployConflicts => {
-                        awake::execute_detect_deploy_conflicts(db, &witness, start)
+                        awake::execute_detect_deploy_conflicts(read_only_db, &witness, start)
                     }
                     awake::Computation::CheckDeployConflicts { track_id } => {
-                        awake::execute_check_deploy_conflicts(db, *track_id, start)
+                        awake::execute_check_deploy_conflicts(read_only_db, *track_id, start)
                     }
                     awake::Computation::DeriveDeployHealthSignals { library_name, library_root, corpus_path_prefixes } => {
-                        awake::execute_derive_deploy_health_signals(db, library_name, library_root, corpus_path_prefixes, &witness, start)
+                        awake::execute_derive_deploy_health_signals(read_only_db, library_name, library_root, corpus_path_prefixes, &witness, start)
                     }
                 };
                 ComputationResult::from_awake(result)

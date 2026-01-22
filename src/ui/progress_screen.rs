@@ -234,15 +234,16 @@ impl ProgressScreen {
         self.tick_count
     }
 
-    /// Get the current bouncing dot spinner character for left column position.
+    /// Get the current bouncing dot spinner character for left column only.
+    /// Used for even half-positions (left column bouncing, right empty).
     pub fn spinner_char_left(&self) -> char {
         // Single dot bouncing up/down in left column (dots 1,2,3)
         const BOUNCE_LEFT: &[char] = &['⠁', '⠂', '⠄', '⠂']; // top, mid, bottom, mid
         BOUNCE_LEFT[((self.tick_count / 2) as usize) % BOUNCE_LEFT.len()]
     }
 
-    /// Get the current bouncing dot spinner character for right column position.
-    /// This is combined with a filled left column (dots 1,2,3 + bouncing 4,5,6).
+    /// Get the current bouncing dot spinner character for right column with left filled.
+    /// Used for odd half-positions (left column filled + right column bouncing).
     pub fn spinner_char_right(&self) -> char {
         // Left column filled + bouncing dot in right column
         const BOUNCE_RIGHT_WITH_LEFT: &[char] = &['⠏', '⠗', '⠧', '⠗']; // 1,2,3+4 / +5 / +6 / +5
@@ -476,35 +477,34 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
         let bar_inner_width = 40u16.min(progress_area.width.saturating_sub(4));
         let bar_x = (progress_area.width.saturating_sub(bar_inner_width + 2)) / 2 + progress_area.x;
 
-        // Calculate filled portion
-        let filled = (progress * bar_inner_width as f32) as u16;
-        let empty = bar_inner_width.saturating_sub(filled);
+        // Calculate filled portion with half-cell granularity
+        // Each braille char has left and right columns; we track progress in half-cells
+        // Sequence: left spinner → right-with-left → full block + left spinner → ...
+        let max_half = bar_inner_width * 2;
+        let half_filled = ((progress * max_half as f32) as u16).min(max_half.saturating_sub(1));
+        let full_blocks = half_filled / 2;
+        let is_half_fill = half_filled % 2 == 1;
+        let empty = bar_inner_width.saturating_sub(full_blocks + 1);
 
         // Get animated color
         let bar_color = animated_progress_color(screen.tick_count);
 
         // Build the bar:
+        // - Brackets on inside columns: ⠸ (right col) left, ⠇ (left col) right
         // - Fill uses ⠿ (full 6-dot braille)
-        // - Bouncing spinner at trailing edge (right column, with left filled)
-        let bar_text = if filled == 0 {
-            // Spinner replaces left bracket when empty
-            let spinner = screen.spinner_char_left();
-            format!(
-                "{}{}⠇",
-                spinner,
-                " ".repeat(bar_inner_width as usize)
-            )
+        // - Even positions: left-only spinner (⠁⠂⠄)
+        // - Odd positions: right-with-left spinner (⠏⠗⠧) for half-fill effect
+        let spinner = if is_half_fill {
+            screen.spinner_char_right()
         } else {
-            // Spinner at trailing edge of fill (right column position)
-            let spinner = screen.spinner_char_right();
-            let fill_chars = filled.saturating_sub(1) as usize;
-            format!(
-                "⠸{}{}{}⠇",
-                "⠿".repeat(fill_chars),
-                spinner,
-                " ".repeat(empty as usize)
-            )
+            screen.spinner_char_left()
         };
+        let bar_text = format!(
+            "⠸{}{}{}⠇",
+            "⠿".repeat(full_blocks as usize),
+            spinner,
+            " ".repeat(empty as usize)
+        );
 
         let detail = screen.progress_detail.as_deref().unwrap_or("");
         let progress_text = format!("{}\n{}", bar_text, detail);

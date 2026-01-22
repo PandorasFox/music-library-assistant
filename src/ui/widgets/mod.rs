@@ -23,7 +23,7 @@ mod titlebar;
 pub use layout::{PaneConfig, TwoPaneLayout, ThreePaneLayout};
 
 // Modal widgets
-pub use modal::{centered_rect, ConfirmationModal, Modal, ModalButton, ModalStyle};
+pub use modal::{centered_rect, centered_rect_fixed, ConfirmationModal, Modal, ModalButton, ModalStyle};
 
 // Controls hint widgets
 pub use controls::presets as control_presets;

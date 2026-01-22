@@ -11,20 +11,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use crate::ui::widgets::centered_rect_fixed;
+
 use super::types::{TagCanonicalityModal, TagCanonicalityState};
 
 /// Render the tag canonicity resolution modal.
 pub fn render(f: &mut Frame, area: Rect, state: &TagCanonicalityState) {
-    // Calculate modal size - centered, 60x20 or smaller
-    let modal_width = 60.min(area.width.saturating_sub(4));
-    let modal_height = 20.min(area.height.saturating_sub(4));
+    // Calculate modal size - wider to fit long album names with counts
+    // Use centered_rect_fixed which properly accounts for area.x/area.y offsets
+    let modal_width = 72.min(area.width.saturating_sub(4));
+    let modal_height = 20.min(area.height.saturating_sub(2));
 
-    let modal_area = Rect {
-        x: (area.width.saturating_sub(modal_width)) / 2,
-        y: (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
+    let modal_area = centered_rect_fixed(modal_width, modal_height, area);
 
     // Clear the background
     f.render_widget(Clear, modal_area);
@@ -208,16 +206,11 @@ use super::types::TagCanonicityReviewState;
 ///
 /// Shows summary of all pending decisions before final confirmation.
 pub fn render_review(f: &mut Frame, area: Rect, state: &TagCanonicityReviewState) {
-    // Calculate modal size - centered, 70x22 or smaller
-    let modal_width = 70.min(area.width.saturating_sub(4));
-    let modal_height = 22.min(area.height.saturating_sub(4));
+    // Calculate modal size - use centered_rect_fixed which properly accounts for area.x/area.y offsets
+    let modal_width = 74.min(area.width.saturating_sub(4));
+    let modal_height = 22.min(area.height.saturating_sub(2));
 
-    let modal_area = Rect {
-        x: (area.width.saturating_sub(modal_width)) / 2,
-        y: (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
+    let modal_area = centered_rect_fixed(modal_width, modal_height, area);
 
     // Clear the background
     f.render_widget(Clear, modal_area);

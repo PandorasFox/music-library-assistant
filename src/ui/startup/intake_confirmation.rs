@@ -16,6 +16,8 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::ui::widgets::centered_rect_fixed;
+
 use crate::corpus::db::types::SignalType;
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
@@ -171,14 +173,10 @@ impl IntakeConfirmationState {
 /// Render the intake confirmation modal.
 pub fn render(f: &mut Frame, area: Rect, state: &IntakeConfirmationState) {
     let dialog_width = 55.min(area.width.saturating_sub(4));
-    let dialog_height = 14.min(area.height.saturating_sub(4));
+    let dialog_height = 14.min(area.height.saturating_sub(2));
 
-    let dialog_area = Rect {
-        x: (area.width.saturating_sub(dialog_width)) / 2,
-        y: (area.height.saturating_sub(dialog_height)) / 2,
-        width: dialog_width,
-        height: dialog_height,
-    };
+    // Use centered_rect_fixed to properly account for area.x/area.y offsets
+    let dialog_area = centered_rect_fixed(dialog_width, dialog_height, area);
 
     f.render_widget(Clear, dialog_area);
 

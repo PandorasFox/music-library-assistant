@@ -65,9 +65,12 @@ pub fn detect_canonicalizations(read_only_db: &Database) -> Result<Vec<DetectedC
     Ok(results)
 }
 
-/// Collect canonicalization entries from a collision (read-only check).
+/// Collect canonicalization entries from a collision.
+///
+/// Returns all variant values that differ from the canonical value.
+/// Phase 1 will emit signals for these; deduplication happens via signal system.
 fn collect_collision_entries(
-    read_only_db: &Database,
+    _read_only_db: &Database,
     collision: &TagCollision,
 ) -> Result<Vec<DetectedCanonicalization>> {
     let mut entries = Vec::new();
@@ -75,14 +78,6 @@ fn collect_collision_entries(
     for variant in &collision.variants {
         // Skip the canonical value itself
         if variant == &collision.canonical {
-            continue;
-        }
-
-        // Check if this variant is already stored (read-only check)
-        if read_only_db
-            .get_canonical_tag_value(&collision.tag_name, variant)?
-            .is_some()
-        {
             continue;
         }
 

@@ -19,7 +19,9 @@ pub struct Track {
     pub duration_ms: Option<i64>,
     pub bitrate_kbps: Option<i32>,
     pub sample_rate: Option<i32>,
-    pub fingerprint: Option<String>,   // chromaprint acoustic fingerprint
+    /// Chromaprint acoustic fingerprint as raw u32 values.
+    /// Stored in DB as BLOB (little-endian bytes).
+    pub fingerprint: Option<Vec<u32>>,
 }
 
 /// A single tag associated with a track.
@@ -63,7 +65,7 @@ pub struct DeploymentStats {
 /// - **Second-level**: Derived from comparing first-level signals
 /// - **Third-level**: Triggered when files become healthy (e.g., deploy conflicts)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HealthIssueType {
+pub enum SignalType {
     // =========================================================================
     // First-level signals (computed from corpus + index state)
     // =========================================================================
@@ -113,9 +115,13 @@ pub enum HealthIssueType {
     OutOfBandTagChange,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
+    /// Tag value collision needing canonicalization
+    TagCanonicity,
+    /// Album has tracks with different artists + missing/inconsistent album_artist
+    InconsistentAlbumArtist,
 }
 
-impl HealthIssueType {
+impl SignalType {
     pub fn as_str(&self) -> &'static str {
         match self {
             // First-level signals
@@ -141,6 +147,8 @@ impl HealthIssueType {
             Self::MissingTag => "missing_tag",
             Self::OutOfBandTagChange => "oob_tag",
             Self::DuplicateInode => "duplicate_inode",
+            Self::TagCanonicity => "tag_canonicity",
+            Self::InconsistentAlbumArtist => "inconsistent_album_artist",
         }
     }
 
@@ -169,6 +177,8 @@ impl HealthIssueType {
             "missing_tag" => Some(Self::MissingTag),
             "oob_tag" => Some(Self::OutOfBandTagChange),
             "duplicate_inode" => Some(Self::DuplicateInode),
+            "tag_canonicity" => Some(Self::TagCanonicity),
+            "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
 
             // Legacy DB values → map to new types
             "missing_from_disk" => Some(Self::MissingFile),
@@ -177,6 +187,34 @@ impl HealthIssueType {
             "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
 
             _ => None,
+        }
+    }
+}
+
+impl From<CorpusFileSignalType> for SignalType {
+    fn from(t: CorpusFileSignalType) -> Self {
+        match t {
+            CorpusFileSignalType::FileInCorpus => Self::FileInCorpus,
+            CorpusFileSignalType::UnindexedFile => Self::UnindexedFile,
+            CorpusFileSignalType::HealthyFile => Self::HealthyFile,
+            CorpusFileSignalType::MissingFile => Self::MissingFile,
+            CorpusFileSignalType::CorpusFileModifiedOutOfBand => Self::CorpusFileModifiedOutOfBand,
+            CorpusFileSignalType::MovedFile => Self::MovedFile,
+            CorpusFileSignalType::OutOfBandTagChange => Self::OutOfBandTagChange,
+        }
+    }
+}
+
+impl From<LibraryFileSignalType> for SignalType {
+    fn from(t: LibraryFileSignalType) -> Self {
+        match t {
+            LibraryFileSignalType::LibraryLeftover => Self::LibraryLeftover,
+            LibraryFileSignalType::LibraryStale => Self::LibraryStale,
+            // DeployReady/DeployedHealthy don't have SignalType equivalents
+            // They're library-specific internal states
+            LibraryFileSignalType::DeployReady | LibraryFileSignalType::DeployedHealthy => {
+                panic!("DeployReady/DeployedHealthy cannot be converted to SignalType")
+            }
         }
     }
 }
@@ -244,15 +282,15 @@ impl CorpusFileSignalType {
         }
     }
 
-    pub fn to_health_issue_type(&self) -> HealthIssueType {
+    pub fn to_signal_type(&self) -> SignalType {
         match self {
-            Self::FileInCorpus => HealthIssueType::FileInCorpus,
-            Self::UnindexedFile => HealthIssueType::UnindexedFile,
-            Self::HealthyFile => HealthIssueType::HealthyFile,
-            Self::MissingFile => HealthIssueType::MissingFile,
-            Self::CorpusFileModifiedOutOfBand => HealthIssueType::CorpusFileModifiedOutOfBand,
-            Self::MovedFile => HealthIssueType::MovedFile,
-            Self::OutOfBandTagChange => HealthIssueType::OutOfBandTagChange,
+            Self::FileInCorpus => SignalType::FileInCorpus,
+            Self::UnindexedFile => SignalType::UnindexedFile,
+            Self::HealthyFile => SignalType::HealthyFile,
+            Self::MissingFile => SignalType::MissingFile,
+            Self::CorpusFileModifiedOutOfBand => SignalType::CorpusFileModifiedOutOfBand,
+            Self::MovedFile => SignalType::MovedFile,
+            Self::OutOfBandTagChange => SignalType::OutOfBandTagChange,
         }
     }
 }
@@ -298,13 +336,13 @@ impl LibraryFileSignalType {
         }
     }
 
-    pub fn to_health_issue_type(&self) -> HealthIssueType {
+    pub fn to_signal_type(&self) -> SignalType {
         match self {
-            Self::LibraryLeftover => HealthIssueType::LibraryLeftover,
-            Self::LibraryStale => HealthIssueType::LibraryStale,
-            // DeployReady/DeployedHealthy don't have HealthIssueType equivalents
+            Self::LibraryLeftover => SignalType::LibraryLeftover,
+            Self::LibraryStale => SignalType::LibraryStale,
+            // DeployReady/DeployedHealthy don't have SignalType equivalents
             Self::DeployReady | Self::DeployedHealthy => {
-                panic!("DeployReady/DeployedHealthy should not use to_health_issue_type")
+                panic!("DeployReady/DeployedHealthy should not use to_signal_type")
             }
         }
     }
@@ -414,6 +452,14 @@ pub enum AggregateSignalType {
     MissingTag,
     /// Multiple corpus files deploy to same library path
     DeployConflict,
+    /// Tag value collision needing canonicalization
+    /// Key: "{tag_name}:{normalized_key}" (e.g., "artist:dragonforce")
+    /// Metadata: { "variants": {"DragonForce": 47, "Dragonforce": 3}, "track_ids": [...] }
+    TagCanonicity,
+    /// Album has tracks with different artists + missing/inconsistent album_artist
+    /// Key: "{normalized_album}" (e.g., "clockwork hearts")
+    /// Metadata: { "album": "...", "artist_variants": {...}, "album_artist_variants": {...}, "track_ids": [...] }
+    InconsistentAlbumArtist,
 }
 
 impl AggregateSignalType {
@@ -424,6 +470,8 @@ impl AggregateSignalType {
             Self::DuplicateInode => "duplicate_inode",
             Self::MissingTag => "missing_tag",
             Self::DeployConflict => "deploy_conflict",
+            Self::TagCanonicity => "tag_canonicity",
+            Self::InconsistentAlbumArtist => "inconsistent_album_artist",
         }
     }
 
@@ -434,33 +482,36 @@ impl AggregateSignalType {
             "duplicate_inode" => Some(Self::DuplicateInode),
             "missing_tag" => Some(Self::MissingTag),
             "deploy_conflict" => Some(Self::DeployConflict),
+            "tag_canonicity" => Some(Self::TagCanonicity),
+            "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             _ => None,
         }
     }
 }
 
 // ============================================================================
-// Legacy HealthIssue (for migration compatibility)
+// Signal (Unified Signal Type)
 // ============================================================================
 
-/// Legacy unified signal type.
+/// Unified signal representing a fact about corpus state.
 ///
-/// Kept for backwards compatibility. Prefer `Signal` enum for new code.
+/// Signals are created by computations and deleted when stale. They record
+/// file health, duplicate detection, missing tags, deploy conflicts, etc.
 #[derive(Debug, Clone)]
-pub struct HealthIssue {
+pub struct Signal {
     pub id: Option<i64>,
-    pub issue_type: HealthIssueType,
+    pub issue_type: SignalType,
     pub issue_key: String,
     pub discovered_at: Option<String>,
     pub metadata_json: Option<String>,
 }
 
-impl From<FileSignal> for HealthIssue {
+impl From<FileSignal> for Signal {
     fn from(sig: FileSignal) -> Self {
         Self {
             id: sig.id,
-            issue_type: HealthIssueType::from_str(sig.signal_type.as_str())
-                .unwrap_or(HealthIssueType::FileInCorpus),
+            issue_type: SignalType::from_str(sig.signal_type.as_str())
+                .unwrap_or(SignalType::FileInCorpus),
             issue_key: sig.path,
             discovered_at: sig.discovered_at,
             metadata_json: None,
@@ -468,12 +519,12 @@ impl From<FileSignal> for HealthIssue {
     }
 }
 
-impl From<AggregateSignal> for HealthIssue {
+impl From<AggregateSignal> for Signal {
     fn from(sig: AggregateSignal) -> Self {
         Self {
             id: sig.id,
-            issue_type: HealthIssueType::from_str(sig.signal_type.as_str())
-                .unwrap_or(HealthIssueType::FingerprintDuplicate),
+            issue_type: SignalType::from_str(sig.signal_type.as_str())
+                .unwrap_or(SignalType::FingerprintDuplicate),
             issue_key: sig.key,
             discovered_at: sig.discovered_at,
             metadata_json: sig.metadata_json,
@@ -481,21 +532,9 @@ impl From<AggregateSignal> for HealthIssue {
     }
 }
 
-/// A canonical tag value mapping (unified for artist, album_artist, genre, album).
-#[derive(Debug, Clone)]
-pub struct TagCanonicalization {
-    pub id: Option<i64>,
-    pub tag_name: String, // "artist", "album_artist", "genre", "album"
-    pub canonical_value: String,
-    pub variant_value: String,
-    pub confidence: Option<f64>,
-    pub auto_detected: bool,
-    pub confirmed_at: Option<String>,
-}
-
-/// Summary of corpus health.
+/// Summary of corpus signals.
 #[derive(Debug, Clone, Default)]
-pub struct HealthSummary {
+pub struct SignalSummary {
     /// Total health issues (excluding deploy_conflicts)
     pub total_issues: usize,
     // Content-level breakdowns (may not sum to total_issues due to other issue types)
@@ -512,7 +551,7 @@ pub struct CorpusSummary {
     pub track_count: usize,
     /// Number of unresolved deployment conflicts (tracks that would deploy to same path)
     pub deploy_conflicts: usize,
-    pub health_summary: HealthSummary,
+    pub signal_summary: SignalSummary,
     pub deployment_stats: Option<DeploymentStats>,
     pub pending_changes: HashMap<String, usize>,
     pub last_scan: Option<String>,
@@ -576,17 +615,30 @@ pub struct CorpusFilesBucket {
     pub directory_breakdown: DirectoryBreakdown,
 }
 
-/// Bucket 2: Placeholder
-#[derive(Debug, Clone)]
-pub struct PlaceholderBucket {
-    pub description: &'static str,
+/// Bucket 2: Tag Squash - tag canonicity and album_artist issues
+#[derive(Debug, Clone, Default)]
+pub struct TagSquashBucket {
+    /// Tag canonicity issues grouped by tag name (e.g., "artist": 50 clusters)
+    pub tag_canonicity: Vec<TagSquashEntry>,
+    /// Inconsistent album_artist issues count
+    pub inconsistent_album_artist_count: usize,
 }
 
-impl Default for PlaceholderBucket {
-    fn default() -> Self {
-        Self { description: ":)" }
-    }
+/// Entry for tag squash signals (grouped by tag name)
+#[derive(Debug, Clone)]
+pub struct TagSquashEntry {
+    /// Tag name (e.g., "artist", "genre", "album")
+    pub tag_name: String,
+    /// Number of clusters needing resolution
+    pub cluster_count: usize,
+    /// Total tracks affected (for ordering - higher = more important)
+    pub total_tracks: usize,
 }
+
+// Aliases for compatibility
+pub type PlaceholderBucket = TagSquashBucket;
+pub type TagResolutionBucket = TagSquashBucket;
+pub type TagResolutionEntry = TagSquashEntry;
 
 /// Bucket 3: Library/Deploy state
 #[derive(Debug, Clone, Default)]

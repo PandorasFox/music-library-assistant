@@ -18,8 +18,8 @@ use rusqlite::{params, OptionalExtension};
 use super::Database;
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, HealthIssue,
-    HealthIssueType, HealthSummary, Track,
+    AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, Signal,
+    SignalType, SignalSummary, Track,
 };
 
 impl Database {
@@ -33,68 +33,68 @@ impl Database {
 
         // Count deploy conflict signals
         let deploy_conflicts: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'deploy_conflict'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'deploy_conflict'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         // File-level signal counts (benign signals - shown separately)
         let files_in_corpus: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'file_in_corpus'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'file_in_corpus'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let healthy_files: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'healthy_file'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'healthy_file'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let unindexed_files: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'unindexed_file'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'unindexed_file'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let missing_files: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'missing_file'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'missing_file'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let moved_files: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'moved_file'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'moved_file'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let library_stale: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'library_stale'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'library_stale'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let library_leftover: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'library_leftover'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'library_leftover'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let modified_oob: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'corpus_file_modified_out_of_band'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'corpus_file_modified_out_of_band'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let tags_changed_oob: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'out_of_band_tag_change'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'out_of_band_tag_change'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let duplicate_inodes: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = 'duplicate_inode'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'duplicate_inode'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
@@ -103,8 +103,8 @@ impl Database {
         // - deploy_conflicts (shown separately)
         // - file_in_corpus, healthy_file (benign status signals)
         // - unindexed_file, missing_file, moved_file (file-level signals shown separately)
-        let total_health_issues: usize = self.conn.query_row(
-            r#"SELECT COUNT(*) FROM health_issues
+        let total_signals: usize = self.conn.query_row(
+            r#"SELECT COUNT(*) FROM signals
                WHERE issue_type NOT IN (
                    'deploy_conflict',
                    'file_in_corpus',
@@ -117,9 +117,9 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
 
-        let mut health_summary = self.get_health_summary().unwrap_or_default();
+        let mut signal_summary = self.get_signal_summary().unwrap_or_default();
         // Set total count from direct query (excludes benign/file-level signals)
-        health_summary.total_issues = total_health_issues;
+        signal_summary.total_issues = total_signals;
 
         let deployment_stats = self.get_deployment_stats().ok().flatten();
         let pending_changes = std::collections::HashMap::new(); // Decisions now in-memory only
@@ -139,7 +139,7 @@ impl Database {
         Ok(CorpusSummary {
             track_count,
             deploy_conflicts,
-            health_summary,
+            signal_summary,
             deployment_stats,
             pending_changes,
             last_scan,
@@ -161,11 +161,11 @@ impl Database {
     // ========================================================================
 
     /// Insert a new health signal.
-    pub fn insert_health_issue(&self, issue: &HealthIssue) -> Result<i64> {
+    pub fn insert_signal(&self, issue: &Signal) -> Result<i64> {
         self.conn
             .execute(
                 r#"
-                INSERT INTO health_issues
+                INSERT INTO signals
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
                 "#,
@@ -182,20 +182,20 @@ impl Database {
     }
 
     /// Get health signals, optionally filtered by type.
-    pub fn get_health_signals(
+    pub fn get_signals(
         &self,
-        issue_type: Option<HealthIssueType>,
-    ) -> Result<Vec<HealthIssue>> {
+        issue_type: Option<SignalType>,
+    ) -> Result<Vec<Signal>> {
         let sql = match issue_type {
             Some(_) => {
                 r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-                   FROM health_issues
+                   FROM signals
                    WHERE issue_type = ?1
                    ORDER BY discovered_at DESC"#
             }
             None => {
                 r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-                   FROM health_issues
+                   FROM signals
                    ORDER BY discovered_at DESC"#
             }
         };
@@ -203,9 +203,9 @@ impl Database {
         let mut stmt = self.conn.prepare(sql)?;
 
         let rows = if let Some(it) = issue_type {
-            stmt.query_map(params![it.as_str()], Self::row_to_health_issue)?
+            stmt.query_map(params![it.as_str()], Self::row_to_signal)?
         } else {
-            stmt.query_map(params![], Self::row_to_health_issue)?
+            stmt.query_map(params![], Self::row_to_signal)?
         };
 
         let mut issues = Vec::new();
@@ -217,30 +217,44 @@ impl Database {
 
 
     /// Get health signal by type and key (e.g., path or fingerprint).
-    pub fn get_health_issue_by_key(
+    pub fn get_signal_by_key(
         &self,
-        issue_type: HealthIssueType,
+        issue_type: SignalType,
         issue_key: &str,
-    ) -> Result<Option<HealthIssue>> {
+    ) -> Result<Option<Signal>> {
         self.conn
             .query_row(
                 r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-                   FROM health_issues
+                   FROM signals
                    WHERE issue_type = ?1 AND issue_key = ?2"#,
                 params![issue_type.as_str(), issue_key],
-                Self::row_to_health_issue,
+                Self::row_to_signal,
             )
             .optional()
             .context("Failed to query health signal by key")
     }
 
+    /// Get signal by ID.
+    pub fn get_signal_by_id(&self, signal_id: i64) -> Result<Option<Signal>> {
+        self.conn
+            .query_row(
+                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
+                   FROM signals
+                   WHERE id = ?1"#,
+                params![signal_id],
+                Self::row_to_signal,
+            )
+            .optional()
+            .context("Failed to query signal by ID")
+    }
+
     /// Fast existence check for a signal (no data fetch).
     ///
     /// Use this before emitting signals to avoid redundant DB writes.
-    pub fn signal_exists(&self, issue_type: HealthIssueType, issue_key: &str) -> bool {
+    pub fn signal_exists(&self, issue_type: SignalType, issue_key: &str) -> bool {
         self.conn
             .query_row(
-                "SELECT 1 FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
+                "SELECT 1 FROM signals WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
                 params![issue_type.as_str(), issue_key],
                 |_| Ok(()),
             )
@@ -253,7 +267,7 @@ impl Database {
     pub fn file_signal_exists(&self, signal_type: FileSignalType, key: &str) -> bool {
         self.conn
             .query_row(
-                "SELECT 1 FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
+                "SELECT 1 FROM signals WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
                 params![signal_type.as_str(), key],
                 |_| Ok(()),
             )
@@ -261,22 +275,22 @@ impl Database {
     }
 
     /// Delete a health signal by ID.
-    pub fn delete_health_signal(&self, signal_id: i64) -> Result<()> {
+    pub fn delete_signal(&self, signal_id: i64) -> Result<()> {
         self.conn
-            .execute("DELETE FROM health_issues WHERE id = ?1", params![signal_id])
+            .execute("DELETE FROM signals WHERE id = ?1", params![signal_id])
             .context("Failed to delete health signal")?;
         Ok(())
     }
 
     /// Delete health signals by type and key.
-    pub fn delete_health_signals_by_key(
+    pub fn delete_signals_by_key(
         &self,
-        issue_type: HealthIssueType,
+        issue_type: SignalType,
         issue_key: &str,
     ) -> Result<usize> {
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
                 params![issue_type.as_str(), issue_key],
             )
             .context("Failed to delete health signals")?;
@@ -287,7 +301,7 @@ impl Database {
     pub fn delete_signals_for_path(&self, path: &str) -> Result<usize> {
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_key = ?1",
+                "DELETE FROM signals WHERE issue_key = ?1",
                 params![path],
             )
             .context("Failed to delete signals for path")?;
@@ -306,7 +320,7 @@ impl Database {
     /// Requires `ComputationWitness` to ensure this is called from computation context.
     pub fn ensure_signal(
         &self,
-        issue_type: HealthIssueType,
+        issue_type: SignalType,
         issue_key: &str,
         metadata_json: Option<&str>,
         _witness: &ComputationWitness,
@@ -315,7 +329,7 @@ impl Database {
         self.conn
             .execute(
                 r#"
-                INSERT OR IGNORE INTO health_issues
+                INSERT OR IGNORE INTO signals
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
                 "#,
@@ -338,13 +352,13 @@ impl Database {
     /// Requires `ComputationWitness` to ensure this is called from computation context.
     pub fn clear_signal(
         &self,
-        issue_type: HealthIssueType,
+        issue_type: SignalType,
         issue_key: &str,
         _witness: &ComputationWitness,
     ) -> Result<bool> {
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
                 params![issue_type.as_str(), issue_key],
             )
             .context("Failed to clear signal")?;
@@ -354,19 +368,19 @@ impl Database {
 
     /// Replace a signal (delete existing + insert new).
     ///
-    /// Used for signals like LibraryHealthSummary where we want to update
+    /// Used for signals like LibrarySignalSummary where we want to update
     /// with fresh data rather than accumulate.
     ///
     /// Requires `ComputationWitness` to ensure this is called from computation context.
     pub fn replace_signal(
         &self,
-        issue: &HealthIssue,
+        issue: &Signal,
         _witness: &ComputationWitness,
     ) -> Result<i64> {
         // Delete existing signal with same type and key
         self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
                 params![issue.issue_type.as_str(), &issue.issue_key],
             )
             .context("Failed to delete existing signal")?;
@@ -375,7 +389,7 @@ impl Database {
         self.conn
             .execute(
                 r#"
-                INSERT INTO health_issues
+                INSERT INTO signals
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
                 "#,
@@ -400,14 +414,14 @@ impl Database {
     pub fn clear_signals_in_directory(
         &self,
         directory: &std::path::Path,
-        issue_type: HealthIssueType,
+        issue_type: SignalType,
         _witness: &ComputationWitness,
     ) -> Result<usize> {
         let pattern = super::dir_like_pattern(directory);
 
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
                 params![issue_type.as_str(), pattern],
             )
             .context("Failed to clear signals in directory")?;
@@ -429,7 +443,7 @@ impl Database {
         self.conn
             .execute(
                 r#"
-                INSERT OR IGNORE INTO health_issues
+                INSERT OR IGNORE INTO signals
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, CURRENT_TIMESTAMP, NULL)
                 "#,
@@ -453,7 +467,7 @@ impl Database {
         self.conn
             .execute(
                 r#"
-                INSERT OR IGNORE INTO health_issues
+                INSERT OR IGNORE INTO signals
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
                 "#,
@@ -473,7 +487,7 @@ impl Database {
     ) -> Result<bool> {
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
                 params![signal_type.as_str(), path],
             )
             .context("Failed to clear file signal")?;
@@ -492,7 +506,7 @@ impl Database {
 
         let deleted = self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
                 params![signal_type.as_str(), pattern],
             )
             .context("Failed to clear file signals in directory")?;
@@ -511,7 +525,7 @@ impl Database {
         self.conn
             .execute(
                 r#"
-                INSERT OR IGNORE INTO health_issues
+                INSERT OR IGNORE INTO signals
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
                 "#,
@@ -530,7 +544,7 @@ impl Database {
     ) -> Result<i64> {
         self.conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
                 params![signal.signal_type.as_str(), &signal.key],
             )
             .context("Failed to delete existing aggregate signal")?;
@@ -538,7 +552,7 @@ impl Database {
         self.conn
             .execute(
                 r#"
-                INSERT INTO health_issues
+                INSERT INTO signals
                 (issue_type, issue_key, discovered_at, metadata_json)
                 VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
                 "#,
@@ -564,7 +578,7 @@ impl Database {
         let deleted = self
             .conn
             .execute(
-                "DELETE FROM health_issues WHERE issue_type = ?1 AND issue_key = ?2",
+                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
                 params![signal_type.as_str(), key],
             )
             .context("Failed to clear aggregate signal")?;
@@ -580,7 +594,7 @@ impl Database {
         signal_type: AggregateSignalType,
     ) -> Result<Vec<(String, Option<String>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT issue_key, metadata_json FROM health_issues WHERE issue_type = ?1",
+            "SELECT issue_key, metadata_json FROM signals WHERE issue_type = ?1",
         )?;
 
         let rows = stmt.query_map(params![signal_type.as_str()], |row| {
@@ -588,6 +602,58 @@ impl Database {
             let metadata: Option<String> = row.get(1)?;
             Ok((key, metadata))
         })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get all aggregate signals of a given type.
+    ///
+    /// Returns full AggregateSignal structs for UI display and modal data loading.
+    pub fn get_aggregate_signals(
+        &self,
+        signal_type: Option<AggregateSignalType>,
+    ) -> Result<Vec<AggregateSignal>> {
+        let sql = match signal_type {
+            Some(_) => {
+                "SELECT id, issue_type, issue_key, discovered_at, metadata_json
+                 FROM signals WHERE issue_type = ?1 ORDER BY discovered_at DESC"
+            }
+            None => {
+                "SELECT id, issue_type, issue_key, discovered_at, metadata_json
+                 FROM signals ORDER BY discovered_at DESC"
+            }
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+
+        let row_mapper = |row: &rusqlite::Row| {
+            let id: i64 = row.get(0)?;
+            let type_str: String = row.get(1)?;
+            let key: String = row.get(2)?;
+            let discovered_at: Option<String> = row.get(3)?;
+            let metadata_json: Option<String> = row.get(4)?;
+
+            let signal_type = AggregateSignalType::from_str(&type_str)
+                .unwrap_or(AggregateSignalType::FingerprintDuplicate);
+
+            Ok(AggregateSignal {
+                id: Some(id),
+                signal_type,
+                key,
+                discovered_at,
+                metadata_json,
+            })
+        };
+
+        let rows = if let Some(t) = signal_type {
+            stmt.query_map(params![t.as_str()], row_mapper)?
+        } else {
+            stmt.query_map(params![], row_mapper)?
+        };
 
         let mut results = Vec::new();
         for row in rows {
@@ -631,7 +697,7 @@ impl Database {
 
         // FileInCorpus signals use file path as issue_key
         let mut stmt = self.conn.prepare(
-            r#"SELECT DISTINCT issue_key FROM health_issues
+            r#"SELECT DISTINCT issue_key FROM signals
                WHERE issue_type = 'file_in_corpus'"#
         )?;
 
@@ -660,19 +726,19 @@ impl Database {
     pub fn get_signals_in_directory(
         &self,
         dir: &std::path::Path,
-        signal_type: HealthIssueType,
-    ) -> Result<Vec<HealthIssue>> {
+        signal_type: SignalType,
+    ) -> Result<Vec<Signal>> {
         let pattern = super::dir_like_pattern(dir);
 
         let mut stmt = self.conn.prepare(
             r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-               FROM health_issues
+               FROM signals
                WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\'"#
         )?;
 
         let rows = stmt.query_map(
             params![signal_type.as_str(), pattern],
-            Self::row_to_health_issue
+            Self::row_to_signal
         )?;
 
         let mut issues = Vec::new();
@@ -687,19 +753,19 @@ impl Database {
     /// Get signals discovered since a given timestamp.
     pub fn get_signals_since(
         &self,
-        signal_type: HealthIssueType,
+        signal_type: SignalType,
         since: &str,
-    ) -> Result<Vec<HealthIssue>> {
+    ) -> Result<Vec<Signal>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-               FROM health_issues
+               FROM signals
                WHERE issue_type = ?1 AND discovered_at > ?2
                ORDER BY discovered_at DESC"#
         )?;
 
         let rows = stmt.query_map(
             params![signal_type.as_str(), since],
-            Self::row_to_health_issue
+            Self::row_to_signal
         )?;
 
         let mut issues = Vec::new();
@@ -714,11 +780,11 @@ impl Database {
     /// Aggregate signals store track IDs directly in metadata_json["track_ids"].
     pub fn get_aggregate_signal_tracks(&self, signal_id: i64) -> Result<Vec<Track>> {
         // Get the signal to extract track_ids from metadata
-        let signal: HealthIssue = self.conn.query_row(
+        let signal: Signal = self.conn.query_row(
             r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-               FROM health_issues WHERE id = ?1"#,
+               FROM signals WHERE id = ?1"#,
             params![signal_id],
-            Self::row_to_health_issue,
+            Self::row_to_signal,
         ).context("Signal not found")?;
 
         // Parse track_ids from metadata_json
@@ -740,13 +806,13 @@ impl Database {
     }
 
     /// Get health summary statistics.
-    pub fn get_health_summary(&self) -> Result<HealthSummary> {
-        let mut summary = HealthSummary::default();
+    pub fn get_signal_summary(&self) -> Result<SignalSummary> {
+        let mut summary = SignalSummary::default();
 
         // Count by issue type
         let mut stmt = self.conn.prepare(
             r#"SELECT issue_type, COUNT(*)
-               FROM health_issues
+               FROM signals
                GROUP BY issue_type"#,
         )?;
 
@@ -777,7 +843,7 @@ impl Database {
         )?;
 
         // Count unconfirmed tag canonicalizations as canonicalization issues
-        // These are stored in tag_canonicalization, not health_issues
+        // These are stored in tag_canonicalization, not signals
         let unconfirmed_canons: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM tag_canonicalization WHERE confirmed_at IS NULL",
             params![],
@@ -800,7 +866,7 @@ impl Database {
 
         Ok(InsightsData {
             bucket_corpus: self.compute_corpus_files_bucket()?,
-            bucket_placeholder: PlaceholderBucket::default(),
+            bucket_placeholder: self.compute_tag_resolution_bucket()?,
             bucket_library: self.compute_library_deploy_bucket()?,
             bucket_other: self.compute_other_signals_bucket()?,
         })
@@ -855,6 +921,43 @@ impl Database {
         })
     }
 
+    fn compute_tag_resolution_bucket(&self) -> Result<crate::corpus::db::types::TagSquashBucket> {
+        use crate::corpus::db::types::*;
+
+        // Count inconsistent_album_artist signals
+        let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
+
+        // Group tag_canonicity signals by tag name (extracted from issue_key prefix)
+        // Key format: "{tag_name}:{normalized_key}" e.g., "artist:dragonforce"
+        // ORDER BY total_tracks DESC - tags affecting more tracks should appear first
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                SUBSTR(issue_key, 1, INSTR(issue_key, ':') - 1) as tag_name,
+                COUNT(*) as cluster_count,
+                COALESCE(SUM(json_array_length(json_extract(metadata_json, '$.track_ids'))), 0) as total_tracks
+            FROM signals
+            WHERE issue_type = 'tag_canonicity'
+            GROUP BY tag_name
+            ORDER BY total_tracks DESC"#
+        )?;
+
+        let tag_canonicity: Vec<TagSquashEntry> = stmt
+            .query_map(params![], |row| {
+                Ok(TagSquashEntry {
+                    tag_name: row.get(0)?,
+                    cluster_count: row.get(1)?,
+                    total_tracks: row.get::<_, i64>(2).unwrap_or(0) as usize,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(TagSquashBucket {
+            tag_canonicity,
+            inconsistent_album_artist_count,
+        })
+    }
+
     fn compute_other_signals_bucket(&self) -> Result<crate::corpus::db::types::OtherSignalsBucket> {
         use crate::corpus::db::types::*;
 
@@ -906,7 +1009,7 @@ impl Database {
     /// Count signals of a specific type by string.
     fn count_signal_type(&self, signal_type: &str) -> Result<usize> {
         let count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM health_issues WHERE issue_type = ?1",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = ?1",
             params![signal_type],
             |row| row.get(0),
         )?;
@@ -919,7 +1022,7 @@ impl Database {
             r#"SELECT COALESCE(SUM(
                  json_extract(metadata_json, '$.track_count')
                ), 0)
-               FROM health_issues
+               FROM signals
                WHERE issue_type = ?1"#,
             params![signal_type],
             |row| row.get(0),
@@ -957,7 +1060,7 @@ impl Database {
                    ELSE ''
                  END as dir,
                  COUNT(*) as cnt
-               FROM health_issues
+               FROM signals
                WHERE issue_type = ?1
                GROUP BY dir
                ORDER BY cnt DESC
@@ -979,15 +1082,15 @@ impl Database {
     // Row Conversion Helpers
     // ========================================================================
 
-    /// Convert a row to HealthIssue.
+    /// Convert a row to Signal.
     /// Expected columns: id, issue_type, issue_key, discovered_at, metadata_json
-    pub(super) fn row_to_health_issue(row: &rusqlite::Row) -> rusqlite::Result<HealthIssue> {
+    pub(super) fn row_to_signal(row: &rusqlite::Row) -> rusqlite::Result<Signal> {
         let issue_type_str: String = row.get(1)?;
 
-        Ok(HealthIssue {
+        Ok(Signal {
             id: Some(row.get(0)?),
-            issue_type: HealthIssueType::from_str(&issue_type_str)
-                .unwrap_or(HealthIssueType::FingerprintDuplicate),
+            issue_type: SignalType::from_str(&issue_type_str)
+                .unwrap_or(SignalType::FingerprintDuplicate),
             issue_key: row.get(2)?,
             discovered_at: row.get(3)?,
             metadata_json: row.get(4)?,
@@ -1011,7 +1114,7 @@ impl Database {
                  h.issue_key as corpus_path,
                  json_extract(h.metadata_json, '$.deploy_path') as deploy_path,
                  COALESCE(t.id, 0) as track_id
-               FROM health_issues h
+               FROM signals h
                LEFT JOIN tracks t ON t.path = h.issue_key AND t.source = 'corpus'
                WHERE h.issue_type = 'deploy_ready'
                ORDER BY h.issue_key"#
@@ -1042,7 +1145,7 @@ impl Database {
                  h.issue_key as corpus_path,
                  json_extract(h.metadata_json, '$.library_path') as library_path,
                  COALESCE(t.id, 0) as track_id
-               FROM health_issues h
+               FROM signals h
                LEFT JOIN tracks t ON t.path = h.issue_key AND t.source = 'corpus'
                WHERE h.issue_type = 'deployed_healthy'
                ORDER BY h.issue_key"#
@@ -1074,7 +1177,7 @@ impl Database {
                  json_extract(h.metadata_json, '$.expected_path') as expected_path,
                  json_extract(h.metadata_json, '$.corpus_path') as corpus_path,
                  COALESCE(json_extract(h.metadata_json, '$.track_id'), 0) as track_id
-               FROM health_issues h
+               FROM signals h
                WHERE h.issue_type = 'library_stale'
                ORDER BY json_extract(h.metadata_json, '$.library_path')"#
         )?;
@@ -1102,7 +1205,7 @@ impl Database {
         // We need to extract just the library_path portion (after the second colon)
         let mut stmt = self.conn.prepare(
             r#"SELECT issue_key
-               FROM health_issues
+               FROM signals
                WHERE issue_type = 'library_leftover'
                ORDER BY issue_key"#
         )?;
@@ -1134,7 +1237,7 @@ impl Database {
             r#"SELECT
                  h.issue_key as deploy_path,
                  h.metadata_json
-               FROM health_issues h
+               FROM signals h
                WHERE h.issue_type = 'deploy_conflict'
                ORDER BY h.issue_key"#
         )?;
@@ -1185,7 +1288,7 @@ impl Database {
     /// Used by the missing file resolution modal to categorize files.
     pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT issue_key FROM health_issues WHERE issue_type = 'missing_file' ORDER BY issue_key"
+            "SELECT issue_key FROM signals WHERE issue_type = 'missing_file' ORDER BY issue_key"
         )?;
 
         let results = stmt

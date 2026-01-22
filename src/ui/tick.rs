@@ -112,11 +112,11 @@ impl App {
 
         // Query signal count - this can be slow with many signals
         let signals_start = std::time::Instant::now();
-        let signal_count = db.get_health_signals(None)
+        let signal_count = db.get_signals(None)
             .map(|s| s.len())
             .unwrap_or(0);
         let _ = config::log_message(&format!(
-            "[TRANSITION] get_health_signals(None) took {}ms, {} signals",
+            "[TRANSITION] get_signals(None) took {}ms, {} signals",
             signals_start.elapsed().as_millis(),
             signal_count
         ));

@@ -6,8 +6,13 @@ use std::time::Instant;
 
 use crate::config;
 use crate::corpus::computations::{Computation, awakening};
+use crate::corpus::db::types::AggregateSignalType;
 use crate::corpus::db::Database;
-use crate::corpus::mutations::Mutation;
+use crate::corpus::health::normalization::{
+    normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
+};
+use crate::corpus::mutations::{Mutation, TagEdit};
+use crate::db_thread;
 
 use super::types::{Migration, MigrationWitness, MutationExecutionWitness, Task, TaskResult};
 
@@ -103,6 +108,14 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         "[EXECUTION] execute_mutation END: success={}, error={:?}, duration={}ms",
         success, error, duration_ms
     ));
+
+    // Clear affected TagCanonicity signals after successful tag edits
+    // The next awake-phase DetectTagCanonicalizations will recreate any still-valid signals
+    if success {
+        if let Mutation::TagEditAndFlush { edits, .. } = &mutation {
+            clear_affected_canonicity_signals(edits, &witness);
+        }
+    }
 
     // Queue per-file signal updates for affected paths
     // This ensures signals like UnindexedFile → HealthyFile are updated
@@ -230,7 +243,7 @@ fn clear_library_stale_signals(
     library_path: &std::path::Path,
     witness: &MutationExecutionWitness,
 ) {
-    use crate::corpus::db::types::{LibraryFileSignalType, HealthIssueType};
+    use crate::corpus::db::types::LibraryFileSignalType;
     use crate::db_thread;
 
     let sender = match db_thread::signal_sender() {
@@ -241,7 +254,7 @@ fn clear_library_stale_signals(
     let library_path_str = library_path.to_string_lossy();
 
     // Query LibraryStale signals and clear those matching this path
-    if let Ok(signals) = db.get_health_signals(Some(HealthIssueType::LibraryStale)) {
+    if let Ok(signals) = db.get_signals(Some(LibraryFileSignalType::LibraryStale.into())) {
         for signal in signals {
             // Key format: "library_stale:{name}:{path}"
             if signal.issue_key.ends_with(&format!(":{}", library_path_str)) {
@@ -251,6 +264,41 @@ fn clear_library_stale_signals(
                     witness,
                 );
             }
+        }
+    }
+}
+
+/// Clear TagCanonicity signals affected by tag edits.
+///
+/// For each edited tag (artist, album_artist, album, genre), compute the normalized
+/// key from the OLD value and clear the corresponding signal. The next awake-phase
+/// DetectTagCanonicalizations computation will recreate any still-valid signals.
+fn clear_affected_canonicity_signals(
+    edits: &[TagEdit],
+    witness: &MutationExecutionWitness,
+) {
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    for edit in edits {
+        // Only clear for tag types that have canonicity detection
+        let normalized_key = match edit.tag_name.as_str() {
+            "artist" => edit.old_value.as_ref().map(|v| normalize_artist(v)),
+            "album_artist" => edit.old_value.as_ref().map(|v| normalize_album_artist(v)),
+            "album" => edit.old_value.as_ref().map(|v| normalize_album(v)),
+            "genre" => edit.old_value.as_ref().map(|v| normalize_genre(v)),
+            _ => None, // Other tag types don't have canonicity signals
+        };
+
+        if let Some(normalized) = normalized_key {
+            let signal_key = format!("{}:{}", edit.tag_name, normalized);
+            sender.clear_aggregate_signal_for_mutation(
+                AggregateSignalType::TagCanonicity,
+                &signal_key,
+                witness,
+            );
         }
     }
 }

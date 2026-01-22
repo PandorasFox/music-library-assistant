@@ -1,147 +1,11 @@
-//! App metadata, tag canonicalization, and tag mismatch operations.
+//! App metadata and tag mismatch operations.
 
-use anyhow::{Context, Result};
-use rusqlite::{params, OptionalExtension};
+use anyhow::Result;
+use rusqlite::params;
 
 use super::Database;
-use crate::corpus::db::types::TagCanonicalization;
 
 impl Database {
-    // ========================================================================
-    // Unified Tag Canonicalization Operations
-    // ========================================================================
-
-    /// Insert or update a tag canonicalization (unified for artist, album_artist, genre, album).
-    pub fn upsert_tag_canonicalization(&self, canon: &TagCanonicalization) -> Result<i64> {
-        self.conn
-            .execute(
-                r#"INSERT INTO tag_canonicalization
-                   (tag_name, canonical_value, variant_value, confidence, auto_detected, confirmed_at)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                   ON CONFLICT(tag_name, variant_value) DO UPDATE SET
-                       canonical_value = ?2,
-                       confidence = ?4,
-                       auto_detected = ?5,
-                       confirmed_at = ?6"#,
-                params![
-                    &canon.tag_name,
-                    &canon.canonical_value,
-                    &canon.variant_value,
-                    canon.confidence,
-                    canon.auto_detected as i32,
-                    &canon.confirmed_at,
-                ],
-            )
-            .context("Failed to upsert tag canonicalization")?;
-
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    /// Get canonical value for a variant of a specific tag.
-    pub fn get_canonical_tag_value(&self, tag_name: &str, variant_value: &str) -> Result<Option<String>> {
-        self.conn
-            .query_row(
-                "SELECT canonical_value FROM tag_canonicalization WHERE tag_name = ?1 AND variant_value = ?2",
-                params![tag_name, variant_value],
-                |row| row.get(0),
-            )
-            .optional()
-            .context("Failed to query canonical tag value")
-    }
-
-    /// Get all unconfirmed tag canonicalizations, optionally filtered by tag_name.
-    pub fn get_unconfirmed_tag_canonicalizations(&self, tag_name: Option<&str>) -> Result<Vec<TagCanonicalization>> {
-        let mut canons = Vec::new();
-
-        if let Some(name) = tag_name {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT id, tag_name, canonical_value, variant_value, confidence, auto_detected, confirmed_at
-                   FROM tag_canonicalization
-                   WHERE confirmed_at IS NULL AND tag_name = ?1
-                   ORDER BY confidence DESC"#,
-            )?;
-            let rows = stmt.query_map(params![name], Self::row_to_tag_canonicalization)?;
-            for row in rows {
-                canons.push(row?);
-            }
-        } else {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT id, tag_name, canonical_value, variant_value, confidence, auto_detected, confirmed_at
-                   FROM tag_canonicalization
-                   WHERE confirmed_at IS NULL
-                   ORDER BY tag_name, confidence DESC"#,
-            )?;
-            let rows = stmt.query_map(params![], Self::row_to_tag_canonicalization)?;
-            for row in rows {
-                canons.push(row?);
-            }
-        }
-
-        Ok(canons)
-    }
-
-    /// Confirm a tag canonicalization.
-    pub fn confirm_tag_canonicalization(&self, id: i64) -> Result<()> {
-        self.conn
-            .execute(
-                "UPDATE tag_canonicalization SET confirmed_at = CURRENT_TIMESTAMP WHERE id = ?1",
-                params![id],
-            )
-            .context("Failed to confirm tag canonicalization")?;
-        Ok(())
-    }
-
-    /// Get all variant values for a canonical value of a specific tag.
-    pub fn get_tag_variants(&self, tag_name: &str, canonical_value: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT variant_value FROM tag_canonicalization WHERE tag_name = ?1 AND canonical_value = ?2",
-        )?;
-
-        let rows = stmt.query_map(params![tag_name, canonical_value], |row| row.get(0))?;
-
-        let mut variants = Vec::new();
-        for row in rows {
-            variants.push(row?);
-        }
-        Ok(variants)
-    }
-
-    /// Count canonicalization issues by tag name.
-    pub fn count_tag_canonicalizations(&self, tag_name: Option<&str>) -> Result<usize> {
-        let count: i64 = if let Some(name) = tag_name {
-            self.conn.query_row(
-                "SELECT COUNT(*) FROM tag_canonicalization WHERE tag_name = ?1",
-                params![name],
-                |row| row.get(0),
-            )?
-        } else {
-            self.conn.query_row(
-                "SELECT COUNT(*) FROM tag_canonicalization",
-                params![],
-                |row| row.get(0),
-            )?
-        };
-        Ok(count as usize)
-    }
-
-    /// Count unconfirmed canonicalizations by tag name.
-    pub fn count_unconfirmed_tag_canonicalizations(&self, tag_name: Option<&str>) -> Result<usize> {
-        let count: i64 = if let Some(name) = tag_name {
-            self.conn.query_row(
-                "SELECT COUNT(*) FROM tag_canonicalization WHERE tag_name = ?1 AND confirmed_at IS NULL",
-                params![name],
-                |row| row.get(0),
-            )?
-        } else {
-            self.conn.query_row(
-                "SELECT COUNT(*) FROM tag_canonicalization WHERE confirmed_at IS NULL",
-                params![],
-                |row| row.get(0),
-            )?
-        };
-        Ok(count as usize)
-    }
-
     // ========================================================================
     // App Metadata
     // ========================================================================
@@ -297,7 +161,7 @@ impl Database {
     }
 
     // ========================================================================
-    // Tag Collision Detection Queries (for canonicalization)
+    // Tag Collision Detection Queries (for canonicalization signals)
     // ========================================================================
 
     /// Query distinct tag values with track counts from track_tags table.
@@ -360,23 +224,5 @@ impl Database {
             result.push(row?);
         }
         Ok(result)
-    }
-
-    // ========================================================================
-    // Row Conversion Helper
-    // ========================================================================
-
-    pub(super) fn row_to_tag_canonicalization(row: &rusqlite::Row) -> rusqlite::Result<TagCanonicalization> {
-        let auto_detected_int: i32 = row.get(5)?;
-
-        Ok(TagCanonicalization {
-            id: Some(row.get(0)?),
-            tag_name: row.get(1)?,
-            canonical_value: row.get(2)?,
-            variant_value: row.get(3)?,
-            confidence: row.get(4)?,
-            auto_detected: auto_detected_int != 0,
-            confirmed_at: row.get(6)?,
-        })
     }
 }

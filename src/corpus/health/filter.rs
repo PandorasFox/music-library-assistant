@@ -128,7 +128,7 @@ mod tests {
             duration_ms: Some(180000),
             bitrate_kbps: Some(320),
             sample_rate: Some(44100),
-            fingerprint: Some("abc123".to_string()),
+            fingerprint: Some(vec![0xabc123]),
         }
     }
 

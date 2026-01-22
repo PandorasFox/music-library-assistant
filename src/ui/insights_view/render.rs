@@ -62,7 +62,7 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &InsightsViewState) {
 
     // Build list items from all buckets using cached entries
     items.extend(bucket_items("Corpus Files", &state.cached_entries.corpus, FocusedBucket::Corpus, state, busy));
-    items.extend(bucket_items("Placeholder", &state.cached_entries.placeholder, FocusedBucket::Placeholder, state, busy));
+    items.extend(bucket_items("Similar Tag Issues", &state.cached_entries.placeholder, FocusedBucket::Placeholder, state, busy));
     items.extend(bucket_items("Library / Deploy", &state.cached_entries.library, FocusedBucket::Library, state, busy));
     items.extend(bucket_items_other("Other Signals", &state.cached_entries.other, state, busy));
 
@@ -342,12 +342,46 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        // Placeholder bucket
-        InsightType::Placeholder => {
+        // Tag resolution bucket entries
+        InsightType::InconsistentAlbumArtist => {
+            lines.push(Line::from(Span::styled(
+                "Inconsistent Album Artist",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Reserved for future use.",
-                Style::default().fg(if busy { Color::DarkGray } else { Color::Gray }),
+                "Albums with multiple artists but",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "missing or inconsistent album_artist.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to resolve.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
+        InsightType::TagCanonicity { ref tag_name } => {
+            lines.push(Line::from(Span::styled(
+                format!("{} Canonicity", tag_name),
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("Variants of {} tags that should", tag_name),
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "be unified (e.g., spelling differences).",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to resolve.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
             )));
         }
 

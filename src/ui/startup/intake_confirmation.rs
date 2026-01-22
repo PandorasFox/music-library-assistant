@@ -16,7 +16,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::corpus::db::types::HealthIssueType;
+use crate::corpus::db::types::SignalType;
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
 use crate::config::log_message;
@@ -56,7 +56,7 @@ impl IntakeConfirmationState {
     /// Returns None if there are no unindexed files.
     pub fn gather(db: &Database, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
         // Get all UnindexedFile signals - these are pre-computed during Awakening
-        let issues = match db.get_health_signals(Some(HealthIssueType::UnindexedFile)) {
+        let issues = match db.get_signals(Some(SignalType::UnindexedFile)) {
             Ok(i) => i,
             Err(e) => {
                 let _ = log_message(&format!(

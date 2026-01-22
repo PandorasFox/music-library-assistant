@@ -18,7 +18,7 @@ use crate::config::{self, Config};
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{deploy_flow, insights_view, missing_file_flow, tag_editor, tag_search, tree_browser};
+use super::{deploy_flow, insights_view, missing_file_flow, tag_canonicity, tag_editor, tag_search, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -29,6 +29,8 @@ pub struct RenderContext<'a> {
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
+    pub tag_canonicity_state: Option<&'a tag_canonicity::TagCanonicalityState>,
+    pub tag_canonicity_review: Option<&'a tag_canonicity::TagCanonicityReviewState>,
     pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub progress_screen: Option<&'a super::progress_screen::ProgressScreen>,
@@ -86,8 +88,8 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),    // Content with unified titlebar
-                Constraint::Length(18), // Footer with eye
+                Constraint::Min(10), // Content with unified titlebar
+                Constraint::Length(10), // Footer
             ])
             .split(f.area());
 
@@ -114,7 +116,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
             .constraints([
                 Constraint::Length(3),  // Header
                 Constraint::Min(10),    // Content
-                Constraint::Length(18), // Footer with eye
+                Constraint::Length(10), // Footer
             ])
             .split(f.area());
 
@@ -155,6 +157,8 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::TagSearch => Some("Tag Search"),
         super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
         super::UiMode::MissingFileResolution => Some("Missing File Resolution"),
+        super::UiMode::TagCanonicityResolution => Some("Tag Canonicity"),
+        super::UiMode::TagCanonicityReview => Some("Tag Canonicity - Review"),
     };
 
     let title = match suffix {
@@ -232,6 +236,18 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             view_name = "missing_file_resolution";
             if let Some(ref preview) = ctx.missing_file_preview {
                 preview.render(f, area);
+            }
+        }
+        super::UiMode::TagCanonicityResolution => {
+            view_name = "tag_canonicity_resolution";
+            if let Some(ref state) = ctx.tag_canonicity_state {
+                tag_canonicity::render(f, area, state);
+            }
+        }
+        super::UiMode::TagCanonicityReview => {
+            view_name = "tag_canonicity_review";
+            if let Some(ref state) = ctx.tag_canonicity_review {
+                tag_canonicity::render_review(f, area, state);
             }
         }
     }
@@ -379,50 +395,45 @@ fn render_exit_confirm_modal(
 }
 
 fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    let footer_layout = Layout::default()
-        .direction(Direction::Horizontal)
+    // Two-row layout: full-width corpus health on top, task/controls side-by-side below
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(30),      // Left status area (flexible)
-            Constraint::Length(70),   // Eye animation (fixed 70 cols)
+            Constraint::Length(4), // Corpus health (slim)
+            Constraint::Min(5),    // Task + Controls
         ])
         .split(area);
 
-    // Left side: three stacked status boxes
-    let status_layout = Layout::default()
-        .direction(Direction::Vertical)
+    // Bottom row: Task and Controls side-by-side
+    let bottom_cols = Layout::default()
+        .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(5),  // Corpus status
-            Constraint::Length(6),  // Operation status
-            Constraint::Min(4),     // Controls
+            Constraint::Percentage(50), // Task
+            Constraint::Percentage(50), // Controls
         ])
-        .split(footer_layout[0]);
+        .split(rows[1]);
 
     let start = Instant::now();
-    render_corpus_status(f, status_layout[0], ctx);
+    render_corpus_status(f, rows[0], ctx);
     let corpus_time = start.elapsed();
 
     let start = Instant::now();
-    render_operation_status(f, status_layout[1], ctx);
+    render_operation_status(f, bottom_cols[0], ctx);
     let operation_time = start.elapsed();
 
     let start = Instant::now();
-    render_controls(f, status_layout[2], ctx);
+    render_controls(f, bottom_cols[1], ctx);
     let controls_time = start.elapsed();
 
-    // Eye animation
-    let start = Instant::now();
-    render_eye(f, footer_layout[1], ctx);
-    let eye_time = start.elapsed();
-
-    if corpus_time.as_millis() > 16 || operation_time.as_millis() > 16
-        || controls_time.as_millis() > 16 || eye_time.as_millis() > 16
+    if corpus_time.as_millis() > 16
+        || operation_time.as_millis() > 16
+        || controls_time.as_millis() > 16
     {
         let _ = config::log_message(&format!(
-            "[RENDER DEBUG] footer: corpus={}ms operation={}ms controls={}ms eye={}ms",
+            "[RENDER DEBUG] footer: corpus={}ms operation={}ms controls={}ms",
             corpus_time.as_millis(),
             operation_time.as_millis(),
-            controls_time.as_millis(),
-            eye_time.as_millis()
+            controls_time.as_millis()
         ));
     }
 }
@@ -488,7 +499,7 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
         lines.push(Line::from(file_parts));
 
         // Signal breakdown (all remaining signals)
-        let hs = &summary.health_summary;
+        let hs = &summary.signal_summary;
         let total_signals = hs.fingerprint_duplicates
             + hs.metadata_duplicates
             + hs.canonicalization_issues
@@ -699,6 +710,8 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::IntakeConfirmation => control_presets::empty(), // Modal handles its own hints
         super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
         super::UiMode::MissingFileResolution => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::TagCanonicityResolution => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::TagCanonicityReview => control_presets::empty(), // Modal handles its own hints
     };
     lines.push(controls.render_line());
 
@@ -707,22 +720,3 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
     f.render_widget(para, area);
 }
 
-fn render_eye(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    let eye_text = match ctx.eye.current_frame() {
-        EyeFrame::Open => EYE_OPEN,
-        EyeFrame::Closing => EYE_CLOSING,
-        EyeFrame::Closed => EYE_CLOSED,
-    };
-
-    // Center the 64-col eye in the 70-col frame
-    let centered_eye: String = eye_text
-        .lines()
-        .map(|line| format!("   {}   ", line))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let eye_para = Paragraph::new(centered_eye)
-        .style(Style::default().fg(Color::Cyan))
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(eye_para, area);
-}

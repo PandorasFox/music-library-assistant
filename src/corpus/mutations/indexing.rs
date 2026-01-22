@@ -355,7 +355,7 @@ mod tests {
             duration_ms: Some(180000),
             bitrate_kbps: Some(1411),
             sample_rate: Some(44100),
-            fingerprint: Some("abc123".to_string()),
+            fingerprint: Some(vec![0xabc123]),
             tags: vec![
                 ("artist".to_string(), "Test Artist".to_string()),
                 ("album".to_string(), "Test Album".to_string()),

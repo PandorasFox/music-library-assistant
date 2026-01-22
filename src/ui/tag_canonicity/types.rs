@@ -1,0 +1,420 @@
+//! Tag Canonicity Modal Types
+//!
+//! Data structures for the tag canonicity resolution modal, including
+//! variant data, selection state, and mutation generation.
+//!
+//! Key behaviors:
+//! - Spacebar toggle-select for each variant
+//! - Editable text field for canonical value
+//! - Pre-filled to most common value (alphabetical tiebreaker) for tag canonicity
+//! - NOT pre-filled for album_artist resolution
+
+use std::collections::HashSet;
+
+use std::path::PathBuf;
+
+use crate::corpus::db::types::AggregateSignal;
+use crate::corpus::health::album_artist_detection::AlbumArtistIssue;
+use crate::corpus::health::collision::TagCollision;
+use crate::corpus::mutations::{Mutation, TagEdit};
+use crate::ui::widgets::TextInputState;
+
+/// A tag variant with its occurrence count.
+#[derive(Debug, Clone)]
+pub struct TagVariantEntry {
+    /// The tag value
+    pub value: String,
+    /// Number of tracks with this value
+    pub count: usize,
+}
+
+/// Data loaded once when the modal opens.
+///
+/// This is immutable during modal interaction - all DB queries happen at load time.
+#[derive(Debug, Clone)]
+pub struct TagCanonicalityModalData {
+    /// The tag name being canonicalized (e.g., "artist", "album_artist")
+    pub tag_name: String,
+    /// Optional context label (e.g., "Album: Clockwork Hearts")
+    pub context_label: Option<String>,
+    /// Variants sorted by count DESC, then alphabetically for ties
+    pub variants: Vec<TagVariantEntry>,
+    /// Track IDs affected by this canonicalization
+    pub track_ids: Vec<i64>,
+}
+
+impl TagCanonicalityModalData {
+    /// Create from a TagCollision (artist, genre canonicity).
+    ///
+    /// Note: track_ids are not directly available from TagCollision.
+    /// They must be populated separately via a database query if needed for mutations.
+    pub fn from_collision(collision: &TagCollision) -> Self {
+        // Build variants from the collision's variant_counts
+        let mut variants: Vec<TagVariantEntry> = collision
+            .variant_counts
+            .iter()
+            .map(|(value, count)| TagVariantEntry {
+                value: value.clone(),
+                count: *count,
+            })
+            .collect();
+
+        // Sort: count DESC, then alphabetically for ties
+        variants.sort_by(|a, b| {
+            b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
+        });
+
+        Self {
+            tag_name: collision.tag_name.clone(),
+            context_label: None,
+            variants,
+            // Track IDs need to be populated separately via DB query
+            track_ids: Vec::new(),
+        }
+    }
+
+    /// Create from an AlbumArtistIssue (album_artist resolution).
+    pub fn from_album_artist_issue(issue: &AlbumArtistIssue) -> Self {
+        // For album_artist, we show the artist variants as the list
+        // The user will input the album_artist value
+        let mut variants: Vec<TagVariantEntry> = issue
+            .artist_variants
+            .iter()
+            .map(|(value, count)| TagVariantEntry {
+                value: value.clone(),
+                count: *count,
+            })
+            .collect();
+
+        // Sort: count DESC, then alphabetically for ties
+        variants.sort_by(|a, b| {
+            b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
+        });
+
+        Self {
+            tag_name: "album_artist".to_string(),
+            context_label: Some(format!("Album: {}", issue.album)),
+            variants,
+            track_ids: issue.track_ids.clone(),
+        }
+    }
+
+    /// Create from an AggregateSignal (loaded from database).
+    pub fn from_signal(signal: &AggregateSignal) -> Option<Self> {
+        let metadata = signal.metadata_json.as_ref()?;
+        let json: serde_json::Value = serde_json::from_str(metadata).ok()?;
+
+        let tag_name = json.get("tag_name")?.as_str()?.to_string();
+
+        let variants_obj = json.get("variants")?.as_object()?;
+        let mut variants: Vec<TagVariantEntry> = variants_obj
+            .iter()
+            .filter_map(|(value, count)| {
+                Some(TagVariantEntry {
+                    value: value.clone(),
+                    count: count.as_u64()? as usize,
+                })
+            })
+            .collect();
+
+        variants.sort_by(|a, b| {
+            b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
+        });
+
+        let track_ids = json
+            .get("track_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+            .unwrap_or_default();
+
+        Some(Self {
+            tag_name,
+            context_label: json.get("context").and_then(|v| v.as_str()).map(String::from),
+            variants,
+            track_ids,
+        })
+    }
+
+    /// Get the default canonical value for pre-filling.
+    ///
+    /// Returns the most common value. For ties, uses alphabetical order.
+    /// Returns empty string if no variants.
+    pub fn default_canonical(&self) -> String {
+        self.variants.first().map(|v| v.value.clone()).unwrap_or_default()
+    }
+}
+
+/// Modal overlay state for confirmation dialogs.
+///
+/// Currently unused - navigation is non-committal so no confirmation needed.
+/// Retained for future use (e.g., confirming destructive actions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TagCanonicalityModal {
+    /// No modal overlay
+    #[default]
+    None,
+}
+
+/// State for the tag canonicity resolution modal.
+///
+/// Layout: text field at top (cursor = -1), variant list below (cursor >= 0).
+/// Default focus is first list item (cursor = 0).
+#[derive(Debug, Clone)]
+pub struct TagCanonicalityState {
+    /// Loaded data (immutable during interaction)
+    pub data: TagCanonicalityModalData,
+    /// Which variants are selected for squashing (indices into data.variants)
+    pub selected: HashSet<usize>,
+    /// Currently highlighted position:
+    /// - -1 = text field at top
+    /// - 0..n = variant list indices
+    pub cursor: i32,
+    /// Canonical value text input (with cursor, Ctrl+U/K/A/E support)
+    pub canonical_input: TextInputState,
+    /// Whether the canonical value was pre-filled
+    pub pre_filled: bool,
+    /// Modal overlay (confirmation dialogs) - currently unused
+    pub modal: TagCanonicalityModal,
+}
+
+impl TagCanonicalityState {
+    /// Create a new state from data.
+    ///
+    /// If `pre_fill` is true, pre-fills the canonical input with the most common value.
+    /// For album_artist resolution, `pre_fill` should be false.
+    ///
+    /// Layout: text field at top (cursor=-1), variant list below (cursor>=0).
+    /// Default focus: first list item (cursor=0).
+    /// All items selected initially.
+    pub fn new(data: TagCanonicalityModalData, pre_fill: bool) -> Self {
+        let canonical_value = if pre_fill {
+            data.default_canonical()
+        } else {
+            String::new()
+        };
+
+        // ALL items selected initially
+        let selected: HashSet<usize> = (0..data.variants.len()).collect();
+
+        // Create text input state with cursor at end
+        let mut canonical_input = TextInputState::new();
+        canonical_input.set_value(canonical_value);
+        canonical_input.focused = false; // Not focused by default
+
+        Self {
+            data,
+            selected,
+            cursor: 0, // Default focus = first list item (not text field)
+            canonical_input,
+            pre_filled: pre_fill,
+            modal: TagCanonicalityModal::None,
+        }
+    }
+
+    /// Toggle selection of the variant at cursor (only works if cursor >= 0).
+    pub fn toggle_selection(&mut self) {
+        if self.cursor >= 0 {
+            let idx = self.cursor as usize;
+            if idx < self.data.variants.len() {
+                if self.selected.contains(&idx) {
+                    self.selected.remove(&idx);
+                } else {
+                    self.selected.insert(idx);
+                }
+            }
+        }
+    }
+
+    /// Move cursor up (including into text field at -1).
+    pub fn cursor_up(&mut self) {
+        if self.cursor > -1 {
+            self.cursor -= 1;
+            // Update text input focus
+            self.canonical_input.focused = self.cursor == -1;
+        }
+    }
+
+    /// Move cursor down (from text field into list, or within list).
+    pub fn cursor_down(&mut self) {
+        let max_cursor = self.data.variants.len() as i32 - 1;
+        if self.cursor < max_cursor {
+            self.cursor += 1;
+            self.canonical_input.focused = false;
+        }
+    }
+
+    /// Check if cursor is on text field.
+    pub fn is_on_text_field(&self) -> bool {
+        self.cursor == -1
+    }
+
+    /// Check if cursor is on first list item.
+    pub fn is_on_first_item(&self) -> bool {
+        self.cursor == 0
+    }
+
+    /// Check if cursor is on last list item.
+    pub fn is_on_last_item(&self) -> bool {
+        self.cursor == self.data.variants.len() as i32 - 1
+    }
+
+    /// Check if we can submit (canonical value is non-empty and variants selected, no modal open).
+    pub fn can_submit(&self) -> bool {
+        self.modal == TagCanonicalityModal::None
+            && !self.canonical_input.value().trim().is_empty()
+            && !self.selected.is_empty()
+    }
+
+    /// Close any open modal.
+    pub fn close_modal(&mut self) {
+        self.modal = TagCanonicalityModal::None;
+    }
+
+    /// Check if a modal is open.
+    pub fn has_modal(&self) -> bool {
+        self.modal != TagCanonicalityModal::None
+    }
+
+    /// Get the canonical value to apply.
+    pub fn canonical_value(&self) -> &str {
+        self.canonical_input.value().trim()
+    }
+
+    /// Get the selected variant values that should be replaced.
+    pub fn selected_variants(&self) -> Vec<&str> {
+        self.selected
+            .iter()
+            .filter_map(|&idx| self.data.variants.get(idx))
+            .map(|v| v.value.as_str())
+            .collect()
+    }
+
+    /// Generate mutations for the selected variants → canonical value.
+    ///
+    /// Requires track_paths: a map from track_id to path for mutation generation.
+    /// If track_paths is empty, returns empty mutations (caller must populate).
+    pub fn mutations_with_paths(&self, track_paths: &std::collections::HashMap<i64, PathBuf>) -> Vec<Mutation> {
+        let canonical = self.canonical_input.value().trim();
+        if canonical.is_empty() {
+            return Vec::new();
+        }
+
+        let selected_variants: HashSet<&str> = self.selected_variants().into_iter().collect();
+        if selected_variants.is_empty() {
+            return Vec::new();
+        }
+
+        let mut mutations = Vec::new();
+
+        // For each track, create a mutation if its current value is a selected variant
+        // Note: In practice, we'd need to know which variant each track has
+        // For now, we create edits for all selected variants on all tracks
+        for &track_id in &self.data.track_ids {
+            if let Some(path) = track_paths.get(&track_id) {
+                // Create tag edits for each selected variant → canonical
+                let edits: Vec<TagEdit> = selected_variants
+                    .iter()
+                    .filter(|&&v| v != canonical)
+                    .map(|&v| TagEdit {
+                        tag_name: self.data.tag_name.clone(),
+                        old_value: Some(v.to_string()),
+                        new_value: Some(canonical.to_string()),
+                    })
+                    .collect();
+
+                if !edits.is_empty() {
+                    mutations.push(Mutation::TagEditAndFlush {
+                        track_id,
+                        path: path.clone(),
+                        edits,
+                    });
+                }
+            }
+        }
+
+        mutations
+    }
+}
+
+/// Action returned from handling input in the modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagCanonicalityAction {
+    /// No action, continue showing modal
+    None,
+    /// User confirmed current squash (Enter) - stage decision and advance
+    Confirmed,
+    /// User cancelled entire flow (Esc from main, not from modal)
+    Cancelled,
+    /// User navigated to next/prev cluster (Tab/Shift-Tab) - does NOT stage decision
+    Navigate {
+        /// True = forward (Tab), false = backward (Shift-Tab)
+        forward: bool,
+    },
+    /// User requested review screen (Ctrl+R)
+    ShowReview,
+}
+
+// ============================================================================
+// Review Screen
+// ============================================================================
+
+/// Summary of a single decision for the review screen.
+#[derive(Debug, Clone)]
+pub struct DecisionSummary {
+    /// Human-readable label (e.g., "Canonicalize artist")
+    pub label: String,
+    /// Number of mutations (tag edits) in this decision
+    pub mutation_count: usize,
+    /// Number of unique tracks affected
+    pub track_count: usize,
+}
+
+/// State for the tag canonicity review screen.
+///
+/// Shows all pending decisions before final confirmation.
+#[derive(Debug, Clone)]
+pub struct TagCanonicityReviewState {
+    /// Summary of each decision
+    pub decisions: Vec<DecisionSummary>,
+    /// Currently highlighted decision (for potential future discard feature)
+    pub cursor: usize,
+    /// Button focus: true = Confirm, false = Cancel
+    pub confirm_focused: bool,
+}
+
+impl TagCanonicityReviewState {
+    /// Create a new review state with the given decision summaries.
+    pub fn new(decisions: Vec<DecisionSummary>) -> Self {
+        Self {
+            decisions,
+            cursor: 0,
+            confirm_focused: true, // Default to Confirm
+        }
+    }
+
+    /// Total mutations across all decisions.
+    pub fn total_mutations(&self) -> usize {
+        self.decisions.iter().map(|d| d.mutation_count).sum()
+    }
+
+    /// Total unique tracks affected (approximation - may double count).
+    pub fn total_tracks(&self) -> usize {
+        self.decisions.iter().map(|d| d.track_count).sum()
+    }
+
+    /// Toggle button focus between Cancel and Confirm.
+    pub fn toggle_focus(&mut self) {
+        self.confirm_focused = !self.confirm_focused;
+    }
+}
+
+/// Action returned from the review screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagCanonicityReviewAction {
+    /// No action, continue showing review
+    None,
+    /// User confirmed - execute all decisions
+    Confirm,
+    /// User cancelled - discard all decisions
+    Cancel,
+}

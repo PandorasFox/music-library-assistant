@@ -270,8 +270,8 @@ pub fn check_and_run_migrations<B: ratatui::backend::Backend>(
                 }
             }
 
-            // Continue anyway - app will handle errors as they arise
-            Ok(())
+            // EXIT - we shall not continue without all migrations being applied
+            Err(anyhow::anyhow!("Migration failed: {}. Cannot continue with incompatible database schema.", e))
         }
     }
 }

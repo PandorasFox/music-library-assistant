@@ -57,6 +57,10 @@ pub(crate) enum UiMode {
     UnifiedTagEditor,
     /// Missing file resolution modal
     MissingFileResolution,
+    /// Tag canonicity resolution modal (artist/genre/album canonization, album_artist setting)
+    TagCanonicityResolution,
+    /// Tag canonicity review screen - summary before confirming all decisions
+    TagCanonicityReview,
 }
 
 // ============================================================================

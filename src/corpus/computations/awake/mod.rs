@@ -73,6 +73,11 @@ pub enum Computation {
     /// Finds similar tag values that could be unified.
     DetectTagCanonicalizations,
 
+    /// Detect albums with inconsistent album_artist tags.
+    ///
+    /// Finds albums where tracks have different artists but missing/inconsistent album_artist.
+    DetectInconsistentAlbumArtist,
+
     /// Verify out-of-band changes for files with modified mtime.
     ///
     /// For CorpusFileModifiedOutOfBand signals, checks if tags actually differ.
@@ -115,6 +120,7 @@ impl Computation {
             Computation::DetectMissingTags => "Detecting missing tags",
             Computation::DetectMetadataDuplicates => "Detecting metadata duplicates",
             Computation::DetectTagCanonicalizations => "Detecting tag canonicalizations",
+            Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::VerifyOutOfBandChanges => "Verifying out-of-band changes",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::CheckDeployConflicts { .. } => "Checking deploy conflicts",

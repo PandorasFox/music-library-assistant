@@ -12,7 +12,7 @@ mod health;
 mod library_scan;
 mod metadata;
 mod scan_state;
-mod tracks;
+pub mod tracks;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -240,12 +240,13 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_tag_history_session ON tag_edit_history(session_id);
 
             -- =================================================================
-            -- Corpus Health Signal Tables
+            -- Corpus Signal Tables
             -- =================================================================
 
-            -- Health signals (facts about corpus state)
+            -- Signals (facts about corpus state)
             -- Signals are created by computations and deleted when stale
-            CREATE TABLE IF NOT EXISTS health_issues (
+            -- Note: column names kept as issue_type/issue_key for backwards compat
+            CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY,
                 issue_type TEXT NOT NULL,
                 issue_key TEXT NOT NULL,
@@ -253,8 +254,8 @@ impl Database {
                 metadata_json TEXT,
                 UNIQUE(issue_type, issue_key)
             );
-            CREATE INDEX IF NOT EXISTS idx_health_issues_type ON health_issues(issue_type);
-            CREATE INDEX IF NOT EXISTS idx_health_issues_discovered ON health_issues(discovered_at);
+            CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(issue_type);
+            CREATE INDEX IF NOT EXISTS idx_signals_discovered ON signals(discovered_at);
 
             -- Known variants (legitimate re-releases, remixes, etc.)
             CREATE TABLE IF NOT EXISTS known_variants (
@@ -271,21 +272,6 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_known_variants_fingerprint ON known_variants(canonical_fingerprint);
             CREATE INDEX IF NOT EXISTS idx_known_variants_type ON known_variants(variant_type);
-
-            -- Unified tag canonicalization (artist, album_artist, genre, album)
-            CREATE TABLE IF NOT EXISTS tag_canonicalization (
-                id INTEGER PRIMARY KEY,
-                tag_name TEXT NOT NULL,
-                canonical_value TEXT NOT NULL,
-                variant_value TEXT NOT NULL,
-                confidence REAL,
-                auto_detected INTEGER DEFAULT 1,
-                confirmed_at DATETIME,
-                UNIQUE(tag_name, variant_value)
-            );
-            CREATE INDEX IF NOT EXISTS idx_tag_canon_name ON tag_canonicalization(tag_name);
-            CREATE INDEX IF NOT EXISTS idx_tag_canon_canonical ON tag_canonicalization(tag_name, canonical_value);
-            CREATE INDEX IF NOT EXISTS idx_tag_canon_unconfirmed ON tag_canonicalization(tag_name) WHERE confirmed_at IS NULL;
 
             -- Tag mismatches: tracks where DB tags differ from on-disk tags
             -- Records pending tag flushes (DB updated but disk not yet written)

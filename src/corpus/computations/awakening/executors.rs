@@ -14,7 +14,7 @@ use crate::corpus::computations::helpers::{
     get_configured_library_names, is_audio_file,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{CorpusFileSignalType, LibraryFileSignalType, HealthIssueType};
+use crate::corpus::db::types::{CorpusFileSignalType, LibraryFileSignalType};
 use crate::corpus::db::Database;
 use crate::db_thread;
 
@@ -112,7 +112,7 @@ pub fn execute_derive_directory_signals(
     };
 
     // Get FileInCorpus signals for this directory
-    let corpus_signals = match read_only_db.get_signals_in_directory(directory, HealthIssueType::FileInCorpus) {
+    let corpus_signals = match read_only_db.get_signals_in_directory(directory, CorpusFileSignalType::FileInCorpus.into()) {
         Ok(s) => s,
         Err(e) => {
             return Result::failure(
@@ -149,7 +149,7 @@ pub fn execute_derive_directory_signals(
 
     // Prune stale UnindexedFile signals
     if let Ok(existing_unindexed) =
-        read_only_db.get_signals_in_directory(directory, HealthIssueType::UnindexedFile)
+        read_only_db.get_signals_in_directory(directory, CorpusFileSignalType::UnindexedFile.into())
     {
         for signal in existing_unindexed {
             if !corpus_paths.contains(&signal.issue_key) {
@@ -499,7 +499,7 @@ fn clear_library_signals_for_path(
     witness: &ComputationWitness,
 ) {
     // Check for LibraryLeftover signals matching this path
-    if let Ok(signals) = read_only_db.get_health_signals(Some(HealthIssueType::LibraryLeftover)) {
+    if let Ok(signals) = read_only_db.get_signals(Some(LibraryFileSignalType::LibraryLeftover.into())) {
         for signal in signals {
             // Key format: "library_leftover:{name}:{path}"
             if signal.issue_key.ends_with(&format!(":{}", library_path)) {
@@ -509,7 +509,7 @@ fn clear_library_signals_for_path(
     }
 
     // Check for LibraryStale signals matching this path
-    if let Ok(signals) = read_only_db.get_health_signals(Some(HealthIssueType::LibraryStale)) {
+    if let Ok(signals) = read_only_db.get_signals(Some(LibraryFileSignalType::LibraryStale.into())) {
         for signal in signals {
             // Key format: "library_stale:{name}:{path}"
             if signal.issue_key.ends_with(&format!(":{}", library_path)) {

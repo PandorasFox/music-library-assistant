@@ -12,6 +12,5 @@ pub mod types;
 // Re-export core types
 pub use queries::Database;
 pub use types::{ScanStateEntry, Track};
-// New type-safe signal system
-// Legacy (for migration compatibility)
-pub use types::{HealthIssue, HealthIssueType};
+// Signal types
+pub use types::{Signal, SignalType};

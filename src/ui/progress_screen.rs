@@ -22,6 +22,8 @@
 //! witch.queue_content_analysis();
 //! ```
 
+use std::time::Instant;
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
@@ -51,7 +53,7 @@ pub enum ProgressPhase {
 }
 
 impl ProgressPhase {
-    /// Get the status message for this phase.
+    /// Get the status message for this phase (without trailing ellipsis).
     pub fn status_message(&self, eye_state: EyeState, complete: bool) -> &'static str {
         if complete {
             return match self {
@@ -63,12 +65,12 @@ impl ProgressPhase {
 
         match self {
             ProgressPhase::Eyeballing => match eye_state {
-                EyeState::Closed => "Scanning corpus...",
-                EyeState::Awakening => "Computing health signals...",
+                EyeState::Closed => "Scanning corpus",
+                EyeState::Awakening => "Computing health signals",
                 EyeState::Awake => "Ready!",
             },
-            ProgressPhase::ContentAnalysis => "Analyzing metadata...",
-            ProgressPhase::SignalRefresh => "Updating signals...",
+            ProgressPhase::ContentAnalysis => "Analyzing metadata",
+            ProgressPhase::SignalRefresh => "Updating signals",
         }
     }
 
@@ -107,6 +109,10 @@ pub struct ProgressScreen {
     db_queue_depth: u64,
     /// Consecutive ticks where the Witch was idle (safety valve for missed work).
     consecutive_idle_ticks: u8,
+    /// Tick counter for animations (spinner, color pulse).
+    tick_count: u32,
+    /// Last time the animation ticked (for frame-rate independent animation).
+    last_animation_tick: Instant,
 }
 
 impl ProgressScreen {
@@ -125,6 +131,8 @@ impl ProgressScreen {
             worker_stats: None,
             db_queue_depth: 0,
             consecutive_idle_ticks: 0,
+            tick_count: 0,
+            last_animation_tick: Instant::now(),
         }
     }
 
@@ -143,6 +151,8 @@ impl ProgressScreen {
             worker_stats: None,
             db_queue_depth: 0,
             consecutive_idle_ticks: 0,
+            tick_count: 0,
+            last_animation_tick: Instant::now(),
         };
         screen.wait_state.start();
         screen
@@ -163,6 +173,8 @@ impl ProgressScreen {
             worker_stats: None,
             db_queue_depth: 0,
             consecutive_idle_ticks: 0,
+            tick_count: 0,
+            last_animation_tick: Instant::now(),
         };
         screen.wait_state.start();
         screen
@@ -217,10 +229,44 @@ impl ProgressScreen {
         self.db_queue_depth = depth;
     }
 
+    /// Get the current tick count for animations.
+    pub fn tick_count(&self) -> u32 {
+        self.tick_count
+    }
+
+    /// Get the current bouncing dot spinner character for left column position.
+    pub fn spinner_char_left(&self) -> char {
+        // Single dot bouncing up/down in left column (dots 1,2,3)
+        const BOUNCE_LEFT: &[char] = &['⠁', '⠂', '⠄', '⠂']; // top, mid, bottom, mid
+        BOUNCE_LEFT[((self.tick_count / 2) as usize) % BOUNCE_LEFT.len()]
+    }
+
+    /// Get the current bouncing dot spinner character for right column position.
+    /// This is combined with a filled left column (dots 1,2,3 + bouncing 4,5,6).
+    pub fn spinner_char_right(&self) -> char {
+        // Left column filled + bouncing dot in right column
+        const BOUNCE_RIGHT_WITH_LEFT: &[char] = &['⠏', '⠗', '⠧', '⠗']; // 1,2,3+4 / +5 / +6 / +5
+        BOUNCE_RIGHT_WITH_LEFT[((self.tick_count / 2) as usize) % BOUNCE_RIGHT_WITH_LEFT.len()]
+    }
+
+    /// Animation tick interval in milliseconds (~10Hz for smooth animation).
+    const ANIMATION_TICK_MS: u64 = 100;
+
     /// Tick the progress screen state.
     ///
     /// Returns `true` if work is complete.
     pub fn tick(&mut self, witch: &Witch) -> bool {
+        // Time-based animation tick: only increment when enough time has elapsed.
+        // This keeps animation smooth regardless of UI frame rate.
+        let now = Instant::now();
+        let elapsed_ms = now.duration_since(self.last_animation_tick).as_millis() as u64;
+        if elapsed_ms >= Self::ANIMATION_TICK_MS {
+            // Advance by the number of ticks that should have occurred
+            let ticks_to_add = elapsed_ms / Self::ANIMATION_TICK_MS;
+            self.tick_count = self.tick_count.wrapping_add(ticks_to_add as u32);
+            self.last_animation_tick = now;
+        }
+
         // Update progress from the Witch
         let status = witch.status();
         self.update_progress(&status);
@@ -300,6 +346,54 @@ impl ProgressScreen {
 }
 
 // ============================================================================
+// Animated Color
+// ============================================================================
+
+/// Calculate animated color with sinusoidal hue/saturation/lightness shifting.
+///
+/// Base color is #f15c99 (RGB 241, 92, 153) - a vibrant magenta/pink.
+/// Hue shifts ±7% with period ~2.2 seconds (22 ticks at 100ms).
+/// Saturation shifts ±3.6% with period ~3.3 seconds (33 ticks).
+/// Lightness shifts ±1.8% with period ~5.5 seconds (55 ticks).
+fn animated_progress_color(tick: u32) -> Color {
+    // Base color #f15c99 in HSL: H=337°, S=83%, L=65%
+    let base_h = 337.0_f32;
+    let base_s = 0.83_f32;
+    let base_l = 0.65_f32;
+
+    // Sinusoidal shifts with different periods for variety
+    // (slowed 10% and tightened 10% from initial values)
+    let tick_f = tick as f32;
+    let hue_shift = (tick_f * 0.285).sin() * 24.3;      // ±24° (~7% of 360), period ~22 ticks
+    let sat_shift = (tick_f * 0.190).sin() * 0.036;     // ±3.6%, period ~33 ticks
+    let light_shift = (tick_f * 0.115).sin() * 0.018;   // ±1.8%, period ~55 ticks
+
+    let h = (base_h + hue_shift).rem_euclid(360.0);
+    let s = (base_s + sat_shift).clamp(0.0, 1.0);
+    let l = (base_l + light_shift).clamp(0.0, 1.0);
+
+    // HSL to RGB conversion
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+
+    let (r1, g1, b1) = match h as u32 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    let r = ((r1 + m) * 255.0).round() as u8;
+    let g = ((g1 + m) * 255.0).round() as u8;
+    let b = ((b1 + m) * 255.0).round() as u8;
+
+    Color::Rgb(r, g, b)
+}
+
+// ============================================================================
 // Rendering
 // ============================================================================
 
@@ -311,6 +405,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     // Eye art is 16 lines tall
     let eye_height = 16;
     let progress_height = if screen.progress.is_some() { 3 } else { 0 };
+    let eye_progress_spacing = if screen.progress.is_some() { 1 } else { 0 }; // Blank line above progress
 
     // Always reserve space for queue depth line to prevent layout jumping
     let show_queue_depth = screen.db_queue_depth > 0;
@@ -322,7 +417,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let show_worker_stats = show_stats && screen.worker_stats.is_some();
     let db_stats_height = if show_db_stats { 1 } else { 0 };
     let worker_stats_height = if show_worker_stats { 2 } else { 0 };
-    let total_height = 2 + eye_height + progress_height + queue_depth_height + db_stats_height + worker_stats_height;
+    let total_height = 2 + eye_height + eye_progress_spacing + progress_height + queue_depth_height + db_stats_height + worker_stats_height;
 
     // Calculate vertical centering
     let v_margin = area.height.saturating_sub(total_height as u16) / 2;
@@ -335,15 +430,16 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(v_margin),                    // Top margin
-            Constraint::Length(1),                           // Message
-            Constraint::Length(1),                           // Spacing
-            Constraint::Length(eye_height as u16),           // Eye
-            Constraint::Length(progress_height as u16),      // Progress bar
-            Constraint::Length(queue_depth_height as u16),   // Queue depth
-            Constraint::Length(db_stats_height as u16),      // DB stats
-            Constraint::Length(worker_stats_height as u16),  // Worker stats
-            Constraint::Min(0),                              // Bottom margin
+            Constraint::Length(v_margin),                        // 0: Top margin
+            Constraint::Length(1),                               // 1: Message
+            Constraint::Length(1),                               // 2: Spacing
+            Constraint::Length(eye_height as u16),               // 3: Eye
+            Constraint::Length(eye_progress_spacing as u16),     // 4: Blank line above progress
+            Constraint::Length(progress_height as u16),          // 5: Progress bar
+            Constraint::Length(queue_depth_height as u16),       // 6: Queue depth
+            Constraint::Length(db_stats_height as u16),          // 7: DB stats
+            Constraint::Length(worker_stats_height as u16),      // 8: Worker stats
+            Constraint::Min(0),                                  // 9: Bottom margin
         ])
         .split(area);
 
@@ -375,31 +471,52 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
 
     // Render progress bar if present
     if let Some(progress) = screen.progress {
-        let progress_area = chunks[4];
+        let progress_area = chunks[5]; // Now at index 5 due to new spacing row
 
-        let bar_width = 40u16.min(progress_area.width.saturating_sub(4));
-        let bar_x = (progress_area.width.saturating_sub(bar_width)) / 2 + progress_area.x;
+        let bar_inner_width = 40u16.min(progress_area.width.saturating_sub(4));
+        let bar_x = (progress_area.width.saturating_sub(bar_inner_width + 2)) / 2 + progress_area.x;
 
-        let filled = (progress * bar_width as f32) as u16;
-        let empty = bar_width.saturating_sub(filled);
+        // Calculate filled portion
+        let filled = (progress * bar_inner_width as f32) as u16;
+        let empty = bar_inner_width.saturating_sub(filled);
 
-        let bar_text = format!(
-            "[{}{}]",
-            "=".repeat(filled as usize),
-            " ".repeat(empty as usize)
-        );
+        // Get animated color
+        let bar_color = animated_progress_color(screen.tick_count);
+
+        // Build the bar:
+        // - Fill uses ⠿ (full 6-dot braille)
+        // - Bouncing spinner at trailing edge (right column, with left filled)
+        let bar_text = if filled == 0 {
+            // Spinner replaces left bracket when empty
+            let spinner = screen.spinner_char_left();
+            format!(
+                "{}{}⠇",
+                spinner,
+                " ".repeat(bar_inner_width as usize)
+            )
+        } else {
+            // Spinner at trailing edge of fill (right column position)
+            let spinner = screen.spinner_char_right();
+            let fill_chars = filled.saturating_sub(1) as usize;
+            format!(
+                "⠸{}{}{}⠇",
+                "⠿".repeat(fill_chars),
+                spinner,
+                " ".repeat(empty as usize)
+            )
+        };
 
         let detail = screen.progress_detail.as_deref().unwrap_or("");
         let progress_text = format!("{}\n{}", bar_text, detail);
 
         let progress_widget = Paragraph::new(progress_text)
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(bar_color))
             .alignment(Alignment::Center);
 
         let centered_progress = Rect {
             x: bar_x,
             y: progress_area.y,
-            width: bar_width + 4,
+            width: bar_inner_width + 4,
             height: progress_area.height,
         };
 
@@ -408,7 +525,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
 
     // Render pending DB writes
     if show_queue_depth {
-        let queue_area = chunks[5];
+        let queue_area = chunks[6]; // Index shifted due to spacing row
         let label_color = Color::Rgb(245, 28, 153); // Magenta
 
         let queue_line = Line::from(vec![
@@ -426,7 +543,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     // Render DB stats if timing enabled
     if show_db_stats {
         if let Some(stats) = &screen.db_stats {
-            let stats_area = chunks[6];
+            let stats_area = chunks[7]; // Index shifted due to spacing row
 
             let queue_color = if stats.queue_depth > 100 {
                 Color::Red
@@ -454,7 +571,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     // Render worker stats if timing enabled
     if show_worker_stats {
         if let Some(stats) = &screen.worker_stats {
-            let stats_area = chunks[7];
+            let stats_area = chunks[8]; // Index shifted due to spacing row
             let label_color = Color::Rgb(245, 28, 153); // Magenta
 
             let avg_task_color = if stats.avg_task_ms < 100 {

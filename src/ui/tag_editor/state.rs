@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::corpus::db::{HealthIssue, Track};
+use crate::corpus::db::{Signal, Track};
 use crate::corpus::metadata;
 use crate::corpus::mutations::Mutation;
 
@@ -110,8 +110,8 @@ pub struct UnifiedTagEditorState {
     // Signals (SingleFile context)
     // ========================================================================
 
-    /// Health signals for the current track
-    pub signals: Vec<HealthIssue>,
+    /// Signals for the current track
+    pub signals: Vec<Signal>,
 
     /// Whether OOB (out-of-band) tag change signal is present
     pub has_oob_signal: bool,
@@ -527,7 +527,7 @@ impl UnifiedTagEditorState {
 
     /// Load health signals for the current track(s)
     pub fn load_signals(&mut self, _db: &crate::corpus::db::Database) {
-        // TODO: Query health_issues table for current track(s)
+        // TODO: Query signals table for current track(s)
         // Set has_oob_signal based on presence of OutOfBandTagChange signal
         self.signals.clear();
         self.has_oob_signal = false;

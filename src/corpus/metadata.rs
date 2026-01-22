@@ -191,8 +191,9 @@ fn extract_audio_metadata(path: &Path) -> Result<AudioMetadata> {
     })
 }
 
-/// Generate chromaprint fingerprint for audio file
-fn generate_fingerprint(path: &Path) -> Result<String> {
+/// Generate chromaprint fingerprint for audio file.
+/// Returns the raw u32 fingerprint values (stored as BLOB in DB).
+fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
     use rusty_chromaprint::{Configuration, Fingerprinter};
 
     // Open audio file with symphonia
@@ -270,17 +271,8 @@ fn generate_fingerprint(path: &Path) -> Result<String> {
     // Finish processing
     fingerprinter.finish();
 
-    // Get fingerprint as u32 array
-    let fp_data = fingerprinter.fingerprint();
-
-    // Convert u32 array to a string representation (comma-separated)
-    let fingerprint = fp_data
-        .iter()
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-
-    Ok(fingerprint)
+    // Return fingerprint as Vec<u32> (will be stored as BLOB in DB)
+    Ok(fingerprinter.fingerprint().to_vec())
 }
 
 /// Convert Symphonia AudioBuffer to i16 samples for chromaprint

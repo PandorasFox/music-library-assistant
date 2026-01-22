@@ -18,14 +18,14 @@
 //! Implementation:
 //! - Use `mla_utils::metadata_magic::normalize_artist()` on both fields
 //! - Compare normalized values; if different but base names match, flag as mismatch
-//! - Create a new `HealthIssueType::ArtistAlbumArtistMismatch` variant
+//! - Create a new `SignalType::ArtistAlbumArtistMismatch` variant
 //! - Group by normalized key for bulk resolution
 //! - Could also catch typo variants like "Deadmau5" vs "deadmau5"
 
 use std::collections::{HashMap, HashSet};
 
 use crate::config::Config;
-use crate::corpus::db::{Database, HealthIssue, HealthIssueType, Track};
+use crate::corpus::db::{Database, Signal, SignalType, Track};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use anyhow::Result;
 
@@ -151,7 +151,7 @@ pub fn detect_deployment_conflicts_for_library(
 
         // Check if this conflict already exists
         let existing = db
-            .get_health_signals(Some(HealthIssueType::DeployConflict))?
+            .get_signals(Some(SignalType::DeployConflict))?
             .into_iter()
             .find(|i| i.issue_key == issue_key);
 
@@ -170,15 +170,15 @@ pub fn detect_deployment_conflicts_for_library(
                 "conflicting_paths": conflicting_paths,
             });
 
-            let issue = HealthIssue {
+            let signal = Signal {
                 id: None,
-                issue_type: HealthIssueType::DeployConflict,
+                issue_type: SignalType::DeployConflict,
                 issue_key,
                 discovered_at: None,
                 metadata_json: Some(metadata.to_string()),
             };
 
-            db.insert_health_issue(&issue)?;
+            db.insert_signal(&signal)?;
             new_conflicts += 1;
         }
     }
@@ -195,7 +195,7 @@ pub fn detect_deployment_conflicts_for_library(
 /// Returns the number of signals deleted.
 pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> Result<usize> {
     // Get all existing DeployConflict signals
-    let existing_conflicts = db.get_health_signals(Some(HealthIssueType::DeployConflict))?;
+    let existing_conflicts = db.get_signals(Some(SignalType::DeployConflict))?;
 
     if existing_conflicts.is_empty() {
         return Ok(0);
@@ -220,7 +220,7 @@ pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> 
 
         if track_ids.is_empty() {
             // Can't verify, delete stale signal
-            db.delete_health_signal(conflict_id)?;
+            db.delete_signal(conflict_id)?;
             deleted += 1;
             continue;
         }
@@ -263,7 +263,7 @@ pub fn cleanup_resolved_deployment_conflicts(config: &Config, db: &Database) -> 
 
         if !still_conflict {
             // Conflict resolved, delete the signal
-            db.delete_health_signal(conflict_id)?;
+            db.delete_signal(conflict_id)?;
             deleted += 1;
         }
     }
@@ -298,7 +298,12 @@ mod tests {
             duration_ms: Some(240_000),
             bitrate_kbps: bitrate,
             sample_rate: Some(44100),
-            fingerprint: Some(format!("fp_{}_{}_{}", artist, album, title)),
+            // Fake fingerprint - use hash of artist/album/title as u32 values
+            fingerprint: Some(vec![
+                artist.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
+                album.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
+                title.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
+            ]),
         }
     }
 

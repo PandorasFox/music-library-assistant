@@ -20,7 +20,8 @@ pub struct ExtractedMetadata {
     pub duration_ms: Option<i64>,
     pub bitrate_kbps: Option<i32>,
     pub sample_rate: Option<i32>,
-    pub fingerprint: Option<String>,
+    /// Chromaprint acoustic fingerprint as raw u32 values.
+    pub fingerprint: Option<Vec<u32>>,
     /// All tags extracted from the file: (tag_name, tag_value)
     pub tags: Vec<(String, String)>,
 }

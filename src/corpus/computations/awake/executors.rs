@@ -15,7 +15,7 @@ use crate::corpus::computations::helpers::{
     parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, LibraryFileSignalType, HealthIssueType};
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, LibraryFileSignalType, SignalType};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::Database;
 use crate::db_thread;
@@ -39,6 +39,7 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectMissingTags,
         Computation::DetectMetadataDuplicates,
         Computation::DetectTagCanonicalizations,
+        Computation::DetectInconsistentAlbumArtist,
         Computation::VerifyOutOfBandChanges,
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
@@ -79,6 +80,8 @@ pub fn execute_detect_fingerprint_duplicates(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
+    use crate::corpus::db::queries::tracks::fingerprint_to_text;
+
     let computation = Computation::DetectFingerprintDuplicates;
 
     let sender = match db_thread::signal_sender() {
@@ -93,6 +96,7 @@ pub fn execute_detect_fingerprint_duplicates(
     };
 
     // Find all fingerprints with duplicates
+    // fingerprint is now BLOB, GROUP BY works on BLOBs in SQLite
     let query = "SELECT fingerprint, GROUP_CONCAT(id) as track_ids
                  FROM tracks
                  WHERE fingerprint IS NOT NULL
@@ -111,9 +115,10 @@ pub fn execute_detect_fingerprint_duplicates(
     };
 
     let rows = match stmt.query_map(params![], |row| {
-        let fingerprint: String = row.get(0)?;
+        // fingerprint is BLOB, convert to Vec<u32> then to text for signal key
+        let fp_blob: Vec<u8> = row.get(0)?;
         let track_ids_str: String = row.get(1)?;
-        Ok((fingerprint, track_ids_str))
+        Ok((fp_blob, track_ids_str))
     }) {
         Ok(r) => r,
         Err(e) => {
@@ -130,7 +135,7 @@ pub fn execute_detect_fingerprint_duplicates(
     let mut total_tracks = 0;
 
     for row_result in rows {
-        let (fingerprint, track_ids_str) = match row_result {
+        let (fp_blob, track_ids_str) = match row_result {
             Ok(r) => r,
             Err(e) => {
                 let _ = log_message(&format!(
@@ -141,17 +146,24 @@ pub fn execute_detect_fingerprint_duplicates(
             }
         };
 
+        // Convert BLOB to Vec<u32> then to text for signal key
+        let fp_u32: Vec<u32> = fp_blob
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        let fingerprint_text = fingerprint_to_text(&fp_u32);
+
         let track_ids = parse_track_ids_csv(&track_ids_str);
         total_tracks += track_ids.len();
 
+        // Metadata no longer stores fingerprint (it's already the signal key)
         let metadata = serde_json::json!({
-            "fingerprint": &fingerprint,
             "track_ids": &track_ids,
         })
         .to_string();
 
         computed.push(ComputedAggregateSignal {
-            key: fingerprint,
+            key: fingerprint_text,
             track_ids,
             metadata_json: metadata,
         });
@@ -322,7 +334,7 @@ pub fn execute_detect_missing_tags(
         .collect();
 
     // Clear all existing MissingTag signals (routes through db_thread)
-    sender.clear_health_issues_by_type(HealthIssueType::MissingTag, witness);
+    sender.clear_signals_by_type(SignalType::MissingTag, witness);
 
     let query = "
         SELECT t.id, t.path,
@@ -454,7 +466,7 @@ pub fn execute_detect_metadata_duplicates(
     };
 
     // Clear all MetadataDuplicate signals (routes through db_thread)
-    sender.clear_health_issues_by_type(HealthIssueType::MetadataDuplicate, witness);
+    sender.clear_signals_by_type(SignalType::MetadataDuplicate, witness);
 
     let query = "
         SELECT t.id, tt.tag_name, tt.tag_value
@@ -566,12 +578,17 @@ pub fn md5_hash(s: &str) -> u64 {
 // ============================================================================
 
 /// Execute DetectTagCanonicalizations - detect tag canonicalization opportunities.
+///
+/// Emits TagCanonicity aggregate signals for each detected collision cluster.
 pub fn execute_detect_tag_canonicalizations(
     read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::health::canonicalization::detect_canonicalizations;
+    use crate::corpus::health::collision::{
+        get_album_artist_collisions, get_album_collisions, get_artist_collisions,
+        get_genre_collisions,
+    };
 
     let computation = Computation::DetectTagCanonicalizations;
 
@@ -586,31 +603,70 @@ pub fn execute_detect_tag_canonicalizations(
         }
     };
 
-    match detect_canonicalizations(read_only_db) {
-        Ok(canonicalizations) => {
-            let count = canonicalizations.len();
-            // Store canonicalizations via db_thread
-            for canon in canonicalizations {
-                sender.upsert_tag_canonicalization(
-                    &canon.tag_name,
-                    &canon.canonical_value,
-                    &canon.variant_value,
-                    canon.confidence,
-                    witness,
-                );
-            }
-            let _ = log_message(&format!(
-                "[COMPUTE] DetectTagCanonicalizations: {} new canonicalization entries",
-                count
-            ));
-            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    let mut signal_count = 0;
+
+    // Helper to emit signals for a set of collisions
+    let emit_collision_signals = |collisions: Vec<crate::corpus::health::collision::TagCollision>,
+                                   sender: &crate::db_thread::SignalWriteSender,
+                                   witness: &ComputationWitness,
+                                   count: &mut usize| {
+        for collision in collisions {
+            // Get track_ids for all variants in this collision
+            let variant_refs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
+            let track_ids = read_only_db
+                .get_track_ids_for_tag_values(&collision.tag_name, &variant_refs)
+                .unwrap_or_default();
+
+            // Build metadata JSON
+            let variants_json: serde_json::Map<String, serde_json::Value> = collision
+                .variant_counts
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::Number((*v as u64).into())))
+                .collect();
+
+            let metadata = serde_json::json!({
+                "tag_name": collision.tag_name,
+                "variants": variants_json,
+                "track_ids": track_ids,
+            });
+
+            // Signal key: "{tag_name}:{normalized_key}"
+            let key = format!("{}:{}", collision.tag_name, collision.normalized_key);
+
+            sender.ensure_aggregate_signal(
+                AggregateSignalType::TagCanonicity,
+                &key,
+                Some(&metadata.to_string()),
+                witness,
+            );
+
+            *count += 1;
         }
-        Err(e) => Result::failure(
-            computation,
-            start.elapsed().as_millis() as u64,
-            format!("Failed to detect canonicalizations: {}", e),
-        ),
+    };
+
+    // Detect and emit signals for each tag type
+    if let Ok(collisions) = get_artist_collisions(read_only_db) {
+        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
     }
+
+    if let Ok(collisions) = get_album_artist_collisions(read_only_db) {
+        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
+    }
+
+    if let Ok(collisions) = get_album_collisions(read_only_db) {
+        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
+    }
+
+    if let Ok(collisions) = get_genre_collisions(read_only_db) {
+        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectTagCanonicalizations: emitted {} TagCanonicity signals",
+        signal_count
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
 // ============================================================================
@@ -639,7 +695,7 @@ pub fn execute_verify_out_of_band_changes(
         }
     };
 
-    let oob_signals = match read_only_db.get_health_signals(Some(HealthIssueType::CorpusFileModifiedOutOfBand)) {
+    let oob_signals = match read_only_db.get_signals(Some(SignalType::CorpusFileModifiedOutOfBand)) {
         Ok(signals) => signals,
         Err(e) => {
             return Result::failure(
@@ -741,10 +797,10 @@ pub fn execute_detect_deploy_conflicts(
     };
 
     // Clear all existing DeployConflict signals (routes through db_thread)
-    sender.clear_health_issues_by_type(HealthIssueType::DeployConflict, witness);
+    sender.clear_signals_by_type(SignalType::DeployConflict, witness);
 
     let healthy_signals = read_only_db
-        .get_health_signals(Some(HealthIssueType::HealthyFile))
+        .get_signals(Some(SignalType::HealthyFile))
         .unwrap_or_default();
 
     let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
@@ -991,7 +1047,7 @@ pub fn execute_derive_corpus_deploy_status(
 
     // Get all HealthyFile signals
     let healthy_signals = read_only_db
-        .get_health_signals(Some(HealthIssueType::HealthyFile))
+        .get_signals(Some(SignalType::HealthyFile))
         .unwrap_or_default();
 
     // Build set of deployed inodes from library_scan_state
@@ -1000,7 +1056,7 @@ pub fn execute_derive_corpus_deploy_status(
     // Get set of stale library paths (files in library but at wrong path)
     // LibraryStale keys have format "library_stale:{library_name}:{library_path}"
     let stale_signals = read_only_db
-        .get_health_signals(Some(HealthIssueType::LibraryStale))
+        .get_signals(Some(SignalType::LibraryStale))
         .unwrap_or_default();
 
     // Build set of inodes that are deployed but stale
@@ -1140,6 +1196,88 @@ pub fn execute_derive_corpus_deploy_status(
         deploy_ready_count,
         deployed_healthy_count,
         skipped_not_configured,
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Inconsistent Album Artist Detection
+// ============================================================================
+
+/// Execute DetectInconsistentAlbumArtist - detect albums with inconsistent album_artist tags.
+///
+/// Emits InconsistentAlbumArtist aggregate signals for albums where:
+/// - Multiple artists are present on the same album
+/// - album_artist tags are missing or inconsistent
+pub fn execute_detect_inconsistent_album_artist(
+    read_only_db: &Database,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    use crate::corpus::health::album_artist_detection::detect_inconsistent_album_artist;
+
+    let computation = Computation::DetectInconsistentAlbumArtist;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let issues = match detect_inconsistent_album_artist(read_only_db) {
+        Ok(i) => i,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to detect inconsistent album_artist: {}", e),
+            );
+        }
+    };
+
+    let mut signal_count = 0;
+
+    for issue in issues {
+        // Build metadata JSON
+        let artist_variants_json: serde_json::Map<String, serde_json::Value> = issue
+            .artist_variants
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::Number((*v as u64).into())))
+            .collect();
+
+        let album_artist_variants_json: serde_json::Map<String, serde_json::Value> = issue
+            .album_artist_variants
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::Number((*v as u64).into())))
+            .collect();
+
+        let metadata = serde_json::json!({
+            "album": issue.album,
+            "artist_variants": artist_variants_json,
+            "album_artist_variants": album_artist_variants_json,
+            "track_ids": issue.track_ids,
+        });
+
+        // Signal key: normalized album name
+        sender.ensure_aggregate_signal(
+            AggregateSignalType::InconsistentAlbumArtist,
+            &issue.normalized_album,
+            Some(&metadata.to_string()),
+            witness,
+        );
+
+        signal_count += 1;
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectInconsistentAlbumArtist: emitted {} signals",
+        signal_count
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

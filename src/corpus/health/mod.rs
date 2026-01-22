@@ -30,6 +30,7 @@
 //! - **Leftovers**: Library files without corpus backing
 //! - **Deployment Conflicts**: Multiple corpus files would deploy to same path
 
+pub mod album_artist_detection;
 pub mod album_normalization;
 pub mod canonicalization;
 pub mod collision;

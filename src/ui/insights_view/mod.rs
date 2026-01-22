@@ -28,7 +28,7 @@ mod render;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 
-use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, LibraryDeployBucket, PlaceholderBucket, OtherSignalsBucket};
+use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, LibraryDeployBucket, TagSquashBucket, OtherSignalsBucket};
 use crate::witch::DaemonStatus;
 
 pub use render::render_insights_view;
@@ -121,7 +121,7 @@ pub struct BucketSelection {
 
 /// Unique identifier for each insight type across all buckets.
 /// Enables type-safe action dispatch and detail rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsightType {
     // Corpus bucket entries
     CorpusModifiedOob,
@@ -131,8 +131,9 @@ pub enum InsightType {
     CorpusFilesUnindexed,
     CorpusFilesMissing,
     CorpusFilesRelocated,
-    // Placeholder bucket
-    Placeholder,
+    // Tag resolution bucket entries
+    InconsistentAlbumArtist,
+    TagCanonicity { tag_name: String },
     // Library bucket entries
     LibraryStale,
     LibraryLeftover,
@@ -149,6 +150,8 @@ pub enum InsightAction {
     LaunchDeploymentPreview,
     /// Launch missing file resolution flow
     LaunchMissingFileResolution,
+    /// Launch tag canonicity resolution flow
+    LaunchTagCanonicityResolution,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -205,27 +208,45 @@ impl BucketEntry {
         }
     }
 
-    /// Create placeholder entry
-    fn placeholder(description: &str) -> Self {
+    /// Create inconsistent album_artist entry
+    fn inconsistent_album_artist(count: usize) -> Self {
         Self {
-            insight_type: InsightType::Placeholder,
-            label: description.to_string(),
-            count: None,
-            color: Color::Gray,
+            insight_type: InsightType::InconsistentAlbumArtist,
+            label: "Inconsistent album_artist".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::Green },
             rank: 0,
-            action: InsightAction::Informational,
+            action: InsightAction::LaunchTagCanonicityResolution,
+        }
+    }
+
+    /// Create tag canonicity entry (for a specific tag name)
+    fn tag_canonicity(tag_name: &str, cluster_count: usize) -> Self {
+        Self {
+            insight_type: InsightType::TagCanonicity { tag_name: tag_name.to_string() },
+            label: format!("{} canonicity", tag_name),
+            count: Some(cluster_count),
+            color: if cluster_count > 0 { Color::Yellow } else { Color::Green },
+            rank: 0,
+            action: InsightAction::LaunchTagCanonicityResolution,
         }
     }
 
     /// Create "other signal" entry
-    fn other(index: usize, label: &str, count: usize) -> Self {
+    fn other(index: usize, label: &str, count: usize, signal_type: &str) -> Self {
+        // Determine action based on signal type
+        let action = match signal_type {
+            "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
+            _ => InsightAction::NotImplemented,
+        };
+
         Self {
             insight_type: InsightType::OtherSignal { index },
             label: label.to_string(),
             count: Some(count),
             color: if count > 0 { Color::Yellow } else { Color::Green },
             rank: 0, // Pre-sorted from database
-            action: InsightAction::NotImplemented,
+            action,
         }
     }
 }
@@ -349,8 +370,20 @@ impl CachedBucketEntries {
         entries
     }
 
-    fn build_placeholder_entries(placeholder: &PlaceholderBucket) -> Vec<BucketEntry> {
-        vec![BucketEntry::placeholder(placeholder.description)]
+    fn build_placeholder_entries(bucket: &TagSquashBucket) -> Vec<BucketEntry> {
+        let mut entries = Vec::new();
+
+        // Add inconsistent album_artist if present
+        if bucket.inconsistent_album_artist_count > 0 {
+            entries.push(BucketEntry::inconsistent_album_artist(bucket.inconsistent_album_artist_count));
+        }
+
+        // Add tag canonicity entries for each tag type
+        for entry in &bucket.tag_canonicity {
+            entries.push(BucketEntry::tag_canonicity(&entry.tag_name, entry.cluster_count));
+        }
+
+        entries
     }
 
     fn build_other_entries(other: &OtherSignalsBucket) -> Vec<BucketEntry> {
@@ -358,7 +391,7 @@ impl CachedBucketEntries {
         other.entries
             .iter()
             .enumerate()
-            .map(|(idx, entry)| BucketEntry::other(idx, &entry.display_label, entry.count))
+            .map(|(idx, entry)| BucketEntry::other(idx, &entry.display_label, entry.count, &entry.signal_type))
             .collect()
     }
 
@@ -434,6 +467,11 @@ impl InsightsViewState {
     /// Get the action for the currently selected entry
     pub fn selected_action(&self) -> Option<InsightAction> {
         self.selected_entry().map(|e| e.action)
+    }
+
+    /// Get the insight type for the currently selected entry
+    pub fn selected_insight_type(&self) -> Option<InsightType> {
+        self.selected_entry().map(|e| e.insight_type.clone())
     }
 
     /// Check if the Witch is busy (actions should be blocked)
@@ -590,8 +628,9 @@ mod tests {
                 file_type_breakdown: vec![],
                 directory_breakdown: Default::default(),
             },
-            bucket_placeholder: PlaceholderBucket {
-                description: ":)",
+            bucket_placeholder: TagSquashBucket {
+                tag_canonicity: vec![],
+                inconsistent_album_artist_count: 0,
             },
             bucket_library: LibraryDeployBucket {
                 library_stale: 1,

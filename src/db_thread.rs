@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, FileSignalType, HealthIssueType,
+    AggregateSignal, AggregateSignalType, FileSignalType, SignalType,
 };
 use crate::corpus::db::Database;
 use crate::witch::MutationExecutionWitness;
@@ -112,21 +112,14 @@ enum SignalWriteOp {
     // =========================================================================
 
     /// Clear all health issues of a specific type (for bulk re-computation).
-    ClearHealthIssuesByType {
-        issue_type: HealthIssueType,
+    ClearSignalsByType {
+        issue_type: SignalType,
     },
     /// Update scan_state mtime for a file (after OOB verification).
     UpdateScanStateMtime {
         path: String,
         mtime_secs: i64,
         mtime_nanos: i64,
-    },
-    /// Upsert a tag canonicalization entry.
-    UpsertTagCanonicalization {
-        tag_name: String,
-        canonical_value: String,
-        variant_value: String,
-        confidence: Option<f64>,
     },
 }
 
@@ -384,6 +377,20 @@ impl SignalWriteSender {
         });
     }
 
+    /// Clear an aggregate signal from mutation context (idempotent delete).
+    pub fn clear_aggregate_signal_for_mutation(
+        &self,
+        signal_type: AggregateSignalType,
+        key: &str,
+        _witness: &MutationExecutionWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignal {
+            signal_type,
+            key: key.to_string(),
+        });
+    }
+
     // =========================================================================
     // Library Scan State Operations (Awakening phase)
     // =========================================================================
@@ -421,13 +428,13 @@ impl SignalWriteSender {
     // =========================================================================
 
     /// Clear all health issues of a specific type (for bulk re-computation).
-    pub fn clear_health_issues_by_type(
+    pub fn clear_signals_by_type(
         &self,
-        issue_type: HealthIssueType,
+        issue_type: SignalType,
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearHealthIssuesByType { issue_type });
+        let _ = self.tx.send(SignalWriteOp::ClearSignalsByType { issue_type });
     }
 
     /// Update scan_state mtime for a file (after OOB verification).
@@ -443,24 +450,6 @@ impl SignalWriteSender {
             path: path.to_string(),
             mtime_secs,
             mtime_nanos,
-        });
-    }
-
-    /// Upsert a tag canonicalization entry.
-    pub fn upsert_tag_canonicalization(
-        &self,
-        tag_name: &str,
-        canonical_value: &str,
-        variant_value: &str,
-        confidence: Option<f64>,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpsertTagCanonicalization {
-            tag_name: tag_name.to_string(),
-            canonical_value: canonical_value.to_string(),
-            variant_value: variant_value.to_string(),
-            confidence,
         });
     }
 }
@@ -711,13 +700,13 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         }
 
         // Bulk operations (Awake phase content analysis)
-        SignalWriteOp::ClearHealthIssuesByType { issue_type } => {
+        SignalWriteOp::ClearSignalsByType { issue_type } => {
             let issue_type_str = issue_type.as_str();
-            with_retry("clear_health_issues_by_type", issue_type_str, || {
+            with_retry("clear_signals_by_type", issue_type_str, || {
                 use rusqlite::params;
                 db.conn
                     .execute(
-                        "DELETE FROM health_issues WHERE issue_type = ?1",
+                        "DELETE FROM signals WHERE issue_type = ?1",
                         params![issue_type_str],
                     )
                     .map(|_| ())
@@ -738,27 +727,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     )
                     .map(|_| ())
                     .map_err(|e| anyhow::anyhow!(e))
-            });
-        }
-        SignalWriteOp::UpsertTagCanonicalization {
-            tag_name,
-            canonical_value,
-            variant_value,
-            confidence,
-        } => {
-            let ctx = format!("{}:{}->{}", tag_name, variant_value, canonical_value);
-            with_retry("upsert_tag_canonicalization", &ctx, || {
-                use crate::corpus::db::types::TagCanonicalization;
-                let canon_entry = TagCanonicalization {
-                    id: None,
-                    tag_name: tag_name.clone(),
-                    canonical_value: canonical_value.clone(),
-                    variant_value: variant_value.clone(),
-                    confidence: *confidence,
-                    auto_detected: true,
-                    confirmed_at: None,
-                };
-                db.upsert_tag_canonicalization(&canon_entry).map(|_| ())
             });
         }
     }

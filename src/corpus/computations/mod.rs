@@ -254,6 +254,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awake::Computation::DetectTagCanonicalizations => {
                         awake::execute_detect_tag_canonicalizations(read_only_db, &witness, start)
                     }
+                    awake::Computation::DetectInconsistentAlbumArtist => {
+                        awake::execute_detect_inconsistent_album_artist(read_only_db, &witness, start)
+                    }
                     awake::Computation::VerifyOutOfBandChanges => {
                         awake::execute_verify_out_of_band_changes(read_only_db, &witness, start)
                     }

@@ -7,12 +7,39 @@ use std::path::PathBuf;
 use super::Database;
 use crate::corpus::db::types::{Track, TrackTag};
 
+// ============================================================================
+// Fingerprint BLOB Conversion Helpers
+// ============================================================================
+
+/// Convert fingerprint Vec<u32> to BLOB bytes (little-endian).
+fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
+    fp.iter().flat_map(|n| n.to_le_bytes()).collect()
+}
+
+/// Convert BLOB bytes to fingerprint Vec<u32> (little-endian).
+fn blob_to_fingerprint(blob: &[u8]) -> Vec<u32> {
+    blob.chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+/// Convert fingerprint Vec<u32> to text format (comma-separated) for signal keys.
+pub fn fingerprint_to_text(fp: &[u32]) -> String {
+    fp.iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 impl Database {
     // ========================================================================
     // Track Operations
     // ========================================================================
 
     pub fn insert_track(&self, track: &Track) -> Result<i64> {
+        // Convert fingerprint to BLOB if present
+        let fp_blob: Option<Vec<u8>> = track.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
+
         self.conn
             .execute(
                 r#"
@@ -29,7 +56,7 @@ impl Database {
                     &track.duration_ms,
                     &track.bitrate_kbps,
                     &track.sample_rate,
-                    &track.fingerprint,
+                    &fp_blob,
                 ],
             )
             .with_context(|| format!(
@@ -332,7 +359,9 @@ impl Database {
     }
 
     /// Get all tracks with a specific fingerprint.
-    pub fn get_tracks_by_fingerprint(&self, fingerprint: &str) -> Result<Vec<Track>> {
+    pub fn get_tracks_by_fingerprint(&self, fingerprint: &[u32]) -> Result<Vec<Track>> {
+        let fp_blob = fingerprint_to_blob(fingerprint);
+
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
                     duration_ms, bitrate_kbps, sample_rate, fingerprint
@@ -342,7 +371,7 @@ impl Database {
         )?;
 
         let tracks = stmt
-            .query_map(params![fingerprint], Self::row_to_track)?
+            .query_map(params![fp_blob], Self::row_to_track)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(tracks)
@@ -625,6 +654,10 @@ impl Database {
         )?;
 
         let track_rows = stmt.query_map(params![tag_name, pattern], |row| {
+            // Fingerprint is stored as BLOB, convert to Vec<u32>
+            let fp_blob: Option<Vec<u8>> = row.get(9)?;
+            let fingerprint = fp_blob.map(|blob| blob_to_fingerprint(&blob));
+
             Ok(Track {
                 id: row.get(0)?,
                 path: row.get(1)?,
@@ -635,7 +668,7 @@ impl Database {
                 duration_ms: row.get(6)?,
                 bitrate_kbps: row.get(7)?,
                 sample_rate: row.get(8)?,
-                fingerprint: row.get(9)?,
+                fingerprint,
             })
         })?;
 
@@ -733,6 +766,35 @@ impl Database {
         }
     }
 
+    /// Get track IDs that have any of the given tag values for a specific tag name.
+    pub fn get_track_ids_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build placeholders for IN clause
+        let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT DISTINCT track_id FROM track_tags WHERE tag_name = ?1 AND tag_value IN ({})",
+            placeholders.join(",")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        // Build params: tag_name first, then each value
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 1);
+        params.push(&tag_name);
+        for v in values {
+            params.push(v);
+        }
+
+        let ids = stmt
+            .query_map(params.as_slice(), |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?;
+
+        Ok(ids)
+    }
+
     // ========================================================================
     // Signal Resolution Operations
     // ========================================================================
@@ -782,6 +844,9 @@ impl Database {
     /// Used by CorpusFileModifiedOutOfBand signal handler.
     /// Note: This only updates the tracks table, not track_tags.
     pub fn update_track_metadata(&self, track_id: i64, track: &Track) -> Result<()> {
+        // Convert fingerprint to BLOB if present
+        let fp_blob: Option<Vec<u8>> = track.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
+
         self.conn
             .execute(
                 r#"
@@ -799,7 +864,7 @@ impl Database {
                     &track.duration_ms,
                     &track.bitrate_kbps,
                     &track.sample_rate,
-                    &track.fingerprint,
+                    &fp_blob,
                     track_id,
                 ],
             )
@@ -827,6 +892,10 @@ impl Database {
     /// Expected column order: id, path, source, inode, file_size, file_type,
     ///                        duration_ms, bitrate_kbps, sample_rate, fingerprint
     pub(super) fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
+        // Fingerprint is stored as BLOB, convert to Vec<u32>
+        let fp_blob: Option<Vec<u8>> = row.get(9)?;
+        let fingerprint = fp_blob.map(|blob| blob_to_fingerprint(&blob));
+
         Ok(Track {
             id: Some(row.get(0)?),
             path: row.get(1)?,
@@ -837,7 +906,7 @@ impl Database {
             duration_ms: row.get(6)?,
             bitrate_kbps: row.get(7)?,
             sample_rate: row.get(8)?,
-            fingerprint: row.get(9)?,
+            fingerprint,
         })
     }
 }

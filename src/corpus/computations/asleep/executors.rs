@@ -13,7 +13,7 @@ use crate::corpus::computations::helpers::{
     ensure_file_signal_if_missing,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{CorpusFileSignalType, HealthIssueType};
+use crate::corpus::db::types::CorpusFileSignalType;
 use crate::corpus::db::Database;
 use crate::db_thread;
 
@@ -46,7 +46,7 @@ pub fn execute_clear_existing_observation_state(
     };
 
     // Clear all FileInCorpus signals - they'll be rebuilt during the corpus walk
-    sender.clear_health_issues_by_type(HealthIssueType::FileInCorpus, witness);
+    sender.clear_signals_by_type(CorpusFileSignalType::FileInCorpus.into(), witness);
 
     let _ = log_message("[COMPUTE] ClearExistingObservationState: complete");
 

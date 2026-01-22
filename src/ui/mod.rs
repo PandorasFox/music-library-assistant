@@ -34,6 +34,7 @@ pub mod missing_file_flow;
 pub mod progress_screen;
 pub mod render;
 pub mod startup;
+pub mod tag_canonicity;
 pub mod tag_editor;
 pub mod tag_search;
 pub mod tree_browser;
@@ -64,6 +65,55 @@ use app::EyeAnimation;
 use types::ProgressStatsUpdater;
 
 // ============================================================================
+// Tag Canonicity Navigation
+// ============================================================================
+
+/// Tracks the list of signals for Tab/Shift-Tab navigation in tag canonicity modal.
+#[derive(Debug, Clone)]
+pub(super) struct TagCanonicityClusters {
+    /// Signal IDs in navigation order
+    pub signal_ids: Vec<i64>,
+    /// Current index into signal_ids
+    pub current_index: usize,
+}
+
+impl TagCanonicityClusters {
+    pub fn new(signal_ids: Vec<i64>) -> Self {
+        Self { signal_ids, current_index: 0 }
+    }
+
+    pub fn current_signal_id(&self) -> Option<i64> {
+        self.signal_ids.get(self.current_index).copied()
+    }
+
+    pub fn next(&mut self) -> bool {
+        if self.current_index + 1 < self.signal_ids.len() {
+            self.current_index += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn prev(&mut self) -> bool {
+        if self.current_index > 0 {
+            self.current_index -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_last(&self) -> bool {
+        self.current_index + 1 >= self.signal_ids.len()
+    }
+
+    pub fn is_first(&self) -> bool {
+        self.current_index == 0
+    }
+}
+
+// ============================================================================
 // Application State
 // ============================================================================
 
@@ -79,6 +129,12 @@ pub(crate) struct App {
     pub(super) deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
     // Missing file resolution modal
     pub(super) missing_file_preview: Option<missing_file_flow::MissingFilePreviewState>,
+    // Tag canonicity resolution modal
+    pub(super) tag_canonicity_state: Option<tag_canonicity::TagCanonicalityState>,
+    // Tag canonicity cluster navigation (signal IDs and current index)
+    pub(super) tag_canonicity_clusters: Option<TagCanonicityClusters>,
+    // Tag canonicity review screen (before confirming all decisions)
+    pub(super) tag_canonicity_review: Option<tag_canonicity::TagCanonicityReviewState>,
     // Unified tag editor (transaction-based)
     pub(super) unified_tag_editor: Option<tag_editor::UnifiedTagEditorState>,
     // Exit confirmation modal
@@ -112,6 +168,9 @@ impl App {
             tree_browser: None,
             deployment_preview: None,
             missing_file_preview: None,
+            tag_canonicity_state: None,
+            tag_canonicity_clusters: None,
+            tag_canonicity_review: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
             progress_screen: None,
@@ -210,6 +269,18 @@ impl App {
                 if let Some(ref mut preview) = self.missing_file_preview {
                     let action = preview.handle_key(key);
                     self.handle_missing_file_preview_action(action);
+                }
+            }
+            UiMode::TagCanonicityResolution => {
+                if let Some(ref mut state) = self.tag_canonicity_state {
+                    let action = state.handle_key(key);
+                    self.handle_tag_canonicity_action(action);
+                }
+            }
+            UiMode::TagCanonicityReview => {
+                if let Some(ref mut review) = self.tag_canonicity_review {
+                    let action = review.handle_key(key);
+                    self.handle_tag_canonicity_review_action(action);
                 }
             }
         }
@@ -375,6 +446,8 @@ fn render(f: &mut Frame, app: &mut App) {
         tree_browser: app.tree_browser.as_mut(),
         deployment_preview: app.deployment_preview.as_mut(),
         missing_file_preview: app.missing_file_preview.as_ref(),
+        tag_canonicity_state: app.tag_canonicity_state.as_ref(),
+        tag_canonicity_review: app.tag_canonicity_review.as_ref(),
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         progress_screen: app.progress_screen.as_ref(),
         insights_view: app.insights_view.as_mut(),

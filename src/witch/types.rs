@@ -109,20 +109,23 @@ pub struct Migration {
 /// this token, preventing code from queueing state-altering mutations without
 /// explicit operator decisions.
 ///
-/// The token can ONLY be obtained via [`confirm_decision()`], which should be
-/// called at the moment the user confirms a decision (save, deploy, etc.).
+/// The token can ONLY be obtained via [`DecisionScope`], which is created by
+/// [`Witch::with_operator_decision()`]. That method should ONLY be called from
+/// `ui/operator_decisions.rs`, which provides sealed handler functions for
+/// Enter keypress handlers in confirmation modals.
 ///
 /// Computations (health signals, verification) use separate queue methods
 /// that do NOT require a witness, as they are decisionless by design.
 pub mod sealed {
     /// A zero-sized token proving mutations come from a user-led Decision context.
     ///
-    /// Cannot be constructed outside [`confirm_decision()`].
+    /// Cannot be constructed outside [`DecisionScope`].
+    /// See `ui/operator_decisions.rs` for the sanctioned access pattern.
     #[derive(Clone, Copy)]
     pub struct DecisionWitness(());
 
     impl DecisionWitness {
-        /// Internal constructor - only callable from confirm_decision()
+        /// Internal constructor - only callable from DecisionScope::new()
         pub(super) fn new() -> Self {
             Self(())
         }
@@ -183,31 +186,86 @@ pub use sealed::DecisionWitness;
 pub use sealed::MigrationWitness;
 pub use sealed::MutationExecutionWitness;
 
-/// Create a DecisionWitness, certifying that the user has confirmed a decision.
+// ============================================================================
+// Operator Decision Scope (Sealed Access Pattern)
+// ============================================================================
+
+/// A scoped decision context where operator decisions can be made.
 ///
-/// Call this at the moment of user confirmation (e.g., when user presses Enter
-/// to save tag edits, or confirms deployment). The returned witness can then
-/// be passed to [`Witch::add_decision`] or [`Witch::confirm_transaction`].
+/// `DecisionWitness` exists only within this scope and cannot escape.
+/// All decision operations (add_decision, confirm_transaction, etc.) are
+/// performed through this scope's methods.
 ///
-/// # Example
+/// # Sealed Access Pattern
 ///
-/// ```rust,ignore
-/// // Start a transaction when entering a decision flow
-/// witch.start_transaction("Tag edits")?;
+/// This type is created ONLY via [`Witch::with_operator_decision()`], which
+/// should ONLY be called from `ui/operator_decisions.rs`. The callback pattern
+/// ensures the witness cannot be stored, returned, or passed elsewhere.
 ///
-/// // User confirms edits for first item
-/// let witness = confirm_decision();
-/// witch.add_decision(0, &witness, "Track A", mutations)?;
-///
-/// // ... user edits more items ...
-///
-/// // User commits the transaction
-/// let commit_witness = confirm_decision();
-/// witch.confirm_transaction(&commit_witness)?;
-/// ```
-pub fn confirm_decision() -> DecisionWitness {
-    DecisionWitness::new()
+/// See `ui/operator_decisions.rs` for the sanctioned call sites.
+pub struct DecisionScope<'a> {
+    witch: &'a mut super::Witch,
+    witness: DecisionWitness,
 }
+
+impl<'a> DecisionScope<'a> {
+    /// Create a new DecisionScope. Only callable from within the witch module.
+    pub(super) fn new(witch: &'a mut super::Witch) -> Self {
+        Self {
+            witch,
+            witness: DecisionWitness::new(),
+        }
+    }
+
+    /// Start a new transaction.
+    ///
+    /// Called when the user is about to be presented with Decisions.
+    /// Only one transaction may be active at a time.
+    pub fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {
+        self.witch.start_transaction(label)
+    }
+
+    /// Add a witnessed decision to the active transaction.
+    ///
+    /// - `idx`: UI-provided index (may have gaps, largely sequential)
+    /// - `label`: Human-readable description
+    /// - `mutations`: The mutations this decision represents
+    pub fn add_decision(
+        &mut self,
+        idx: usize,
+        label: impl Into<String>,
+        mutations: Vec<Mutation>,
+    ) -> Result<(), TransactionError> {
+        self.witch.add_decision(idx, &self.witness, label, mutations)
+    }
+
+    /// Confirm the transaction - queue all mutations for execution.
+    ///
+    /// This commits all accumulated decisions and queues their mutations.
+    pub fn confirm_transaction(&mut self) -> Result<CommitSummary, TransactionError> {
+        self.witch.confirm_transaction(&self.witness)
+    }
+
+    /// Discard the transaction - drop all accumulated decisions.
+    pub fn discard_transaction(&mut self) -> Result<DiscardSummary, TransactionError> {
+        self.witch.discard_transaction(&self.witness)
+    }
+
+    /// Discard a single decision by index.
+    pub fn discard_decision(&mut self, idx: usize) -> Result<Option<WitnessedDecision>, TransactionError> {
+        self.witch.discard_decision(idx, &self.witness)
+    }
+}
+
+// NOTE: confirm_decision() has been removed from the public API.
+// All decision authority now flows through Witch::with_operator_decision()
+// which should ONLY be called from ui/operator_decisions.rs.
+//
+// If you need to make a decision, use one of the functions in operator_decisions.rs:
+//   - operator_decisions::stage_decision()
+//   - operator_decisions::commit_transaction()
+//   - operator_decisions::discard_transaction()
+//   - operator_decisions::execute_single_decision()
 
 /// Create a MigrationWitness for startup migrations (pre-Witch context).
 ///

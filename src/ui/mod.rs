@@ -24,6 +24,8 @@ mod tag_editor_ops;
 mod tick;
 mod types;
 
+pub mod operator_decisions;
+
 pub mod app;
 pub mod deploy_flow;
 pub mod eye;
@@ -302,13 +304,13 @@ impl App {
     ///
     /// Helper for StageDecision, StageDecisionAndNext, and StageDecisionAndReview actions.
     pub(super) fn stage_decision(&mut self, index: usize, mutations: Vec<crate::corpus::mutations::Mutation>) {
-        let witness = crate::witch::confirm_decision();
         if let Some(the_witch) = self.witch.as_mut() {
             let label = self.unified_tag_editor
                 .as_ref()
                 .map(|e| e.current_item_label())
                 .unwrap_or_else(|| "Tag edit".to_string());
-            let _ = the_witch.add_decision(index, &witness, label, mutations.clone());
+            // Stage via sealed operator decision handler
+            let _ = operator_decisions::stage_decision(the_witch, index, &label, mutations.clone());
         }
         // Track staged mutations for redundant confirmation skipping
         if let Some(ref mut editor) = self.unified_tag_editor {

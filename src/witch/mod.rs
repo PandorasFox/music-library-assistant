@@ -39,12 +39,15 @@ mod worker_stats;
 // Re-export public types
 #[allow(unused_imports)] // Re-exports for public API
 pub use types::{
-    confirm_decision, confirm_startup_migration, CommitSummary, CompletedSession,
-    CorpusObservationState, TaskExecutionState, TaskExecutionStateSnapshot, DaemonStatus, DecisionWitness,
-    DiscardSummary, EyeState, Migration, MigrationWitness, MutationExecutionWitness,
-    PendingTransaction, Task, TaskLabel, TransactionError, TransactionInfo, WitnessedDecision,
-    WorkerStats,
+    confirm_startup_migration, CommitSummary, CompletedSession,
+    CorpusObservationState, TaskExecutionState, TaskExecutionStateSnapshot, DaemonStatus,
+    DecisionScope, DecisionWitness, DiscardSummary, EyeState, Migration, MigrationWitness,
+    MutationExecutionWitness, PendingTransaction, Task, TaskLabel, TransactionError,
+    TransactionInfo, WitnessedDecision, WorkerStats,
 };
+// NOTE: confirm_decision() is deliberately NOT exported.
+// All decision authority flows through with_operator_decision() which should
+// ONLY be called from ui/operator_decisions.rs. See types.rs for details.
 pub use ui_read_cache::UiReadCache;
 
 // Internal imports
@@ -727,6 +730,41 @@ impl Witch {
             let task_label = self.resolve_label(label.clone(), &task);
             self.spawn_task(task, task_label, queue_time);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Operator Decision Scope (Sealed Access)
+    // -------------------------------------------------------------------------
+
+    /// Enter operator decision context.
+    ///
+    /// # Sealed Access Pattern
+    ///
+    /// ⚠️ **ONLY CALL FROM `ui/operator_decisions.rs`** ⚠️
+    ///
+    /// This method creates a `DecisionScope` that provides access to transaction
+    /// operations with an internal `DecisionWitness`. The witness exists only
+    /// within the callback scope and cannot be stored, returned, or passed elsewhere.
+    ///
+    /// All UI code that needs to make decisions should call functions in
+    /// `ui/operator_decisions.rs`, which is the only sanctioned call site for
+    /// this method.
+    ///
+    /// # Example (from operator_decisions.rs only)
+    ///
+    /// ```rust,ignore
+    /// pub fn commit_transaction(witch: &mut Witch) -> Result<CommitSummary, TransactionError> {
+    ///     witch.with_operator_decision(|scope| {
+    ///         scope.confirm_transaction()
+    ///     })
+    /// }
+    /// ```
+    pub fn with_operator_decision<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut types::DecisionScope<'_>) -> R,
+    {
+        let mut scope = types::DecisionScope::new(self);
+        f(&mut scope)
     }
 
     // -------------------------------------------------------------------------

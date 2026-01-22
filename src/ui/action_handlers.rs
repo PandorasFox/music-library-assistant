@@ -155,7 +155,7 @@ impl App {
 
     /// Handle intake confirmation dialog actions.
     pub(super) fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction) {
-        use crate::witch::confirm_decision;
+        use super::operator_decisions;
 
         match action {
             startup::IntakeConfirmationAction::None => {}
@@ -179,12 +179,14 @@ impl App {
                         count
                     ));
 
-                    // Use the transaction API to queue mutations
-                    let the_witch = self.witch();
-                    if the_witch.start_transaction("Intake indexing").is_ok() {
-                        let witness = confirm_decision();
-                        let _ = the_witch.add_decision(0, &witness, "Index unindexed files", mutations);
-                        let _ = the_witch.confirm_transaction(&witness);
+                    // Execute via sealed operator decision handler
+                    if let Some(the_witch) = self.witch.as_mut() {
+                        let _ = operator_decisions::execute_single_decision(
+                            the_witch,
+                            "Intake indexing",
+                            "Index unindexed files",
+                            mutations,
+                        );
                     }
 
                     // Transition to progress screen to wait for indexing + content analysis
@@ -275,10 +277,9 @@ impl App {
             }
 
             UnifiedTagEditorAction::CommitTransaction => {
-                // Commit all staged decisions
-                let witness = crate::witch::confirm_decision();
+                // Commit all staged decisions via sealed operator decision handler
                 let commit_message = if let Some(the_witch) = self.witch.as_mut() {
-                    match the_witch.confirm_transaction(&witness) {
+                    match super::operator_decisions::commit_transaction(the_witch) {
                         Ok(summary) => {
                             format!(
                                 "Committed {} decisions ({} mutations)",
@@ -299,10 +300,9 @@ impl App {
             }
 
             UnifiedTagEditorAction::DiscardTransaction => {
-                // Discard all staged decisions
-                let witness = crate::witch::confirm_decision();
+                // Discard all staged decisions via sealed operator decision handler
                 if let Some(the_witch) = self.witch.as_mut() {
-                    let _ = the_witch.discard_transaction(&witness);
+                    let _ = super::operator_decisions::discard_transaction(the_witch);
                 }
                 self.unified_tag_editor = None;
                 self.start_insights_view();
@@ -426,7 +426,6 @@ impl App {
     /// Returns the number of mutations queued.
     fn execute_deploy_mutations(&mut self, data: &deploy_flow::DeployModalData) -> usize {
         use crate::corpus::mutations::Mutation;
-        use crate::witch::confirm_decision;
         use std::path::PathBuf;
 
         let Some(ref mut witch) = self.witch else {
@@ -482,12 +481,13 @@ impl App {
             return 0;
         }
 
-        // Submit via transaction API
-        let witness = confirm_decision();
-        if witch.start_transaction("Deploy").is_ok() {
-            let _ = witch.add_decision(0, &witness, "Deploy operations", mutations);
-            let _ = witch.confirm_transaction(&witness);
-        }
+        // Execute via sealed operator decision handler
+        let _ = super::operator_decisions::execute_single_decision(
+            witch,
+            "Deploy",
+            "Deploy operations",
+            mutations,
+        );
 
         count
     }
@@ -559,17 +559,17 @@ impl App {
 
     /// Execute missing file mutations.
     fn execute_missing_file_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
-        use crate::witch::confirm_decision;
-
         let Some(ref mut witch) = self.witch else {
             return;
         };
 
-        let witness = confirm_decision();
-        if witch.start_transaction(label).is_ok() {
-            let _ = witch.add_decision(0, &witness, label, mutations);
-            let _ = witch.confirm_transaction(&witness);
-        }
+        // Execute via sealed operator decision handler
+        let _ = super::operator_decisions::execute_single_decision(
+            witch,
+            label,
+            label,
+            mutations,
+        );
     }
 
     // ========================================================================
@@ -644,9 +644,9 @@ impl App {
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
                 self.tag_canonicity_clusters = None;
-                // Discard the transaction we just started
+                // Discard the transaction we just started via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
-                    let _ = witch.discard_transaction(&crate::witch::confirm_decision());
+                    let _ = super::operator_decisions::discard_transaction(witch);
                 }
                 return;
             }
@@ -667,9 +667,9 @@ impl App {
                 self.advance_to_next_cluster();
             }
             tag_canonicity::TagCanonicalityAction::Cancelled => {
-                // Discard transaction if active
+                // Discard transaction if active via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
-                    let _ = witch.discard_transaction(&crate::witch::confirm_decision());
+                    let _ = super::operator_decisions::discard_transaction(witch);
                 }
                 let _ = config::log_message("Tag canonicity resolution cancelled");
                 self.tag_canonicity_state = None;
@@ -784,18 +784,18 @@ impl App {
         match action {
             tag_canonicity::TagCanonicityReviewAction::None => {}
             tag_canonicity::TagCanonicityReviewAction::Confirm => {
-                // Confirm the transaction and go to progress screen
+                // Confirm the transaction and go to progress screen via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
-                    let _ = witch.confirm_transaction(&crate::witch::confirm_decision());
+                    let _ = super::operator_decisions::commit_transaction(witch);
                 }
                 self.tag_canonicity_review = None;
                 self.tag_canonicity_clusters = None;
                 self.transition_to_progress_after_mutations(progress_screen::ProgressPhase::SignalRefresh);
             }
             tag_canonicity::TagCanonicityReviewAction::Cancel => {
-                // Discard the transaction and return to insights
+                // Discard the transaction and return to insights via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
-                    let _ = witch.discard_transaction(&crate::witch::confirm_decision());
+                    let _ = super::operator_decisions::discard_transaction(witch);
                 }
                 self.tag_canonicity_review = None;
                 self.tag_canonicity_clusters = None;
@@ -876,8 +876,6 @@ impl App {
     /// This adds the decision to the transaction but does NOT confirm it.
     /// The transaction is confirmed when the user completes the review screen.
     fn stage_canonicity_decision(&mut self) {
-        use crate::witch::confirm_decision;
-
         let Some(ref state) = self.tag_canonicity_state else {
             return;
         };
@@ -908,9 +906,8 @@ impl App {
             .unwrap_or(0);
 
         let label = format!("Canonicalize {}", state.data.tag_name);
-        let witness = confirm_decision();
 
-        // Add decision to existing transaction (don't confirm yet)
-        let _ = witch.add_decision(cluster_idx, &witness, &label, mutations);
+        // Add decision to existing transaction via sealed operator decision handler
+        let _ = super::operator_decisions::stage_decision(witch, cluster_idx, &label, mutations);
     }
 }

@@ -15,7 +15,6 @@ use std::path::Path;
 
 use crate::corpus::db::Database;
 use crate::corpus::mutations::MigrationRegistry;
-use crate::witch::confirm_decision;
 
 /// Handle first-time setup when no database exists.
 ///
@@ -88,7 +87,9 @@ pub fn handle_first_time_setup<B: Backend>(
         if let Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Enter => {
-                    let _witness = confirm_decision();
+                    // User confirmed first-time setup. No DecisionWitness needed here:
+                    // database creation is infrastructure setup, not a corpus mutation.
+                    // DecisionWitness is for mutations that alter indexed corpus data.
                     break;
                 }
                 KeyCode::Esc => {

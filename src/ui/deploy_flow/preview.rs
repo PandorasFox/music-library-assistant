@@ -435,8 +435,8 @@ impl DeploymentPreviewState {
             .title("Confirm Deployment")
             .style(Style::default().bg(Color::Black));
 
-        // Calculate centered area
-        let popup_area = centered_rect(50, 50, area);
+        // Calculate centered area (fixed size - won't shrink on small windows)
+        let popup_area = centered_rect_fixed(60, 18, area);
         f.render_widget(Clear, popup_area);
 
         let paragraph = Paragraph::new(lines).block(block);
@@ -444,23 +444,11 @@ impl DeploymentPreviewState {
     }
 }
 
-/// Compute a centered rectangle.
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+/// Compute a centered rectangle with fixed dimensions.
+fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width, height)
 }

@@ -2060,7 +2060,7 @@ impl UnifiedTagEditorState {
         destination: super::types::UnsavedChangesDestination,
         selected_button: super::types::UnsavedChangesButton,
     ) {
-        let modal_area = crate::ui::helpers::centered_rect(60, 30, area);
+        let modal_area = crate::ui::helpers::centered_rect_fixed(60, 12, area);
         f.render_widget(Clear, modal_area);
 
         let modal_block = Block::default()

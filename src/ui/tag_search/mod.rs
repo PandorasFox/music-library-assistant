@@ -205,7 +205,7 @@ impl TagSearchState {
             types::TagSearchModal::NoResults => {
                 Modal::new()
                     .title("Search Results")
-                    .size(40, 25)
+                    .fixed_size(32, 8)
                     .content(vec![
                         Line::raw(""),
                         Line::styled("No results found", Style::default().fg(Color::White)),
@@ -219,7 +219,7 @@ impl TagSearchState {
                 let track_count = self.pending_bulk_edit.as_ref().map(|t| t.len()).unwrap_or(0);
                 Modal::new()
                     .title("Bulk Edit")
-                    .size(45, 20)
+                    .fixed_size(42, 7)
                     .content(vec![
                         Line::raw(""),
                         Line::styled(

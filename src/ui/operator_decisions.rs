@@ -3,14 +3,13 @@
 //! ╔════════════════════════════════════════════════════════════════════════════╗
 //! ║  THIS MODULE IS THE OPERATOR CONFIRMATION BOUNDARY                         ║
 //! ║                                                                            ║
-//! ║  Functions here are called ONLY from Enter keypress handlers in            ║
-//! ║  confirmation modals. They create DecisionWitnesses via                    ║
-//! ║  with_operator_decision() - the ONLY sanctioned call site.                 ║
+//! ║  Functions here create DecisionWitnesses via with_operator_decision() -    ║
+//! ║  the ONLY sanctioned call sites.                                           ║
 //! ║                                                                            ║
 //! ║  DO NOT:                                                                   ║
 //! ║  - Export with_operator_decision or DecisionScope from here                ║
 //! ║  - Add new functions without explicit human operator approval              ║
-//! ║  - Call these functions from anywhere except Enter keypress handlers       ║
+//! ║  - Call these functions from anywhere except action handlers               ║
 //! ║  - Extend this module with new patterns or abstractions                    ║
 //! ║                                                                            ║
 //! ║  The witness cannot escape the callback scope - this is by design.         ║
@@ -23,16 +22,19 @@
 //! decisions. The `DecisionWitness` type is a zero-sized proof that code is
 //! executing in a user-confirmed context.
 //!
-//! Previously, `confirm_decision()` was a public function that could be called
-//! from anywhere, making it easy to accidentally (or intentionally) bypass the
-//! operator confirmation requirement.
-//!
 //! This module implements a sealed access pattern:
 //! 1. `DecisionWitness` can only be created inside `Witch::with_operator_decision()`
 //! 2. That method should only be called from functions in THIS module
-//! 3. These functions are only called from Enter keypress handlers
+//! 3. These functions are called from action handlers
 //!
-//! The result: a clear, auditable boundary between "user pressed Enter to confirm"
+//! # Transaction Flow
+//!
+//! All mutation flows now go through a standardized Transaction Review modal:
+//! 1. Source modal stages decision(s) via `stage_decision()`
+//! 2. TransactionReview modal shows staged decisions
+//! 3. User confirms via `commit_transaction()` or discards via `discard_transaction()`
+//!
+//! The result: a clear, auditable boundary between "user confirmed the operation"
 //! and "mutations were queued for execution".
 
 use crate::corpus::mutations::Mutation;
@@ -84,33 +86,10 @@ pub fn commit_transaction(witch: &mut Witch) -> Result<CommitSummary, Transactio
 /// All accumulated decisions are discarded without execution.
 ///
 /// # Call Sites
-/// - Tag editor: when user cancels/escapes without committing
-/// - Tag canonicity: when user cancels the resolution flow
+/// - Transaction review: when user cancels/discards the transaction
+/// - Source modals: when user cancels after returning from review
 pub fn discard_transaction(witch: &mut Witch) -> Result<DiscardSummary, TransactionError> {
     witch.with_operator_decision(|scope| {
         scope.discard_transaction()
-    })
-}
-
-/// Execute a complete single-decision transaction (start, add, commit).
-///
-/// Called from Enter keypress for simple flows where there's exactly one
-/// decision with no review step. This is a convenience for flows that don't
-/// need multi-decision staging.
-///
-/// # Call Sites
-/// - Intake confirmation: when user confirms indexing unindexed files
-/// - Deploy confirmation: when user confirms deployment operations
-/// - Missing file resolution: when user confirms file operations
-pub fn execute_single_decision(
-    witch: &mut Witch,
-    transaction_label: &str,
-    decision_label: &str,
-    mutations: Vec<Mutation>,
-) -> Result<CommitSummary, TransactionError> {
-    witch.with_operator_decision(|scope| {
-        scope.start_transaction(transaction_label)?;
-        scope.add_decision(0, decision_label, mutations)?;
-        scope.confirm_transaction()
     })
 }

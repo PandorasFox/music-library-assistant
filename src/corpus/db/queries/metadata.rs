@@ -165,13 +165,15 @@ impl Database {
     // ========================================================================
 
     /// Query distinct tag values with track counts from track_tags table.
+    /// Only considers corpus tracks (excludes library tracks and orphaned tag entries).
     /// Returns Vec of (tag_value, track_count).
     pub fn get_distinct_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT tag_value, COUNT(DISTINCT track_id) as track_count
-               FROM track_tags
-               WHERE LOWER(tag_name) = LOWER(?1) AND tag_value IS NOT NULL AND tag_value != ''
-               GROUP BY tag_value
+            r#"SELECT tt.tag_value, COUNT(DISTINCT tt.track_id) as track_count
+               FROM track_tags tt
+               INNER JOIN tracks t ON tt.track_id = t.id AND t.source = 'corpus'
+               WHERE LOWER(tt.tag_name) = LOWER(?1) AND tt.tag_value IS NOT NULL AND tt.tag_value != ''
+               GROUP BY tt.tag_value
                ORDER BY track_count DESC"#,
         )?;
 
@@ -191,6 +193,7 @@ impl Database {
     /// Query album values with artist context for collision detection.
     /// Albums are keyed by (artist_context, album) to avoid false positives
     /// like "Greatest Hits" by different artists.
+    /// Only considers corpus tracks (excludes library tracks and orphaned tag entries).
     /// Returns Vec of (album_value, artist_context, track_count).
     pub fn get_album_values_with_artist_context(&self) -> Result<Vec<(String, String, usize)>> {
         let mut stmt = self.conn.prepare(
@@ -199,6 +202,7 @@ impl Database {
                    COALESCE(album_artist.tag_value, artist.tag_value, '') as artist_context,
                    COUNT(DISTINCT album.track_id) as track_count
                FROM track_tags album
+               INNER JOIN tracks t ON album.track_id = t.id AND t.source = 'corpus'
                LEFT JOIN track_tags album_artist
                    ON album.track_id = album_artist.track_id
                    AND LOWER(album_artist.tag_name) = 'album_artist'

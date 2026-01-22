@@ -109,11 +109,11 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         success, error, duration_ms
     ));
 
-    // Clear affected TagCanonicity signals after successful tag edits
-    // The next awake-phase DetectTagCanonicalizations will recreate any still-valid signals
+    // Clear affected TagCanonicity and InconsistentAlbumArtist signals after successful tag edits
+    // The next awake-phase computations will recreate any still-valid signals
     if success {
-        if let Mutation::TagEditAndFlush { edits, .. } = &mutation {
-            clear_affected_canonicity_signals(edits, &witness);
+        if let Mutation::TagEditAndFlush { track_id, edits, .. } = &mutation {
+            clear_affected_canonicity_signals(&db, *track_id, edits, &witness);
         }
     }
 
@@ -268,12 +268,16 @@ fn clear_library_stale_signals(
     }
 }
 
-/// Clear TagCanonicity signals affected by tag edits.
+/// Clear TagCanonicity and InconsistentAlbumArtist signals affected by tag edits.
 ///
 /// For each edited tag (artist, album_artist, album, genre), compute the normalized
 /// key from the OLD value and clear the corresponding signal. The next awake-phase
-/// DetectTagCanonicalizations computation will recreate any still-valid signals.
+/// computations will recreate any still-valid signals.
+///
+/// For album_artist edits, also clears InconsistentAlbumArtist signals for the track's album.
 fn clear_affected_canonicity_signals(
+    db: &Database,
+    track_id: i64,
     edits: &[TagEdit],
     witness: &MutationExecutionWitness,
 ) {
@@ -282,12 +286,23 @@ fn clear_affected_canonicity_signals(
         None => return,
     };
 
+    // Get the track's album and artist for context-aware signal clearing
+    let track_album = db.get_track_tag_value(track_id, "album").ok().flatten().unwrap_or_default();
+    let track_artist = db.get_track_tag_value(track_id, "artist").ok().flatten().unwrap_or_default();
+
     for edit in edits {
-        // Only clear for tag types that have canonicity detection
+        // Clear TagCanonicity signals for affected tag types
         let normalized_key = match edit.tag_name.as_str() {
             "artist" => edit.old_value.as_ref().map(|v| normalize_artist(v)),
             "album_artist" => edit.old_value.as_ref().map(|v| normalize_album_artist(v)),
-            "album" => edit.old_value.as_ref().map(|v| normalize_album(v)),
+            "album" => {
+                // Album canonicity uses "{artist}::{album}" format
+                edit.old_value.as_ref().map(|v| {
+                    let norm_artist = normalize_artist(&track_artist);
+                    let norm_album = normalize_album(v);
+                    format!("{} :: {}", norm_artist, norm_album)
+                })
+            }
             "genre" => edit.old_value.as_ref().map(|v| normalize_genre(v)),
             _ => None, // Other tag types don't have canonicity signals
         };
@@ -297,6 +312,16 @@ fn clear_affected_canonicity_signals(
             sender.clear_aggregate_signal_for_mutation(
                 AggregateSignalType::TagCanonicity,
                 &signal_key,
+                witness,
+            );
+        }
+
+        // For album_artist edits, also clear InconsistentAlbumArtist signals
+        if edit.tag_name == "album_artist" && !track_album.is_empty() {
+            let normalized_album = normalize_album(&track_album);
+            sender.clear_aggregate_signal_for_mutation(
+                AggregateSignalType::InconsistentAlbumArtist,
+                &normalized_album,
                 witness,
             );
         }

@@ -767,6 +767,7 @@ impl Database {
     }
 
     /// Get track IDs that have any of the given tag values for a specific tag name.
+    /// Only considers corpus tracks (excludes library tracks and orphaned tag entries).
     pub fn get_track_ids_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
         if values.is_empty() {
             return Ok(Vec::new());
@@ -775,7 +776,9 @@ impl Database {
         // Build placeholders for IN clause
         let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
         let sql = format!(
-            "SELECT DISTINCT track_id FROM track_tags WHERE tag_name = ?1 AND tag_value IN ({})",
+            r#"SELECT DISTINCT tt.track_id FROM track_tags tt
+               INNER JOIN tracks t ON tt.track_id = t.id AND t.source = 'corpus'
+               WHERE tt.tag_name = ?1 AND tt.tag_value IN ({})"#,
             placeholders.join(",")
         );
 

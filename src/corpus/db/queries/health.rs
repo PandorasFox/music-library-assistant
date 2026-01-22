@@ -927,6 +927,9 @@ impl Database {
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
 
+        // Count compound_tag_value signals
+        let compound_tag_value_count = self.count_signal_type("compound_tag_value")?;
+
         // Group tag_canonicity signals by tag name (extracted from issue_key prefix)
         // Key format: "{tag_name}:{normalized_key}" e.g., "artist:dragonforce"
         // ORDER BY total_tracks DESC - tags affecting more tracks should appear first
@@ -955,6 +958,7 @@ impl Database {
         Ok(TagSquashBucket {
             tag_canonicity,
             inconsistent_album_artist_count,
+            compound_tag_value_count,
         })
     }
 

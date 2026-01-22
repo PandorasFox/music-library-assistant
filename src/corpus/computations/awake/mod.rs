@@ -78,6 +78,11 @@ pub enum Computation {
     /// Finds albums where tracks have different artists but missing/inconsistent album_artist.
     DetectInconsistentAlbumArtist,
 
+    /// Detect compound tag values that should be split.
+    ///
+    /// Finds tag values containing separator characters (e.g., "Rock; Metal" in genre).
+    DetectCompoundTagValues,
+
     /// Verify out-of-band changes for files with modified mtime.
     ///
     /// For CorpusFileModifiedOutOfBand signals, checks if tags actually differ.
@@ -121,6 +126,7 @@ impl Computation {
             Computation::DetectMetadataDuplicates => "Detecting metadata duplicates",
             Computation::DetectTagCanonicalizations => "Detecting tag canonicalizations",
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
+            Computation::DetectCompoundTagValues => "Detecting compound tag values",
             Computation::VerifyOutOfBandChanges => "Verifying out-of-band changes",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::CheckDeployConflicts { .. } => "Checking deploy conflicts",

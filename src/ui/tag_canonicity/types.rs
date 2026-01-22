@@ -100,10 +100,50 @@ impl TagCanonicalityModalData {
     }
 
     /// Create from an AggregateSignal (loaded from database).
+    ///
+    /// Handles two signal formats:
+    /// - TagCanonicity: { tag_name, variants: {value: count}, track_ids, context? }
+    /// - InconsistentAlbumArtist: { album, album_artist_variants: {value: count}, track_ids }
     pub fn from_signal(signal: &AggregateSignal) -> Option<Self> {
+        use crate::corpus::db::types::AggregateSignalType;
+
         let metadata = signal.metadata_json.as_ref()?;
         let json: serde_json::Value = serde_json::from_str(metadata).ok()?;
 
+        // Handle InconsistentAlbumArtist format
+        if signal.signal_type == AggregateSignalType::InconsistentAlbumArtist {
+            let variants_obj = json.get("album_artist_variants")?.as_object()?;
+            let mut variants: Vec<TagVariantEntry> = variants_obj
+                .iter()
+                .filter_map(|(value, count)| {
+                    Some(TagVariantEntry {
+                        value: value.clone(),
+                        count: count.as_u64()? as usize,
+                    })
+                })
+                .collect();
+
+            variants.sort_by(|a, b| {
+                b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
+            });
+
+            let track_ids = json
+                .get("track_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default();
+
+            let album = json.get("album").and_then(|v| v.as_str()).map(String::from);
+
+            return Some(Self {
+                tag_name: "album_artist".to_string(),
+                context_label: album,
+                variants,
+                track_ids,
+            });
+        }
+
+        // Standard TagCanonicity format
         let tag_name = json.get("tag_name")?.as_str()?.to_string();
 
         let variants_obj = json.get("variants")?.as_object()?;
@@ -360,96 +400,4 @@ pub enum TagCanonicalityAction {
     },
     /// User requested review screen (Ctrl+R)
     ShowReview,
-}
-
-// ============================================================================
-// Review Screen
-// ============================================================================
-
-/// Summary of a single decision for the review screen.
-#[derive(Debug, Clone)]
-pub struct DecisionSummary {
-    /// Human-readable label (e.g., "Canonicalize artist")
-    pub label: String,
-    /// Number of mutations (tag edits) in this decision
-    pub mutation_count: usize,
-    /// Number of unique tracks affected
-    pub track_count: usize,
-}
-
-/// Which button is focused in the review screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReviewButtonFocus {
-    /// Cancel button (returns to resolution modal)
-    #[default]
-    Cancel,
-    /// Discard button (returns to Insights, discards all)
-    Discard,
-    /// Confirm button (executes all decisions)
-    Confirm,
-}
-
-/// State for the tag canonicity review screen.
-///
-/// Shows all pending decisions before final confirmation.
-#[derive(Debug, Clone)]
-pub struct TagCanonicityReviewState {
-    /// Summary of each decision
-    pub decisions: Vec<DecisionSummary>,
-    /// Currently highlighted decision (for potential future discard feature)
-    pub cursor: usize,
-    /// Which button is focused
-    pub button_focus: ReviewButtonFocus,
-}
-
-impl TagCanonicityReviewState {
-    /// Create a new review state with the given decision summaries.
-    pub fn new(decisions: Vec<DecisionSummary>) -> Self {
-        Self {
-            decisions,
-            cursor: 0,
-            button_focus: ReviewButtonFocus::Cancel, // Default to Cancel (safer choice)
-        }
-    }
-
-    /// Total mutations across all decisions.
-    pub fn total_mutations(&self) -> usize {
-        self.decisions.iter().map(|d| d.mutation_count).sum()
-    }
-
-    /// Total unique tracks affected (approximation - may double count).
-    pub fn total_tracks(&self) -> usize {
-        self.decisions.iter().map(|d| d.track_count).sum()
-    }
-
-    /// Move button focus left (Cancel <- Discard <- Confirm).
-    pub fn focus_left(&mut self) {
-        self.button_focus = match self.button_focus {
-            ReviewButtonFocus::Confirm => ReviewButtonFocus::Discard,
-            ReviewButtonFocus::Discard => ReviewButtonFocus::Cancel,
-            ReviewButtonFocus::Cancel => ReviewButtonFocus::Cancel, // Already leftmost
-        };
-    }
-
-    /// Move button focus right (Cancel -> Discard -> Confirm).
-    pub fn focus_right(&mut self) {
-        self.button_focus = match self.button_focus {
-            ReviewButtonFocus::Cancel => ReviewButtonFocus::Discard,
-            ReviewButtonFocus::Discard => ReviewButtonFocus::Confirm,
-            ReviewButtonFocus::Confirm => ReviewButtonFocus::Confirm, // Already rightmost
-        };
-    }
-}
-
-/// Action returned from the review screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TagCanonicityReviewAction {
-    /// No action, continue showing review
-    None,
-    /// User confirmed - execute all decisions
-    Confirm,
-    /// User cancelled review - return to resolution modal (keeps staged decisions)
-    Cancel,
-    /// User wants to discard all decisions and return to Insights
-    Discard,
 }

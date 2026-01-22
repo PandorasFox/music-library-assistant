@@ -605,3 +605,116 @@ pub fn write_tags_to_file(
     Ok(())
 }
 
+/// Write tags to an audio file, supporting multi-value tags.
+///
+/// Unlike `write_tags_to_file`, this function:
+/// - Accepts duplicate keys in the input (e.g., multiple genre values)
+/// - Writes them as separate tag entries (for Vorbis/FLAC)
+/// - Preserves existing tags that aren't being replaced
+///
+/// For tags being replaced, ALL existing values for that tag name are removed
+/// and replaced with the new values.
+///
+/// # Multi-value support
+///
+/// Vorbis comments (FLAC, OGG) natively support multiple values per tag.
+/// ID3v2 has limited support. Other formats may only keep the last value.
+///
+/// # Authorization
+///
+/// Requires a `MutationToken` to prove the caller is executing within a mutation context.
+pub fn write_tags_to_file_multi_value(
+    path: &Path,
+    tags: &[(String, String)],
+    _token: &crate::corpus::mutations::MutationToken,
+) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::file::{AudioFile, TaggedFileExt};
+    use lofty::probe::Probe;
+    use lofty::tag::{Accessor, ItemKey, ItemValue, Tag, TagExt, TagItem};
+    use std::collections::HashSet;
+
+    // 1. Read existing tags from file
+    let existing_tags = read_all_tags(path).unwrap_or_default();
+
+    // 2. Determine which tag names are being replaced
+    let replaced_keys: HashSet<String> = tags.iter().map(|(k, _)| k.to_lowercase()).collect();
+
+    // 3. Open file for writing
+    let mut tagged_file = Probe::open(path)
+        .with_context(|| format!("Failed to open file for tag writing: {}", path.display()))?
+        .read()
+        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+
+    let tag_type = tagged_file.primary_tag_type();
+
+    // Get or create primary tag
+    let tag = match tagged_file.primary_tag_mut() {
+        Some(t) => t,
+        None => {
+            let new_tag = Tag::new(tag_type);
+            tagged_file.insert_tag(new_tag);
+            tagged_file.primary_tag_mut().unwrap()
+        }
+    };
+
+    // Clear existing tags before writing
+    tag.clear();
+
+    // 4. Write preserved tags (existing tags not being replaced)
+    for (key, value) in &existing_tags {
+        if replaced_keys.contains(&key.to_lowercase()) {
+            continue; // Skip - this tag is being replaced
+        }
+        write_single_tag(tag, tag_type, key, value);
+    }
+
+    // 5. Write new tags (including multi-value)
+    for (key, value) in tags {
+        if value.is_empty() {
+            continue; // Skip empty values
+        }
+        write_single_tag(tag, tag_type, key, value);
+    }
+
+    // 6. Save to file
+    tagged_file
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
+
+    Ok(())
+}
+
+/// Write a single tag value to a tag container.
+///
+/// For multi-value support, this uses push_item() which adds without replacing,
+/// allowing multiple values for the same key (e.g., multiple genres).
+fn write_single_tag(
+    tag: &mut lofty::tag::Tag,
+    tag_type: lofty::tag::TagType,
+    key: &str,
+    value: &str,
+) {
+    use lofty::tag::{Accessor, ItemKey, ItemValue, TagItem};
+
+    // For standard tags, we still use set_* for the first value
+    // but for multi-value we need to use push_item
+    let item_key = match key.to_lowercase().as_str() {
+        "artist" => ItemKey::TrackArtist,
+        "album" => ItemKey::AlbumTitle,
+        "album_artist" => ItemKey::AlbumArtist,
+        "title" => ItemKey::TrackTitle,
+        "track_number" => ItemKey::TrackNumber,
+        "disc_number" => ItemKey::DiscNumber,
+        "year" | "date" => ItemKey::Year,
+        "genre" => ItemKey::Genre,
+        "comment" => ItemKey::Comment,
+        "composer" => ItemKey::Composer,
+        _ => ItemKey::from_key(tag_type, key),
+    };
+
+    // Create tag item and push (allows duplicates for multi-value)
+    let item = TagItem::new(item_key, ItemValue::Text(value.to_string()));
+    tag.push(item);
+}
+

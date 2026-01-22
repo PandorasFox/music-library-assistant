@@ -34,6 +34,7 @@ pub mod album_artist_detection;
 pub mod album_normalization;
 pub mod canonicalization;
 pub mod collision;
+pub mod compound;
 mod detection;
 pub mod filter;
 pub mod normalization;

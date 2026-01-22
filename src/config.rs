@@ -35,6 +35,7 @@ pub struct Opinions {
     pub startup: StartupOpinions,
     pub health_detection: HealthDetectionOpinions,
     pub performance: PerformanceOpinions,
+    pub tag_splitting: TagSplittingOpinions,
 }
 
 
@@ -183,6 +184,28 @@ impl Default for PerformanceOpinions {
             db_cache_mb: 256,
             timing_instrumentation: false,
         }
+    }
+}
+
+/// Opinions for detecting and splitting compound tag values.
+///
+/// Maps tag names to their separator characters. When a tag value contains
+/// any of its configured separators, it's flagged for potential splitting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagSplittingOpinions {
+    /// Map of tag_name -> separators to detect.
+    /// Default: { "genre": [";", ",", "/"] }
+    pub tag_separators: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl Default for TagSplittingOpinions {
+    fn default() -> Self {
+        let mut tag_separators = std::collections::HashMap::new();
+        tag_separators.insert(
+            "genre".to_string(),
+            vec![";".to_string(), ",".to_string(), "/".to_string()],
+        );
+        Self { tag_separators }
     }
 }
 
@@ -667,6 +690,33 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
     }
 }
 
+/// Parse tag-splitting opinions from KDL node.
+///
+/// Expected format:
+/// ```kdl
+/// tag-splitting {
+///     "genre" ";" "," "/"
+///     "artist" "&" "," ";"
+/// }
+/// ```
+/// Each child node is a tag name, with separator strings as entries.
+fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplittingOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let tag_name = child.name().value().to_string();
+            // Collect all string entries as separators
+            let separators: Vec<String> = child
+                .entries()
+                .iter()
+                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                .collect();
+            if !separators.is_empty() {
+                opinions.tag_separators.insert(tag_name, separators);
+            }
+        }
+    }
+}
+
 fn parse_kdl_config(content: &str) -> Result<Config> {
     let doc: kdl::KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
@@ -802,6 +852,9 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "performance" => {
                                 parse_performance_opinions(child, &mut config.opinions.performance);
+                            }
+                            "tag-splitting" => {
+                                parse_tag_splitting_opinions(child, &mut config.opinions.tag_splitting);
                             }
                             _ => {}
                         }

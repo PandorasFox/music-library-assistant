@@ -152,13 +152,6 @@ pub enum UnifiedTagEditorModal {
         /// Selected button (defaults to KeepEditing for safety)
         selected_button: UnsavedChangesButton,
     },
-    /// Review all staged decisions before final commit
-    TransactionReview {
-        /// (index, label, mutation_count)
-        decisions: Vec<(usize, String, usize)>,
-        scroll: usize,
-        selected_button: TransactionReviewButton,
-    },
     /// Edit multiple values for a single tag (FLAC/Vorbis multi-value support)
     MultiValueEditor {
         /// Index of the field in the tag_fields list
@@ -199,17 +192,6 @@ pub enum UnsavedChangesButton {
     DiscardAndProceed,
 }
 
-/// Buttons on the transaction review modal
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TransactionReviewButton {
-    /// Commit all staged decisions
-    CommitAll,
-    /// Discard all staged decisions
-    DiscardAll,
-    /// Go back to editing (safe default - stuck Enter won't commit)
-    #[default]
-    BackToEditing,
-}
 
 // ============================================================================
 // Legacy Types (to be removed after refactoring)

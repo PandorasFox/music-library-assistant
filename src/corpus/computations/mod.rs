@@ -257,6 +257,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awake::Computation::DetectInconsistentAlbumArtist => {
                         awake::execute_detect_inconsistent_album_artist(read_only_db, &witness, start)
                     }
+                    awake::Computation::DetectCompoundTagValues => {
+                        awake::execute_detect_compound_tag_values(read_only_db, &witness, start)
+                    }
                     awake::Computation::VerifyOutOfBandChanges => {
                         awake::execute_verify_out_of_band_changes(read_only_db, &witness, start)
                     }

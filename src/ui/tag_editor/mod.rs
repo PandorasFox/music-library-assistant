@@ -19,5 +19,5 @@ pub mod types;
 pub use state::UnifiedTagEditorState;
 pub use types::{
     GroupContext, TagEditorSource,
-    TransactionReviewButton, UnifiedTagEditorAction, UnifiedTagEditorModal,
+    UnifiedTagEditorAction, UnifiedTagEditorModal,
 };

@@ -385,6 +385,31 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
+        InsightType::CompoundTagValue => {
+            lines.push(Line::from(Span::styled(
+                "Compound Tag Values",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Tags containing separators (e.g.,",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "\"Rock; Metal\") that should be split",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "into multiple values.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to split.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
         // Library bucket entries
         InsightType::LibraryStale => {
             lines.push(Line::from(Span::styled(

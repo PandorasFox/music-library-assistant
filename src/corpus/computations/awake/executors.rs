@@ -41,6 +41,7 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectMetadataDuplicates,
         Computation::DetectTagCanonicalizations,
         Computation::DetectInconsistentAlbumArtist,
+        Computation::DetectCompoundTagValues,
         Computation::VerifyOutOfBandChanges,
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
@@ -664,6 +665,97 @@ pub fn execute_detect_tag_canonicalizations(
 
     let _ = log_message(&format!(
         "[COMPUTE] DetectTagCanonicalizations: emitted {} TagCanonicity signals",
+        signal_count
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Execute DetectCompoundTagValues - detect tag values that should be split.
+///
+/// Emits CompoundTagValue aggregate signals for each detected compound value.
+pub fn execute_detect_compound_tag_values(
+    read_only_db: &Database,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    use crate::corpus::health::compound::{detect_all_compound_values, get_track_ids_for_compound_value};
+
+    let computation = Computation::DetectCompoundTagValues;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Get tag splitting config from opinions
+    let tag_separators = crate::config::load_config()
+        .map(|c| c.opinions.tag_splitting.tag_separators.clone())
+        .unwrap_or_default();
+
+    if tag_separators.is_empty() {
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+    }
+
+    let compound_values = match detect_all_compound_values(read_only_db, &tag_separators) {
+        Ok(v) => v,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to detect compound values: {}", e),
+            );
+        }
+    };
+
+    let mut signal_count = 0;
+
+    for cv in compound_values {
+        // Get track IDs for this compound value
+        let track_ids = get_track_ids_for_compound_value(read_only_db, &cv.tag_name, &cv.compound_value)
+            .unwrap_or_default();
+
+        if track_ids.is_empty() {
+            continue;
+        }
+
+        // Build metadata JSON
+        let metadata = serde_json::json!({
+            "tag_name": cv.tag_name,
+            "compound_value": cv.compound_value,
+            "split_parts": cv.split_parts,
+            "separator": cv.separator,
+            "track_ids": track_ids,
+        });
+
+        // Signal key: "{tag_name}:{hash}" - use a simple hash of the compound value
+        let hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            cv.compound_value.hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
+        let key = format!("{}:{}", cv.tag_name, hash);
+
+        sender.ensure_aggregate_signal(
+            AggregateSignalType::CompoundTagValue,
+            &key,
+            Some(&metadata.to_string()),
+            witness,
+        );
+
+        signal_count += 1;
+    }
+
+    let _ = log_message(&format!(
+        "[COMPUTE] DetectCompoundTagValues: emitted {} CompoundTagValue signals",
         signal_count
     ));
 

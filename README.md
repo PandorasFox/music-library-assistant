@@ -1,6 +1,6 @@
 # Music Library Assistant (MLA)
 
-A high-performance music library management tool for managing large music collections with multiple organizational strategies. Named after the Music Library Assistant from The Talos Principle.
+A high-performance music library management tool for managing large music collections with multiple organizational strategies.
 
 **Repository**: https://git.hecate.pink/hecate/mla
 
@@ -26,6 +26,8 @@ The binary will be at `target/release/mla`.
 
 MLA requires a config file at `$XDG_CONFIG_HOME/mla/config.kdl` (or `~/.config/mla/config.kdl`):
 
+There will, eventually, be a built-in config editor + first-time setup wizard. For now, though: woe, config file be upon ye.
+
 ```kdl
 // Root directory of your music archive
 corpus-root "/path/to/your/music/archive"
@@ -49,42 +51,24 @@ Launch the TUI:
 mla
 ```
 
-### Navigation
-
-- **Arrow keys** (up/down): Navigate menus
-- **Enter**: Select item
-- **ESC**: Go back
-- **Q**: Quit (from main menu)
-
-### Menu Categories
-
-- **Insight & Health**: Corpus health dashboard, analysis reports
-- **Intake**: Scan external sources, import from legacy library
-- **Organization**: Deduplication, tag repairs, file consolidation
-- **Deployment**: Preview changes, deploy to libraries, view pending changes
-- **Operations**: Rescanning, database operations
-
 ## Features
 
-- Fast metadata extraction (FLAC, MP3, OGG, M4A, and more)
-- SQLite-based indexing for quick queries
 - Interactive TUI with keyboard navigation
 - Multiple report types (legacy matching, deployment status, quality issues, duplicates)
-- Inode-based hard-link detection
 - Acoustic fingerprinting for duplicate detection
-- Read-only operations preserve archive integrity
+- Algebraic Mutation and Batch Execution systems for staging, previewing, and bulk-applying changes!
 
-## Librarian Workflow Philosophy
+All corpus-mutating operations are tracked as composable, reversible algebraic changes that accumulate before execution.
 
-MLA organizes library management around classic librarian cycles:
+All corpus-mutation operations *must* be confirmed via a user's Enter keypress. This is enforced at compile-time thanks to some clever Rust sealed trait usage.
 
-1. **Insight & Health** - Understanding corpus state, metadata quality, deployment coverage
-2. **Intake** - Bringing external material into corpus, normalizing metadata
-3. **Organization** - Corpus-mutating operations: deduplication, tag repairs, consolidation
-4. **Deployment** - Publishing corpus to browsable libraries via hard links
-5. **Operations** - Low-level maintenance, rescanning, database operations
+This enables confident experimentation with large-scale organizational changes.
 
-All corpus-mutating operations are tracked as composable, reversible algebraic changes that accumulate before execution. This enables confident experimentation with large-scale organizational changes.
+## Disclaimer
+
+This project is approximately 99% codegenned (with Claude). I review all changes as best I can, but I also still code-churned thousands of lines of code in the prototyping stage.
+
+That being said: I still designed this software at the systems layer with this all in mind, and the software itself is designed to not do anything more dangerous than editing tags. I do not let the codebase have the concept of 'removing a file', and it can only move files at most.
 
 ## Documentation
 

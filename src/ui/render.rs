@@ -18,7 +18,7 @@ use crate::config::{self, Config};
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{deploy_flow, insights_view, missing_file_flow, tag_canonicity, tag_editor, tag_search, tree_browser};
+use super::{compound_split, deploy_flow, insights_view, missing_file_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -30,7 +30,9 @@ pub struct RenderContext<'a> {
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
     pub tag_canonicity_state: Option<&'a tag_canonicity::TagCanonicalityState>,
-    pub tag_canonicity_review: Option<&'a tag_canonicity::TagCanonicityReviewState>,
+    pub compound_split_state: Option<&'a compound_split::CompoundSplitState>,
+    pub transaction_review: Option<&'a transaction_review::TransactionReviewState>,
+    pub transaction_review_decisions: Vec<transaction_review::DecisionSummary>,
     pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
     pub exit_confirm_modal_state: Option<&'a super::ExitConfirmModalState>,
     pub progress_screen: Option<&'a super::progress_screen::ProgressScreen>,
@@ -158,7 +160,8 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
         super::UiMode::MissingFileResolution => Some("Missing File Resolution"),
         super::UiMode::TagCanonicityResolution => Some("Tag Canonicity"),
-        super::UiMode::TagCanonicityReview => Some("Tag Canonicity - Review"),
+        super::UiMode::CompoundTagSplit => Some("Compound Tag Split"),
+        super::UiMode::TransactionReview => Some("Transaction Review"),
     };
 
     let title = match suffix {
@@ -244,10 +247,16 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 tag_canonicity::render(f, area, state);
             }
         }
-        super::UiMode::TagCanonicityReview => {
-            view_name = "tag_canonicity_review";
-            if let Some(ref state) = ctx.tag_canonicity_review {
-                tag_canonicity::render_review(f, area, state);
+        super::UiMode::CompoundTagSplit => {
+            view_name = "compound_tag_split";
+            if let Some(ref state) = ctx.compound_split_state {
+                compound_split::render(f, area, state);
+            }
+        }
+        super::UiMode::TransactionReview => {
+            view_name = "transaction_review";
+            if let Some(ref state) = ctx.transaction_review {
+                transaction_review::render(f, area, state, &ctx.transaction_review_decisions);
             }
         }
     }
@@ -711,7 +720,8 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
         super::UiMode::MissingFileResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TagCanonicityResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::TagCanonicityReview => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::CompoundTagSplit => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::TransactionReview => control_presets::empty(), // Modal handles its own hints
     };
     lines.push(controls.render_line());
 

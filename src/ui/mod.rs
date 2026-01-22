@@ -25,8 +25,10 @@ mod tick;
 mod types;
 
 pub mod operator_decisions;
+pub mod transaction_review;
 
 pub mod app;
+pub mod compound_split;
 pub mod deploy_flow;
 pub mod eye;
 pub mod flows;
@@ -135,8 +137,12 @@ pub(crate) struct App {
     pub(super) tag_canonicity_state: Option<tag_canonicity::TagCanonicalityState>,
     // Tag canonicity cluster navigation (signal IDs and current index)
     pub(super) tag_canonicity_clusters: Option<TagCanonicityClusters>,
-    // Tag canonicity review screen (before confirming all decisions)
-    pub(super) tag_canonicity_review: Option<tag_canonicity::TagCanonicityReviewState>,
+    // Compound tag split modal
+    pub(super) compound_split_state: Option<compound_split::CompoundSplitState>,
+    // Compound split cluster navigation (signal IDs and current index)
+    pub(super) compound_split_clusters: Option<compound_split::CompoundSplitClusters>,
+    // Standardized transaction review modal
+    pub(super) transaction_review: Option<transaction_review::TransactionReviewState>,
     // Unified tag editor (transaction-based)
     pub(super) unified_tag_editor: Option<tag_editor::UnifiedTagEditorState>,
     // Exit confirmation modal
@@ -172,7 +178,9 @@ impl App {
             missing_file_preview: None,
             tag_canonicity_state: None,
             tag_canonicity_clusters: None,
-            tag_canonicity_review: None,
+            compound_split_state: None,
+            compound_split_clusters: None,
+            transaction_review: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
             progress_screen: None,
@@ -279,10 +287,16 @@ impl App {
                     self.handle_tag_canonicity_action(action);
                 }
             }
-            UiMode::TagCanonicityReview => {
-                if let Some(ref mut review) = self.tag_canonicity_review {
+            UiMode::TransactionReview => {
+                if let Some(ref mut review) = self.transaction_review {
                     let action = review.handle_key(key);
-                    self.handle_tag_canonicity_review_action(action);
+                    self.handle_transaction_review_action(action);
+                }
+            }
+            UiMode::CompoundTagSplit => {
+                if let Some(ref mut state) = self.compound_split_state {
+                    let action = state.handle_key(key);
+                    self.handle_compound_split_action(action);
                 }
             }
         }
@@ -438,6 +452,15 @@ fn render(f: &mut Frame, app: &mut App) {
         }
     });
 
+    // Fetch decision summaries from Witch if transaction review is active
+    let transaction_review_decisions = if app.transaction_review.is_some() {
+        app.witch.as_ref()
+            .map(|w| transaction_review::fetch_decision_summaries(w))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     let mut ctx = render::RenderContext {
         mode: app.mode,
         config: &app.config,
@@ -446,7 +469,9 @@ fn render(f: &mut Frame, app: &mut App) {
         deployment_preview: app.deployment_preview.as_mut(),
         missing_file_preview: app.missing_file_preview.as_ref(),
         tag_canonicity_state: app.tag_canonicity_state.as_ref(),
-        tag_canonicity_review: app.tag_canonicity_review.as_ref(),
+        compound_split_state: app.compound_split_state.as_ref(),
+        transaction_review: app.transaction_review.as_ref(),
+        transaction_review_decisions,
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
         progress_screen: app.progress_screen.as_ref(),
         insights_view: app.insights_view.as_mut(),

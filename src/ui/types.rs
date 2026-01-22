@@ -59,8 +59,10 @@ pub(crate) enum UiMode {
     MissingFileResolution,
     /// Tag canonicity resolution modal (artist/genre/album canonization, album_artist setting)
     TagCanonicityResolution,
-    /// Tag canonicity review screen - summary before confirming all decisions
-    TagCanonicityReview,
+    /// Compound tag split resolution modal (split "Rock; Metal" into separate values)
+    CompoundTagSplit,
+    /// Standardized transaction review modal - all mutation flows pass through here
+    TransactionReview,
 }
 
 // ============================================================================

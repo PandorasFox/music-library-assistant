@@ -746,55 +746,6 @@ impl UnifiedTagEditorState {
                     _ => UnifiedTagEditorAction::None,
                 }
             }
-            Some(UnifiedTagEditorModal::TransactionReview { scroll, selected_button, .. }) => {
-                match key.code {
-                    KeyCode::Enter => {
-                        match selected_button {
-                            super::types::TransactionReviewButton::CommitAll => {
-                                self.modal = None;
-                                UnifiedTagEditorAction::CommitTransaction
-                            }
-                            super::types::TransactionReviewButton::DiscardAll => {
-                                self.modal = None;
-                                UnifiedTagEditorAction::DiscardTransaction
-                            }
-                            super::types::TransactionReviewButton::BackToEditing => {
-                                self.modal = None;
-                                UnifiedTagEditorAction::CloseModal
-                            }
-                        }
-                    }
-                    KeyCode::Esc => {
-                        self.modal = None;
-                        UnifiedTagEditorAction::CloseModal
-                    }
-                    KeyCode::Left => {
-                        *selected_button = match selected_button {
-                            super::types::TransactionReviewButton::CommitAll => super::types::TransactionReviewButton::BackToEditing,
-                            super::types::TransactionReviewButton::DiscardAll => super::types::TransactionReviewButton::CommitAll,
-                            super::types::TransactionReviewButton::BackToEditing => super::types::TransactionReviewButton::DiscardAll,
-                        };
-                        UnifiedTagEditorAction::None
-                    }
-                    KeyCode::Right => {
-                        *selected_button = match selected_button {
-                            super::types::TransactionReviewButton::CommitAll => super::types::TransactionReviewButton::DiscardAll,
-                            super::types::TransactionReviewButton::DiscardAll => super::types::TransactionReviewButton::BackToEditing,
-                            super::types::TransactionReviewButton::BackToEditing => super::types::TransactionReviewButton::CommitAll,
-                        };
-                        UnifiedTagEditorAction::None
-                    }
-                    KeyCode::Up => {
-                        *scroll = scroll.saturating_sub(1);
-                        UnifiedTagEditorAction::None
-                    }
-                    KeyCode::Down => {
-                        *scroll += 1;
-                        UnifiedTagEditorAction::None
-                    }
-                    _ => UnifiedTagEditorAction::None,
-                }
-            }
             Some(UnifiedTagEditorModal::MultiValueEditor {
                 field_idx,
                 values,
@@ -1946,9 +1897,6 @@ impl UnifiedTagEditorState {
             UnifiedTagEditorModal::UnsavedChanges { destination, selected_button } => {
                 self.render_unsaved_changes_modal(f, area, *destination, *selected_button);
             }
-            UnifiedTagEditorModal::TransactionReview { decisions, scroll, selected_button } => {
-                self.render_transaction_review_modal(f, area, decisions, *scroll, *selected_button);
-            }
             UnifiedTagEditorModal::MultiValueEditor {
                 field_idx,
                 values,
@@ -2111,99 +2059,6 @@ impl UnifiedTagEditorState {
         ];
 
         let paragraph = Paragraph::new(lines)
-            .alignment(Alignment::Center)
-            .style(Style::default().bg(Color::Black));
-        f.render_widget(paragraph, inner);
-    }
-
-    fn render_transaction_review_modal(
-        &self,
-        f: &mut Frame,
-        area: Rect,
-        decisions: &[(usize, String, usize)],
-        scroll_offset: usize,
-        selected_button: super::types::TransactionReviewButton,
-    ) {
-        let modal_area = crate::ui::helpers::centered_rect(80, 80, area);
-        f.render_widget(Clear, modal_area);
-
-        let modal_block = Block::default()
-            .borders(Borders::ALL)
-            .title("Transaction Review")
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(Color::Black));
-
-        let inner = modal_block.inner(modal_area);
-        f.render_widget(modal_block, modal_area);
-
-        let mut lines = Vec::new();
-
-        let total_mutations: usize = decisions.iter().map(|(_, _, count)| count).sum();
-        lines.push(
-            Line::from(format!(
-                "Staged: {} decisions, {} mutations",
-                decisions.len(),
-                total_mutations
-            ))
-            .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
-        );
-        lines.push(Line::from(""));
-
-        if decisions.is_empty() {
-            lines.push(Line::from("No decisions staged yet.").style(Style::default().fg(Color::DarkGray)));
-        } else {
-            for (idx, label, mutation_count) in decisions {
-                lines.push(Line::from(format!(
-                    "  {}. {} ({} mutations)",
-                    idx + 1,
-                    label,
-                    mutation_count
-                )).style(Style::default().fg(Color::White)));
-            }
-        }
-
-        lines.push(Line::from(""));
-        lines.push(Line::from(""));
-
-        // Buttons
-        let buttons = [
-            ("Commit All", super::types::TransactionReviewButton::CommitAll),
-            ("Discard All", super::types::TransactionReviewButton::DiscardAll),
-            ("Back", super::types::TransactionReviewButton::BackToEditing),
-        ];
-
-        let mut button_spans = Vec::new();
-        for (i, (label, btn)) in buttons.iter().enumerate() {
-            let style = if *btn == selected_button {
-                Style::default()
-                    .bg(Color::Cyan)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            button_spans.push(Span::styled(format!("[ {} ]", label), style));
-            if i < buttons.len() - 1 {
-                button_spans.push(Span::raw("  "));
-            }
-        }
-        lines.push(Line::from(button_spans));
-
-        lines.push(Line::from(""));
-        lines.push(
-            Line::from("←→ Select | Enter Confirm | Esc Cancel")
-                .style(Style::default().fg(Color::DarkGray)),
-        );
-
-        let max_scroll = lines.len().saturating_sub(inner.height as usize);
-        let clamped_offset = scroll_offset.min(max_scroll);
-        let visible_lines: Vec<Line> = lines
-            .into_iter()
-            .skip(clamped_offset)
-            .take(inner.height as usize)
-            .collect();
-
-        let paragraph = Paragraph::new(visible_lines)
             .alignment(Alignment::Center)
             .style(Style::default().bg(Color::Black));
         f.render_widget(paragraph, inner);

@@ -82,17 +82,39 @@ pub fn detect_inconsistent_album_artist(db: &Database) -> Result<Vec<AlbumArtist
         let mut track_ids = Vec::new();
         let mut album_name = String::new();
 
-        for (track_id, artist, album_artist, album) in &tracks {
-            track_ids.push(*track_id);
-            *artist_counts.entry(artist.clone()).or_insert(0) += 1;
-            *album_artist_counts.entry(album_artist.clone()).or_insert(0) += 1;
-            if album_name.is_empty() && !album.is_empty() {
-                album_name = album.clone();
+        // Collect distinct catalog numbers and ISRCs (excluding empty values)
+        let mut catalog_numbers: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut isrcs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+        for track in &tracks {
+            track_ids.push(track.track_id);
+            *artist_counts.entry(track.artist.clone()).or_insert(0) += 1;
+            *album_artist_counts.entry(track.album_artist.clone()).or_insert(0) += 1;
+            if album_name.is_empty() && !track.album.is_empty() {
+                album_name = track.album.clone();
+            }
+            // Track non-empty catalog numbers and ISRCs
+            if !track.catalog_number.is_empty() {
+                catalog_numbers.insert(&track.catalog_number);
+            }
+            if !track.isrc.is_empty() {
+                isrcs.insert(&track.isrc);
             }
         }
 
         // Skip if only one artist (not a multi-artist album)
         if artist_counts.len() < 2 {
+            continue;
+        }
+
+        // Skip if tracks have different catalog numbers - indicates different releases
+        // (e.g., "Surge" and "Surge EP" from different artists with different catalog numbers)
+        if catalog_numbers.len() > 1 {
+            continue;
+        }
+
+        // Skip if tracks have different ISRCs - indicates different releases
+        if isrcs.len() > 1 {
             continue;
         }
 
@@ -115,19 +137,32 @@ pub fn detect_inconsistent_album_artist(db: &Database) -> Result<Vec<AlbumArtist
     Ok(issues)
 }
 
+/// Track data collected per album for analysis.
+struct TrackAlbumData {
+    track_id: i64,
+    artist: String,
+    album_artist: String,
+    album: String,
+    catalog_number: String,
+    isrc: String,
+}
+
 /// Query album/artist/album_artist data for all tracks.
-/// Returns: HashMap<normalized_album, Vec<(track_id, artist, album_artist, album)>>
+/// Also fetches catalog_number and isrc for release differentiation.
+/// Returns: HashMap<normalized_album, Vec<TrackAlbumData>>
 fn query_album_artist_data(
     db: &Database,
-) -> Result<HashMap<String, Vec<(i64, String, String, String)>>> {
-    // SQL to get tracks with album, artist, album_artist tags
+) -> Result<HashMap<String, Vec<TrackAlbumData>>> {
+    // SQL to get tracks with album, artist, album_artist, catalog_number, isrc tags
     // Using LEFT JOINs to handle missing tags
     let sql = r#"
         SELECT
             t.id as track_id,
             COALESCE(album.tag_value, '') as album,
             COALESCE(artist.tag_value, '') as artist,
-            COALESCE(album_artist.tag_value, '') as album_artist
+            COALESCE(album_artist.tag_value, '') as album_artist,
+            COALESCE(catalog.tag_value, '') as catalog_number,
+            COALESCE(isrc.tag_value, '') as isrc
         FROM tracks t
         LEFT JOIN track_tags album
             ON t.id = album.track_id AND LOWER(album.tag_name) = 'album'
@@ -135,28 +170,31 @@ fn query_album_artist_data(
             ON t.id = artist.track_id AND LOWER(artist.tag_name) = 'artist'
         LEFT JOIN track_tags album_artist
             ON t.id = album_artist.track_id AND LOWER(album_artist.tag_name) = 'album_artist'
+        LEFT JOIN track_tags catalog
+            ON t.id = catalog.track_id AND LOWER(catalog.tag_name) = 'catalognumber'
+        LEFT JOIN track_tags isrc
+            ON t.id = isrc.track_id AND LOWER(isrc.tag_name) = 'isrc'
         WHERE album.tag_value IS NOT NULL AND album.tag_value != ''
     "#;
 
     let mut stmt = db.conn.prepare(sql)?;
     let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-        ))
+        Ok(TrackAlbumData {
+            track_id: row.get(0)?,
+            album: row.get(1)?,
+            artist: row.get(2)?,
+            album_artist: row.get(3)?,
+            catalog_number: row.get(4)?,
+            isrc: row.get(5)?,
+        })
     })?;
 
-    let mut album_data: HashMap<String, Vec<(i64, String, String, String)>> = HashMap::new();
+    let mut album_data: HashMap<String, Vec<TrackAlbumData>> = HashMap::new();
 
     for row in rows {
-        let (track_id, album, artist, album_artist) = row?;
-        let normalized = normalize_album(&album);
-        album_data
-            .entry(normalized)
-            .or_default()
-            .push((track_id, artist, album_artist, album));
+        let data = row?;
+        let normalized = normalize_album(&data.album);
+        album_data.entry(normalized).or_default().push(data);
     }
 
     Ok(album_data)
@@ -168,3 +206,4 @@ fn normalize_album(album: &str) -> String {
     // Albums need less aggressive normalization than artists
     normalize_artist(album)
 }
+

@@ -119,6 +119,8 @@ pub enum SignalType {
     TagCanonicity,
     /// Album has tracks with different artists + missing/inconsistent album_artist
     InconsistentAlbumArtist,
+    /// Tag value contains separators that should be split into multiple values
+    CompoundTagValue,
 }
 
 impl SignalType {
@@ -149,6 +151,7 @@ impl SignalType {
             Self::DuplicateInode => "duplicate_inode",
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
+            Self::CompoundTagValue => "compound_tag_value",
         }
     }
 
@@ -179,6 +182,7 @@ impl SignalType {
             "duplicate_inode" => Some(Self::DuplicateInode),
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
+            "compound_tag_value" => Some(Self::CompoundTagValue),
 
             // Legacy DB values → map to new types
             "missing_from_disk" => Some(Self::MissingFile),
@@ -460,6 +464,10 @@ pub enum AggregateSignalType {
     /// Key: "{normalized_album}" (e.g., "clockwork hearts")
     /// Metadata: { "album": "...", "artist_variants": {...}, "album_artist_variants": {...}, "track_ids": [...] }
     InconsistentAlbumArtist,
+    /// Tag value contains separator characters needing to be split
+    /// Key: "{tag_name}:{compound_value_hash}" (e.g., "genre:abc123")
+    /// Metadata: { "tag_name", "compound_value", "split_parts": [...], "separator", "track_ids": [...] }
+    CompoundTagValue,
 }
 
 impl AggregateSignalType {
@@ -472,6 +480,7 @@ impl AggregateSignalType {
             Self::DeployConflict => "deploy_conflict",
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
+            Self::CompoundTagValue => "compound_tag_value",
         }
     }
 
@@ -484,6 +493,7 @@ impl AggregateSignalType {
             "deploy_conflict" => Some(Self::DeployConflict),
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
+            "compound_tag_value" => Some(Self::CompoundTagValue),
             _ => None,
         }
     }
@@ -615,13 +625,15 @@ pub struct CorpusFilesBucket {
     pub directory_breakdown: DirectoryBreakdown,
 }
 
-/// Bucket 2: Tag Squash - tag canonicity and album_artist issues
+/// Bucket 2: Tag Squash - tag canonicity, album_artist, and compound tag issues
 #[derive(Debug, Clone, Default)]
 pub struct TagSquashBucket {
     /// Tag canonicity issues grouped by tag name (e.g., "artist": 50 clusters)
     pub tag_canonicity: Vec<TagSquashEntry>,
     /// Inconsistent album_artist issues count
     pub inconsistent_album_artist_count: usize,
+    /// Compound tag values needing split (e.g., "Rock; Metal")
+    pub compound_tag_value_count: usize,
 }
 
 /// Entry for tag squash signals (grouped by tag name)

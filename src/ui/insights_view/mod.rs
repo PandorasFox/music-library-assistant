@@ -134,6 +134,7 @@ pub enum InsightType {
     // Tag resolution bucket entries
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
+    CompoundTagValue,
     // Library bucket entries
     LibraryStale,
     LibraryLeftover,
@@ -152,6 +153,8 @@ pub enum InsightAction {
     LaunchMissingFileResolution,
     /// Launch tag canonicity resolution flow
     LaunchTagCanonicityResolution,
+    /// Launch compound tag split flow
+    LaunchCompoundTagSplit,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -232,11 +235,24 @@ impl BucketEntry {
         }
     }
 
+    /// Create compound tag value entry
+    fn compound_tag_value(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::CompoundTagValue,
+            label: "Compound tag values".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::Green },
+            rank: 0,
+            action: InsightAction::LaunchCompoundTagSplit,
+        }
+    }
+
     /// Create "other signal" entry
     fn other(index: usize, label: &str, count: usize, signal_type: &str) -> Self {
         // Determine action based on signal type
         let action = match signal_type {
             "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
+            "CompoundTagValue" => InsightAction::LaunchCompoundTagSplit,
             _ => InsightAction::NotImplemented,
         };
 
@@ -381,6 +397,11 @@ impl CachedBucketEntries {
         // Add tag canonicity entries for each tag type
         for entry in &bucket.tag_canonicity {
             entries.push(BucketEntry::tag_canonicity(&entry.tag_name, entry.cluster_count));
+        }
+
+        // Add compound tag values if present
+        if bucket.compound_tag_value_count > 0 {
+            entries.push(BucketEntry::compound_tag_value(bucket.compound_tag_value_count));
         }
 
         entries

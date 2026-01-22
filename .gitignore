@@ -7,9 +7,6 @@ mla
 *.db
 *.txt
 
-# Config (may contain sensitive paths)
-config.kdl
-
 # IDE
 .vscode/
 .idea/
@@ -20,3 +17,6 @@ config.kdl
 # macOS
 .DS_Store
 ._*
+
+# claude lol
+.claude/

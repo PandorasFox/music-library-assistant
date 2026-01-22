@@ -652,7 +652,13 @@ impl App {
             }
         };
 
-        let state = tag_canonicity::TagCanonicalityState::new(data, pre_fill);
+        // Get group info from clusters (just set above)
+        let (group_index, total_groups) = self.tag_canonicity_clusters
+            .as_ref()
+            .map(|c| (c.current_index, c.signal_ids.len()))
+            .unwrap_or((0, 1));
+
+        let state = tag_canonicity::TagCanonicalityState::new(data, pre_fill, group_index, total_groups);
         self.tag_canonicity_state = Some(state);
         self.mode = UiMode::TagCanonicityResolution;
     }
@@ -793,11 +799,17 @@ impl App {
                 self.transition_to_progress_after_mutations(progress_screen::ProgressPhase::SignalRefresh);
             }
             tag_canonicity::TagCanonicityReviewAction::Cancel => {
+                // Just dismiss the review popup, return to resolution modal (keeps staged decisions)
+                self.tag_canonicity_review = None;
+                self.mode = UiMode::TagCanonicityResolution;
+            }
+            tag_canonicity::TagCanonicityReviewAction::Discard => {
                 // Discard the transaction and return to insights via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::discard_transaction(witch);
                 }
                 self.tag_canonicity_review = None;
+                self.tag_canonicity_state = None;
                 self.tag_canonicity_clusters = None;
                 self.start_insights_view();
             }
@@ -867,7 +879,13 @@ impl App {
         // Determine pre-fill based on signal type
         let pre_fill = agg_signal.signal_type == AggregateSignalType::TagCanonicity;
 
-        let state = tag_canonicity::TagCanonicalityState::new(data, pre_fill);
+        // Get group info from clusters
+        let (group_index, total_groups) = self.tag_canonicity_clusters
+            .as_ref()
+            .map(|c| (c.current_index, c.signal_ids.len()))
+            .unwrap_or((0, 1));
+
+        let state = tag_canonicity::TagCanonicalityState::new(data, pre_fill, group_index, total_groups);
         self.tag_canonicity_state = Some(state);
     }
 

@@ -27,11 +27,12 @@ pub fn render(f: &mut Frame, area: Rect, state: &TagCanonicalityState) {
     // Clear the background
     f.render_widget(Clear, modal_area);
 
-    // Build title
+    // Build title with group indicator
+    let group_indicator = format!(" ({}/{}) ", state.group_index + 1, state.total_groups);
     let title = if let Some(ref context) = state.data.context_label {
-        format!(" Set {} - {} ", state.data.tag_name, context)
+        format!(" Set {} - {}{}", state.data.tag_name, context, group_indicator)
     } else {
-        format!(" Squash \"{}\" variants ", state.data.tag_name)
+        format!(" Squash \"{}\" variants{}", state.data.tag_name, group_indicator)
     };
 
     let block = Block::default()
@@ -251,7 +252,7 @@ pub fn render_review(f: &mut Frame, area: Rect, state: &TagCanonicityReviewState
     render_review_buttons(f, chunks[2], state);
 
     // Render hints
-    let hints = "[↑↓] scroll  [Y/Enter] confirm  [N/Esc] cancel";
+    let hints = "[←→] select  [Enter] activate  [Y] confirm  [D] discard  [Esc] cancel";
     let hint = Paragraph::new(hints)
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
@@ -324,26 +325,36 @@ fn render_review_list(f: &mut Frame, area: Rect, state: &TagCanonicityReviewStat
     }
 }
 
-/// Render the Cancel/Confirm buttons.
+/// Render the Cancel/Discard/Confirm buttons.
 fn render_review_buttons(f: &mut Frame, area: Rect, state: &TagCanonicityReviewState) {
-    let cancel_style = if !state.confirm_focused {
+    use super::types::ReviewButtonFocus;
+
+    let cancel_style = if state.button_focus == ReviewButtonFocus::Cancel {
         Style::default().fg(Color::Black).bg(Color::White)
     } else {
         Style::default().fg(Color::White)
     };
 
-    let confirm_style = if state.confirm_focused {
+    let discard_style = if state.button_focus == ReviewButtonFocus::Discard {
+        Style::default().fg(Color::Black).bg(Color::Red)
+    } else {
+        Style::default().fg(Color::Red)
+    };
+
+    let confirm_style = if state.button_focus == ReviewButtonFocus::Confirm {
         Style::default().fg(Color::Black).bg(Color::Green)
     } else {
         Style::default().fg(Color::Green)
     };
 
     let buttons = Line::from(vec![
-        Span::raw("      "),
+        Span::raw("  "),
         Span::styled(" Cancel ", cancel_style),
-        Span::raw("   "),
+        Span::raw("  "),
+        Span::styled(" Discard ", discard_style),
+        Span::raw("  "),
         Span::styled(" Confirm ", confirm_style),
-        Span::raw("      "),
+        Span::raw("  "),
     ]);
 
     let buttons_para = Paragraph::new(buttons).alignment(Alignment::Center);

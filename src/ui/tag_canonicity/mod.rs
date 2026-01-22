@@ -24,8 +24,9 @@ pub mod types;
 
 pub use render::{render, render_review};
 pub use types::{
-    DecisionSummary, TagCanonicalityAction, TagCanonicalityModal, TagCanonicalityModalData,
-    TagCanonicalityState, TagCanonicityReviewAction, TagCanonicityReviewState, TagVariantEntry,
+    DecisionSummary, ReviewButtonFocus, TagCanonicalityAction, TagCanonicalityModal,
+    TagCanonicalityModalData, TagCanonicalityState, TagCanonicityReviewAction,
+    TagCanonicityReviewState, TagVariantEntry,
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -109,6 +110,8 @@ impl TagCanonicalityState {
 impl TagCanonicityReviewState {
     /// Handle keyboard input for the review screen.
     pub fn handle_key(&mut self, key: KeyEvent) -> TagCanonicityReviewAction {
+        use types::ReviewButtonFocus;
+
         match key.code {
             // Up/Down: Navigate decision list
             KeyCode::Up => {
@@ -124,29 +127,33 @@ impl TagCanonicityReviewState {
                 TagCanonicityReviewAction::None
             }
 
-            // Left/Right or Tab: Toggle button focus
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                self.toggle_focus();
+            // Left: Move focus left (Cancel <- Discard <- Confirm)
+            KeyCode::Left => {
+                self.focus_left();
+                TagCanonicityReviewAction::None
+            }
+
+            // Right/Tab: Move focus right (Cancel -> Discard -> Confirm)
+            KeyCode::Right | KeyCode::Tab => {
+                self.focus_right();
                 TagCanonicityReviewAction::None
             }
 
             // Enter: Activate focused button
-            KeyCode::Enter => {
-                if self.confirm_focused {
-                    TagCanonicityReviewAction::Confirm
-                } else {
-                    TagCanonicityReviewAction::Cancel
-                }
-            }
+            KeyCode::Enter => match self.button_focus {
+                ReviewButtonFocus::Confirm => TagCanonicityReviewAction::Confirm,
+                ReviewButtonFocus::Discard => TagCanonicityReviewAction::Discard,
+                ReviewButtonFocus::Cancel => TagCanonicityReviewAction::Cancel,
+            },
 
-            // Esc: Cancel
+            // Esc: Cancel (return to resolution modal)
             KeyCode::Esc => TagCanonicityReviewAction::Cancel,
 
             // Y: Quick confirm
             KeyCode::Char('y') | KeyCode::Char('Y') => TagCanonicityReviewAction::Confirm,
 
-            // N: Quick cancel
-            KeyCode::Char('n') | KeyCode::Char('N') => TagCanonicityReviewAction::Cancel,
+            // D: Quick discard
+            KeyCode::Char('d') | KeyCode::Char('D') => TagCanonicityReviewAction::Discard,
 
             _ => TagCanonicityReviewAction::None,
         }

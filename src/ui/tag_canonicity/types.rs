@@ -175,6 +175,10 @@ pub struct TagCanonicalityState {
     pub pre_filled: bool,
     /// Modal overlay (confirmation dialogs) - currently unused
     pub modal: TagCanonicalityModal,
+    /// Current group index (0-based)
+    pub group_index: usize,
+    /// Total number of groups
+    pub total_groups: usize,
 }
 
 impl TagCanonicalityState {
@@ -186,7 +190,9 @@ impl TagCanonicalityState {
     /// Layout: text field at top (cursor=-1), variant list below (cursor>=0).
     /// Default focus: first list item (cursor=0).
     /// All items selected initially.
-    pub fn new(data: TagCanonicalityModalData, pre_fill: bool) -> Self {
+    ///
+    /// `group_index` and `total_groups` are used to display "N of M" in the modal title.
+    pub fn new(data: TagCanonicalityModalData, pre_fill: bool, group_index: usize, total_groups: usize) -> Self {
         let canonical_value = if pre_fill {
             data.default_canonical()
         } else {
@@ -208,6 +214,8 @@ impl TagCanonicalityState {
             canonical_input,
             pre_filled: pre_fill,
             modal: TagCanonicalityModal::None,
+            group_index,
+            total_groups,
         }
     }
 
@@ -369,6 +377,18 @@ pub struct DecisionSummary {
     pub track_count: usize,
 }
 
+/// Which button is focused in the review screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReviewButtonFocus {
+    /// Cancel button (returns to resolution modal)
+    #[default]
+    Cancel,
+    /// Discard button (returns to Insights, discards all)
+    Discard,
+    /// Confirm button (executes all decisions)
+    Confirm,
+}
+
 /// State for the tag canonicity review screen.
 ///
 /// Shows all pending decisions before final confirmation.
@@ -378,8 +398,8 @@ pub struct TagCanonicityReviewState {
     pub decisions: Vec<DecisionSummary>,
     /// Currently highlighted decision (for potential future discard feature)
     pub cursor: usize,
-    /// Button focus: true = Confirm, false = Cancel
-    pub confirm_focused: bool,
+    /// Which button is focused
+    pub button_focus: ReviewButtonFocus,
 }
 
 impl TagCanonicityReviewState {
@@ -388,7 +408,7 @@ impl TagCanonicityReviewState {
         Self {
             decisions,
             cursor: 0,
-            confirm_focused: true, // Default to Confirm
+            button_focus: ReviewButtonFocus::Cancel, // Default to Cancel (safer choice)
         }
     }
 
@@ -402,9 +422,22 @@ impl TagCanonicityReviewState {
         self.decisions.iter().map(|d| d.track_count).sum()
     }
 
-    /// Toggle button focus between Cancel and Confirm.
-    pub fn toggle_focus(&mut self) {
-        self.confirm_focused = !self.confirm_focused;
+    /// Move button focus left (Cancel <- Discard <- Confirm).
+    pub fn focus_left(&mut self) {
+        self.button_focus = match self.button_focus {
+            ReviewButtonFocus::Confirm => ReviewButtonFocus::Discard,
+            ReviewButtonFocus::Discard => ReviewButtonFocus::Cancel,
+            ReviewButtonFocus::Cancel => ReviewButtonFocus::Cancel, // Already leftmost
+        };
+    }
+
+    /// Move button focus right (Cancel -> Discard -> Confirm).
+    pub fn focus_right(&mut self) {
+        self.button_focus = match self.button_focus {
+            ReviewButtonFocus::Cancel => ReviewButtonFocus::Discard,
+            ReviewButtonFocus::Discard => ReviewButtonFocus::Confirm,
+            ReviewButtonFocus::Confirm => ReviewButtonFocus::Confirm, // Already rightmost
+        };
     }
 }
 
@@ -415,6 +448,8 @@ pub enum TagCanonicityReviewAction {
     None,
     /// User confirmed - execute all decisions
     Confirm,
-    /// User cancelled - discard all decisions
+    /// User cancelled review - return to resolution modal (keeps staged decisions)
     Cancel,
+    /// User wants to discard all decisions and return to Insights
+    Discard,
 }

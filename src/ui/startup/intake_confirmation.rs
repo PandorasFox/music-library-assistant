@@ -21,6 +21,7 @@ use crate::ui::widgets::centered_rect_fixed;
 use crate::corpus::db::types::SignalType;
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
+use crate::corpus::paths;
 use crate::config::log_message;
 
 /// State for the intake confirmation modal.
@@ -78,26 +79,33 @@ impl IntakeConfirmationState {
             return None;
         }
 
-        // Each UnindexedFile signal has the file path as issue_key
+        // Each UnindexedFile signal has a relative file path as issue_key
+        // Resolve to absolute for filesystem operations
+        let resolver = paths::get_resolver();
         let mut all_paths: Vec<PathBuf> = Vec::new();
         let mut total_bytes: u64 = 0;
         let mut directories: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
         for issue in &issues {
-            let path = PathBuf::from(&issue.issue_key);
+            // Resolve relative signal key to absolute path
+            let rel_path = std::path::Path::new(&issue.issue_key);
+            let abs_path = match resolver.resolve(rel_path, source) {
+                Some(p) => p,
+                None => continue, // Skip if can't resolve (shouldn't happen)
+            };
 
             // Verify file still exists and get size
-            if path.exists() && path.is_file() {
-                if let Ok(meta) = std::fs::metadata(&path) {
+            if abs_path.exists() && abs_path.is_file() {
+                if let Ok(meta) = std::fs::metadata(&abs_path) {
                     total_bytes += meta.len();
                 }
 
                 // Track unique directories
-                if let Some(parent) = path.parent() {
+                if let Some(parent) = abs_path.parent() {
                     directories.insert(parent.to_path_buf());
                 }
 
-                all_paths.push(path);
+                all_paths.push(abs_path);
             }
         }
 

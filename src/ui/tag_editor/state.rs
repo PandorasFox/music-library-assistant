@@ -10,6 +10,7 @@ use std::path::Path;
 use crate::corpus::db::{Signal, Track};
 use crate::corpus::metadata;
 use crate::corpus::mutations::Mutation;
+use crate::corpus::paths;
 
 use super::types::{
     AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, GroupedChange,
@@ -2356,8 +2357,9 @@ impl std::fmt::Debug for UnifiedTagEditorState {
 
 /// Convert changes to mutations for the daemon
 fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation> {
-    use std::path::PathBuf;
     use crate::corpus::mutations::TagEdit;
+
+    let resolver = paths::get_resolver();
 
     // Group changes by track
     let mut track_changes: HashMap<usize, Vec<TagChange>> = HashMap::new();
@@ -2376,6 +2378,12 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation
             let track_id = match track.id {
                 Some(id) => id,
                 None => continue,
+            };
+
+            // Resolve relative DB path to absolute for filesystem operations
+            let abs_path = match resolver.resolve(Path::new(&track.path), &track.source) {
+                Some(p) => p,
+                None => continue, // Skip if path can't be resolved
             };
 
             let edits: Vec<TagEdit> = changes
@@ -2415,7 +2423,7 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation
 
             mutations.push(Mutation::TagEditAndFlush {
                 track_id,
-                path: PathBuf::from(&track.path),
+                path: abs_path,
                 edits,
             });
         }
@@ -2432,13 +2440,24 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation
 ///
 /// All tags are loaded from the audio file and sorted alphabetically.
 pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
-    let disk_path = Path::new(&track.path);
-    let all_tags = match metadata::read_all_tags(disk_path) {
+    let resolver = paths::get_resolver();
+    let disk_path = match resolver.resolve(Path::new(&track.path), &track.source) {
+        Some(p) => p,
+        None => {
+            let _ = crate::config::log_message(&format!(
+                "Warning: Could not resolve path for track: {}",
+                track.path
+            ));
+            return Vec::new();
+        }
+    };
+
+    let all_tags = match metadata::read_all_tags(&disk_path) {
         Ok(tags) => tags,
         Err(e) => {
             let _ = crate::config::log_message(&format!(
                 "Warning: Could not read tags from {}: {}",
-                track.path, e
+                disk_path.display(), e
             ));
             Vec::new()
         }

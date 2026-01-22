@@ -16,6 +16,7 @@ use crate::corpus::computations::helpers::{
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{CorpusFileSignalType, LibraryFileSignalType};
 use crate::corpus::db::Database;
+use crate::corpus::paths;
 use crate::db_thread;
 
 use super::{Computation, Result};
@@ -210,7 +211,13 @@ pub fn execute_update_corpus_file_signals(
         }
     };
 
-    let path_str = path.to_string_lossy().to_string();
+    // Convert absolute path to relative for DB queries and signal keys
+    let resolver = paths::get_resolver();
+    let relative_path = resolver
+        .to_relative_corpus(path)
+        .unwrap_or_else(|| path.to_path_buf());
+    let path_str = relative_path.to_string_lossy().to_string();
+
     let file_exists = path.exists() && is_audio_file(path);
     let is_indexed = read_only_db.get_track_by_path(&path_str).ok().flatten().is_some();
 
@@ -267,7 +274,12 @@ pub fn execute_update_library_file_signals(
         }
     };
 
-    let path_str = path.to_string_lossy().to_string();
+    // Convert absolute path to relative for signal keys
+    let resolver = paths::get_resolver();
+    let relative_path = resolver
+        .to_relative_library(path)
+        .unwrap_or_else(|| path.to_path_buf());
+    let path_str = relative_path.to_string_lossy().to_string();
 
     // For library files, we check if the file exists and clear any leftover/stale signals
     // The full library health is recomputed during the Awake phase
@@ -399,17 +411,28 @@ pub fn execute_scan_library_directory(
 
     // Store library scan results via db_thread for Awake phase to process
     if !library_files.is_empty() {
+        let resolver = paths::get_resolver();
         let scanned_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
+        // Convert library_root to relative (relative to libraries_root)
+        let relative_library_root = resolver
+            .to_relative_library(library_root)
+            .unwrap_or_else(|| library_root.to_path_buf());
+
         for (file_path, inode) in &library_files {
+            // Convert file_path to relative (relative to libraries_root)
+            let relative_file_path = resolver
+                .to_relative_library(file_path)
+                .unwrap_or_else(|| file_path.clone());
+
             // Routes through db_thread which has write access
             sender.record_library_file(
                 library_name,
-                library_root,
-                file_path,
+                &relative_library_root,
+                &relative_file_path,
                 *inode,
                 scanned_at,
                 witness,
@@ -456,8 +479,17 @@ pub fn execute_update_deploy_signals(
         }
     };
 
-    let library_path_str = library_path.to_string_lossy().to_string();
-    let corpus_path_str = corpus_path.to_string_lossy().to_string();
+    // Convert absolute paths to relative for DB queries and signal keys
+    let resolver = paths::get_resolver();
+    let relative_library_path = resolver
+        .to_relative_library(library_path)
+        .unwrap_or_else(|| library_path.to_path_buf());
+    let relative_corpus_path = resolver
+        .to_relative_corpus(corpus_path)
+        .unwrap_or_else(|| corpus_path.to_path_buf());
+
+    let library_path_str = relative_library_path.to_string_lossy().to_string();
+    let corpus_path_str = relative_corpus_path.to_string_lossy().to_string();
 
     // Clear library-side signals for this path (any library name)
     // These use keys like "library_leftover:{name}:{path}" so we need to find and clear them
@@ -472,7 +504,7 @@ pub fn execute_update_deploy_signals(
         witness,
     );
 
-    // Ensure DeployedHealthy with library_path in metadata
+    // Ensure DeployedHealthy with library_path in metadata (store relative path)
     let metadata = serde_json::json!({
         "library_path": library_path_str,
     });

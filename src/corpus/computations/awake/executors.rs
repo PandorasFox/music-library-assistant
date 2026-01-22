@@ -18,6 +18,7 @@ use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, LibraryFileSignalType, SignalType};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::Database;
+use crate::corpus::paths;
 use crate::db_thread;
 
 use super::{Computation, Result};
@@ -706,17 +707,19 @@ pub fn execute_verify_out_of_band_changes(
         }
     };
 
+    let resolver = paths::get_resolver();
     let mut verified_count = 0;
     let mut tag_change_count = 0;
     let mut mtime_only_count = 0;
 
     for signal in oob_signals {
-        let path = &signal.issue_key;
+        // Signal issue_key is a relative path (stored in DB)
+        let rel_path = &signal.issue_key;
 
-        let track = match read_only_db.get_track_by_path(path) {
+        let track = match read_only_db.get_track_by_path(rel_path) {
             Ok(Some(t)) => t,
             Ok(None) => {
-                sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), path, witness);
+                sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), rel_path, witness);
                 continue;
             }
             Err(_) => continue,
@@ -727,10 +730,16 @@ pub fn execute_verify_out_of_band_changes(
             None => continue,
         };
 
-        if let Err(e) = execute_verify_tags(read_only_db, track_id, Path::new(path)) {
+        // Resolve relative path to absolute for filesystem operations
+        let abs_path = match resolver.resolve(Path::new(rel_path), &track.source) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        if let Err(e) = execute_verify_tags(read_only_db, track_id, &abs_path) {
             let _ = log_message(&format!(
                 "[COMPUTE] VerifyOutOfBandChanges: error verifying {}: {}",
-                path, e
+                rel_path, e
             ));
             continue;
         }
@@ -747,18 +756,18 @@ pub fn execute_verify_out_of_band_changes(
 
         if mismatch_count > 0 {
             tag_change_count += 1;
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagChange.into(), path, witness);
+            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagChange.into(), rel_path, witness);
         } else {
             mtime_only_count += 1;
-            sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), path, witness);
+            sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), rel_path, witness);
 
-            let file_path = Path::new(path);
-            if let Ok(metadata) = std::fs::metadata(file_path) {
+            // Use absolute path for filesystem metadata read
+            if let Ok(metadata) = std::fs::metadata(&abs_path) {
                 let mtime_secs = metadata.mtime();
                 let mtime_nanos = metadata.mtime_nsec() as i64;
 
-                // Routes through db_thread which has write access
-                sender.update_scan_state_mtime(path, mtime_secs, mtime_nanos, witness);
+                // Routes through db_thread which has write access (uses relative path)
+                sender.update_scan_state_mtime(rel_path, mtime_secs, mtime_nanos, witness);
             }
         }
     }
@@ -963,14 +972,23 @@ pub fn execute_derive_deploy_health_signals(
                         .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
                         .collect();
 
+                    // Compute expected relative path within the library
                     let expected_relative = compute_deployment_path_with_tags(&track, &tag_map);
-                    let expected_path = library_root.join(&expected_relative);
 
-                    if library_path != &expected_path {
-                        // Stale: store all needed info in metadata
+                    // library_path is relative to libraries_root (from DB after migration)
+                    // It includes the library name prefix, e.g., "music/Artist/Album/track.mp3"
+                    // expected_relative is just "Artist/Album/track.mp3" (no library prefix)
+                    // So we need to compare the suffix of library_path with expected_relative
+                    let library_path_suffix = library_path
+                        .strip_prefix(library_name)
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|_| library_path.clone());
+
+                    if library_path_suffix != expected_relative {
+                        // Stale: store relative paths in metadata
                         Some(serde_json::json!({
                             "library_path": library_path.to_string_lossy(),
-                            "expected_path": expected_path.to_string_lossy(),
+                            "expected_path": expected_relative.to_string_lossy(),
                             "corpus_path": corpus_path,
                             "track_id": track_id
                         }))
@@ -1153,7 +1171,7 @@ pub fn execute_derive_corpus_deploy_status(
             // File is not deployed (or deployed but stale)
             deploy_ready_count += 1;
 
-            // Compute the deploy path for this track
+            // Compute the deploy path for this track (relative)
             let deploy_path = if let Some(track_id) = track.id {
                 // Get track tags and build tag_map
                 let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
@@ -1161,14 +1179,14 @@ pub fn execute_derive_corpus_deploy_status(
                     .into_iter()
                     .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
                     .collect();
-                // Compute relative deploy path and make absolute
-                let relative_path = compute_deployment_path_with_tags(&track, &tag_map);
-                config.libraries_root.join(&relative_path)
+                // Compute relative deploy path (relative to library root)
+                compute_deployment_path_with_tags(&track, &tag_map)
             } else {
                 // Fallback: no track_id, use empty path (shouldn't happen)
                 std::path::PathBuf::new()
             };
 
+            // Store relative path in metadata
             let metadata = serde_json::json!({
                 "deploy_path": deploy_path.to_string_lossy(),
             });

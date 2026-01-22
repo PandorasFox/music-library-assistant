@@ -3,19 +3,36 @@
 //! Functions for launching and navigating the unified tag editor in various
 //! contexts (single file, bulk edit, directory edit, tag search results).
 
+use crate::corpus::paths;
 use crate::ui::tag_editor;
 use crate::ui::types::UiMode;
 use super::App;
 
 impl App {
     /// Start tag editor for a file path (from tree browser or external trigger).
+    ///
+    /// The input path is an absolute filesystem path. We convert to relative
+    /// for database queries since the DB stores paths relative to corpus_root.
     pub(super) fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
         let db = self.db();
+        let resolver = paths::get_resolver();
 
-        // Load tracks from database
+        // Convert absolute path to relative for DB queries (corpus browser uses corpus paths)
+        let rel_path = match resolver.to_relative_corpus(path) {
+            Some(p) => p,
+            None => {
+                self.abort_to_insights(format!(
+                    "Path not in corpus: {}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+
+        // Load tracks from database using relative path
         let (tracks, selected_idx) = if recursive {
             // Get all tracks in directory and subdirectories (no fingerprint filter)
-            match db.get_tracks_for_tag_editing(path) {
+            match db.get_tracks_for_tag_editing(&rel_path) {
                 Ok(t) => (t, 0usize),
                 Err(e) => {
                     self.abort_to_insights(format!(
@@ -28,7 +45,7 @@ impl App {
             }
         } else {
             // Get all tracks in the same directory for cycling with tab/shift-tab
-            let parent_dir = match path.parent() {
+            let rel_parent = match rel_path.parent() {
                 Some(p) => p,
                 None => {
                     self.abort_to_insights(format!(
@@ -40,12 +57,12 @@ impl App {
             };
 
             // Load all tracks from parent directory (non-recursive, just this folder)
-            let dir_tracks = match db.get_tracks_for_tag_editing(parent_dir) {
+            let dir_tracks = match db.get_tracks_for_tag_editing(rel_parent) {
                 Ok(t) => t,
                 Err(e) => {
                     self.abort_to_insights(format!(
                         "Query error for directory '{}': {}",
-                        parent_dir.display(),
+                        path.display(),
                         e
                     ));
                     return;
@@ -53,31 +70,30 @@ impl App {
             };
 
             // Filter to only tracks directly in this directory (not subdirectories)
-            let path_str = path.to_string_lossy().to_string();
-            let parent_str = parent_dir.to_string_lossy().to_string();
+            let rel_path_str = rel_path.to_string_lossy().to_string();
+            let rel_parent_str = rel_parent.to_string_lossy().to_string();
             let tracks_in_dir: Vec<_> = dir_tracks
                 .into_iter()
                 .filter(|t| {
-                    // Check if track is directly in parent_dir (no additional path separators)
-                    if let Some(rel) = t.path.strip_prefix(&parent_str) {
-                        let rel = rel.trim_start_matches(std::path::MAIN_SEPARATOR);
-                        !rel.contains(std::path::MAIN_SEPARATOR)
+                    // Check if track is directly in rel_parent (no additional path separators)
+                    if let Some(suffix) = t.path.strip_prefix(&rel_parent_str) {
+                        let suffix = suffix.trim_start_matches(std::path::MAIN_SEPARATOR);
+                        !suffix.contains(std::path::MAIN_SEPARATOR)
                     } else {
                         false
                     }
                 })
                 .collect();
 
-            // Find the index of the selected track
+            // Find the index of the selected track (comparing relative paths)
             let selected_idx = tracks_in_dir
                 .iter()
-                .position(|t| t.path == path_str)
+                .position(|t| t.path == rel_path_str)
                 .unwrap_or(0);
 
             if tracks_in_dir.is_empty() {
                 // Fallback: try to get just the single track
-                let path_str = path.to_string_lossy();
-                match db.get_track_by_path(&path_str) {
+                match db.get_track_by_path(&rel_path_str) {
                     Ok(Some(track)) => (vec![track], 0),
                     Ok(None) => {
                         self.abort_to_insights(format!(
@@ -187,12 +203,27 @@ impl App {
         self.mode = UiMode::UnifiedTagEditor;
     }
 
-    /// Open the unified tag editor for a directory path
+    /// Open the unified tag editor for a directory path.
+    ///
+    /// The input is an absolute filesystem path. We convert to relative for DB queries.
     pub(super) fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
         // Query database for tracks in this directory
         let db = self.db();
+        let resolver = paths::get_resolver();
 
-        let tracks = match db.get_tracks_for_tag_editing(directory) {
+        // Convert absolute path to relative for DB query
+        let rel_dir = match resolver.to_relative_corpus(directory) {
+            Some(p) => p,
+            None => {
+                self.status_message = Some(format!(
+                    "Directory not in corpus: {}",
+                    directory.display()
+                ));
+                return;
+            }
+        };
+
+        let tracks = match db.get_tracks_for_tag_editing(&rel_dir) {
             Ok(tracks) => tracks,
             Err(e) => {
                 self.status_message = Some(format!("Failed to query tracks: {}", e));

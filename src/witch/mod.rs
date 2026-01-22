@@ -23,10 +23,11 @@ use chrono::{DateTime, Utc};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use crate::config;
+use crate::config::{self, Config};
 use crate::corpus::computations::{Computation, asleep, awakening, awake};
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
+use crate::corpus::paths::PathResolver;
 use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
 
 // Module declarations
@@ -137,13 +138,17 @@ pub struct Witch {
     /// Background cache for UI read queries.
     /// UI calls want_*() methods, the Witch spawns refresh tasks in tick().
     ui_read_cache: UiReadCache,
+
+    /// Path resolver for converting between absolute filesystem paths and
+    /// relative database paths. Created from Config at startup.
+    path_resolver: PathResolver,
 }
 
 impl Witch {
     /// Linger duration for completed session display.
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
-    pub fn new() -> Self {
+    pub fn new(cfg: &Config) -> Self {
         // Use rayon's global thread pool with work-stealing for better performance.
         // Thread count from config (default: 2x logical cores for I/O-bound workloads).
         let num_threads = config::get_worker_thread_count();
@@ -197,6 +202,7 @@ impl Witch {
             db_thread_handle,
             worker_stats_shared,
             ui_read_cache: UiReadCache::new(),
+            path_resolver: PathResolver::new(cfg),
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
@@ -212,8 +218,8 @@ impl Witch {
     }
 
     /// Create a new Witch with opinions applied.
-    pub fn with_opinions(read_only_mode: bool, freshen_last_stage_at_startup: bool) -> Self {
-        let mut she = Self::new();
+    pub fn with_opinions(cfg: &Config, read_only_mode: bool, freshen_last_stage_at_startup: bool) -> Self {
+        let mut she = Self::new(cfg);
         she.read_only_mode = read_only_mode;
         she.freshen_last_stage_at_startup = freshen_last_stage_at_startup;
         if freshen_last_stage_at_startup {
@@ -978,6 +984,11 @@ impl Witch {
         &self.ui_read_cache
     }
 
+    /// Get the path resolver for converting between absolute and relative paths.
+    pub fn path_resolver(&self) -> &PathResolver {
+        &self.path_resolver
+    }
+
     /// Check if there's a lingering completed session to display.
     pub fn has_completed_session(&self) -> bool {
         self.state == TaskExecutionState::Completed
@@ -994,8 +1005,4 @@ impl Witch {
     }
 }
 
-impl Default for Witch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Note: Witch no longer implements Default because it requires Config for PathResolver

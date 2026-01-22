@@ -398,11 +398,8 @@ impl App {
     /// Get or create the Witch.
     pub(super) fn witch(&mut self) -> &mut crate::witch::Witch {
         if self.witch.is_none() {
-            // Load startup opinions from config
-            let (read_only, force_freshen) = crate::config::load_config()
-                .map(|c| (false, c.opinions.startup.freshen_last_stage_at_startup))
-                .unwrap_or((false, false));
-            self.witch = Some(crate::witch::Witch::with_opinions(read_only, force_freshen));
+            let force_freshen = self.config.opinions.startup.freshen_last_stage_at_startup;
+            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_freshen));
         }
         self.witch.as_mut().unwrap()
     }

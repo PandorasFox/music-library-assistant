@@ -18,6 +18,7 @@ pub mod eyeballing;
 pub mod health;
 pub mod metadata;
 pub mod mutations;
+pub mod paths;
 
 
 

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::corpus::db::Database;
+use crate::corpus::paths;
 
 /// A missing corpus file that can be restored from library.
 ///
@@ -121,12 +122,23 @@ impl MissingFileModalData {
     }
 
     /// Generate HardLink mutations for restorable files.
+    ///
+    /// Paths stored in RestorableMissingFile are relative to their roots:
+    /// - library_path: relative to libraries_root
+    /// - corpus_path: relative to corpus_root
+    /// These must be resolved to absolute for HardLink filesystem operations.
     pub fn restore_mutations(&self) -> Vec<crate::corpus::mutations::Mutation> {
+        let resolver = paths::get_resolver();
         self.restorable
             .iter()
-            .map(|f| crate::corpus::mutations::Mutation::HardLink {
-                source: PathBuf::from(&f.library_path),
-                destination: PathBuf::from(&f.corpus_path),
+            .filter_map(|f| {
+                // Resolve relative paths to absolute
+                let source = resolver.resolve_library(std::path::Path::new(&f.library_path));
+                let destination = resolver.resolve_corpus(std::path::Path::new(&f.corpus_path));
+                Some(crate::corpus::mutations::Mutation::HardLink {
+                    source,
+                    destination,
+                })
             })
             .collect()
     }

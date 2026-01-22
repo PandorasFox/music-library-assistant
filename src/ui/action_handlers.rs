@@ -5,6 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::config;
+use crate::corpus::paths;
 use crate::ui::{insights_view, missing_file_flow, progress_screen, tag_canonicity, tag_search, tree_browser, tag_editor, deploy_flow, startup};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
@@ -424,13 +425,18 @@ impl App {
     /// Execute deploy mutations from the cached data.
     ///
     /// Returns the number of mutations queued.
+    ///
+    /// Paths in the signal data are relative to their roots:
+    /// - corpus_path: relative to corpus_root
+    /// - deploy_path/library_path/expected_path: relative to libraries_root
+    /// These must be resolved to absolute for filesystem mutations.
     fn execute_deploy_mutations(&mut self, data: &deploy_flow::DeployModalData) -> usize {
         use crate::corpus::mutations::Mutation;
-        use std::path::PathBuf;
 
         let Some(ref mut witch) = self.witch else {
             return 0;
         };
+        let resolver = paths::get_resolver();
         let mut mutations = Vec::new();
 
         // New files: create hard links
@@ -439,24 +445,24 @@ impl App {
             if file.deploy_path.is_empty() {
                 continue;
             }
-            mutations.push(Mutation::HardLink {
-                source: PathBuf::from(&file.corpus_path),
-                destination: PathBuf::from(&file.deploy_path),
-            });
+            // Resolve relative paths to absolute
+            let source = resolver.resolve_corpus(std::path::Path::new(&file.corpus_path));
+            let destination = resolver.resolve_library(std::path::Path::new(&file.deploy_path));
+            mutations.push(Mutation::HardLink { source, destination });
         }
 
         // Stale files: move from wrong path to correct path
         for file in &data.stale {
-            mutations.push(Mutation::LibraryMove {
-                source: PathBuf::from(&file.library_path),
-                destination: PathBuf::from(&file.expected_path),
-            });
+            let source = resolver.resolve_library(std::path::Path::new(&file.library_path));
+            let destination = resolver.resolve_library(std::path::Path::new(&file.expected_path));
+            mutations.push(Mutation::LibraryMove { source, destination });
         }
 
         // Leftover files: move to stash (preserve data, never destroy)
         for file in &data.leftover {
+            let path = resolver.resolve_library(std::path::Path::new(&file.library_path));
             mutations.push(Mutation::MoveToStash {
-                path: PathBuf::from(&file.library_path),
+                path,
                 track_id: None, // No corpus backing
                 stash_name: "library_leftovers".to_string(),
             });
@@ -469,10 +475,9 @@ impl App {
                 .iter()
                 .min_by(|a, b| a.0.cmp(&b.0))
             {
-                mutations.push(Mutation::HardLink {
-                    source: PathBuf::from(corpus_path),
-                    destination: PathBuf::from(&group.deploy_path),
-                });
+                let source = resolver.resolve_corpus(std::path::Path::new(corpus_path));
+                let destination = resolver.resolve_library(std::path::Path::new(&group.deploy_path));
+                mutations.push(Mutation::HardLink { source, destination });
             }
         }
 
@@ -902,12 +907,16 @@ impl App {
             return;
         };
 
-        // Get track paths from database
+        // Get track paths from database (resolved to absolute for mutations)
         let db = witch.read_only_db();
+        let resolver = paths::get_resolver();
         let mut track_paths = std::collections::HashMap::new();
         for &track_id in &state.data.track_ids {
             if let Ok(Some(track)) = db.get_track_by_id(track_id) {
-                track_paths.insert(track_id, std::path::PathBuf::from(&track.path));
+                // Resolve relative DB path to absolute for filesystem operations
+                if let Some(abs_path) = resolver.resolve(std::path::Path::new(&track.path), &track.source) {
+                    track_paths.insert(track_id, abs_path);
+                }
             }
         }
 

@@ -15,6 +15,7 @@ use crate::corpus::computations::helpers::{
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::CorpusFileSignalType;
 use crate::corpus::db::Database;
+use crate::corpus::paths;
 use crate::db_thread;
 
 use super::{Computation, Result};
@@ -169,26 +170,36 @@ pub fn execute_scan_corpus_directory(
     let indexed_by_inode = read_only_db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
     let mut spawn: Vec<Computation> = Vec::new();
+    let resolver = paths::get_resolver();
 
     // Process each file found on disk
     for (inode, path, disk_mtime_s, disk_mtime_ns) in &disk_state {
-        let path_str = path.to_string_lossy().to_string();
+        // Convert absolute path to relative for DB queries and signal keys
+        let relative_path = match resolver.to_relative(path, source) {
+            Some(rel) => rel,
+            None => {
+                // Path doesn't match expected root - skip
+                continue;
+            }
+        };
+        let relative_path_str = relative_path.to_string_lossy().to_string();
 
-        // Create FileInCorpus signal for every file on disk
+        // Create FileInCorpus signal for every file on disk (with relative key)
         // (ClearExistingObservationState cleared all stale signals at start of observation)
-        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
+        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &relative_path_str, witness);
 
         // Check if file is indexed and needs mtime verification
         if let Some(entry) = indexed_by_inode.get(inode) {
             // File is indexed - check if mtime changed
             if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
-                let track = match read_only_db.get_track_by_path(&path_str) {
+                let track = match read_only_db.get_track_by_path(&relative_path_str) {
                     Ok(Some(t)) => t,
                     _ => continue,
                 };
                 let Some(track_id) = track.id else { continue };
 
                 // Mtime mismatched - verify tags
+                // Note: path in Computation is still absolute for filesystem operations
                 spawn.push(Computation::VerifyMtime {
                     track_id,
                     path: path.clone(),
@@ -290,10 +301,16 @@ pub fn execute_compare_inodes(
 
     // Create UnindexedFile signals (disk files not indexed)
     if !missing_from_index.is_empty() {
+        let resolver = paths::get_resolver();
         let missing_paths: Vec<String> = missing_from_index
             .iter()
             .filter_map(|inode| disk_inode_to_state.get(inode))
-            .map(|(path, _, _)| path.to_string_lossy().to_string())
+            .filter_map(|(path, _, _)| {
+                // Convert absolute path to relative for signal key
+                resolver
+                    .to_relative(path, source)
+                    .map(|rel| rel.to_string_lossy().to_string())
+            })
             .collect();
         create_unindexed_file_issues(read_only_db, &missing_paths, witness);
     }
@@ -305,6 +322,7 @@ pub fn execute_compare_inodes(
     let inode_vec: Vec<i64> = indexed_inodes.iter().copied().collect();
     let indexed_by_inode = read_only_db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
 
+    let resolver = paths::get_resolver();
     for (inode, path, disk_mtime_s, disk_mtime_ns) in disk_state {
         // Skip files not in index (already reported as UnindexedFile)
         let Some(entry) = indexed_by_inode.get(inode) else {
@@ -313,13 +331,20 @@ pub fn execute_compare_inodes(
 
         // Only verify if mtime mismatched
         if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
+            // Convert to relative for DB query (DB stores relative paths)
+            let relative_path = match resolver.to_relative(path, source) {
+                Some(rel) => rel,
+                None => continue,
+            };
+
             // Get track_id for this path
-            let track = match read_only_db.get_track_by_path(&path.to_string_lossy()) {
+            let track = match read_only_db.get_track_by_path(&relative_path.to_string_lossy()) {
                 Ok(Some(t)) => t,
                 _ => continue,
             };
             let Some(track_id) = track.id else { continue };
 
+            // Note: path in Computation is absolute for filesystem operations
             spawn.push(Computation::VerifyMtime {
                 track_id,
                 path: path.clone(),

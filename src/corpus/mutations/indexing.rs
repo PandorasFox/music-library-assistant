@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::corpus::db::{Database, ScanStateEntry, Track};
+use crate::corpus::paths;
 use crate::witch::MutationExecutionWitness;
 
 use super::types::{ExtractedMetadata, Mutation, MutationResult};
@@ -25,10 +26,23 @@ pub fn execute_index_track(
     source: &str,
     metadata: &ExtractedMetadata,
 ) -> Result<i64> {
+    let resolver = paths::get_resolver();
+
+    // Convert absolute path to relative for storage
+    let relative_path = resolver
+        .to_relative(path, source)
+        .with_context(|| {
+            format!(
+                "Path {} does not match {} root. Check config.kdl roots.",
+                path.display(),
+                source
+            )
+        })?;
+
     // Build Track from ExtractedMetadata (audio/file metadata only)
     let track = Track {
         id: None,
-        path: path.to_string_lossy().to_string(),
+        path: relative_path.to_string_lossy().to_string(),
         source: source.to_string(),
         inode: metadata.inode,
         file_size: metadata.file_size,
@@ -89,10 +103,23 @@ pub fn execute_update_scan_state(
     file_size: u64,
     path: &Path,
 ) -> Result<()> {
+    let resolver = paths::get_resolver();
+
+    // Convert absolute path to relative for storage
+    let relative_path = resolver
+        .to_relative(path, source)
+        .with_context(|| {
+            format!(
+                "Path {} does not match {} root. Check config.kdl roots.",
+                path.display(),
+                source
+            )
+        })?;
+
     let entry = ScanStateEntry {
         source: source.to_string(),
         inode: inode as i64,
-        path: path.to_string_lossy().to_string(),
+        path: relative_path.to_string_lossy().to_string(),
         mtime_secs,
         mtime_nanos,
         file_size: file_size as i64,
@@ -124,8 +151,29 @@ pub fn execute_cleanup_stale(
 // ============================================================================
 
 /// Execute UpdateTrackPath mutation - update path for relocated file.
+///
+/// Note: This function needs the source to determine which root to use for
+/// relative path conversion. It fetches the track's source from the database.
 pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path) -> Result<()> {
-    db.update_track_path(track_id, new_path.to_string_lossy().as_ref())
+    let resolver = paths::get_resolver();
+
+    // Get track's source to determine which root to use
+    let track = db
+        .get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Convert absolute path to relative for storage
+    let relative_path = resolver
+        .to_relative(new_path, &track.source)
+        .with_context(|| {
+            format!(
+                "Path {} does not match {} root. Check config.kdl roots.",
+                new_path.display(),
+                track.source
+            )
+        })?;
+
+    db.update_track_path(track_id, relative_path.to_string_lossy().as_ref())
         .context("Failed to update track path")
 }
 
@@ -136,7 +184,20 @@ pub fn execute_update_scan_state_path(
     inode: i64,
     new_path: &Path,
 ) -> Result<()> {
-    db.update_scan_state_path(source, inode, new_path.to_string_lossy().as_ref())
+    let resolver = paths::get_resolver();
+
+    // Convert absolute path to relative for storage
+    let relative_path = resolver
+        .to_relative(new_path, source)
+        .with_context(|| {
+            format!(
+                "Path {} does not match {} root. Check config.kdl roots.",
+                new_path.display(),
+                source
+            )
+        })?;
+
+    db.update_scan_state_path(source, inode, relative_path.to_string_lossy().as_ref())
         .context("Failed to update scan state path")
 }
 
@@ -167,11 +228,29 @@ pub fn execute_update_track(
     path: &Path,
     metadata: &ExtractedMetadata,
 ) -> Result<()> {
+    let resolver = paths::get_resolver();
+
+    // Get existing track to preserve source
+    let existing = db
+        .get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Convert absolute path to relative for storage
+    let relative_path = resolver
+        .to_relative(path, &existing.source)
+        .with_context(|| {
+            format!(
+                "Path {} does not match {} root. Check config.kdl roots.",
+                path.display(),
+                existing.source
+            )
+        })?;
+
     // Build Track from ExtractedMetadata (audio/file metadata only)
     let track = Track {
         id: Some(track_id),
-        path: path.to_string_lossy().to_string(),
-        source: "corpus".to_string(), // Will be overwritten by existing
+        path: relative_path.to_string_lossy().to_string(),
+        source: existing.source, // Preserve original source
         inode: metadata.inode,
         file_size: metadata.file_size,
         file_type: metadata.file_type.clone(),

@@ -24,8 +24,7 @@ pub mod types;
 
 pub use render::render;
 pub use types::{
-    TagCanonicalityAction, TagCanonicalityModal, TagCanonicalityModalData,
-    TagCanonicalityState,
+    TagCanonicalityAction, TagCanonicalityModalData, TagCanonicalityState,
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

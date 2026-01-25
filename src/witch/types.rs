@@ -261,11 +261,10 @@ impl<'a> DecisionScope<'a> {
 // All decision authority now flows through Witch::with_operator_decision()
 // which should ONLY be called from ui/operator_decisions.rs.
 //
-// If you need to make a decision, use one of the functions in operator_decisions.rs:
-//   - operator_decisions::stage_decision()
-//   - operator_decisions::commit_transaction()
-//   - operator_decisions::discard_transaction()
-//   - operator_decisions::execute_single_decision()
+// Transaction flow for mutations:
+//   1. operator_decisions::start_transaction()
+//   2. operator_decisions::stage_decision() - repeat for each decision
+//   3. operator_decisions::commit_transaction() or discard_transaction()
 
 /// Create a MigrationWitness for startup migrations (pre-Witch context).
 ///

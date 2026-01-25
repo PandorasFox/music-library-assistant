@@ -17,7 +17,4 @@ pub mod types;
 
 // Unified tag editor exports (transaction-based API)
 pub use state::UnifiedTagEditorState;
-pub use types::{
-    GroupContext, TagEditorSource,
-    UnifiedTagEditorAction, UnifiedTagEditorModal,
-};
+pub use types::{GroupContext, TagEditorSource, UnifiedTagEditorAction};

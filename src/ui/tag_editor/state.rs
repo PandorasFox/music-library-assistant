@@ -1581,10 +1581,16 @@ impl UnifiedTagEditorState {
             .map(|(idx, field)| {
                 let is_current = idx == self.current_field_idx;
 
-                // Check if modified
+                // Check if modified: field is unmodified if an original (name, value) pair exists
+                // This correctly handles multi-value tags (e.g., multiple Genre entries)
                 let is_modified = original_fields
-                    .and_then(|orig| orig.iter().find(|o| o.name == field.name))
-                    .map(|orig| orig.value != field.value || orig.name != field.name)
+                    .map(|orig| {
+                        !orig.iter().any(|o| {
+                            o.name.eq_ignore_ascii_case(&field.name)
+                                && o.value == field.value
+                                && !o.deleted
+                        })
+                    })
                     .unwrap_or(true);
 
                 let name_display = if is_current && matches!(self.field_edit_state, FieldEditState::EditingName) {

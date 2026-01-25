@@ -55,6 +55,68 @@ fn execute_disk_only(path: &Path, tags: &[(String, String)]) -> Result<()> {
     write_tags_to_disk_only(path, &merged)
 }
 
+/// Filter out no-op edits where old_value equals new_value.
+///
+/// These edits would have no effect and waste I/O. This commonly happens when:
+/// - User opens tag editor and closes without changes
+/// - User edits a value and then reverts it
+/// - Bulk operations include unchanged tags
+fn filter_nop_edits(edits: &[TagEdit]) -> Vec<TagEdit> {
+    edits
+        .iter()
+        .filter(|edit| edit.old_value != edit.new_value)
+        .cloned()
+        .collect()
+}
+
+/// Validate that all edits with old_value have matching tags on disk.
+///
+/// Returns error if any expected old_value is not found, indicating
+/// the file was modified externally since the editor was opened.
+///
+/// This ensures the read-edit-write cycle is consistent and prevents
+/// applying stale edits to files that have changed.
+fn validate_edits_against_current(
+    edits: &[TagEdit],
+    current_tags: &[(String, String)],
+    path: &Path,
+) -> Result<()> {
+    for edit in edits {
+        if let Some(ref expected_old) = edit.old_value {
+            // Check if a tag with (name, old_value) exists in current tags
+            let found = current_tags.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case(&edit.tag_name) && value == expected_old
+            });
+
+            if !found {
+                // Collect current values for this tag name for diagnostic logging
+                let current_values: Vec<&str> = current_tags
+                    .iter()
+                    .filter(|(n, _)| n.eq_ignore_ascii_case(&edit.tag_name))
+                    .map(|(_, v)| v.as_str())
+                    .collect();
+
+                let _ = crate::config::log_message(&format!(
+                    "Tag edit conflict for '{}': expected {}='{}' but not found. \
+                     File may have been modified externally. Current values for '{}': {:?}",
+                    path.display(),
+                    edit.tag_name,
+                    expected_old,
+                    edit.tag_name,
+                    current_values
+                ));
+
+                return Err(anyhow::anyhow!(
+                    "Tag edit rejected: {}='{}' not found in current file (stale edit)",
+                    edit.tag_name,
+                    expected_old
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Execute a combined tag edit (database + disk).
 ///
 /// This is the proper mutation path: disk write + explicit DB update.
@@ -63,6 +125,10 @@ fn execute_disk_only(path: &Path, tags: &[(String, String)]) -> Result<()> {
 /// 1. **Standard edits**: Single value per tag, uses HashMap-based merge
 /// 2. **Multi-value edits**: Multiple values for same tag (e.g., split compound tags)
 ///    Detected when there are multiple edits with same tag_name and new_value != None
+///
+/// Before execution:
+/// - Filters out NOP edits (old_value == new_value)
+/// - Validates that old_values match current disk state
 fn execute_combined(
     db: &Database,
     track_id: i64,
@@ -70,16 +136,35 @@ fn execute_combined(
     edits: &[TagEdit],
     session_id: &str,
 ) -> Result<()> {
-    // Create token - only possible within mutations module
+    // 1. Filter out no-op edits
+    let edits = filter_nop_edits(edits);
+
+    // Early return if all edits were filtered out
+    if edits.is_empty() {
+        let _ = crate::config::log_message(&format!(
+            "Tag edit for '{}': all edits were no-ops, skipping",
+            path.display()
+        ));
+        return Ok(());
+    }
+
+    // 2. Read current tags for validation
+    let current_tags = metadata::read_all_tags(path).unwrap_or_default();
+
+    // 3. Validate old_values match current state
+    validate_edits_against_current(&edits, &current_tags, path)?;
+
+    // 4. Create token - only possible within mutations module
     let token = MutationToken::new();
 
-    // Detect if this is a multi-value edit (same tag_name appears multiple times with new values)
-    let is_multi_value = detect_multi_value_edits(edits);
+    // 5. Detect if this is a multi-value edit (same tag_name appears multiple times with new values)
+    let is_multi_value = detect_multi_value_edits(&edits);
 
     if is_multi_value {
-        execute_combined_multi_value(db, track_id, path, edits, session_id, &token)
+        execute_combined_multi_value(db, track_id, path, &edits, session_id, &token)
     } else {
-        execute_combined_single_value(db, track_id, path, edits, session_id, &token)
+        // Pass current_tags to avoid re-reading from disk
+        execute_combined_single_value(db, track_id, path, &edits, session_id, &token, current_tags)
     }
 }
 
@@ -106,10 +191,10 @@ fn execute_combined_single_value(
     edits: &[TagEdit],
     session_id: &str,
     token: &MutationToken,
+    existing_tags: Vec<(String, String)>,
 ) -> Result<()> {
-    // 1. Read existing tags from disk
-    let existing = metadata::read_all_tags(path).unwrap_or_default();
-    let mut tag_map: std::collections::HashMap<String, String> = existing.into_iter().collect();
+    // Use pre-read tags (already validated in execute_combined)
+    let mut tag_map: std::collections::HashMap<String, String> = existing_tags.into_iter().collect();
 
     // 2. Apply edits
     for edit in edits {
@@ -351,5 +436,164 @@ mod tests {
         };
 
         assert!(matches!(mutation, Mutation::TagEditAndFlush { .. }));
+    }
+
+    #[test]
+    fn test_filter_nop_edits_removes_identical() {
+        let edits = vec![
+            TagEdit {
+                tag_name: "artist".to_string(),
+                old_value: Some("Same".to_string()),
+                new_value: Some("Same".to_string()),
+            },
+            TagEdit {
+                tag_name: "album".to_string(),
+                old_value: Some("Old Album".to_string()),
+                new_value: Some("New Album".to_string()),
+            },
+        ];
+
+        let filtered = filter_nop_edits(&edits);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].tag_name, "album");
+    }
+
+    #[test]
+    fn test_filter_nop_edits_keeps_none_to_some() {
+        let edits = vec![TagEdit {
+            tag_name: "genre".to_string(),
+            old_value: None,
+            new_value: Some("Rock".to_string()),
+        }];
+
+        let filtered = filter_nop_edits(&edits);
+
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_nop_edits_keeps_some_to_none() {
+        let edits = vec![TagEdit {
+            tag_name: "genre".to_string(),
+            old_value: Some("Rock".to_string()),
+            new_value: None,
+        }];
+
+        let filtered = filter_nop_edits(&edits);
+
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_nop_edits_removes_none_to_none() {
+        let edits = vec![TagEdit {
+            tag_name: "genre".to_string(),
+            old_value: None,
+            new_value: None,
+        }];
+
+        let filtered = filter_nop_edits(&edits);
+
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_validate_edits_passes_when_old_value_matches() {
+        let edits = vec![TagEdit {
+            tag_name: "artist".to_string(),
+            old_value: Some("Old Artist".to_string()),
+            new_value: Some("New Artist".to_string()),
+        }];
+
+        let current_tags = vec![("artist".to_string(), "Old Artist".to_string())];
+
+        let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_edits_fails_when_old_value_missing() {
+        let edits = vec![TagEdit {
+            tag_name: "artist".to_string(),
+            old_value: Some("Expected Artist".to_string()),
+            new_value: Some("New Artist".to_string()),
+        }];
+
+        let current_tags = vec![("artist".to_string(), "Different Artist".to_string())];
+
+        let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("stale edit"));
+    }
+
+    #[test]
+    fn test_validate_edits_case_insensitive_tag_name() {
+        let edits = vec![TagEdit {
+            tag_name: "ARTIST".to_string(),
+            old_value: Some("Old Artist".to_string()),
+            new_value: Some("New Artist".to_string()),
+        }];
+
+        let current_tags = vec![("artist".to_string(), "Old Artist".to_string())];
+
+        let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_edits_none_old_value_always_passes() {
+        let edits = vec![TagEdit {
+            tag_name: "new_tag".to_string(),
+            old_value: None,
+            new_value: Some("New Value".to_string()),
+        }];
+
+        // Empty current tags - new tag doesn't need to exist
+        let current_tags: Vec<(String, String)> = vec![];
+
+        let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_edits_multi_value_finds_specific_value() {
+        // File has multiple genre tags
+        let current_tags = vec![
+            ("genre".to_string(), "Rock".to_string()),
+            ("genre".to_string(), "Metal".to_string()),
+        ];
+
+        // Edit specifically targets "Metal"
+        let edits = vec![TagEdit {
+            tag_name: "genre".to_string(),
+            old_value: Some("Metal".to_string()),
+            new_value: Some("Jazz".to_string()),
+        }];
+
+        let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_edits_multi_value_fails_if_specific_value_missing() {
+        // File has genre=Rock only
+        let current_tags = vec![("genre".to_string(), "Rock".to_string())];
+
+        // Edit targets genre=Metal which doesn't exist
+        let edits = vec![TagEdit {
+            tag_name: "genre".to_string(),
+            old_value: Some("Metal".to_string()),
+            new_value: Some("Jazz".to_string()),
+        }];
+
+        let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
+
+        assert!(result.is_err());
     }
 }

@@ -652,6 +652,7 @@ mod tests {
             bucket_placeholder: TagSquashBucket {
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
+                compound_tag_value_count: 0,
             },
             bucket_library: LibraryDeployBucket {
                 library_stale: 1,

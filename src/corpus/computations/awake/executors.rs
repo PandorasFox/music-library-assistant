@@ -1056,12 +1056,13 @@ pub fn execute_derive_deploy_health_signals(
                     // Compute expected relative path within the library
                     let expected_relative = compute_deployment_path_with_tags(&track, &tag_map);
 
-                    // library_path is relative to libraries_root (from DB after migration)
-                    // It includes the library name prefix, e.g., "music/Artist/Album/track.mp3"
+                    // library_path is domain-prefixed relative to archive root,
+                    // e.g., "libraries/music/Artist/Album/track.mp3"
                     // expected_relative is just "Artist/Album/track.mp3" (no library prefix)
-                    // So we need to compare the suffix of library_path with expected_relative
+                    // So we strip the "libraries/{name}" prefix for comparison
+                    let library_domain_prefix = std::path::Path::new("libraries").join(library_name);
                     let library_path_suffix = library_path
-                        .strip_prefix(library_name)
+                        .strip_prefix(&library_domain_prefix)
                         .map(|p| p.to_path_buf())
                         .unwrap_or_else(|_| library_path.clone());
 

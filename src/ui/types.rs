@@ -63,6 +63,8 @@ pub(crate) enum UiMode {
     CompoundTagSplit,
     /// Standardized transaction review modal - all mutation flows pass through here
     TransactionReview,
+    /// Format standardization view (part of lateral view ring)
+    FormatStandardization,
 }
 
 // ============================================================================

@@ -17,7 +17,8 @@
 //! Parallel Worker executes:
 //!     ├── tag_edit::execute_single()
 //!     ├── indexing::execute_single()
-//!     └── file_ops::execute_single()
+//!     ├── file_ops::execute_single()
+//!     └── transcode::execute_single()
 //! ```
 //!
 mod types;
@@ -25,6 +26,7 @@ mod migration;
 pub mod tag_edit;
 pub mod indexing;
 pub mod file_ops;
+pub mod transcode;
 
 pub use types::*;
 pub use migration::MigrationRegistry;

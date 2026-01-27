@@ -34,6 +34,7 @@ pub enum TransactionReviewSource {
     DeployPreview,
     MissingFileResolution,
     IntakeConfirmation,
+    FormatStandardization,
 }
 
 /// Summary of a single decision for display.
@@ -190,6 +191,9 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
 
             // Mutations with optional track_id
             Mutation::MoveToStash { track_id, .. } | Mutation::Move { track_id, .. } => *track_id,
+
+            // Mutations with track_id (transcode)
+            Mutation::Transcode { track_id, .. } => Some(*track_id),
 
             // Mutations without track IDs
             Mutation::TagFlushToDisk { .. }

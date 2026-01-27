@@ -147,14 +147,58 @@ fn execute_library_move(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Move a file to the stash directory, organized by stash action name.
+///
+/// Destination: `{stash_root}/{stash_name}/{filename}`
+/// Creates the stash subdirectory if it doesn't exist.
+pub fn execute_move_to_stash(
+    path: &Path,
+    stash_name: &str,
+    stash_root: &Path,
+) -> Result<()> {
+    if !path.exists() {
+        return Err(anyhow::anyhow!(
+            "Source file does not exist: {}",
+            path.display()
+        ));
+    }
+
+    let filename = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("Path has no filename: {}", path.display()))?;
+
+    let stash_dir = stash_root.join(stash_name);
+    fs::create_dir_all(&stash_dir)
+        .with_context(|| format!("Failed to create stash directory: {}", stash_dir.display()))?;
+
+    let dest = stash_dir.join(filename);
+
+    // Don't overwrite existing stashed files
+    if dest.exists() {
+        return Err(anyhow::anyhow!(
+            "Stash destination already exists: {}",
+            dest.display()
+        ));
+    }
+
+    fs::rename(path, &dest).with_context(|| {
+        format!(
+            "Failed to move {} to stash at {}",
+            path.display(),
+            dest.display()
+        )
+    })?;
+
+    Ok(())
+}
+
 /// Execute a single file operation mutation.
 ///
-/// Note: MoveToStash requires a stash_root parameter not available in the mutation,
-/// so it returns an error. Use execute_move_to_stash directly when stash_root is known.
 /// Requires a MutationExecutionWitness to prove execution is inside the daemon.
 pub fn execute_single(
     db: Option<&Database>,
     mutation: &Mutation,
+    stash_root: Option<&Path>,
     _witness: &MutationExecutionWitness,
 ) -> MutationResult {
     let start = std::time::Instant::now();
@@ -171,13 +215,14 @@ pub fn execute_single(
             destination,
         } => execute_copy(source, destination),
 
-        Mutation::MoveToStash { path, .. } => {
-            // MoveToStash requires stash_root which isn't in the mutation
-            // This should be handled by a higher-level executor with config access
-            Err(anyhow::anyhow!(
-                "MoveToStash requires stash_root configuration. File: {}",
-                path.display()
-            ))
+        Mutation::MoveToStash { path, stash_name, .. } => {
+            match stash_root {
+                Some(root) => execute_move_to_stash(path, stash_name, root),
+                None => Err(anyhow::anyhow!(
+                    "Stash directory not configured. File: {}",
+                    path.display()
+                )),
+            }
         }
 
         Mutation::HardLink {

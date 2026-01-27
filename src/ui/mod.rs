@@ -32,6 +32,7 @@ pub mod compound_split;
 pub mod deploy_flow;
 pub mod eye;
 pub mod flows;
+pub mod format_standardization;
 pub mod helpers;
 pub mod insights_view;
 pub mod missing_file_flow;
@@ -155,6 +156,8 @@ pub(crate) struct App {
     pub(super) tag_search: Option<tag_search::TagSearchState>,
     // Intake confirmation modal
     pub(super) intake_confirmation: Option<startup::IntakeConfirmationState>,
+    // Format standardization view (lateral view ring)
+    pub(super) format_std: Option<format_standardization::FormatStdState>,
 
     // The Witch - enforcer of orderliness, handles all mutations and background work
     pub(super) witch: Option<crate::witch::Witch>,
@@ -187,6 +190,7 @@ impl App {
             insights_view: None,
             tag_search: None,
             intake_confirmation: None,
+            format_std: None,
             witch: None,
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
@@ -299,6 +303,12 @@ impl App {
                     self.handle_compound_split_action(action);
                 }
             }
+            UiMode::FormatStandardization => {
+                if let Some(ref mut state) = self.format_std {
+                    let action = state.handle_key(key);
+                    self.handle_format_std_action(action);
+                }
+            }
         }
     }
 
@@ -377,6 +387,12 @@ impl App {
     pub(super) fn start_tag_search(&mut self) {
         self.tag_search = Some(tag_search::TagSearchState::new());
         self.mode = UiMode::TagSearch;
+    }
+
+    pub(super) fn start_format_standardization(&mut self) {
+        let db = self.db();
+        self.format_std = Some(format_standardization::FormatStdState::new(&db));
+        self.mode = UiMode::FormatStandardization;
     }
 
 
@@ -477,6 +493,7 @@ fn render(f: &mut Frame, app: &mut App) {
         insights_view: app.insights_view.as_mut(),
         tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
+        format_std: app.format_std.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,

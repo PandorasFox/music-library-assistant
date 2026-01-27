@@ -79,6 +79,10 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     let session_id = "witch";
 
+    // Load config for stash_root access (needed by file_ops and transcode)
+    let loaded_config = config::load_config().ok();
+    let stash_root = loaded_config.as_ref().and_then(|c| c.stash_dir.clone());
+
     let (success, error) = match mutation.category() {
         MutationCategory::TagEdit => {
             let _ = config::log_message(&format!(
@@ -90,7 +94,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         }
         MutationCategory::FileMove | MutationCategory::FileCopy |
         MutationCategory::Deployment => {
-            let r = file_ops::execute_single(Some(&db), &mutation, &witness);
+            let r = file_ops::execute_single(Some(&db), &mutation, stash_root.as_deref(), &witness);
             (r.success, r.error)
         }
         MutationCategory::Indexing => {
@@ -99,6 +103,12 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         }
         MutationCategory::Migration => {
             (false, Some("Migrations not supported in Witch executor".to_string()))
+        }
+        MutationCategory::Transcode => {
+            let r = crate::corpus::mutations::transcode::execute_single(
+                &db, &mutation, stash_root.as_deref(), &witness,
+            );
+            (r.success, r.error)
         }
     };
 
@@ -124,12 +134,11 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Path-aware spawning: corpus paths → UpdateCorpusFileSignals,
     // library paths → UpdateLibraryFileSignals, others → skip
     let mut spawn: Vec<Computation> = if success {
-        let config = config::load_config().ok();
         mutation
             .affected_paths()
             .into_iter()
             .filter_map(|path| {
-                if let Some(ref cfg) = config {
+                if let Some(ref cfg) = loaded_config {
                     if path.starts_with(&cfg.corpus_root) {
                         Some(Computation::Awakening(awakening::Computation::UpdateCorpusFileSignals { path }))
                     } else if path.starts_with(&cfg.libraries_root) {

@@ -306,6 +306,7 @@ impl TaskLabel {
             MutationCategory::FileCopy => "File copies",
             MutationCategory::Deployment => "Deployment",
             MutationCategory::Migration => "Migrations",
+            MutationCategory::Transcode => "Transcoding",
         };
         Self(label.to_string())
     }

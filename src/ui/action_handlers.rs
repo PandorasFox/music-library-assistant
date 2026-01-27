@@ -6,7 +6,7 @@
 
 use crate::config;
 use crate::corpus::paths;
-use crate::ui::{compound_split, insights_view, missing_file_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup};
+use crate::ui::{compound_split, format_standardization, insights_view, missing_file_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -53,9 +53,9 @@ impl App {
                 }
             }
             insights_view::InsightsAction::CycleNext => {
-                // Insights → Tag Search (Deploy removed from lateral ring)
+                // Insights → Format Standardization
                 self.insights_view = None;
-                self.start_tag_search();
+                self.start_format_standardization();
             }
             insights_view::InsightsAction::CyclePrev => {
                 // Insights → Corpus Browser
@@ -132,9 +132,9 @@ impl App {
                 self.start_corpus_browser();
             }
             tag_search::TagSearchAction::CyclePrev => {
-                // TagSearch → Insights (Deploy removed from lateral ring)
+                // TagSearch → Format Standardization
                 self.tag_search = None;
-                self.start_insights_view();
+                self.start_format_standardization();
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search with db access - take ownership temporarily to avoid borrow conflict
@@ -1229,6 +1229,10 @@ impl App {
                             self.start_insights_view();
                         }
                     }
+                    Some(TransactionReviewSource::FormatStandardization) => {
+                        // format_std state was preserved
+                        self.mode = UiMode::FormatStandardization;
+                    }
                     None => self.start_insights_view(),
                 }
             }
@@ -1298,6 +1302,7 @@ impl App {
         self.deployment_preview = None;
         self.missing_file_preview = None;
         self.intake_confirmation = None;
+        self.format_std = None;
     }
 
     /// Transition to the standardized transaction review modal.
@@ -1437,5 +1442,100 @@ impl App {
 
         // Add decision to existing transaction via sealed operator decision handler
         let _ = super::operator_decisions::stage_decision(witch, cluster_idx, &label, mutations);
+    }
+
+    // =========================================================================
+    // Format Standardization
+    // =========================================================================
+
+    pub(super) fn handle_format_std_action(&mut self, action: format_standardization::FormatStdAction) {
+        match action {
+            format_standardization::FormatStdAction::None => {}
+            format_standardization::FormatStdAction::RequestQuit => {
+                if self.has_pending_operations() {
+                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                } else {
+                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
+                    self.mode = UiMode::ExitConfirmModal;
+                }
+            }
+            format_standardization::FormatStdAction::CycleNext => {
+                // FormatStandardization → TagSearch
+                self.format_std = None;
+                self.start_tag_search();
+            }
+            format_standardization::FormatStdAction::CyclePrev => {
+                // FormatStandardization → Insights
+                self.format_std = None;
+                self.start_insights_view();
+            }
+            format_standardization::FormatStdAction::ConvertLossy { bitrate_kbps } => {
+                self.stage_format_conversion(
+                    format_standardization::LOSSY_TYPES,
+                    crate::corpus::transcode::TranscodeTarget::Opus { bitrate_kbps },
+                    &format!("Convert lossy → Opus {}kbps", bitrate_kbps),
+                );
+            }
+            format_standardization::FormatStdAction::ConvertLossless => {
+                self.stage_format_conversion(
+                    format_standardization::LOSSLESS_TYPES,
+                    crate::corpus::transcode::TranscodeTarget::Flac,
+                    "Convert lossless → FLAC",
+                );
+            }
+        }
+    }
+
+    /// Stage transcode mutations for all tracks matching given file types.
+    fn stage_format_conversion(
+        &mut self,
+        file_types: &[&str],
+        target: crate::corpus::transcode::TranscodeTarget,
+        label: &str,
+    ) {
+        use crate::corpus::mutations::Mutation;
+
+        let Some(ref mut witch) = self.witch else {
+            self.status_message = Some("Witch not available".to_string());
+            return;
+        };
+
+        let db = witch.read_only_db();
+        let resolver = paths::get_resolver();
+
+        let tracks = db.get_tracks_by_file_types(file_types).unwrap_or_default();
+        if tracks.is_empty() {
+            self.status_message = Some("No matching tracks found".to_string());
+            return;
+        }
+
+        let mutations: Vec<Mutation> = tracks
+            .iter()
+            .filter_map(|(track_id, rel_path, _file_type)| {
+                let abs_path = resolver.resolve(
+                    std::path::Path::new(rel_path),
+                    "corpus",
+                )?;
+                Some(Mutation::Transcode {
+                    track_id: *track_id,
+                    source_path: abs_path,
+                    target_format: target,
+                    stash_name: "remux-input".to_string(),
+                })
+            })
+            .collect();
+
+        if mutations.is_empty() {
+            self.status_message = Some("No resolvable tracks found".to_string());
+            return;
+        }
+
+        let count = mutations.len();
+        let _ = witch.start_transaction(label);
+        let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
+
+        self.status_message = Some(format!("Staged {} transcode operations", count));
+        // Note: format_std state is NOT cleared - preserved for Cancel return
+        self.start_transaction_review(transaction_review::TransactionReviewSource::FormatStandardization);
     }
 }

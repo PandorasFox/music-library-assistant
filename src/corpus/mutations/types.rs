@@ -10,6 +10,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::corpus::transcode::TranscodeTarget;
+
 /// Extracted metadata from an audio file, ready for indexing.
 /// This is a Clone + Serialize version of the data from metadata::extract_metadata().
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -157,6 +159,20 @@ pub enum Mutation {
     },
 
     // ========================================================================
+    // Transcode Operations
+    // ========================================================================
+    /// Transcode a file to a different container/codec format.
+    ///
+    /// On success: creates new file at same path with different extension,
+    /// stashes original under stash_name, and updates the track record.
+    Transcode {
+        track_id: i64,
+        source_path: PathBuf,
+        target_format: TranscodeTarget,
+        stash_name: String,
+    },
+
+    // ========================================================================
     // Deployment Operations
     // ========================================================================
     /// Create a hard link from source to destination.
@@ -228,6 +244,7 @@ pub enum MutationCategory {
     FileCopy,
     Deployment,
     Migration,
+    Transcode,
 }
 
 impl Mutation {
@@ -254,6 +271,8 @@ impl Mutation {
             Mutation::HardLink { .. } | Mutation::LibraryMove { .. } => MutationCategory::Deployment,
 
             Mutation::DbMigration { .. } => MutationCategory::Migration,
+
+            Mutation::Transcode { .. } => MutationCategory::Transcode,
         }
     }
 
@@ -268,6 +287,7 @@ impl Mutation {
             | Mutation::Move { source: path, .. }
             | Mutation::Copy { source: path, .. }
             | Mutation::MoveToStash { path, .. }
+            | Mutation::Transcode { source_path: path, .. }
             | Mutation::HardLink { source: path, .. }
             | Mutation::LibraryMove { source: path, .. } => Some(path),
 
@@ -308,7 +328,8 @@ impl Mutation {
         match self {
             Mutation::TagEditDb { track_id, .. }
             | Mutation::TagEditAndFlush { track_id, .. }
-            | Mutation::UpdateTrack { track_id, .. } => Some(*track_id),
+            | Mutation::UpdateTrack { track_id, .. }
+            | Mutation::Transcode { track_id, .. } => Some(*track_id),
 
             // These don't have a track_id directly
             Mutation::TagFlushToDisk { .. }
@@ -411,6 +432,13 @@ impl Mutation {
                 }
             }
 
+            // Transcode: affects the source file's directory (output is same dir, new extension)
+            Mutation::Transcode { source_path, .. } => {
+                if let Some(parent) = source_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+
             // Track updates don't change file presence
             Mutation::UpdateTrack { .. } => {}
 
@@ -462,6 +490,14 @@ impl Mutation {
 
             // Track update: the path being updated
             Mutation::UpdateTrack { path, .. } => vec![path.clone()],
+
+            // Transcode: source path and new output path
+            Mutation::Transcode { source_path, target_format, .. } => {
+                let mut paths = vec![source_path.clone()];
+                let new_path = source_path.with_extension(target_format.extension());
+                paths.push(new_path);
+                paths
+            }
 
             // Operations without specific file paths that need signal updates
             Mutation::TagEditDb { .. }

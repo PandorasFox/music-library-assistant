@@ -18,7 +18,7 @@ use crate::config::{self, Config};
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split, deploy_flow, insights_view, missing_file_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
+use super::{compound_split, deploy_flow, format_standardization, insights_view, missing_file_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -38,6 +38,7 @@ pub struct RenderContext<'a> {
     pub progress_screen: Option<&'a super::progress_screen::ProgressScreen>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
     pub tag_search: Option<&'a tag_search::TagSearchState>,
+    pub format_std: Option<&'a format_standardization::FormatStdState>,
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub eye: &'a EyeAnimation,
     pub throughput_samples: &'a VecDeque<(Instant, u64)>,
@@ -83,6 +84,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         super::UiMode::TagSearch
             | super::UiMode::CorpusBrowser
             | super::UiMode::Insights
+            | super::UiMode::FormatStandardization
     );
 
     if uses_unified_titlebar {
@@ -162,6 +164,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::TagCanonicityResolution => Some("Tag Canonicity"),
         super::UiMode::CompoundTagSplit => Some("Compound Tag Split"),
         super::UiMode::TransactionReview => Some("Transaction Review"),
+        super::UiMode::FormatStandardization => Some("Format Standardization"),
     };
 
     let title = match suffix {
@@ -257,6 +260,12 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             view_name = "transaction_review";
             if let Some(ref state) = ctx.transaction_review {
                 transaction_review::render(f, area, state, &ctx.transaction_review_decisions);
+            }
+        }
+        super::UiMode::FormatStandardization => {
+            view_name = "format_standardization";
+            if let Some(ref state) = ctx.format_std {
+                format_standardization::render::render(f, area, state);
             }
         }
     }
@@ -722,6 +731,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::TagCanonicityResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::CompoundTagSplit => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TransactionReview => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::FormatStandardization => control_presets::format_standardization(),
     };
     lines.push(controls.render_line());
 

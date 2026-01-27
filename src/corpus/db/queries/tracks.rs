@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::Database;
@@ -885,6 +886,66 @@ impl Database {
         self.update_track_metadata(track_id, track)?;
         self.set_track_tags(track_id, tags)?;
         Ok(())
+    }
+
+    // ========================================================================
+    // Format Standardization Queries
+    // ========================================================================
+
+    /// Get track counts grouped by file type for corpus tracks.
+    pub fn get_track_counts_by_file_type(&self) -> Result<HashMap<String, i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT file_type, COUNT(*) as count FROM tracks WHERE source = 'corpus' GROUP BY file_type",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let file_type: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((file_type, count))
+        })?;
+
+        let mut counts = HashMap::new();
+        for row in rows {
+            let (file_type, count) = row?;
+            counts.insert(file_type, count);
+        }
+        Ok(counts)
+    }
+
+    /// Get all corpus tracks with a given set of file types.
+    ///
+    /// Returns (track_id, relative_path, file_type) tuples.
+    pub fn get_tracks_by_file_types(&self, file_types: &[&str]) -> Result<Vec<(i64, String, String)>> {
+        if file_types.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build IN clause dynamically
+        let placeholders: Vec<String> = (0..file_types.len()).map(|i| format!("?{}", i + 1)).collect();
+        let sql = format!(
+            "SELECT id, path, file_type FROM tracks WHERE source = 'corpus' AND file_type IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let params: Vec<&dyn rusqlite::types::ToSql> = file_types
+            .iter()
+            .map(|ft| ft as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            let id: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let file_type: String = row.get(2)?;
+            Ok((id, path, file_type))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
     }
 
     // ========================================================================

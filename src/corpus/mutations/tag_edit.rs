@@ -39,7 +39,8 @@ fn execute_db_only(
 /// Execute a disk-only tag write (no database update).
 fn execute_disk_only(path: &Path, tags: &[(String, String)]) -> Result<()> {
     // Read existing tags
-    let existing = metadata::read_all_tags(path).unwrap_or_default();
+    let existing = metadata::read_all_tags(path)
+        .with_context(|| format!("Failed to read existing tags from {}", path.display()))?;
 
     // Merge: new tags override existing
     let mut final_tags: std::collections::HashMap<String, String> = existing.into_iter().collect();
@@ -149,7 +150,8 @@ fn execute_combined(
     }
 
     // 2. Read current tags for validation
-    let current_tags = metadata::read_all_tags(path).unwrap_or_default();
+    let current_tags = metadata::read_all_tags(path)
+        .with_context(|| format!("Failed to read current tags from {}", path.display()))?;
 
     // 3. Validate old_values match current state
     validate_edits_against_current(&edits, &current_tags, path)?;
@@ -281,7 +283,8 @@ fn execute_combined_multi_value(
     // 4. Insert all new values
     // We need to use set_track_tags which supports multiple values
     // But we need to preserve other tags not being edited
-    let existing_tags = db.get_track_tags(track_id).unwrap_or_default();
+    let existing_tags = db.get_track_tags(track_id)
+        .with_context(|| format!("Failed to read existing tags for track {}", track_id))?;
     let mut final_db_tags: Vec<(String, String)> = existing_tags
         .into_iter()
         .filter(|t| !replaced_tags.contains(t.tag_name.as_str()))

@@ -2,7 +2,7 @@
 //!
 //! These functions implement the actual logic for Asleep computations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -248,156 +248,7 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
 }
 
 // ============================================================================
-// Phase 2: Compare Inodes
-// ============================================================================
-
-/// Phase 2: Compare disk state to database index.
-pub fn execute_compare_inodes(
-    read_only_db: &Database,
-    source: &str,
-    disk_state: &[(i64, PathBuf, i64, i64)],
-    witness: &ComputationWitness,
-    start: Instant,
-) -> Result {
-    let _ = log_message(&format!(
-        "[COMPUTE] CompareInodes: comparing {} disk files for source '{}'",
-        disk_state.len(),
-        source
-    ));
-
-    let computation = Computation::CompareInodes {
-        source: source.to_string(),
-        disk_state: disk_state.to_vec(),
-    };
-
-    // Build disk inode set and lookup maps
-    let disk_inodes: HashSet<i64> = disk_state.iter().map(|(inode, _, _, _)| *inode).collect();
-    let disk_inode_to_state: HashMap<i64, (&PathBuf, i64, i64)> = disk_state
-        .iter()
-        .map(|(inode, path, mtime_s, mtime_ns)| (*inode, (path, *mtime_s, *mtime_ns)))
-        .collect();
-
-    // Get indexed inodes from scan_state
-    let indexed_inodes = read_only_db.get_all_scan_state_inodes(source).unwrap_or_default();
-
-    // Calculate differences
-    let missing_from_disk: HashSet<i64> = indexed_inodes.difference(&disk_inodes).cloned().collect();
-    let missing_from_index: HashSet<i64> = disk_inodes.difference(&indexed_inodes).cloned().collect();
-
-    let _ = log_message(&format!(
-        "[COMPUTE] CompareInodes: {} indexed, {} on disk, {} missing from disk, {} missing from index",
-        indexed_inodes.len(),
-        disk_inodes.len(),
-        missing_from_disk.len(),
-        missing_from_index.len()
-    ));
-
-    // Create MissingFile signals (indexed files not on disk)
-    if !missing_from_disk.is_empty() {
-        if let Ok(missing_paths) = read_only_db.get_scan_state_paths_for_inodes(source, &missing_from_disk) {
-            create_missing_file_issues(read_only_db, &missing_paths, witness);
-        }
-    }
-
-    // Create UnindexedFile signals (disk files not indexed)
-    if !missing_from_index.is_empty() {
-        let resolver = paths::get_resolver();
-        let missing_paths: Vec<String> = missing_from_index
-            .iter()
-            .filter_map(|inode| disk_inode_to_state.get(inode))
-            .filter_map(|(path, _, _)| {
-                // Convert absolute path to relative for signal key
-                resolver
-                    .to_relative(path, source)
-                    .map(|rel| rel.to_string_lossy().to_string())
-            })
-            .collect();
-        create_unindexed_file_issues(read_only_db, &missing_paths, witness);
-    }
-
-    // Spawn follow-up computations for mtime verification
-    let mut spawn: Vec<Computation> = Vec::new();
-
-    // Get scan_state entries for comparison
-    let inode_vec: Vec<i64> = indexed_inodes.iter().copied().collect();
-    let indexed_by_inode = read_only_db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
-
-    let resolver = paths::get_resolver();
-    for (inode, path, disk_mtime_s, disk_mtime_ns) in disk_state {
-        // Skip files not in index (already reported as UnindexedFile)
-        let Some(entry) = indexed_by_inode.get(inode) else {
-            continue;
-        };
-
-        // Only verify if mtime mismatched
-        if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
-            // Convert to relative for DB query (DB stores relative paths)
-            let relative_path = match resolver.to_relative(path, source) {
-                Some(rel) => rel,
-                None => continue,
-            };
-
-            // Get track_id for this path
-            let track = match read_only_db.get_track_by_path(&relative_path.to_string_lossy()) {
-                Ok(Some(t)) => t,
-                _ => continue,
-            };
-            let Some(track_id) = track.id else { continue };
-
-            // Note: path in Computation is absolute for filesystem operations
-            spawn.push(Computation::VerifyMtime {
-                track_id,
-                path: path.clone(),
-                expected_mtime_secs: entry.mtime_secs,
-                expected_mtime_nanos: entry.mtime_nanos,
-            });
-        }
-    }
-
-    let _ = log_message(&format!(
-        "[COMPUTE] CompareInodes: spawning {} mtime verifications",
-        spawn.len()
-    ));
-
-    Result::success(
-        computation,
-        start.elapsed().as_millis() as u64,
-        spawn,
-    )
-}
-
-/// Create MissingFile signals for files in index but missing from disk.
-fn create_missing_file_issues(
-    read_only_db: &Database,
-    missing_paths: &[String],
-    witness: &ComputationWitness,
-) {
-    let Some(sender) = db_thread::signal_sender() else {
-        return;
-    };
-
-    for path in missing_paths {
-        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
-    }
-}
-
-/// Create UnindexedFile signals for files on disk but not in index.
-fn create_unindexed_file_issues(
-    read_only_db: &Database,
-    missing_paths: &[String],
-    witness: &ComputationWitness,
-) {
-    let Some(sender) = db_thread::signal_sender() else {
-        return;
-    };
-
-    for path in missing_paths {
-        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), path, witness);
-    }
-}
-
-// ============================================================================
-// Phase 3: Verify Mtime
+// Verify Mtime
 // ============================================================================
 
 /// Phase 3: Verify single file mtime.
@@ -458,6 +309,7 @@ pub fn execute_verify_tags(
     read_only_db: &Database,
     track_id: i64,
     path: &Path,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     use crate::corpus::mutations::indexing;
@@ -473,10 +325,34 @@ pub fn execute_verify_tags(
             start.elapsed().as_millis() as u64,
             Vec::new(),
         ),
-        Err(e) => Result::failure(
-            computation,
-            start.elapsed().as_millis() as u64,
-            e.to_string(),
-        ),
+        Err(e) => {
+            // Emit TagParseError signal so the issue is tracked in the DB
+            let _ = log_message(&format!(
+                "[COMPUTE] VerifyTags: tag parse error for track {} ({}): {}",
+                track_id, path.display(), e
+            ));
+            if let Some(sender) = crate::db_thread::signal_sender() {
+                let resolver = crate::corpus::paths::get_resolver();
+                // Try to get source for relative path conversion
+                if let Ok(Some(track)) = read_only_db.get_track_by_id(track_id) {
+                    if let Some(rel) = resolver.to_relative(path, &track.source) {
+                        let rel_str = rel.to_string_lossy();
+                        ensure_file_signal_if_missing(
+                            read_only_db,
+                            &sender,
+                            CorpusFileSignalType::TagParseError.into(),
+                            &rel_str,
+                            witness,
+                        );
+                    }
+                }
+            }
+            // Return success so computation continues processing other files
+            Result::success(
+                computation,
+                start.elapsed().as_millis() as u64,
+                Vec::new(),
+            )
+        }
     }
 }

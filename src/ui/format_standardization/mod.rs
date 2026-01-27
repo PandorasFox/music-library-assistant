@@ -57,15 +57,6 @@ pub enum SelectedAction {
     ConvertLossless,
 }
 
-impl SelectedAction {
-    fn toggle(self) -> Self {
-        match self {
-            SelectedAction::ConvertLossy => SelectedAction::ConvertLossless,
-            SelectedAction::ConvertLossless => SelectedAction::ConvertLossy,
-        }
-    }
-}
-
 /// State for the format standardization view.
 pub struct FormatStdState {
     /// File counts by file type (cached on view init).

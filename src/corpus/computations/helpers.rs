@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSignalType};
-use crate::db_thread;
+use crate::db_thread::{self, SignalWitness};
 
 use super::types::ComputationWitness;
 
@@ -116,12 +116,12 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 ///
 /// Uses the read-only DB to check freshness before queueing to the write thread.
 /// This dramatically reduces redundant writes during re-computation.
-pub(super) fn ensure_file_signal_if_missing(
+pub(crate) fn ensure_file_signal_if_missing(
     read_only_db: &crate::corpus::db::Database,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
-    witness: &ComputationWitness,
+    witness: &impl SignalWitness,
 ) {
     if !read_only_db.file_signal_exists(signal_type, key) {
         sender.ensure_file_signal(signal_type, key, witness);
@@ -148,12 +148,12 @@ pub(super) fn ensure_file_signal_with_metadata_if_missing(
 ///
 /// Uses the read-only DB to check existence before queueing to the write thread.
 /// This dramatically reduces redundant writes during re-computation.
-pub(super) fn clear_file_signal_if_present(
+pub(crate) fn clear_file_signal_if_present(
     read_only_db: &crate::corpus::db::Database,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
-    witness: &ComputationWitness,
+    witness: &impl SignalWitness,
 ) {
     if read_only_db.file_signal_exists(signal_type, key) {
         sender.clear_file_signal(signal_type, key, witness);

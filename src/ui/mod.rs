@@ -395,6 +395,16 @@ impl App {
         self.mode = UiMode::FormatStandardization;
     }
 
+    /// Start the lateral view identified by the given variant.
+    /// Used by CycleNext/CyclePrev handlers to dispatch via LateralView::next()/prev().
+    pub(super) fn start_lateral_view(&mut self, view: widgets::LateralView) {
+        match view {
+            widgets::LateralView::TagSearch => self.start_tag_search(),
+            widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
+            widgets::LateralView::Insights => self.start_insights_view(),
+            widgets::LateralView::FormatStandardization => self.start_format_standardization(),
+        }
+    }
 
     pub(super) fn start_deployment_preview(&mut self) {
         // TODO: Reconnect when corpus::deploy is re-enabled

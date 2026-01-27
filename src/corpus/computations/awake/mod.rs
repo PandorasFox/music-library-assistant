@@ -23,7 +23,6 @@
 //!
 //! Deploy Health:
 //! - `DetectDeployConflicts` - Bulk detection of deploy path collisions
-//! - `CheckDeployConflicts` - Per-track deploy conflict check
 //! - `DeriveDeployHealthSignals` - Derive library health signals from scan data
 
 mod executors;
@@ -93,11 +92,6 @@ pub enum Computation {
     /// Groups healthy tracks by deployment path, flags conflicts.
     DetectDeployConflicts,
 
-    /// Check deploy conflicts for a single track.
-    ///
-    /// Per-track version for targeted refresh after mutations.
-    CheckDeployConflicts { track_id: i64 },
-
     /// Derive deploy health signals from library scan data.
     ///
     /// Compares library_scan_state against corpus to identify leftovers/stale.
@@ -129,7 +123,6 @@ impl Computation {
             Computation::DetectCompoundTagValues => "Detecting compound tag values",
             Computation::VerifyOutOfBandChanges => "Verifying out-of-band changes",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
-            Computation::CheckDeployConflicts { .. } => "Checking deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
         }

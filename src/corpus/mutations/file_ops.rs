@@ -11,7 +11,6 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
-use crate::corpus::db::Database;
 use crate::witch::MutationExecutionWitness;
 
 use super::types::{Mutation, MutationResult};
@@ -21,10 +20,8 @@ use super::types::{Mutation, MutationResult};
 /// Moves a file from source to destination, creating parent directories if needed.
 /// Optionally updates the database if track_id is provided.
 pub fn execute_move(
-    db: Option<&Database>,
     source: &Path,
     destination: &Path,
-    track_id: Option<i64>,
 ) -> Result<()> {
     // Ensure source exists
     if !source.exists() {
@@ -48,10 +45,6 @@ pub fn execute_move(
             destination.display()
         )
     })?;
-
-    // Note: Database path updates are handled by re-indexing after move
-    // The track_id is preserved for reference but path updates require re-scan
-    let _ = (db, track_id); // Silence unused warnings
 
     Ok(())
 }
@@ -196,7 +189,6 @@ pub fn execute_move_to_stash(
 ///
 /// Requires a MutationExecutionWitness to prove execution is inside the daemon.
 pub fn execute_single(
-    db: Option<&Database>,
     mutation: &Mutation,
     stash_root: Option<&Path>,
     _witness: &MutationExecutionWitness,
@@ -207,8 +199,7 @@ pub fn execute_single(
         Mutation::Move {
             source,
             destination,
-            track_id,
-        } => execute_move(db, source, destination, *track_id),
+        } => execute_move(source, destination),
 
         Mutation::Copy {
             source,
@@ -261,7 +252,6 @@ mod tests {
         let mutation = Mutation::Move {
             source: PathBuf::from("/src/file.flac"),
             destination: PathBuf::from("/dst/file.flac"),
-            track_id: Some(1),
         };
 
         assert!(matches!(mutation, Mutation::Move { .. }));

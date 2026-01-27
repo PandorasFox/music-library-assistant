@@ -6,7 +6,7 @@
 
 use crate::config;
 use crate::corpus::paths;
-use crate::ui::{compound_split, format_standardization, insights_view, missing_file_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup};
+use crate::ui::{compound_split, format_standardization, insights_view, missing_file_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -53,14 +53,12 @@ impl App {
                 }
             }
             insights_view::InsightsAction::CycleNext => {
-                // Insights → Format Standardization
                 self.insights_view = None;
-                self.start_format_standardization();
+                self.start_lateral_view(widgets::LateralView::Insights.next());
             }
             insights_view::InsightsAction::CyclePrev => {
-                // Insights → Corpus Browser
                 self.insights_view = None;
-                self.start_corpus_browser();
+                self.start_lateral_view(widgets::LateralView::Insights.prev());
             }
             insights_view::InsightsAction::LaunchFlow => {
                 // Use selected_action() to dispatch to appropriate flow
@@ -127,14 +125,12 @@ impl App {
                 self.start_insights_view();
             }
             tag_search::TagSearchAction::CycleNext => {
-                // TagSearch → CorpusBrowser
                 self.tag_search = None;
-                self.start_corpus_browser();
+                self.start_lateral_view(widgets::LateralView::TagSearch.next());
             }
             tag_search::TagSearchAction::CyclePrev => {
-                // TagSearch → Format Standardization
                 self.tag_search = None;
-                self.start_format_standardization();
+                self.start_lateral_view(widgets::LateralView::TagSearch.prev());
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search with db access - take ownership temporarily to avoid borrow conflict
@@ -234,14 +230,12 @@ impl App {
                 self.start_tag_editor_for_path(&path, false);
             }
             tree_browser::TreeBrowserAction::CycleNext => {
-                // Corpus Browser → Insights
                 self.tree_browser = None;
-                self.start_insights_view();
+                self.start_lateral_view(widgets::LateralView::CorpusBrowser.next());
             }
             tree_browser::TreeBrowserAction::CyclePrev => {
-                // Corpus Browser → TagSearch
                 self.tree_browser = None;
-                self.start_tag_search();
+                self.start_lateral_view(widgets::LateralView::CorpusBrowser.prev());
             }
             tree_browser::TreeBrowserAction::SelectPaths(paths) => {
                 // Directory selector completed - currently unused, placeholder for dedup flows
@@ -468,7 +462,6 @@ impl App {
             let path = resolver.resolve_library(std::path::Path::new(&file.library_path));
             mutations.push(Mutation::MoveToStash {
                 path,
-                track_id: None, // No corpus backing
                 stash_name: "library_leftovers".to_string(),
             });
         }
@@ -1460,27 +1453,27 @@ impl App {
                 }
             }
             format_standardization::FormatStdAction::CycleNext => {
-                // FormatStandardization → TagSearch
                 self.format_std = None;
-                self.start_tag_search();
+                self.start_lateral_view(widgets::LateralView::FormatStandardization.next());
             }
             format_standardization::FormatStdAction::CyclePrev => {
-                // FormatStandardization → Insights
                 self.format_std = None;
-                self.start_insights_view();
+                self.start_lateral_view(widgets::LateralView::FormatStandardization.prev());
             }
             format_standardization::FormatStdAction::ConvertLossy { bitrate_kbps } => {
+                let target = crate::corpus::transcode::TranscodeTarget::Opus { bitrate_kbps };
                 self.stage_format_conversion(
                     format_standardization::LOSSY_TYPES,
-                    crate::corpus::transcode::TranscodeTarget::Opus { bitrate_kbps },
-                    &format!("Convert lossy → Opus {}kbps", bitrate_kbps),
+                    target,
+                    &format!("Convert lossy → {}", target.label()),
                 );
             }
             format_standardization::FormatStdAction::ConvertLossless => {
+                let target = crate::corpus::transcode::TranscodeTarget::Flac;
                 self.stage_format_conversion(
                     format_standardization::LOSSLESS_TYPES,
-                    crate::corpus::transcode::TranscodeTarget::Flac,
-                    "Convert lossless → FLAC",
+                    target,
+                    &format!("Convert lossless → {}", target.label()),
                 );
             }
         }

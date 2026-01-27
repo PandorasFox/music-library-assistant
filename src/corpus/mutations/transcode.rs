@@ -149,7 +149,8 @@ fn execute_transcode(
 
     // Delete old scan_state entry if inode changed (which it will, since it's a new file)
     if existing_track.inode != new_inode {
-        let _ = db.delete_scan_state_by_inode(&existing_track.source, existing_track.inode);
+        db.delete_scan_state_by_inode(&existing_track.source, existing_track.inode)
+            .with_context(|| format!("Failed to delete old scan_state for track {}", track_id))?;
     }
 
     Ok(())

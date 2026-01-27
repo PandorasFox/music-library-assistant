@@ -121,6 +121,14 @@ pub enum SignalType {
     InconsistentAlbumArtist,
     /// Tag value contains separators that should be split into multiple values
     CompoundTagValue,
+
+    // =========================================================================
+    // Error signals (discovery-time parse/read failures)
+    // =========================================================================
+    /// File's tags could not be parsed (corrupt/unsupported tag format)
+    TagParseError,
+    /// File's audio waveform could not be decoded for fingerprinting
+    WaveformReadError,
 }
 
 impl SignalType {
@@ -152,6 +160,10 @@ impl SignalType {
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
+
+            // Error signals
+            Self::TagParseError => "tag_parse_error",
+            Self::WaveformReadError => "waveform_read_error",
         }
     }
 
@@ -183,6 +195,8 @@ impl SignalType {
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
+            "tag_parse_error" => Some(Self::TagParseError),
+            "waveform_read_error" => Some(Self::WaveformReadError),
 
             // Legacy DB values → map to new types
             "missing_from_disk" => Some(Self::MissingFile),
@@ -205,6 +219,8 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::CorpusFileModifiedOutOfBand => Self::CorpusFileModifiedOutOfBand,
             CorpusFileSignalType::MovedFile => Self::MovedFile,
             CorpusFileSignalType::OutOfBandTagChange => Self::OutOfBandTagChange,
+            CorpusFileSignalType::TagParseError => Self::TagParseError,
+            CorpusFileSignalType::WaveformReadError => Self::WaveformReadError,
         }
     }
 }
@@ -258,6 +274,10 @@ pub enum CorpusFileSignalType {
     MovedFile,
     /// Tags on disk differ from indexed tags
     OutOfBandTagChange,
+    /// File's tags could not be parsed
+    TagParseError,
+    /// File's audio waveform could not be decoded for fingerprinting
+    WaveformReadError,
 }
 
 impl CorpusFileSignalType {
@@ -270,6 +290,8 @@ impl CorpusFileSignalType {
             Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
             Self::MovedFile => "moved_file",
             Self::OutOfBandTagChange => "oob_tag",
+            Self::TagParseError => "tag_parse_error",
+            Self::WaveformReadError => "waveform_read_error",
         }
     }
 
@@ -282,6 +304,8 @@ impl CorpusFileSignalType {
             "corpus_file_modified_oob" | "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
             "moved_file" | "file_relocated" => Some(Self::MovedFile),
             "oob_tag" => Some(Self::OutOfBandTagChange),
+            "tag_parse_error" => Some(Self::TagParseError),
+            "waveform_read_error" => Some(Self::WaveformReadError),
             _ => None,
         }
     }
@@ -295,6 +319,8 @@ impl CorpusFileSignalType {
             Self::CorpusFileModifiedOutOfBand => SignalType::CorpusFileModifiedOutOfBand,
             Self::MovedFile => SignalType::MovedFile,
             Self::OutOfBandTagChange => SignalType::OutOfBandTagChange,
+            Self::TagParseError => SignalType::TagParseError,
+            Self::WaveformReadError => SignalType::WaveformReadError,
         }
     }
 }

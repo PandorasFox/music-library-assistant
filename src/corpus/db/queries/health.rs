@@ -82,13 +82,13 @@ impl Database {
         ).unwrap_or(0);
 
         let modified_oob: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signals WHERE issue_type = 'corpus_file_modified_out_of_band'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'corpus_file_modified_oob'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         let tags_changed_oob: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signals WHERE issue_type = 'out_of_band_tag_change'",
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'oob_tag'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);

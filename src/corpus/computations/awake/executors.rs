@@ -605,6 +605,9 @@ pub fn execute_detect_tag_canonicalizations(
         }
     };
 
+    // Clear stale TagCanonicity signals before re-detecting
+    sender.clear_signals_by_type(SignalType::TagCanonicity, witness);
+
     let mut signal_count = 0;
 
     // Helper to emit signals for a set of collisions
@@ -693,6 +696,9 @@ pub fn execute_detect_compound_tag_values(
             );
         }
     };
+
+    // Clear stale CompoundTagValue signals before re-detecting
+    sender.clear_signals_by_type(SignalType::CompoundTagValue, witness);
 
     // Get tag splitting config from opinions
     let tag_separators = crate::config::load_config()
@@ -830,9 +836,16 @@ pub fn execute_verify_out_of_band_changes(
 
         if let Err(e) = execute_verify_tags(read_only_db, track_id, &abs_path) {
             let _ = log_message(&format!(
-                "[COMPUTE] VerifyOutOfBandChanges: error verifying {}: {}",
+                "[COMPUTE] VerifyOutOfBandChanges: tag parse error for {}: {}",
                 rel_path, e
             ));
+            ensure_file_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::TagParseError.into(),
+                rel_path,
+                witness,
+            );
             continue;
         }
 
@@ -957,27 +970,6 @@ pub fn execute_detect_deploy_conflicts(
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
-}
-
-/// Execute CheckDeployConflicts - per-track deploy conflict check.
-///
-/// Placeholder - actual implementation would check a single track's deploy path
-/// against other tracks.
-pub fn execute_check_deploy_conflicts(
-    _read_only_db: &Database,
-    track_id: i64,
-    start: Instant,
-) -> Result {
-    let _ = log_message(&format!(
-        "CheckDeployConflicts: checking track {} (TODO: implement per-track check)",
-        track_id
-    ));
-
-    Result::success(
-        Computation::CheckDeployConflicts { track_id },
-        start.elapsed().as_millis() as u64,
-        Vec::new(),
-    )
 }
 
 // ============================================================================
@@ -1339,6 +1331,9 @@ pub fn execute_detect_inconsistent_album_artist(
             );
         }
     };
+
+    // Clear stale InconsistentAlbumArtist signals before re-detecting
+    sender.clear_signals_by_type(SignalType::InconsistentAlbumArtist, witness);
 
     let issues = match detect_inconsistent_album_artist(read_only_db) {
         Ok(i) => i,

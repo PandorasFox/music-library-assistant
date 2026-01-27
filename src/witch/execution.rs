@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::config;
 use crate::corpus::computations::{Computation, awakening};
-use crate::corpus::db::types::AggregateSignalType;
+use crate::corpus::db::types::{AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::db::Database;
 use crate::corpus::health::normalization::{
     normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
@@ -94,7 +94,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         }
         MutationCategory::FileMove | MutationCategory::FileCopy |
         MutationCategory::Deployment => {
-            let r = file_ops::execute_single(Some(&db), &mutation, stash_root.as_deref(), &witness);
+            let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
             (r.success, r.error)
         }
         MutationCategory::Indexing => {
@@ -124,6 +124,41 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     if success {
         if let Mutation::TagEditAndFlush { track_id, edits, .. } = &mutation {
             clear_affected_canonicity_signals(&db, *track_id, edits, &witness);
+        }
+    }
+
+    // Emit WaveformReadError for indexing mutations where fingerprint extraction failed
+    if success {
+        let resolver = crate::corpus::paths::get_resolver();
+        match &mutation {
+            Mutation::IndexTrack { path, source, metadata } if metadata.fingerprint.is_none() => {
+                if let Some(rel) = resolver.to_relative(path, source) {
+                    if let Some(sender) = db_thread::signal_sender() {
+                        sender.ensure_file_signal(
+                            CorpusFileSignalType::WaveformReadError.into(),
+                            &rel.to_string_lossy(),
+                            &witness,
+                        );
+                    }
+                }
+            }
+            Mutation::IndexFileFromPath { path, source } => {
+                if let Some(rel) = resolver.to_relative(path, source) {
+                    let rel_str = rel.to_string_lossy();
+                    if let Ok(Some(track)) = db.get_track_by_path(&rel_str) {
+                        if track.fingerprint.is_none() {
+                            if let Some(sender) = db_thread::signal_sender() {
+                                sender.ensure_file_signal(
+                                    CorpusFileSignalType::WaveformReadError.into(),
+                                    &rel_str,
+                                    &witness,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -267,7 +302,7 @@ fn clear_library_stale_signals(
         for signal in signals {
             // Key format: "library_stale:{name}:{path}"
             if signal.issue_key.ends_with(&format!(":{}", library_path_str)) {
-                sender.clear_file_signal_for_mutation(
+                sender.clear_file_signal(
                     LibraryFileSignalType::LibraryStale.into(),
                     &signal.issue_key,
                     witness,
@@ -318,7 +353,7 @@ fn clear_affected_canonicity_signals(
 
         if let Some(normalized) = normalized_key {
             let signal_key = format!("{}:{}", edit.tag_name, normalized);
-            sender.clear_aggregate_signal_for_mutation(
+            sender.clear_aggregate_signal(
                 AggregateSignalType::TagCanonicity,
                 &signal_key,
                 witness,
@@ -328,7 +363,7 @@ fn clear_affected_canonicity_signals(
         // For album_artist edits, also clear InconsistentAlbumArtist signals
         if edit.tag_name == "album_artist" && !track_album.is_empty() {
             let normalized_album = normalize_album(&track_album);
-            sender.clear_aggregate_signal_for_mutation(
+            sender.clear_aggregate_signal(
                 AggregateSignalType::InconsistentAlbumArtist,
                 &normalized_album,
                 witness,

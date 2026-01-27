@@ -192,14 +192,11 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     asleep::Computation::ScanCorpusDirectory { directory, source } => {
                         asleep::execute_scan_corpus_directory(read_only_db, directory, source, &witness, start)
                     }
-                    asleep::Computation::CompareInodes { source, disk_state } => {
-                        asleep::execute_compare_inodes(read_only_db, source, disk_state, &witness, start)
-                    }
                     asleep::Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
                         asleep::execute_verify_mtime(read_only_db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)
                     }
                     asleep::Computation::VerifyTags { track_id, path } => {
-                        asleep::execute_verify_tags(read_only_db, *track_id, path, start)
+                        asleep::execute_verify_tags(read_only_db, *track_id, path, &witness, start)
                     }
                 };
                 ComputationResult::from_asleep(result)
@@ -265,9 +262,6 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     }
                     awake::Computation::DetectDeployConflicts => {
                         awake::execute_detect_deploy_conflicts(read_only_db, &witness, start)
-                    }
-                    awake::Computation::CheckDeployConflicts { track_id } => {
-                        awake::execute_check_deploy_conflicts(read_only_db, *track_id, start)
                     }
                     awake::Computation::DeriveDeployHealthSignals { library_name, library_root, corpus_path_prefixes } => {
                         awake::execute_derive_deploy_health_signals(read_only_db, library_name, library_root, corpus_path_prefixes, &witness, start)

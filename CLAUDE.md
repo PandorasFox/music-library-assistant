@@ -8,7 +8,7 @@ Do not try to "refresh" signals. MLA is designed around precisely recomputing re
 
 We use 0-byte Witness objects as guarantees for some compile-time guarantees about correctness and operational intents. Do not ever instantiate a Witness object - do a todo!() instead so that a panic happens and *I* can decide if a Witness is appropriately instantiable there, or not.
 
-DO NOT EVER REMOVE FILES FROM THE FILESYSTEM. YOU ARE NOT ALLOWED TO IMPLEMENT THAT EVER. THIS TOOL DOES NOT DESTROY DATA.
+DO NOT EVER REMOVE FILES FROM THE *CORPUS FILESYSTEM*. YOU ARE NOT ALLOWED TO IMPLEMENT FILE DELETION/UNLINKING, EVER. THIS TOOL DOES NOT DESTROY DATA. Cleaning up source code files via deletion is perfectly acceptable development practice, however.
 
 ### Database Access Patterns
 

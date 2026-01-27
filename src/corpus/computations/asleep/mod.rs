@@ -15,7 +15,6 @@
 //! - `ClearExistingObservationState` - Clear stale FileInCorpus signals before fresh scan
 //! - `WalkCorpus` - Enumerate directories, spawn per-directory scans
 //! - `ScanCorpusDirectory` - Scan single directory, emit FileInCorpus signals
-//! - `CompareInodes` - Compare disk vs index inodes (no longer used, vestigial)
 //! - `VerifyMtime` - Check file modification time
 //! - `VerifyTags` - Compare disk tags to indexed tags
 
@@ -61,17 +60,7 @@ pub enum Computation {
         source: String,
     },
 
-    /// Phase 2: Compare disk state to database index.
-    ///
-    /// Creates signals for:
-    /// - MissingFile: indexed files not on disk
-    /// - UnindexedFile: disk files not indexed
-    CompareInodes {
-        source: String,
-        disk_state: Vec<(i64, PathBuf, i64, i64)>,
-    },
-
-    /// Phase 3: Verify single file mtime.
+    /// Verify single file mtime.
     ///
     /// Checks if current mtime differs from expected (from scan_state).
     /// Spawns VerifyTags if mtime mismatched.
@@ -98,7 +87,6 @@ impl Computation {
             Computation::ClearExistingObservationState => "Clearing observation state",
             Computation::WalkCorpus { .. } => "Observing",
             Computation::ScanCorpusDirectory { .. } => "Scanning directory",
-            Computation::CompareInodes { .. } => "Comparing inodes",
             Computation::VerifyMtime { .. } => "Verifying mtime",
             Computation::VerifyTags { .. } => "Tag verification",
         }
@@ -110,7 +98,6 @@ impl Computation {
             Computation::ClearExistingObservationState => None,
             Computation::WalkCorpus { root, .. } => Some(root),
             Computation::ScanCorpusDirectory { directory, .. } => Some(directory),
-            Computation::CompareInodes { .. } => None,
             Computation::VerifyMtime { path, .. } => Some(path),
             Computation::VerifyTags { path, .. } => Some(path),
         }

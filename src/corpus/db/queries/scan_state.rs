@@ -130,52 +130,6 @@ impl Database {
         Ok(deleted)
     }
 
-    /// Get all indexed inodes for a source (used by eyeballing)
-    pub fn get_all_scan_state_inodes(&self, source: &str) -> Result<HashSet<i64>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT inode FROM scan_state WHERE source = ?1")?;
-        let inodes: HashSet<i64> = stmt
-            .query_map(params![source], |row| row.get(0))?
-            .collect::<Result<HashSet<_>, _>>()?;
-
-        Ok(inodes)
-    }
-
-    /// Get paths for specific inodes from scan_state (used for logging missing files)
-    pub fn get_scan_state_paths_for_inodes(
-        &self,
-        source: &str,
-        inodes: &HashSet<i64>,
-    ) -> Result<Vec<String>> {
-        if inodes.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Build IN clause for query
-        let placeholders: Vec<String> = inodes.iter().map(|_| "?".to_string()).collect();
-        let query = format!(
-            "SELECT path FROM scan_state WHERE source = ?1 AND inode IN ({})",
-            placeholders.join(",")
-        );
-
-        let mut stmt = self.conn.prepare(&query)?;
-
-        // Build params: source first, then all inodes
-        let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        param_values.push(Box::new(source.to_string()));
-        for inode in inodes {
-            param_values.push(Box::new(*inode));
-        }
-        let params: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
-
-        let paths: Vec<String> = stmt
-            .query_map(&params[..], |row| row.get(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(paths)
-    }
-
     // ========================================================================
     // Signal Resolution Operations
     // ========================================================================

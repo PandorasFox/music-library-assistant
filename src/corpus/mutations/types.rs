@@ -142,7 +142,6 @@ pub enum Mutation {
     Move {
         source: PathBuf,
         destination: PathBuf,
-        track_id: Option<i64>,
     },
 
     /// Copy a file from source to destination.
@@ -154,7 +153,6 @@ pub enum Mutation {
     /// Move a file to the stash directory.
     MoveToStash {
         path: PathBuf,
-        track_id: Option<i64>,
         stash_name: String,
     },
 
@@ -534,7 +532,6 @@ mod tests {
         let file_move = Mutation::Move {
             source: PathBuf::from("/a"),
             destination: PathBuf::from("/b"),
-            track_id: Some(1),
         };
         assert_eq!(file_move.category(), MutationCategory::FileMove);
 

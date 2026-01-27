@@ -190,7 +190,7 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
             | Mutation::UpdateTrack { track_id, .. } => Some(*track_id),
 
             // Mutations with optional track_id
-            Mutation::MoveToStash { track_id, .. } | Mutation::Move { track_id, .. } => *track_id,
+            Mutation::MoveToStash { .. } | Mutation::Move { .. } => None,
 
             // Mutations with track_id (transcode)
             Mutation::Transcode { track_id, .. } => Some(*track_id),

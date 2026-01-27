@@ -529,7 +529,8 @@ pub fn write_tags_to_file(
     use std::collections::HashMap;
 
     // 1. PRESERVE: Read existing tags from file BEFORE making changes
-    let existing_tags = read_all_tags(path).unwrap_or_default();
+    let existing_tags = read_all_tags(path)
+        .with_context(|| format!("Failed to read existing tags from {}", path.display()))?;
 
     // 2. MERGE: Build map of updates and preserve non-updated tags
     let updates: HashMap<&str, &str> = tags.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -635,7 +636,8 @@ pub fn write_tags_to_file_multi_value(
     use std::collections::HashSet;
 
     // 1. Read existing tags from file
-    let existing_tags = read_all_tags(path).unwrap_or_default();
+    let existing_tags = read_all_tags(path)
+        .with_context(|| format!("Failed to read existing tags from {}", path.display()))?;
 
     // 2. Determine which tag names are being replaced
     let replaced_keys: HashSet<String> = tags.iter().map(|(k, _)| k.to_lowercase()).collect();

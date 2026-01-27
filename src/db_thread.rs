@@ -6,7 +6,7 @@
 //!
 //! ## Architecture
 //!
-//! - `SignalWriteSender`: For health signal operations (requires `ComputationWitness`)
+//! - `SignalWriteSender`: For health signal operations (requires `SignalWitness`)
 //! - `IndexWriteSender`: For index mutations (requires `MutationExecutionWitness`) - Phase 2
 //! - `DbThreadHandle`: For stats access and shutdown coordination
 //!
@@ -30,6 +30,23 @@ use crate::corpus::db::types::{
 use crate::corpus::db::Database;
 use crate::witch::MutationExecutionWitness;
 use crate::config;
+
+// ============================================================================
+// Signal Witness Trait
+// ============================================================================
+
+/// Marker trait for types that authorize signal emission.
+///
+/// Both `ComputationWitness` (computation context) and `MutationExecutionWitness`
+/// (mutation context) implement this trait. Signal emission methods accept
+/// `&impl SignalWitness` to work in either context.
+///
+/// Creation restrictions on each witness type ensure signals can only be
+/// emitted from authorized execution contexts.
+pub trait SignalWitness {}
+
+impl SignalWitness for ComputationWitness {}
+impl SignalWitness for MutationExecutionWitness {}
 
 // ============================================================================
 // Global Sender Access
@@ -270,7 +287,7 @@ impl SignalWriteSender {
         &self,
         signal_type: FileSignalType,
         path: &str,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::EnsureFileSignal {
@@ -300,21 +317,7 @@ impl SignalWriteSender {
         &self,
         signal_type: FileSignalType,
         path: &str,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearFileSignal {
-            signal_type,
-            path: path.to_string(),
-        });
-    }
-
-    /// Clear a file signal from mutation context (idempotent delete).
-    pub fn clear_file_signal_for_mutation(
-        &self,
-        signal_type: FileSignalType,
-        path: &str,
-        _witness: &MutationExecutionWitness,
+        _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearFileSignal {
@@ -368,21 +371,7 @@ impl SignalWriteSender {
         &self,
         signal_type: AggregateSignalType,
         key: &str,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignal {
-            signal_type,
-            key: key.to_string(),
-        });
-    }
-
-    /// Clear an aggregate signal from mutation context (idempotent delete).
-    pub fn clear_aggregate_signal_for_mutation(
-        &self,
-        signal_type: AggregateSignalType,
-        key: &str,
-        _witness: &MutationExecutionWitness,
+        _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearAggregateSignal {

@@ -63,12 +63,18 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
         "SELECT id, fingerprint FROM tracks WHERE fingerprint IS NOT NULL AND fingerprint != '' AND fingerprint_blob IS NULL"
     )?;
 
-    let tracks: Vec<(i64, String)> = stmt
+    let results: Vec<_> = stmt
         .query_map(params![], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?
-        .filter_map(|r| r.ok())
         .collect();
+    let err_count = results.iter().filter(|r| r.is_err()).count();
+    if err_count > 0 {
+        let _ = log_message(&format!(
+            "[MIGRATION v3→v4] Warning: {} track rows failed to read", err_count
+        ));
+    }
+    let tracks: Vec<(i64, String)> = results.into_iter().filter_map(|r| r.ok()).collect();
 
     let total = tracks.len();
     if total > 0 {
@@ -99,12 +105,18 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
         "SELECT id, metadata_json FROM signals WHERE issue_type = 'fingerprint_dup' AND metadata_json IS NOT NULL"
     )?;
 
-    let signals: Vec<(i64, String)> = signal_stmt
+    let signal_results: Vec<_> = signal_stmt
         .query_map(params![], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?
-        .filter_map(|r| r.ok())
         .collect();
+    let signal_err_count = signal_results.iter().filter(|r| r.is_err()).count();
+    if signal_err_count > 0 {
+        let _ = log_message(&format!(
+            "[MIGRATION v3→v4] Warning: {} signal rows failed to read", signal_err_count
+        ));
+    }
+    let signals: Vec<(i64, String)> = signal_results.into_iter().filter_map(|r| r.ok()).collect();
 
     for (signal_id, metadata_json) in signals {
         if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&metadata_json) {
@@ -368,10 +380,16 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     let mut conflict_stmt = db.conn.prepare(
         "SELECT id, issue_key FROM signals WHERE issue_type = 'deploy_conflict'"
     )?;
-    let conflicts: Vec<(i64, String)> = conflict_stmt
+    let conflict_results: Vec<_> = conflict_stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
-        .filter_map(|r| r.ok())
         .collect();
+    let conflict_err_count = conflict_results.iter().filter(|r| r.is_err()).count();
+    if conflict_err_count > 0 {
+        let _ = log_message(&format!(
+            "[MIGRATION v4→v5] Warning: {} deploy_conflict rows failed to read", conflict_err_count
+        ));
+    }
+    let conflicts: Vec<(i64, String)> = conflict_results.into_iter().filter_map(|r| r.ok()).collect();
     drop(conflict_stmt);
 
     let mut conflict_updated = 0;
@@ -398,10 +416,16 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     let mut metadata_stmt = db.conn.prepare(
         "SELECT id, metadata_json FROM signals WHERE issue_type = 'deploy_conflict' AND metadata_json IS NOT NULL"
     )?;
-    let metadata_signals: Vec<(i64, String)> = metadata_stmt
+    let metadata_results: Vec<_> = metadata_stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
-        .filter_map(|r| r.ok())
         .collect();
+    let metadata_err_count = metadata_results.iter().filter(|r| r.is_err()).count();
+    if metadata_err_count > 0 {
+        let _ = log_message(&format!(
+            "[MIGRATION v4→v5] Warning: {} metadata signal rows failed to read", metadata_err_count
+        ));
+    }
+    let metadata_signals: Vec<(i64, String)> = metadata_results.into_iter().filter_map(|r| r.ok()).collect();
     drop(metadata_stmt);
 
     let corpus_root_owned = corpus_root.to_string();

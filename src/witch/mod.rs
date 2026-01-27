@@ -142,13 +142,19 @@ pub struct Witch {
     /// Path resolver for converting between absolute filesystem paths and
     /// relative database paths. Created from Config at startup.
     path_resolver: PathResolver,
+
+    /// Handle to the dedicated logging thread for shutdown coordination.
+    log_thread_handle: Option<crate::logging::LogThreadHandle>,
 }
 
 impl Witch {
     /// Linger duration for completed session display.
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
-    pub fn new(cfg: &Config) -> Self {
+    pub fn new(cfg: &Config, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
+        // Spawn the logging thread if we have the receiver
+        let log_thread_handle = log_rx.map(crate::logging::spawn_log_thread);
+
         // Use rayon's global thread pool with work-stealing for better performance.
         // Thread count from config (default: 2x logical cores for I/O-bound workloads).
         let num_threads = config::get_worker_thread_count();
@@ -158,7 +164,7 @@ impl Witch {
             .num_threads(num_threads)
             .build_global();
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_general(format!(
             "[WORKER] Using rayon thread pool with {} threads",
             num_threads
         ));
@@ -203,12 +209,13 @@ impl Witch {
             worker_stats_shared,
             ui_read_cache: UiReadCache::new(),
             path_resolver: PathResolver::new(cfg),
+            log_thread_handle,
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
         if let Some(ref stats) = she.worker_stats_shared {
             let (_tasks, total_qw, max_qw) = stats.debug_values();
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[PERF INIT] Witch::new() - total_queue_wait_ms={}, max_queue_wait_ms={}, total_processed={}",
                 total_qw, max_qw, she.total_processed
             ));
@@ -218,12 +225,12 @@ impl Witch {
     }
 
     /// Create a new Witch with opinions applied.
-    pub fn with_opinions(cfg: &Config, read_only_mode: bool, freshen_last_stage_at_startup: bool) -> Self {
-        let mut she = Self::new(cfg);
+    pub fn with_opinions(cfg: &Config, read_only_mode: bool, freshen_last_stage_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
+        let mut she = Self::new(cfg, log_rx);
         she.read_only_mode = read_only_mode;
         she.freshen_last_stage_at_startup = freshen_last_stage_at_startup;
         if freshen_last_stage_at_startup {
-            let _ = config::log_message(
+            crate::logging::log_general(
                 "[WITCH] freshen_last_stage_at_startup=true: will run content analysis once after awakening"
             );
         }
@@ -343,7 +350,7 @@ impl Witch {
         if let Some(ref stats) = self.worker_stats_shared {
             let (_, total_qw_before, _) = stats.debug_values();
             if self.total_processed == 0 && total_qw_before != 0 {
-                let _ = config::log_message(&format!(
+                crate::logging::log_perf(format!(
                     "[PERF BUG] tick() called with total_processed=0 but total_queue_wait_ms={}!",
                     total_qw_before
                 ));
@@ -371,13 +378,13 @@ impl Witch {
                 // DEBUG: Log queue wait values
                 let (_, total_qw_now, max_qw_now) = stats.debug_values();
                 if self.total_processed == 1 {
-                    let _ = config::log_message(&format!(
+                    crate::logging::log_perf(format!(
                         "[PERF FIRST] FIRST TASK: queue_wait_ms={}, total_queue_wait_ms={} (should equal queue_wait_ms!), max_queue_wait_ms={}",
                         result.queue_wait_ms, total_qw_now, max_qw_now
                     ));
                 }
                 if self.total_processed <= 50 || self.total_processed % 500 == 0 || result.queue_wait_ms > 50000 {
-                    let _ = config::log_message(&format!(
+                    crate::logging::log_perf(format!(
                         "[PERF DEBUG] queue_wait_ms={} for task={}, total_processed={}, total_queue_wait_ms={}, max_queue_wait_ms={}",
                         result.queue_wait_ms, result.label, self.total_processed, total_qw_now, max_qw_now
                     ));
@@ -490,7 +497,7 @@ impl Witch {
             // Observing completed while Closed: begin Awakening
             (true, EyeState::Closed) => {
                 self.observation_state = CorpusObservationState::Complete;
-                let _ = config::log_message(&format!(
+                crate::logging::log_general(format!(
                     "[STATE] Observing complete. Transitioning Closed -> Awakening. \
                      Processed {} tasks.",
                     self.total_processed
@@ -502,7 +509,7 @@ impl Witch {
             // Re-observing completed while Awake: sync signals via awakening
             (true, EyeState::Awake) => {
                 self.observation_state = CorpusObservationState::Complete;
-                let _ = config::log_message(&format!(
+                crate::logging::log_general(format!(
                     "[STATE] Re-observing complete while Awake. Queueing awakening to sync signals. \
                      Processed {} tasks.",
                     self.total_processed
@@ -517,7 +524,7 @@ impl Witch {
 
             // Awakening completed: transition to Awake
             (false, EyeState::Awakening) => {
-                let _ = config::log_message(&format!(
+                crate::logging::log_general(format!(
                     "[STATE] Awakening complete. Transitioning Awakening -> Awake. \
                      Processed {} tasks.",
                     self.total_processed
@@ -526,11 +533,11 @@ impl Witch {
 
                 if !self.read_only_mode {
                     self.accepting_mutations = true;
-                    let _ = config::log_message("[STATE] Mutations now enabled (read-write mode).");
+                    crate::logging::log_general("[STATE] Mutations now enabled (read-write mode).");
                 }
 
                 if self.freshen_last_stage_at_startup {
-                    let _ = config::log_message(
+                    crate::logging::log_general(
                         "[STATE] freshen_last_stage_at_startup set - queueing content analysis"
                     );
                     queue_content_analysis_after_reset = true;
@@ -546,7 +553,7 @@ impl Witch {
                     } else {
                         "post-mutation"
                     };
-                    let _ = config::log_message(&format!(
+                    crate::logging::log_general(format!(
                         "[STATE] Session complete (Awake, {}). Auto-triggering content analysis. \
                          Processed {} tasks.",
                         reason, self.total_processed
@@ -554,7 +561,7 @@ impl Witch {
                     queue_content_analysis_after_reset = true;
                     if self.freshen_last_stage_at_startup {
                         self.freshen_last_stage_at_startup = false;
-                        let _ = config::log_message(
+                        crate::logging::log_general(
                             "[DAEMON] freshen_last_stage_at_startup latch cleared (one-shot complete)"
                         );
                     }
@@ -597,7 +604,7 @@ impl Witch {
     /// This queues `ScheduleSecondLevelDerivations` which will spawn per-directory
     /// computations to derive signals like UnindexedFile, MissingFile, etc.
     fn queue_awakening_computations(&mut self) {
-        let _ = config::log_message(
+        crate::logging::log_general(
             "[STATE] Queueing ScheduleSecondLevelDerivations for Awakening"
         );
 
@@ -616,7 +623,7 @@ impl Witch {
     /// Only callable from `transition_to_completed` when mutations drain while Awake.
     /// Sealed by requiring `ContentAnalysisWitness` which can only be created in that context.
     fn queue_content_analysis(&mut self, _witness: ContentAnalysisWitness) {
-        let _ = config::log_message(
+        crate::logging::log_general(
             "[STATE] Queueing ScheduleContentAnalysis for content analysis"
         );
 
@@ -723,7 +730,7 @@ impl Witch {
         let queue_time = Instant::now();
         let mutations: Vec<_> = mutations.into_iter().collect();
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_general(format!(
             "[WORKER] queue_mutations_internal: queueing {} mutations (label={:?})",
             mutations.len(), label
         ));
@@ -967,7 +974,7 @@ impl Witch {
 
         // DEBUG: Log if avg > max (should never happen now with isolated stats)
         if stats.tasks_completed > 0 && stats.queue_wait_avg_ms > stats.queue_wait_max_ms {
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[PERF BUG] avg > max! tasks={}, avg={}, max={}",
                 stats.tasks_completed, stats.queue_wait_avg_ms, stats.queue_wait_max_ms
             ));
@@ -1002,6 +1009,20 @@ impl Witch {
         // Drain any pending results (discard them)
         while self.result_rx.try_recv().is_ok() {}
         self.in_flight = 0;
+    }
+}
+
+impl Drop for Witch {
+    fn drop(&mut self) {
+        // Shut down the DB thread first so its shutdown messages get logged
+        crate::db_thread::request_shutdown();
+        self.db_thread_handle.join();
+
+        // Then shut down the logging thread
+        crate::logging::request_shutdown();
+        if let Some(ref mut handle) = self.log_thread_handle {
+            handle.join();
+        }
     }
 }
 

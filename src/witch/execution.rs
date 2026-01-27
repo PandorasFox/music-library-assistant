@@ -25,7 +25,7 @@ pub(super) fn open_db_for_task(label: String, start: Instant, queue_wait_ms: u64
     match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
         Ok(db) => Ok(db),
         Err(e) => {
-            let _ = config::log_message(&format!(
+            crate::logging::log_error(format!(
                 "[EXECUTION] DB open FAILED: {}",
                 e
             ));
@@ -63,7 +63,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     let start = Instant::now();
 
-    let _ = config::log_message(&format!(
+    crate::logging::log_mutation(format!(
         "[EXECUTION] execute_mutation START: {:?} (label={:?})",
         mutation.category(), label
     ));
@@ -85,7 +85,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     let (success, error) = match mutation.category() {
         MutationCategory::TagEdit => {
-            let _ = config::log_message(&format!(
+            crate::logging::log_mutation(format!(
                 "[EXECUTION] TagEdit mutation: {:?}",
                 mutation
             ));
@@ -114,10 +114,18 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    let _ = config::log_message(&format!(
+    crate::logging::log_mutation(format!(
         "[EXECUTION] execute_mutation END: success={}, error={:?}, duration={}ms",
         success, error, duration_ms
     ));
+    // Mirror failed mutations to errors.log for central error diagnosis
+    if !success {
+        if let Some(ref err) = error {
+            crate::logging::log_error(format!(
+                "[EXECUTION] Mutation failed (label={:?}): {}", label, err
+            ));
+        }
+    }
 
     // Clear affected TagCanonicity and InconsistentAlbumArtist signals after successful tag edits
     // The next awake-phase computations will recreate any still-valid signals

@@ -276,7 +276,7 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
 
         // Log timing (only on first access when connection is opened, and only if timing instrumentation enabled)
         if db_access_ms > 1 && config::is_timing_enabled() {
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[PERF] {} db_access={}ms (thread-local init)",
                 computation.label(),
                 db_access_ms

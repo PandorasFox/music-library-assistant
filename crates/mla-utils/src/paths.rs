@@ -53,16 +53,15 @@ pub fn get_db_path() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("mla.db"))
 }
 
-/// Get the log path for stderr-type logging and warnings
-/// Located in XDG data directory: ~/.local/share/mla/mla.log
-pub fn get_log_path() -> Result<PathBuf> {
-    Ok(get_data_dir()?.join("mla.log"))
-}
-
-/// Get the path for operation summary logs
-/// Located at ~/.local/share/mla/operations-overview.log
-pub fn get_operations_log_path() -> Result<PathBuf> {
-    Ok(get_data_dir()?.join("operations-overview.log"))
+/// Get the logs directory path (~/.local/share/mla/logs/)
+///
+/// Creates the directory if it doesn't exist.
+pub fn get_logs_dir() -> Result<PathBuf> {
+    let logs_dir = get_data_dir()?.join("logs");
+    if !logs_dir.exists() {
+        fs::create_dir_all(&logs_dir).context("Failed to create logs directory")?;
+    }
+    Ok(logs_dir)
 }
 
 #[cfg(test)]
@@ -81,10 +80,7 @@ mod tests {
         let db = get_db_path().unwrap();
         assert!(db.ends_with("mla.db"));
 
-        let log = get_log_path().unwrap();
-        assert!(log.ends_with("mla.log"));
-
-        let ops_log = get_operations_log_path().unwrap();
-        assert!(ops_log.ends_with("operations-overview.log"));
+        let logs = get_logs_dir().unwrap();
+        assert!(logs.ends_with("logs"));
     }
 }

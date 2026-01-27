@@ -97,7 +97,7 @@ fn validate_edits_against_current(
                     .map(|(_, v)| v.as_str())
                     .collect();
 
-                let _ = crate::config::log_message(&format!(
+                crate::logging::log_error(format!(
                     "Tag edit conflict for '{}': expected {}='{}' but not found. \
                      File may have been modified externally. Current values for '{}': {:?}",
                     path.display(),
@@ -142,7 +142,7 @@ fn execute_combined(
 
     // Early return if all edits were filtered out
     if edits.is_empty() {
-        let _ = crate::config::log_message(&format!(
+        crate::logging::log_general(format!(
             "Tag edit for '{}': all edits were no-ops, skipping",
             path.display()
         ));

@@ -65,7 +65,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use crate::config::{self, Config};
+use crate::config::Config;
 use app::EyeAnimation;
 use types::ProgressStatsUpdater;
 
@@ -162,6 +162,9 @@ pub(crate) struct App {
     // The Witch - enforcer of orderliness, handles all mutations and background work
     pub(super) witch: Option<crate::witch::Witch>,
 
+    // Log channel receiver, held until the Witch takes ownership
+    log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
+
     // Throughput tracking for rolling average (timestamp, bytes_processed)
     throughput_samples: VecDeque<(Instant, u64)>,
 
@@ -170,7 +173,7 @@ pub(crate) struct App {
 }
 
 impl App {
-    fn new(config: Config) -> Self {
+    fn new(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>) -> Self {
         Self {
             config,
             should_quit: false,
@@ -192,6 +195,7 @@ impl App {
             intake_confirmation: None,
             format_std: None,
             witch: None,
+            log_rx: Some(log_rx),
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
         }
@@ -439,7 +443,8 @@ impl App {
     pub(super) fn witch(&mut self) -> &mut crate::witch::Witch {
         if self.witch.is_none() {
             let force_freshen = self.config.opinions.startup.freshen_last_stage_at_startup;
-            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_freshen));
+            let log_rx = self.log_rx.take();
+            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_freshen, log_rx));
         }
         self.witch.as_mut().unwrap()
     }
@@ -518,12 +523,9 @@ fn render(f: &mut Frame, app: &mut App) {
 // Entry Point
 // ============================================================================
 
-pub fn run_menu(config: Config) -> Result<()> {
-    // Log startup with timestamp
-    let _ = config::log_message(&format!(
-        "=== MLA startup: {} ===",
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-    ));
+pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>) -> Result<()> {
+    // Log startup
+    crate::logging::log_general("=== MLA startup ===");
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -534,7 +536,7 @@ pub fn run_menu(config: Config) -> Result<()> {
     // Check for and run database migrations before starting app
     startup::check_and_run_migrations(&mut terminal)?;
 
-    let mut app = App::new(config);
+    let mut app = App::new(config, log_rx);
 
     // Observing ALWAYS runs at startup
     // Create progress screen and queue initial observing via the Witch
@@ -573,8 +575,8 @@ fn run_app<B: ratatui::backend::Backend>(
 
     // Register signal handlers
     if let Err(e) = register_signal_handlers(Arc::clone(&signal_received)) {
-        let _ = crate::config::log_message(&format!(
-            "[WARN] Failed to register signal handlers: {}",
+        crate::logging::log_error(format!(
+            "Failed to register signal handlers: {}",
             e
         ));
     }
@@ -593,7 +595,7 @@ fn run_app<B: ratatui::backend::Backend>(
         let tick_status = app.witch().tick();
         let tick_duration = tick_start.elapsed();
         if tick_duration.as_millis() > 16 {
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[FRAME DEBUG] witch.tick() took {}ms, drained {} results",
                 tick_duration.as_millis(),
                 tick_status.total_processed
@@ -631,7 +633,7 @@ fn run_app<B: ratatui::backend::Backend>(
         terminal.draw(|f| render(f, app))?;
         let draw_duration = draw_start.elapsed();
         if draw_duration.as_millis() > 16 {
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[FRAME DEBUG] terminal.draw() took {}ms",
                 draw_duration.as_millis()
             ));
@@ -639,7 +641,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
         let frame_duration = frame_start.elapsed();
         if frame_duration.as_millis() > 16 {
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[FRAME DEBUG] SLOW FRAME: total {}ms (tick={}ms, draw={}ms)",
                 frame_duration.as_millis(),
                 tick_duration.as_millis(),

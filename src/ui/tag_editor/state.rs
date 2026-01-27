@@ -2305,8 +2305,8 @@ pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
     let disk_path = match resolver.resolve(Path::new(&track.path), &track.source) {
         Some(p) => p,
         None => {
-            let _ = crate::config::log_message(&format!(
-                "Warning: Could not resolve path for track: {}",
+            crate::logging::log_error(format!(
+                "Could not resolve path for track: {}",
                 track.path
             ));
             return Vec::new();
@@ -2316,8 +2316,8 @@ pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
     let all_tags = match metadata::read_all_tags(&disk_path) {
         Ok(tags) => tags,
         Err(e) => {
-            let _ = crate::config::log_message(&format!(
-                "Warning: Could not read tags from {}: {}",
+            crate::logging::log_error(format!(
+                "Could not read tags from {}: {}",
                 disk_path.display(), e
             ));
             Vec::new()

@@ -7,7 +7,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::config::log_message;
+use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     clear_file_signal_if_present, ensure_file_signal_if_missing,
     ensure_file_signal_with_metadata_if_missing, enumerate_all_directories,
@@ -30,19 +30,19 @@ pub fn execute_schedule_second_level_derivations(
     read_only_db: &Database,
     start: Instant,
 ) -> Result {
-    let _ = log_message("[COMPUTE] ScheduleSecondLevelDerivations: starting");
+    log_general("[COMPUTE] ScheduleSecondLevelDerivations: starting");
 
     // Get all directories that have:
     // 1. FileInCorpus signals (corpus directories with audio files)
     // 2. Indexed tracks (may be missing from corpus now)
     let corpus_dirs = read_only_db.get_distinct_corpus_directories().unwrap_or_default();
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] Found {} directories with FileInCorpus signals",
         corpus_dirs.len()
     ));
 
     let index_dirs = read_only_db.get_distinct_track_directories().unwrap_or_default();
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] Found {} directories with indexed tracks",
         index_dirs.len()
     ));
@@ -52,7 +52,7 @@ pub fn execute_schedule_second_level_derivations(
         .chain(index_dirs.into_iter())
         .collect();
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] ScheduleSecondLevelDerivations: spawning {} directory computations",
         all_dirs.len()
     ));
@@ -66,7 +66,7 @@ pub fn execute_schedule_second_level_derivations(
     // Also spawn library health computations for each configured library
     if let Ok(config) = crate::config::load_config() {
         let library_names = get_configured_library_names(&config);
-        let _ = log_message(&format!(
+        log_general(format!(
             "[COMPUTE] ScheduleSecondLevelDerivations: spawning {} library walks",
             library_names.len()
         ));
@@ -326,7 +326,7 @@ pub fn execute_walk_library(
     };
 
     if !library_root.exists() {
-        let _ = log_message(&format!(
+        log_general(format!(
             "[COMPUTE] WalkLibrary: library root does not exist: {:?}",
             library_root
         ));
@@ -343,7 +343,7 @@ pub fn execute_walk_library(
 
     let (directories, _symlink_count) = enumerate_all_directories(library_root);
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] WalkLibrary '{}': found {} directories in {:?}",
         library_name,
         directories.len(),

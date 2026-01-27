@@ -22,13 +22,17 @@ pub const MLA_TITLE: &str = "Music Library Assistant (mla alpha 4)";
 
 mod config;
 mod corpus;
-mod witch;
 mod db_thread;
+mod logging;
 mod ui;
+mod witch;
 
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    // Step 0: Initialize log channel FIRST (before any logging happens)
+    let log_rx = logging::init_log_channel();
+
     // Step 1: Ensure config directory exists
     let config_dir = config::get_config_dir()?;
     std::fs::create_dir_all(&config_dir)?;
@@ -37,7 +41,7 @@ fn main() -> Result<()> {
     let config = match config::load_config() {
         Ok(cfg) => {
             // Step 3: Log successful parse and initialize performance globals
-            let _ = config::log_message("Config loaded successfully");
+            logging::log_general("Config loaded successfully");
             config::init_performance_config(cfg.opinions.performance.clone());
             cfg
         }
@@ -58,7 +62,7 @@ fn main() -> Result<()> {
 
     // Step 5: Clear terminal and start TUI
     print!("\x1B[2J\x1B[1;1H"); // ANSI: clear screen + move cursor to top
-    ui::run_menu(config)?;
+    ui::run_menu(config, log_rx)?;
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! Configuration Module
 //!
-//! KDL configuration parsing, path utilities, and logging.
+//! KDL configuration parsing and path utilities.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 // Re-export utilities from mla-utils for backward compatibility
 pub use mla_utils::{
-    get_config_dir, get_db_path, is_audio_extension, log_message, log_scan_error,
+    get_config_dir, get_db_path, is_audio_extension,
     AUDIO_EXTENSIONS,
 };
 
@@ -433,7 +433,7 @@ impl Config {
         }
 
         // Step 6: Log success
-        log_message("Filesystem validation passed")?;
+        crate::logging::log_general("Filesystem validation passed");
         Ok(())
     }
 

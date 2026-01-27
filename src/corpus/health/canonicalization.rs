@@ -9,7 +9,6 @@ use super::collision::{
     get_album_artist_collisions, get_album_collisions, get_artist_collisions,
     get_genre_collisions, TagCollision,
 };
-use crate::config;
 use crate::corpus::db::Database;
 
 /// A detected canonicalization (not yet stored).
@@ -52,7 +51,7 @@ pub fn detect_canonicalizations(read_only_db: &Database) -> Result<Vec<DetectedC
         let album_count = get_album_collisions(read_only_db).map(|c| c.len()).unwrap_or(0);
         let genre_count = get_genre_collisions(read_only_db).map(|c| c.len()).unwrap_or(0);
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_general(format!(
             "Tag canonicalization: detected {} issues (artists: {}, album_artists: {}, albums: {}, genres: {})",
             results.len(),
             artist_count,
@@ -88,7 +87,7 @@ fn collect_collision_entries(
             confidence: Some(collision.confidence),
         });
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_general(format!(
             "[{}] Canonicalization: '{}' -> '{}' (confidence: {:.2})",
             collision.tag_name, variant, collision.canonical, collision.confidence
         ));

@@ -291,7 +291,7 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
         Ok(tags) => tags,
         Err(e) => {
             // File might not exist or be unreadable - log but don't fail
-            let _ = crate::config::log_message(&format!(
+            crate::logging::log_error(format!(
                 "VerifyTags: Could not read tags from {}: {}",
                 path.display(),
                 e

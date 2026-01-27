@@ -63,6 +63,17 @@ pub fn signal_sender() -> Option<&'static SignalWriteSender> {
     SIGNAL_SENDER.get()
 }
 
+/// Signal the DB thread to close its connection and exit.
+///
+/// Called by `Witch::drop()`. After this, further signal sends will still
+/// reach the channel but the thread will have exited, so they queue until
+/// process exit.
+pub fn request_shutdown() {
+    if let Some(sender) = SIGNAL_SENDER.get() {
+        let _ = sender.tx.send(SignalWriteOp::Shutdown);
+    }
+}
+
 // ============================================================================
 // Message Types
 // ============================================================================
@@ -138,6 +149,13 @@ enum SignalWriteOp {
         mtime_secs: i64,
         mtime_nanos: i64,
     },
+
+    // =========================================================================
+    // Shutdown
+    // =========================================================================
+
+    /// Shutdown sentinel — close DB connection and exit thread.
+    Shutdown,
 }
 
 /// Index write operations (track mutations) - Phase 2 placeholder.
@@ -206,14 +224,19 @@ pub struct DbThreadStats {
 }
 
 /// Handle to the DB thread for stats access and shutdown coordination.
-///
-/// Note: `thread_handle` is never accessed but must be retained - dropping it kills the thread.
 pub struct DbThreadHandle {
     stats: Arc<SharedStats>,
-    _thread_handle: JoinHandle<()>,
+    thread_handle: Option<JoinHandle<()>>,
 }
 
 impl DbThreadHandle {
+    /// Join the DB thread, blocking until it finishes closing connections.
+    pub fn join(&mut self) {
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+    }
+
     /// Check if the write queue is empty (for shutdown blocking).
     pub fn queue_empty(&self) -> bool {
         self.stats.queue_empty.load(Ordering::Acquire)
@@ -475,7 +498,7 @@ pub fn spawn() -> DbThreadHandle {
 
     let handle = DbThreadHandle {
         stats: Arc::clone(&stats),
-        _thread_handle: thread_handle,
+        thread_handle: Some(thread_handle),
     };
 
     let signal_sender = SignalWriteSender {
@@ -505,12 +528,12 @@ fn run_db_thread(
     let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
         Ok(db) => db,
         Err(e) => {
-            let _ = config::log_message(&format!("[DB_THREAD] Failed to open database: {}", e));
+            crate::logging::log_error(format!("[DB_THREAD] Failed to open database: {}", e));
             return;
         }
     };
 
-    let _ = config::log_message("[DB_THREAD] Started");
+    crate::logging::log_general("[DB_THREAD] Started");
 
     // Process signal operations
     // Note: Using recv() which blocks until a message arrives or channel closes
@@ -518,6 +541,12 @@ fn run_db_thread(
 
     loop {
         match signal_rx.recv() {
+            Ok(SignalWriteOp::Shutdown) => {
+                crate::logging::log_general(
+                    "[DB_THREAD] Shutdown requested, closing database connection",
+                );
+                break;
+            }
             Ok(op) => {
                 // Only time operations when instrumentation is enabled
                 if timing_enabled {
@@ -541,11 +570,15 @@ fn run_db_thread(
             }
             Err(_) => {
                 // Channel closed, thread should exit
-                let _ = config::log_message("[DB_THREAD] Channel closed, exiting");
+                crate::logging::log_general("[DB_THREAD] Channel closed, exiting");
                 break;
             }
         }
     }
+
+    // Explicitly close the database connection
+    drop(db);
+    crate::logging::log_general("[DB_THREAD] Database connection closed");
 }
 
 /// Retry constants for transient SQLite errors.
@@ -585,13 +618,13 @@ where
                 if let Some(reason) = retryable_sqlite_error(&e) {
                     if attempt < MAX_RETRIES {
                         let delay = BASE_DELAY_MS * (1 << attempt);
-                        let _ = config::log_message(&format!(
+                        crate::logging::log_error(format!(
                             "[DB_THREAD] {} retry {}/{} after {}ms: {} | {}",
                             op_name, attempt + 1, MAX_RETRIES, delay, reason, context
                         ));
                         std::thread::sleep(std::time::Duration::from_millis(delay));
                     } else {
-                        let _ = config::log_message(&format!(
+                        crate::logging::log_error(format!(
                             "[DB_THREAD] {} FAILED after {} retries: {} | {}",
                             op_name, MAX_RETRIES, reason, context
                         ));
@@ -599,7 +632,7 @@ where
                     }
                 } else {
                     // Non-retryable error
-                    let _ = config::log_message(&format!(
+                    crate::logging::log_error(format!(
                         "[DB_THREAD] {} failed (non-retryable): {} | {}",
                         op_name, e, context
                     ));
@@ -718,5 +751,8 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     .map_err(|e| anyhow::anyhow!(e))
             });
         }
+
+        // Shutdown is handled in the run_db_thread loop, never reaches here
+        SignalWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }
 }

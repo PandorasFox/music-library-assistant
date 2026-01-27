@@ -3,7 +3,6 @@
 //! Tick functions run each frame for views that need continuous updates
 //! (progress screen, tag search).
 
-use crate::config;
 use crate::ui::{progress_screen::{ProgressPhase, ProgressScreen}, startup, types::UiMode};
 use super::App;
 
@@ -27,7 +26,7 @@ impl App {
         let completed = progress.tick(self.witch());
         if completed {
             let status = self.witch().status();
-            let _ = config::log_message(&format!(
+            crate::logging::log_general(format!(
                 "{:?} phase complete: {} processed",
                 phase, status.total_processed
             ));
@@ -45,7 +44,7 @@ impl App {
                     let transition_start = std::time::Instant::now();
                     if let Some(intake_state) = self.check_for_unindexed_files() {
                         let check_duration = transition_start.elapsed();
-                        let _ = config::log_message(&format!(
+                        crate::logging::log_general(format!(
                             "[TRANSITION] check_for_unindexed_files took {}ms, found {} files",
                             check_duration.as_millis(),
                             intake_state.file_count
@@ -56,7 +55,7 @@ impl App {
                         let check_duration = transition_start.elapsed();
                         // Check if the Witch has pending work (e.g., freshen latch triggered content analysis)
                         if self.witch().has_pending() {
-                            let _ = config::log_message(&format!(
+                            crate::logging::log_general(format!(
                                 "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files but Witch has pending work - showing content analysis progress",
                                 check_duration.as_millis()
                             ));
@@ -64,7 +63,7 @@ impl App {
                             self.progress_screen = Some(ProgressScreen::new_content_analysis());
                             self.mode = UiMode::Progress;
                         } else {
-                            let _ = config::log_message(&format!(
+                            crate::logging::log_general(format!(
                                 "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to Insights",
                                 check_duration.as_millis()
                             ));
@@ -103,7 +102,7 @@ impl App {
         let corpus_root = self.config.corpus_root.clone();
 
         let eye_state = self.witch().eye_state();
-        let _ = config::log_message(&format!(
+        crate::logging::log_general(format!(
             "check_for_unindexed_files: eye_state={:?}",
             eye_state
         ));
@@ -115,7 +114,7 @@ impl App {
         let signal_count = db.get_signals(None)
             .map(|s| s.len())
             .unwrap_or(0);
-        let _ = config::log_message(&format!(
+        crate::logging::log_general(format!(
             "[TRANSITION] get_signals(None) took {}ms, {} signals",
             signals_start.elapsed().as_millis(),
             signal_count
@@ -123,7 +122,7 @@ impl App {
 
         let gather_start = std::time::Instant::now();
         let result = startup::IntakeConfirmationState::gather(db, &corpus_root, "corpus");
-        let _ = config::log_message(&format!(
+        crate::logging::log_general(format!(
             "[TRANSITION] IntakeConfirmationState::gather took {}ms",
             gather_start.elapsed().as_millis()
         ));

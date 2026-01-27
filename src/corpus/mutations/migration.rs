@@ -39,9 +39,9 @@ use crate::witch::MigrationWitness;
 ///
 /// This migration is idempotent - it can recover from partial failures.
 fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
-    use crate::config::log_message;
+    use crate::logging::log_general;
 
-    let _ = log_message("[MIGRATION v3→v4] Starting fingerprint TEXT→BLOB conversion");
+    log_general("[MIGRATION v3→v4] Starting fingerprint TEXT→BLOB conversion");
 
     // Check if we're recovering from a partial migration
     let has_blob_column: bool = db.conn.query_row(
@@ -70,7 +70,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
         .collect();
     let err_count = results.iter().filter(|r| r.is_err()).count();
     if err_count > 0 {
-        let _ = log_message(&format!(
+        log_general(format!(
             "[MIGRATION v3→v4] Warning: {} track rows failed to read", err_count
         ));
     }
@@ -78,7 +78,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
 
     let total = tracks.len();
     if total > 0 {
-        let _ = log_message(&format!("[MIGRATION v3→v4] Converting {} fingerprints", total));
+        log_general(format!("[MIGRATION v3→v4] Converting {} fingerprints", total));
     }
 
     // Convert in batches
@@ -112,7 +112,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
         .collect();
     let signal_err_count = signal_results.iter().filter(|r| r.is_err()).count();
     if signal_err_count > 0 {
-        let _ = log_message(&format!(
+        log_general(format!(
             "[MIGRATION v3→v4] Warning: {} signal rows failed to read", signal_err_count
         ));
     }
@@ -133,7 +133,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
     }
 
     // Step 4: Schema changes - drop old column, rename new, recreate index
-    let _ = log_message("[MIGRATION v3→v4] Finalizing schema changes");
+    log_general("[MIGRATION v3→v4] Finalizing schema changes");
 
     // Check if we've already completed the swap (tracks_new doesn't exist, fingerprint is BLOB)
     let tracks_new_exists: bool = db.conn.query_row(
@@ -150,7 +150,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
     ).unwrap_or_else(|_| "TEXT".to_string());
 
     if fp_type == "BLOB" && !tracks_new_exists {
-        let _ = log_message("[MIGRATION v3→v4] Table already migrated, skipping swap");
+        log_general("[MIGRATION v3→v4] Table already migrated, skipping swap");
     } else {
         // Need to do the table swap
         // Foreign keys must be off for the entire connection, not just the transaction
@@ -203,11 +203,11 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
         "#)?;
 
         db.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let _ = log_message("[MIGRATION v3→v4] Table swap complete");
+        log_general("[MIGRATION v3→v4] Table swap complete");
     }
 
     db.set_schema_version(4)?;
-    let _ = log_message("[MIGRATION v3→v4] Complete - fingerprints now stored as BLOB");
+    log_general("[MIGRATION v3→v4] Complete - fingerprints now stored as BLOB");
 
     Ok(())
 }
@@ -229,9 +229,9 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
 /// - library_scan_state.library_root: removed (redundant with library_name)
 /// - signals.issue_key: paths become relative (signal_type determines root)
 fn migrate_to_relative_paths(db: &Database) -> Result<()> {
-    use config::log_message;
+    use crate::logging::log_general;
 
-    let _ = log_message("[MIGRATION v4→v5] Starting absolute→relative path conversion");
+    log_general("[MIGRATION v4→v5] Starting absolute→relative path conversion");
 
     // Load config to get current roots
     let cfg = config::load_config().context(
@@ -244,10 +244,10 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     let libraries_root = cfg.libraries_root.to_string_lossy();
     let legacy_root = cfg.legacy_library.as_ref().map(|p| p.to_string_lossy().into_owned());
 
-    let _ = log_message(&format!("[MIGRATION v4→v5] corpus_root: {}", corpus_root));
-    let _ = log_message(&format!("[MIGRATION v4→v5] libraries_root: {}", libraries_root));
+    log_general(format!("[MIGRATION v4→v5] corpus_root: {}", corpus_root));
+    log_general(format!("[MIGRATION v4→v5] libraries_root: {}", libraries_root));
     if let Some(ref legacy) = legacy_root {
-        let _ = log_message(&format!("[MIGRATION v4→v5] legacy_library: {}", legacy));
+        log_general(format!("[MIGRATION v4→v5] legacy_library: {}", legacy));
     }
 
     // Helper to strip prefix and return relative path
@@ -261,7 +261,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // =========================================================================
     // 1. Convert tracks.path
     // =========================================================================
-    let _ = log_message("[MIGRATION v4→v5] Converting tracks.path");
+    log_general("[MIGRATION v4→v5] Converting tracks.path");
 
     // Corpus tracks
     let corpus_pattern = format!("{}/%", corpus_root.trim_end_matches('/'));
@@ -269,7 +269,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
         "UPDATE tracks SET path = substr(path, ?1 + 2) WHERE source = 'corpus' AND path LIKE ?2 ESCAPE '\\'",
         params![corpus_root.len() as i64, corpus_pattern],
     )?;
-    let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} corpus track paths", corpus_updated));
+    log_general(format!("[MIGRATION v4→v5] Updated {} corpus track paths", corpus_updated));
 
     // Legacy tracks (if legacy_library configured)
     if let Some(ref legacy) = legacy_root {
@@ -278,20 +278,20 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
             "UPDATE tracks SET path = substr(path, ?1 + 2) WHERE source = 'legacy' AND path LIKE ?2 ESCAPE '\\'",
             params![legacy.len() as i64, legacy_pattern],
         )?;
-        let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} legacy track paths", legacy_updated));
+        log_general(format!("[MIGRATION v4→v5] Updated {} legacy track paths", legacy_updated));
     }
 
     // =========================================================================
     // 2. Convert scan_state.path
     // =========================================================================
-    let _ = log_message("[MIGRATION v4→v5] Converting scan_state.path");
+    log_general("[MIGRATION v4→v5] Converting scan_state.path");
 
     // Corpus scan state
     let corpus_scan_updated: usize = db.conn.execute(
         "UPDATE scan_state SET path = substr(path, ?1 + 2) WHERE source = 'corpus' AND path LIKE ?2 ESCAPE '\\'",
         params![corpus_root.len() as i64, corpus_pattern],
     )?;
-    let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} corpus scan_state paths", corpus_scan_updated));
+    log_general(format!("[MIGRATION v4→v5] Updated {} corpus scan_state paths", corpus_scan_updated));
 
     // Legacy scan state
     if let Some(ref legacy) = legacy_root {
@@ -300,7 +300,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
             "UPDATE scan_state SET path = substr(path, ?1 + 2) WHERE source = 'legacy' AND path LIKE ?2 ESCAPE '\\'",
             params![legacy.len() as i64, legacy_pattern],
         )?;
-        let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} legacy scan_state paths", legacy_scan_updated));
+        log_general(format!("[MIGRATION v4→v5] Updated {} legacy scan_state paths", legacy_scan_updated));
     }
 
     // Library scan state (any source that's not corpus or legacy)
@@ -309,47 +309,47 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
         "UPDATE scan_state SET path = substr(path, ?1 + 2) WHERE source NOT IN ('corpus', 'legacy') AND path LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
-    let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} library scan_state paths", lib_scan_updated));
+    log_general(format!("[MIGRATION v4→v5] Updated {} library scan_state paths", lib_scan_updated));
 
     // =========================================================================
     // 3. Convert deployment_log paths
     // =========================================================================
-    let _ = log_message("[MIGRATION v4→v5] Converting deployment_log paths");
+    log_general("[MIGRATION v4→v5] Converting deployment_log paths");
 
     let deploy_corpus_updated: usize = db.conn.execute(
         "UPDATE deployment_log SET corpus_path = substr(corpus_path, ?1 + 2) WHERE corpus_path LIKE ?2 ESCAPE '\\'",
         params![corpus_root.len() as i64, corpus_pattern],
     )?;
-    let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} deployment_log corpus_path entries", deploy_corpus_updated));
+    log_general(format!("[MIGRATION v4→v5] Updated {} deployment_log corpus_path entries", deploy_corpus_updated));
 
     let deploy_lib_updated: usize = db.conn.execute(
         "UPDATE deployment_log SET deployed_path = substr(deployed_path, ?1 + 2) WHERE deployed_path LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
-    let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} deployment_log deployed_path entries", deploy_lib_updated));
+    log_general(format!("[MIGRATION v4→v5] Updated {} deployment_log deployed_path entries", deploy_lib_updated));
 
     // =========================================================================
     // 4. Convert library_scan_state paths
     // =========================================================================
-    let _ = log_message("[MIGRATION v4→v5] Converting library_scan_state paths");
+    log_general("[MIGRATION v4→v5] Converting library_scan_state paths");
 
     let lib_scan_file_updated: usize = db.conn.execute(
         "UPDATE library_scan_state SET file_path = substr(file_path, ?1 + 2) WHERE file_path LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
-    let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} library_scan_state file_path entries", lib_scan_file_updated));
+    log_general(format!("[MIGRATION v4→v5] Updated {} library_scan_state file_path entries", lib_scan_file_updated));
 
     // Also convert library_root to relative (or we could drop it, but let's keep it relative for now)
     let lib_root_updated: usize = db.conn.execute(
         "UPDATE library_scan_state SET library_root = substr(library_root, ?1 + 2) WHERE library_root LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
-    let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} library_scan_state library_root entries", lib_root_updated));
+    log_general(format!("[MIGRATION v4→v5] Updated {} library_scan_state library_root entries", lib_root_updated));
 
     // =========================================================================
     // 5. Convert signals.issue_key for file-based signals
     // =========================================================================
-    let _ = log_message("[MIGRATION v4→v5] Converting signal keys");
+    log_general("[MIGRATION v4→v5] Converting signal keys");
 
     // Corpus signals: file_in_corpus, unindexed_file, missing_file, healthy_file
     let corpus_signal_types = vec!["file_in_corpus", "unindexed_file", "missing_file", "healthy_file"];
@@ -359,7 +359,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
             params![corpus_root.len() as i64, signal_type, corpus_pattern],
         )?;
         if updated > 0 {
-            let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} {} signal keys", updated, signal_type));
+            log_general(format!("[MIGRATION v4→v5] Updated {} {} signal keys", updated, signal_type));
         }
     }
 
@@ -371,7 +371,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
             params![libraries_root.len() as i64, signal_type, lib_pattern],
         )?;
         if updated > 0 {
-            let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} {} signal keys", updated, signal_type));
+            log_general(format!("[MIGRATION v4→v5] Updated {} {} signal keys", updated, signal_type));
         }
     }
 
@@ -385,7 +385,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
         .collect();
     let conflict_err_count = conflict_results.iter().filter(|r| r.is_err()).count();
     if conflict_err_count > 0 {
-        let _ = log_message(&format!(
+        log_general(format!(
             "[MIGRATION v4→v5] Warning: {} deploy_conflict rows failed to read", conflict_err_count
         ));
     }
@@ -405,13 +405,13 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
         }
     }
     if conflict_updated > 0 {
-        let _ = log_message(&format!("[MIGRATION v4→v5] Updated {} deploy_conflict signal keys", conflict_updated));
+        log_general(format!("[MIGRATION v4→v5] Updated {} deploy_conflict signal keys", conflict_updated));
     }
 
     // Also update metadata_json for signals that contain paths
     // (fingerprint_dup has track_ids, not paths, so skip)
     // (deploy_conflict metadata has target_path and conflicting_paths)
-    let _ = log_message("[MIGRATION v4→v5] Updating signal metadata paths");
+    log_general("[MIGRATION v4→v5] Updating signal metadata paths");
 
     let mut metadata_stmt = db.conn.prepare(
         "SELECT id, metadata_json FROM signals WHERE issue_type = 'deploy_conflict' AND metadata_json IS NOT NULL"
@@ -421,7 +421,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
         .collect();
     let metadata_err_count = metadata_results.iter().filter(|r| r.is_err()).count();
     if metadata_err_count > 0 {
-        let _ = log_message(&format!(
+        log_general(format!(
             "[MIGRATION v4→v5] Warning: {} metadata signal rows failed to read", metadata_err_count
         ));
     }
@@ -470,7 +470,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // 6. Update schema version
     // =========================================================================
     db.set_schema_version(5)?;
-    let _ = log_message("[MIGRATION v4→v5] Complete - paths are now stored relative to roots");
+    log_general("[MIGRATION v4→v5] Complete - paths are now stored relative to roots");
 
     Ok(())
 }

@@ -104,14 +104,14 @@ impl Database {
                     if let Some(reason) = retryable_reason {
                         if attempt < MAX_RETRIES {
                             let delay = BASE_DELAY_MS * (1 << attempt); // exponential backoff
-                            let _ = crate::config::log_message(&format!(
+                            crate::logging::log_error(format!(
                                 "[DB] insert_track retry {}/{} after {}ms: {} | path={}",
                                 attempt + 1, MAX_RETRIES, delay, reason, track.path
                             ));
                             std::thread::sleep(std::time::Duration::from_millis(delay));
                         } else {
                             // Log final failure with reason
-                            let _ = crate::config::log_message(&format!(
+                            crate::logging::log_error(format!(
                                 "[DB] insert_track FAILED after {} retries: {} | path={}",
                                 MAX_RETRIES, reason, track.path
                             ));
@@ -120,7 +120,7 @@ impl Database {
                         }
                     } else {
                         // Non-retryable error - log and fail immediately
-                        let _ = crate::config::log_message(&format!(
+                        crate::logging::log_error(format!(
                             "[DB] insert_track non-retryable error: {} | path={}",
                             e, track.path
                         ));

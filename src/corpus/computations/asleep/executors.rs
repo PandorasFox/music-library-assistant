@@ -7,7 +7,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::config::log_message;
+use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
     ensure_file_signal_if_missing,
@@ -33,7 +33,7 @@ pub fn execute_clear_existing_observation_state(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    let _ = log_message("[COMPUTE] ClearExistingObservationState: clearing FileInCorpus signals");
+    log_general("[COMPUTE] ClearExistingObservationState: clearing FileInCorpus signals");
 
     let sender = match db_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -49,7 +49,7 @@ pub fn execute_clear_existing_observation_state(
     // Clear all FileInCorpus signals - they'll be rebuilt during the corpus walk
     sender.clear_signals_by_type(CorpusFileSignalType::FileInCorpus.into(), witness);
 
-    let _ = log_message("[COMPUTE] ClearExistingObservationState: complete");
+    log_general("[COMPUTE] ClearExistingObservationState: complete");
 
     Result::success(
         Computation::ClearExistingObservationState,
@@ -86,13 +86,13 @@ pub fn execute_walk_corpus(
     let (directories, symlink_count) = enumerate_all_directories(root);
 
     if symlink_count > 0 {
-        let _ = log_message(&format!(
+        log_general(format!(
             "[WARN] WalkCorpus: skipped {} directory symlinks in {:?}",
             symlink_count, root
         ));
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] WalkCorpus: found {} directories in {:?}",
         directories.len(), root
     ));
@@ -327,7 +327,7 @@ pub fn execute_verify_tags(
         ),
         Err(e) => {
             // Emit TagParseError signal so the issue is tracked in the DB
-            let _ = log_message(&format!(
+            log_general(format!(
                 "[COMPUTE] VerifyTags: tag parse error for track {} ({}): {}",
                 track_id, path.display(), e
             ));

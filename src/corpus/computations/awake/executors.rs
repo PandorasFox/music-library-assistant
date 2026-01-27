@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use rusqlite::params;
 
-use crate::config::log_message;
+use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     clear_file_signal_if_present, ensure_file_signal_if_missing,
     ensure_file_signal_with_metadata_if_missing, get_configured_library_names,
@@ -32,7 +32,7 @@ pub fn execute_schedule_content_analysis(
     read_only_db: &Database,
     start: Instant,
 ) -> Result {
-    let _ = log_message("[COMPUTE] ScheduleContentAnalysis: spawning all detection computations");
+    log_general("[COMPUTE] ScheduleContentAnalysis: spawning all detection computations");
 
     let mut spawn = vec![
         Computation::DetectFingerprintDuplicates,
@@ -140,7 +140,7 @@ pub fn execute_detect_fingerprint_duplicates(
         let (fp_blob, track_ids_str) = match row_result {
             Ok(r) => r,
             Err(e) => {
-                let _ = log_message(&format!(
+                log_general(format!(
                     "[COMPUTE] DetectFingerprintDuplicates: row error: {}",
                     e
                 ));
@@ -181,7 +181,7 @@ pub fn execute_detect_fingerprint_duplicates(
     );
 
     let total_groups = new_count + updated + unchanged;
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectFingerprintDuplicates: {} groups ({} tracks), cleared={}, new={}, updated={}, unchanged={}",
         total_groups, total_tracks, cleared, new_count, updated, unchanged
     ));
@@ -250,7 +250,7 @@ pub fn execute_detect_duplicate_inodes(
         let (inode, track_ids_str) = match row_result {
             Ok(r) => r,
             Err(e) => {
-                let _ = log_message(&format!(
+                log_general(format!(
                     "[COMPUTE] DetectDuplicateInodes: row error: {}",
                     e
                 ));
@@ -283,7 +283,7 @@ pub fn execute_detect_duplicate_inodes(
     );
 
     let total_groups = new_count + updated + unchanged;
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectDuplicateInodes: {} groups, cleared={}, new={}, updated={}, unchanged={}",
         total_groups, cleared, new_count, updated, unchanged
     ));
@@ -436,7 +436,7 @@ pub fn execute_detect_missing_tags(
         sender.replace_aggregate_signal(signal, witness);
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectMissingTags: {} groups with missing tags",
         total_groups
     ));
@@ -558,7 +558,7 @@ pub fn execute_detect_metadata_duplicates(
         sender.replace_aggregate_signal(signal, witness);
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectMetadataDuplicates: {} duplicate metadata groups",
         total_groups
     ));
@@ -666,7 +666,7 @@ pub fn execute_detect_tag_canonicalizations(
         emit_collision_signals(collisions, &sender, witness, &mut signal_count);
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectTagCanonicalizations: emitted {} TagCanonicity signals",
         signal_count
     ));
@@ -760,7 +760,7 @@ pub fn execute_detect_compound_tag_values(
         signal_count += 1;
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectCompoundTagValues: emitted {} CompoundTagValue signals",
         signal_count
     ));
@@ -835,7 +835,7 @@ pub fn execute_verify_out_of_band_changes(
         };
 
         if let Err(e) = execute_verify_tags(read_only_db, track_id, &abs_path) {
-            let _ = log_message(&format!(
+            log_general(format!(
                 "[COMPUTE] VerifyOutOfBandChanges: tag parse error for {}: {}",
                 rel_path, e
             ));
@@ -877,7 +877,7 @@ pub fn execute_verify_out_of_band_changes(
         }
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] VerifyOutOfBandChanges: verified {} files, {} tag changes, {} mtime-only",
         verified_count, tag_change_count, mtime_only_count
     ));
@@ -963,7 +963,7 @@ pub fn execute_detect_deploy_conflicts(
         }
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectDeployConflicts: {} conflicts among {} healthy files",
         conflict_count,
         healthy_signals.len()
@@ -1011,7 +1011,7 @@ pub fn execute_derive_deploy_health_signals(
     let library_scan_entries = match read_only_db.get_library_scan_files(library_name) {
         Ok(entries) => entries,
         Err(e) => {
-            let _ = log_message(&format!(
+            log_general(format!(
                 "[COMPUTE] DeriveDeployHealthSignals '{}': failed to get scan data: {}",
                 library_name, e
             ));
@@ -1107,7 +1107,7 @@ pub fn execute_derive_deploy_health_signals(
         }
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DeriveDeployHealthSignals '{}': {} files, {} healthy, {} stale, {} leftover",
         library_name,
         library_files.len(),
@@ -1292,7 +1292,7 @@ pub fn execute_derive_corpus_deploy_status(
         }
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} not configured",
         healthy_signals.len(),
         deploy_ready_count,
@@ -1380,7 +1380,7 @@ pub fn execute_detect_inconsistent_album_artist(
         signal_count += 1;
     }
 
-    let _ = log_message(&format!(
+    log_general(format!(
         "[COMPUTE] DetectInconsistentAlbumArtist: emitted {} signals",
         signal_count
     ));

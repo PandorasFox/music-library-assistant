@@ -22,7 +22,7 @@ use crate::corpus::db::types::SignalType;
 use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths;
-use crate::config::log_message;
+use crate::logging::log_general;
 
 /// State for the intake confirmation modal.
 #[derive(Debug)]
@@ -62,7 +62,7 @@ impl IntakeConfirmationState {
         let issues = match db.get_signals(Some(SignalType::UnindexedFile)) {
             Ok(i) => i,
             Err(e) => {
-                let _ = log_message(&format!(
+                crate::logging::log_error(format!(
                     "IntakeConfirmation::gather: query failed: {:?}",
                     e
                 ));
@@ -70,7 +70,7 @@ impl IntakeConfirmationState {
             }
         };
 
-        let _ = log_message(&format!(
+        log_general(format!(
             "IntakeConfirmation::gather: found {} UnindexedFile signals",
             issues.len()
         ));
@@ -113,7 +113,7 @@ impl IntakeConfirmationState {
             return None;
         }
 
-        let _ = log_message(&format!(
+        log_general(format!(
             "IntakeConfirmation: gathered {} files ({} bytes) from {} directories",
             all_paths.len(),
             total_bytes,
@@ -152,7 +152,7 @@ impl IntakeConfirmationState {
             })
             .collect();
 
-        let _ = log_message(&format!(
+        log_general(format!(
             "IntakeConfirmation: created {} IndexFileFromPath mutations",
             mutations.len()
         ));

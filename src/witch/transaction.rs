@@ -7,8 +7,6 @@ use super::types::{
     TransactionError, TransactionInfo, WitnessedDecision,
 };
 use crate::corpus::mutations::Mutation;
-use crate::config;
-
 impl super::Witch {
     // -------------------------------------------------------------------------
     // Transaction Helpers
@@ -17,7 +15,7 @@ impl super::Witch {
     /// Require an active transaction, returning error if none exists.
     pub(super) fn require_active_transaction(&self, operation: &str) -> Result<(), TransactionError> {
         if self.pending_transaction.is_none() {
-            let _ = config::log_message(&format!(
+            crate::logging::log_mutation(format!(
                 "[TRANSACTION] {} REJECTED: no active transaction",
                 operation
             ));
@@ -39,14 +37,14 @@ impl super::Witch {
     /// Returns Err if a transaction is already active.
     pub fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {
         if self.pending_transaction.is_some() {
-            let _ = config::log_message(&format!(
+            crate::logging::log_mutation(format!(
                 "[TRANSACTION] start_transaction({:?}) REJECTED: already active",
                 label
             ));
             return Err(TransactionError::AlreadyActive);
         }
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_mutation(format!(
             "[TRANSACTION] start_transaction({:?}) OK",
             label
         ));
@@ -95,14 +93,14 @@ impl super::Witch {
 
         let txn = self.pending_transaction.as_mut().unwrap();
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_mutation(format!(
             "[TRANSACTION] add_decision(idx={}, label={:?}, mutations={}) OK - txn now has {} decisions",
             idx, label_str, mutation_count, txn.decision_count() + 1
         ));
 
         // Log each mutation for debugging
         for (i, m) in mutations.iter().enumerate() {
-            let _ = config::log_message(&format!(
+            crate::logging::log_mutation(format!(
                 "[TRANSACTION]   mutation[{}]: {:?}",
                 i, m
             ));
@@ -165,7 +163,7 @@ impl super::Witch {
     ) -> Result<CommitSummary, TransactionError> {
         // Gate: mutations must be accepted (eyeballing complete, not read-only)
         if !self.accepting_mutations {
-            let _ = config::log_message(
+            crate::logging::log_mutation(
                 "[TRANSACTION] confirm_transaction REJECTED: not accepting mutations (eyeballing incomplete or read-only mode)"
             );
             return Err(TransactionError::NotAcceptingMutations);
@@ -188,7 +186,7 @@ impl super::Witch {
             })
             .collect();
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_mutation(format!(
             "[TRANSACTION] confirm_transaction OK - {} decisions, {} mutations queued",
             decision_count, mutation_count
         ));
@@ -197,7 +195,7 @@ impl super::Witch {
         if !all_mutations.is_empty() {
             self.queue_mutations_internal(all_mutations, Some(txn.label));
         } else {
-            let _ = config::log_message(
+            crate::logging::log_mutation(
                 "[TRANSACTION] confirm_transaction: no mutations to queue (empty transaction)"
             );
         }
@@ -221,7 +219,7 @@ impl super::Witch {
 
         let txn = self.pending_transaction.take().unwrap();
 
-        let _ = config::log_message(&format!(
+        crate::logging::log_mutation(format!(
             "[TRANSACTION] discard_transaction OK - discarded {} decisions, {} mutations",
             txn.decision_count(), txn.mutation_count()
         ));

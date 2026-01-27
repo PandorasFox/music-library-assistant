@@ -58,7 +58,7 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
                 path.display(),
                 e
             );
-            let _ = crate::config::log_scan_error(&error_msg);
+            crate::logging::log_error(&error_msg);
             None
         }
     };

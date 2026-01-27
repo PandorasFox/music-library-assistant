@@ -4,7 +4,6 @@
 //! Actions that are handled here. These handlers coordinate state transitions,
 //! Witch interactions, and modal displays.
 
-use crate::config;
 use crate::corpus::paths;
 use crate::ui::{compound_split, format_standardization, insights_view, missing_file_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
@@ -168,12 +167,12 @@ impl App {
 
                 if mutations.is_empty() {
                     // No files to index (all deleted since detection?) - skip to Insights
-                    let _ = config::log_message("IntakeConfirmation: no mutations to queue, skipping to Insights");
+                    crate::logging::log_general("IntakeConfirmation: no mutations to queue, skipping to Insights");
                     self.intake_confirmation = None;
                     self.start_insights_view();
                 } else {
                     let count = mutations.len();
-                    let _ = config::log_message(&format!(
+                    crate::logging::log_general(format!(
                         "IntakeConfirmation: user confirmed, staging {} IndexTrack mutations for review",
                         count
                     ));
@@ -200,7 +199,7 @@ impl App {
             startup::IntakeConfirmationAction::Skipped => {
                 // User skipped - no mutations ran, skip content analysis entirely
                 // UnindexedFile signals remain for later handling
-                let _ = config::log_message("IntakeConfirmation: user skipped indexing, going to Insights");
+                crate::logging::log_general("IntakeConfirmation: user skipped indexing, going to Insights");
 
                 // Discard any active transaction from review flow
                 if let Some(ref mut witch) = self.witch {
@@ -239,7 +238,7 @@ impl App {
             }
             tree_browser::TreeBrowserAction::SelectPaths(paths) => {
                 // Directory selector completed - currently unused, placeholder for dedup flows
-                let _ = crate::config::log_message(&format!(
+                crate::logging::log_general(format!(
                     "Directory selector returned {} paths (flow not yet wired)",
                     paths.len()
                 ));
@@ -407,7 +406,7 @@ impl App {
                 }
             }
             deploy_flow::DeploymentPreviewAction::Cancel => {
-                let _ = config::log_message("Deployment preview cancelled");
+                crate::logging::log_general("Deployment preview cancelled");
                 // Discard any active transaction from review flow
                 if let Some(ref mut witch) = self.witch {
                     if witch.has_transaction() {
@@ -554,7 +553,7 @@ impl App {
                 }
             }
             missing_file_flow::MissingFilePreviewAction::Cancel => {
-                let _ = config::log_message("Missing file resolution cancelled");
+                crate::logging::log_general("Missing file resolution cancelled");
                 // Discard any active transaction from review flow
                 if let Some(ref mut witch) = self.witch {
                     if witch.has_transaction() {
@@ -746,7 +745,7 @@ impl App {
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::discard_transaction(witch);
                 }
-                let _ = config::log_message("Tag canonicity resolution cancelled");
+                crate::logging::log_general("Tag canonicity resolution cancelled");
                 self.tag_canonicity_state = None;
                 self.tag_canonicity_clusters = None;
                 self.start_insights_view();
@@ -854,7 +853,7 @@ impl App {
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::discard_transaction(witch);
                 }
-                let _ = config::log_message("Compound tag split cancelled");
+                crate::logging::log_general("Compound tag split cancelled");
                 self.compound_split_state = None;
                 self.compound_split_clusters = None;
                 self.start_insights_view();

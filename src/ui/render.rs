@@ -13,7 +13,7 @@ use ratatui::{
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::config::{self, Config};
+use crate::config::Config;
 
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
@@ -67,7 +67,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
             super::progress_screen::render(f, f.area(), progress, eye_frame);
             let elapsed = start.elapsed();
             if elapsed.as_millis() > 16 {
-                let _ = config::log_message(&format!(
+                crate::logging::log_perf(format!(
                     "[RENDER DEBUG] progress_screen::render took {}ms",
                     elapsed.as_millis()
                 ));
@@ -106,7 +106,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         let footer_time = start.elapsed();
 
         if content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[RENDER DEBUG] mode={:?} content={}ms footer={}ms",
                 ctx.mode,
                 content_time.as_millis(),
@@ -137,7 +137,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         let footer_time = start.elapsed();
 
         if header_time.as_millis() > 16 || content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
-            let _ = config::log_message(&format!(
+            crate::logging::log_perf(format!(
                 "[RENDER DEBUG] mode={:?} header={}ms content={}ms footer={}ms",
                 ctx.mode,
                 header_time.as_millis(),
@@ -272,7 +272,7 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
 
     let elapsed = start.elapsed();
     if elapsed.as_millis() > 16 {
-        let _ = config::log_message(&format!(
+        crate::logging::log_perf(format!(
             "[RENDER DEBUG] render_content({}) took {}ms",
             view_name,
             elapsed.as_millis()
@@ -447,7 +447,7 @@ fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         || operation_time.as_millis() > 16
         || controls_time.as_millis() > 16
     {
-        let _ = config::log_message(&format!(
+        crate::logging::log_perf(format!(
             "[RENDER DEBUG] footer: corpus={}ms operation={}ms controls={}ms",
             corpus_time.as_millis(),
             operation_time.as_millis(),

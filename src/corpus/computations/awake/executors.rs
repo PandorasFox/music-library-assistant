@@ -52,7 +52,7 @@ pub fn execute_schedule_content_analysis(
     if let Ok(config) = crate::config::load_config() {
         let library_names = get_configured_library_names(&config);
         for library_name in library_names {
-            let library_root = config.libraries_root.join(&library_name);
+            let library_root = config.libraries_dir().join(&library_name);
             let corpus_path_prefixes = config.get_corpus_paths_for_library(&library_name);
             spawn.push(Computation::DeriveDeployHealthSignals {
                 library_name,
@@ -829,10 +829,7 @@ pub fn execute_verify_out_of_band_changes(
         };
 
         // Resolve relative path to absolute for filesystem operations
-        let abs_path = match resolver.resolve(Path::new(rel_path), &track.source) {
-            Some(p) => p,
-            None => continue,
-        };
+        let abs_path = resolver.resolve(Path::new(rel_path));
 
         if let Err(e) = execute_verify_tags(read_only_db, track_id, &abs_path) {
             log_general(format!(

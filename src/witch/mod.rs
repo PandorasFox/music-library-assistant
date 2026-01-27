@@ -84,6 +84,10 @@ pub struct Witch {
     /// and only if read_only_mode opinion is false. Never reverts to false.
     accepting_mutations: bool,
 
+    /// Whether legacy library observation is enabled.
+    /// Derived from Config at construction time.
+    legacy_enabled: bool,
+
     /// When true, mutations are permanently disabled (read-only debug mode).
     read_only_mode: bool,
 
@@ -190,6 +194,7 @@ impl Witch {
             eye_state: EyeState::Closed,
             observation_state: CorpusObservationState::Unseen,
             accepting_mutations: false,
+            legacy_enabled: cfg.legacy_enabled,
             read_only_mode: false,
             mutations_ran_this_session: false,
             freshen_last_stage_at_startup: false, // Set via with_opinions()
@@ -288,27 +293,22 @@ impl Witch {
 
     /// Start observing. Returns false if observing already in progress.
     ///
+    /// Derives paths from the global resolver and stored config.
     /// Queues WalkCorpus computations for corpus and optional legacy library.
-    pub fn start_observing(
-        &mut self,
-        corpus_root: &std::path::Path,
-        legacy: Option<&std::path::Path>,
-    ) -> bool {
+    pub fn start_observing(&mut self) -> bool {
         if self.is_observing() {
             return false;
         }
 
         self.observation_state = CorpusObservationState::Observing;
-        self.queue_observing_computations(corpus_root, legacy);
+        self.queue_observing_computations();
         true
     }
 
     /// Queue observing computations (internal helper).
-    fn queue_observing_computations(
-        &mut self,
-        corpus_root: &std::path::Path,
-        legacy: Option<&std::path::Path>,
-    ) {
+    fn queue_observing_computations(&mut self) {
+        let resolver = crate::corpus::paths::get_resolver();
+
         // Clear stale observation state first - ensures deleted files get MissingFile signals
         self.queue_computation_with_label(
             Computation::Asleep(asleep::Computation::ClearExistingObservationState),
@@ -318,17 +318,17 @@ impl Witch {
         // Queue corpus walk
         self.queue_computation_with_label(
             Computation::Asleep(asleep::Computation::WalkCorpus {
-                root: corpus_root.to_path_buf(),
+                root: resolver.corpus_dir(),
                 source: "corpus".to_string(),
             }),
             Some("Observing corpus".to_string()),
         );
 
-        // Queue legacy library walk if configured
-        if let Some(legacy_path) = legacy {
+        // Queue legacy library walk if enabled
+        if self.legacy_enabled {
             self.queue_computation_with_label(
                 Computation::Asleep(asleep::Computation::WalkCorpus {
-                    root: legacy_path.to_path_buf(),
+                    root: resolver.libraries_dir().join("legacy"),
                     source: "legacy".to_string(),
                 }),
                 Some("Observing legacy".to_string()),

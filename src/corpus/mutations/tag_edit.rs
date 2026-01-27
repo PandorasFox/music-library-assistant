@@ -408,7 +408,7 @@ pub fn execute_single(
 
     let (success, error) = match result {
         Ok(()) => (true, None),
-        Err(e) => (false, Some(e.to_string())),
+        Err(e) => (false, Some(format!("{:#}", e))),
     };
 
     MutationResult {

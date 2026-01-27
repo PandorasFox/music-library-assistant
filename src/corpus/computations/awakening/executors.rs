@@ -72,7 +72,7 @@ pub fn execute_schedule_second_level_derivations(
         ));
 
         for library_name in library_names {
-            let library_root = config.libraries_root.join(&library_name);
+            let library_root = config.libraries_dir().join(&library_name);
             let corpus_path_prefixes = config.get_corpus_paths_for_library(&library_name);
             spawn.push(Computation::WalkLibrary {
                 library_root,
@@ -214,7 +214,7 @@ pub fn execute_update_corpus_file_signals(
     // Convert absolute path to relative for DB queries and signal keys
     let resolver = paths::get_resolver();
     let relative_path = resolver
-        .to_relative_corpus(path)
+        .to_relative(path)
         .unwrap_or_else(|| path.to_path_buf());
     let path_str = relative_path.to_string_lossy().to_string();
 
@@ -277,7 +277,7 @@ pub fn execute_update_library_file_signals(
     // Convert absolute path to relative for signal keys
     let resolver = paths::get_resolver();
     let relative_path = resolver
-        .to_relative_library(path)
+        .to_relative(path)
         .unwrap_or_else(|| path.to_path_buf());
     let path_str = relative_path.to_string_lossy().to_string();
 
@@ -417,15 +417,15 @@ pub fn execute_scan_library_directory(
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        // Convert library_root to relative (relative to libraries_root)
+        // Convert library_root to relative (relative to archive root)
         let relative_library_root = resolver
-            .to_relative_library(library_root)
+            .to_relative(library_root)
             .unwrap_or_else(|| library_root.to_path_buf());
 
         for (file_path, inode) in &library_files {
-            // Convert file_path to relative (relative to libraries_root)
+            // Convert file_path to relative (relative to archive root)
             let relative_file_path = resolver
-                .to_relative_library(file_path)
+                .to_relative(file_path)
                 .unwrap_or_else(|| file_path.clone());
 
             // Routes through db_thread which has write access
@@ -482,10 +482,10 @@ pub fn execute_update_deploy_signals(
     // Convert absolute paths to relative for DB queries and signal keys
     let resolver = paths::get_resolver();
     let relative_library_path = resolver
-        .to_relative_library(library_path)
+        .to_relative(library_path)
         .unwrap_or_else(|| library_path.to_path_buf());
     let relative_corpus_path = resolver
-        .to_relative_corpus(corpus_path)
+        .to_relative(corpus_path)
         .unwrap_or_else(|| corpus_path.to_path_buf());
 
     let library_path_str = relative_library_path.to_string_lossy().to_string();

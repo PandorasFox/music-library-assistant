@@ -190,7 +190,7 @@ fn render_controls_hint(f: &mut Frame, area: Rect, state: &TagCanonicalityState)
 /// Render the confirmation modal overlay.
 ///
 /// Currently no modals are used - navigation is non-committal.
-fn render_modal_overlay(f: &mut Frame, _parent_area: Rect, state: &TagCanonicalityState) {
+fn render_modal_overlay(_f: &mut Frame, _parent_area: Rect, state: &TagCanonicalityState) {
     match state.modal {
         TagCanonicalityModal::None => {}
         // Future modal types would be handled here

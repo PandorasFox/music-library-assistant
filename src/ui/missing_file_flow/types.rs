@@ -133,8 +133,8 @@ impl MissingFileModalData {
             .iter()
             .filter_map(|f| {
                 // Resolve relative paths to absolute
-                let source = resolver.resolve_library(std::path::Path::new(&f.library_path));
-                let destination = resolver.resolve_corpus(std::path::Path::new(&f.corpus_path));
+                let source = resolver.resolve(std::path::Path::new(&f.library_path));
+                let destination = resolver.resolve(std::path::Path::new(&f.corpus_path));
                 Some(crate::corpus::mutations::Mutation::HardLink {
                     source,
                     destination,

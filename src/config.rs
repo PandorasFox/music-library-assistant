@@ -16,11 +16,9 @@ pub use mla_utils::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub corpus_root: PathBuf,
-    pub libraries_root: PathBuf,
-    pub legacy_library: Option<PathBuf>,
+    pub root: PathBuf,
+    pub legacy_enabled: bool,
     pub deploy_mappings: Vec<DeployMapping>,
-    pub stash_dir: Option<PathBuf>,
     pub opinions: Opinions,
 }
 
@@ -261,16 +259,46 @@ pub struct DeployMapping {
 }
 
 impl Config {
-    /// Get all corpus paths that deploy to a specific library
+    // =========================================================================
+    // Derived directory accessors
+    // =========================================================================
+
+    /// Corpus directory: `<root>/corpus/`
+    pub fn corpus_dir(&self) -> PathBuf {
+        self.root.join("corpus")
+    }
+
+    /// Libraries directory: `<root>/libraries/`
+    pub fn libraries_dir(&self) -> PathBuf {
+        self.root.join("libraries")
+    }
+
+    /// Stash directory: `<root>/stash/`
+    pub fn stash_dir(&self) -> PathBuf {
+        self.root.join("stash")
+    }
+
+    /// Legacy library directory: `<root>/libraries/legacy/`
+    /// Only meaningful when `legacy_enabled` is true.
+    pub fn legacy_dir(&self) -> PathBuf {
+        self.libraries_dir().join("legacy")
+    }
+
+    // =========================================================================
+    // Deploy mapping queries
+    // =========================================================================
+
+    /// Get all corpus paths that deploy to a specific library.
     ///
     /// Returns absolute paths to corpus directories that are configured
     /// to deploy to the given library name.
     pub fn get_corpus_paths_for_library(&self, library_name: &str) -> Vec<PathBuf> {
+        let corpus_dir = self.corpus_dir();
         let mut paths = Vec::new();
         for mapping in &self.deploy_mappings {
             if mapping.library_names.contains(&library_name.to_string()) {
                 for corpus_relative_path in &mapping.corpus_relative_paths {
-                    paths.push(self.corpus_root.join(corpus_relative_path));
+                    paths.push(corpus_dir.join(corpus_relative_path));
                 }
             }
         }
@@ -281,10 +309,11 @@ impl Config {
     ///
     /// Returns absolute paths to all corpus directories that have any deploy mapping.
     pub fn get_all_deploy_corpus_paths(&self) -> Vec<PathBuf> {
+        let corpus_dir = self.corpus_dir();
         let mut paths = Vec::new();
         for mapping in &self.deploy_mappings {
             for corpus_relative_path in &mapping.corpus_relative_paths {
-                paths.push(self.corpus_root.join(corpus_relative_path));
+                paths.push(corpus_dir.join(corpus_relative_path));
             }
         }
         paths
@@ -303,51 +332,49 @@ impl Config {
         false
     }
 
-    /// Validate that all configured paths exist and support required operations
-    /// Tests hard link capability for deployment and atomic moves to stash
+    // =========================================================================
+    // Validation
+    // =========================================================================
+
+    /// Validate that the archive root exists and supports required operations.
+    /// Tests hard link capability (corpus → libraries) and atomic moves (corpus → stash).
     pub fn validate_same_filesystem(&self) -> Result<()> {
         use std::fs;
         use std::io::Write;
         use tempfile::NamedTempFile;
 
-        // Step 1: Validate corpus_root exists
-        if !self.corpus_root.exists() {
+        let corpus_dir = self.corpus_dir();
+        let libraries_dir = self.libraries_dir();
+        let stash_dir = self.stash_dir();
+
+        // Validate root exists
+        if !self.root.exists() {
             anyhow::bail!(
-                "Validation failed: corpus-root does not exist\n\
+                "Validation failed: archive root does not exist\n\
                  Path: {:?}\n\
                  \n\
                  Please create this directory or update config.kdl",
-                self.corpus_root
+                self.root
             );
         }
 
-        // Step 2: Validate libraries_root exists
-        if !self.libraries_root.exists() {
-            anyhow::bail!(
-                "Validation failed: libraries-root does not exist\n\
-                 Path: {:?}\n\
-                 \n\
-                 Please create this directory or update config.kdl",
-                self.libraries_root
-            );
-        }
-
-        // Step 3: Validate stash_dir exists (if configured)
-        if let Some(stash_path) = &self.stash_dir {
-            if !stash_path.exists() {
+        // Validate subdirectories exist
+        for (name, dir) in [("corpus", &corpus_dir), ("libraries", &libraries_dir), ("stash", &stash_dir)] {
+            if !dir.exists() {
                 anyhow::bail!(
-                    "Validation failed: stash-dir does not exist\n\
+                    "Validation failed: {} directory does not exist\n\
                      Path: {:?}\n\
                      \n\
-                     Please create this directory or update config.kdl",
-                    stash_path
+                     Please create this directory under your archive root.",
+                    name,
+                    dir
                 );
             }
         }
 
-        // Step 4: Test hard link capability (corpus → libraries)
-        let temp_file = NamedTempFile::new_in(&self.corpus_root)
-            .context("Failed to create test file in corpus-root")?;
+        // Test hard link capability (corpus → libraries)
+        let temp_file = NamedTempFile::new_in(&corpus_dir)
+            .context("Failed to create test file in corpus directory")?;
         temp_file.as_file().write_all(b"hardlink_test")?;
 
         let link_name = format!(
@@ -357,28 +384,21 @@ impl Config {
                 .unwrap()
                 .as_nanos()
         );
-        let link_path = self.libraries_root.join(&link_name);
+        let link_path = libraries_dir.join(&link_name);
 
         if let Err(e) = fs::hard_link(temp_file.path(), &link_path) {
             anyhow::bail!(
                 "Validation failed: Cannot create hard links\n\
                  \n\
-                 Corpus root: {:?}\n\
-                 Libraries root: {:?}\n\
+                 Corpus: {:?}\n\
+                 Libraries: {:?}\n\
                  \n\
                  Error: {}\n\
                  \n\
-                 EXPLANATION:\n\
-                 MLA's deployment requires hard link support between these directories.\n\
-                 \n\
-                 COMMON CAUSES:\n\
-                 - Directories are on different filesystems/volumes\n\
-                 - Filesystem doesn't support hard links (FAT32, exFAT, network mounts)\n\
-                 \n\
-                 SOLUTION:\n\
-                 Move both directories to the same filesystem/volume.",
-                self.corpus_root,
-                self.libraries_root,
+                 Hard links require the same filesystem. \
+                 All subdirectories must be on the same volume as the archive root.",
+                corpus_dir,
+                libraries_dir,
                 e
             );
         }
@@ -386,73 +406,60 @@ impl Config {
         let cleanup_path = std::path::PathBuf::from("/tmp").join(&link_name);
         let _ = fs::rename(&link_path, &cleanup_path);
 
-        // Step 5: Test atomic move capability (corpus → stash)
-        if let Some(stash_path) = &self.stash_dir {
-            let temp_file2 = NamedTempFile::new_in(&self.corpus_root)
-                .context("Failed to create test file in corpus-root")?;
+        // Test atomic move capability (corpus → stash)
+        let temp_file2 = NamedTempFile::new_in(&corpus_dir)
+            .context("Failed to create test file in corpus directory")?;
+        let source_path = temp_file2.into_temp_path();
 
-            // Persist the temp file so it doesn't get deleted when we convert it
-            let source_path = temp_file2.into_temp_path();
+        let move_name = format!(
+            "mla-move-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let move_path = stash_dir.join(&move_name);
 
-            let move_name = format!(
-                "mla-move-test-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
+        if let Err(e) = fs::rename(&source_path, &move_path) {
+            // Cleanup: move source file to /tmp/ instead of deleting
+            let cleanup_path = std::path::PathBuf::from("/tmp").join(source_path.file_name().unwrap_or_default());
+            let _ = fs::rename(&source_path, &cleanup_path);
+
+            anyhow::bail!(
+                "Validation failed: Cannot atomically move files\n\
+                 \n\
+                 Corpus: {:?}\n\
+                 Stash: {:?}\n\
+                 \n\
+                 Error: {}\n\
+                 \n\
+                 Atomic moves require the same filesystem. \
+                 All subdirectories must be on the same volume as the archive root.",
+                corpus_dir,
+                stash_dir,
+                e
             );
-            let move_path = stash_path.join(&move_name);
-
-            if let Err(e) = fs::rename(&source_path, &move_path) {
-                // Cleanup: move source file to /tmp/ instead of deleting
-                let cleanup_path = std::path::PathBuf::from("/tmp").join(source_path.file_name().unwrap_or_default());
-                let _ = fs::rename(&source_path, &cleanup_path);
-
-                anyhow::bail!(
-                    "Validation failed: Cannot atomically move files\n\
-                     \n\
-                     Corpus root: {:?}\n\
-                     Stash dir: {:?}\n\
-                     \n\
-                     Error: {}\n\
-                     \n\
-                     EXPLANATION:\n\
-                     MLA needs atomic moves between these directories.\n\
-                     Atomic moves only work on the same filesystem.\n\
-                     \n\
-                     SOLUTION:\n\
-                     Move stash-dir to the same filesystem as corpus-root.",
-                    self.corpus_root,
-                    stash_path,
-                    e
-                );
-            }
-            // Cleanup: move test artifact to /tmp/ instead of deleting
-            let cleanup_path = std::path::PathBuf::from("/tmp").join(&move_name);
-            let _ = fs::rename(&move_path, &cleanup_path);
         }
+        // Cleanup: move test artifact to /tmp/ instead of deleting
+        let cleanup_path = std::path::PathBuf::from("/tmp").join(&move_name);
+        let _ = fs::rename(&move_path, &cleanup_path);
 
-        // Step 6: Log success
         crate::logging::log_general("Filesystem validation passed");
         Ok(())
     }
 
-    /// Validate deployment configuration
+    /// Validate deployment configuration.
     pub fn validate(&self) -> Result<()> {
-        // Validate filesystem consistency for hard links
         self.validate_same_filesystem()
             .context("Filesystem validation failed")?;
 
-        // Validate deploy mappings
+        // Validate deploy paths don't escape corpus
+        let corpus_dir = self.corpus_dir();
         for mapping in &self.deploy_mappings {
-            // Note: We can't validate library names here because libraries are
-            // discovered at runtime by scanning libraries_root subdirectories
-
-            // Check that deploy paths are within corpus root
             for corpus_path in &mapping.corpus_relative_paths {
-                let full_path = self.corpus_root.join(corpus_path);
-                if !full_path.starts_with(&self.corpus_root) {
-                    anyhow::bail!("Deploy path escapes corpus root: {:?}", corpus_path);
+                let full_path = corpus_dir.join(corpus_path);
+                if !full_path.starts_with(&corpus_dir) {
+                    anyhow::bail!("Deploy path escapes corpus directory: {:?}", corpus_path);
                 }
             }
         }
@@ -720,70 +727,27 @@ fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplitting
 fn parse_kdl_config(content: &str) -> Result<Config> {
     let doc: kdl::KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
-    // Check for old format with library blocks
-    let has_old_library_format = doc.nodes().iter().any(|n| n.name().value() == "library");
-
-    if has_old_library_format {
-        anyhow::bail!(
-            "Old config format detected: 'library' blocks are no longer supported\n\
-             \n\
-             MIGRATION REQUIRED:\n\
-             \n\
-             OLD FORMAT:\n\
-             library \"music\" {{\n\
-                 path \"/archive/libraries/music\"\n\
-             }}\n\
-             \n\
-             NEW FORMAT:\n\
-             libraries-root \"/archive/libraries\"\n\
-             \n\
-             Libraries are now discovered by scanning subdirectories under libraries-root.\n\
-             Directory names become library names (e.g., /archive/libraries/music → 'music').\n\
-             \n\
-             DEPLOY FORMAT ALSO CHANGED to support multiple corpus paths:\n\
-             \n\
-             OLD:\n\
-             deploy \"web/releases/bandcamp\" {{\n\
-                 library \"music\"\n\
-             }}\n\
-             \n\
-             NEW:\n\
-             deploy \"web/releases/bandcamp\" \"web/releases/itunes\" {{\n\
-                 library \"music\"\n\
-             }}"
-        );
-    }
-
     let mut config = Config {
-        corpus_root: PathBuf::new(),
-        libraries_root: PathBuf::new(),
-        legacy_library: None,
+        root: PathBuf::new(),
+        legacy_enabled: false,
         deploy_mappings: Vec::new(),
-        stash_dir: None,
         opinions: Opinions::default(),
     };
 
     for node in doc.nodes() {
         match node.name().value() {
-            // Accept both "corpus-root" (new) and "archive-root" (backward compat)
-            "corpus-root" | "archive-root" => {
+            "root" => {
                 if let Some(path) = node.entries().first() {
                     if let Some(path_str) = path.value().as_string() {
-                        config.corpus_root = PathBuf::from(path_str);
-                    }
-                }
-            }
-            "libraries-root" => {
-                if let Some(path) = node.entries().first() {
-                    if let Some(path_str) = path.value().as_string() {
-                        config.libraries_root = PathBuf::from(path_str);
+                        config.root = PathBuf::from(path_str);
                     }
                 }
             }
             "legacy-library" => {
-                if let Some(path) = node.entries().first() {
-                    if let Some(path_str) = path.value().as_string() {
-                        config.legacy_library = Some(PathBuf::from(path_str));
+                // Boolean toggle: `legacy-library true`
+                if let Some(entry) = node.entries().first() {
+                    if let Some(val) = entry.value().as_bool() {
+                        config.legacy_enabled = val;
                     }
                 }
             }
@@ -816,13 +780,6 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                         corpus_relative_paths: corpus_paths,
                         library_names,
                     });
-                }
-            }
-            "stash-dir" => {
-                if let Some(path) = node.entries().first() {
-                    if let Some(path_str) = path.value().as_string() {
-                        config.stash_dir = Some(PathBuf::from(path_str));
-                    }
                 }
             }
             "opinions" => {
@@ -865,12 +822,8 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
         }
     }
 
-    if config.corpus_root.as_os_str().is_empty() {
-        anyhow::bail!("corpus-root not specified in config.kdl");
-    }
-
-    if config.libraries_root.as_os_str().is_empty() {
-        anyhow::bail!("libraries-root not specified in config.kdl");
+    if config.root.as_os_str().is_empty() {
+        anyhow::bail!("root not specified in config.kdl");
     }
 
     Ok(config)
@@ -881,69 +834,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_new_format() {
+    fn test_parse_single_root() {
         let kdl = r#"
-corpus-root "/Volumes/cerberus/archive/music"
-libraries-root "/Volumes/cerberus/library"
-stash-dir "/Volumes/cerberus/archive/stash"
+root "/Volumes/cerberus/archive"
 
 deploy "web/releases/bandcamp" "web/releases/itunes" {
     library "main"
 }
 
-legacy-library "/Volumes/cerberus/archive/working/legacy"
+legacy-library true
 "#;
 
         let config = parse_kdl_config(kdl).unwrap();
-        assert_eq!(
-            config.corpus_root,
-            PathBuf::from("/Volumes/cerberus/archive/music")
-        );
-        assert_eq!(
-            config.libraries_root,
-            PathBuf::from("/Volumes/cerberus/library")
-        );
+        assert_eq!(config.root, PathBuf::from("/Volumes/cerberus/archive"));
+        assert_eq!(config.corpus_dir(), PathBuf::from("/Volumes/cerberus/archive/corpus"));
+        assert_eq!(config.libraries_dir(), PathBuf::from("/Volumes/cerberus/archive/libraries"));
+        assert_eq!(config.stash_dir(), PathBuf::from("/Volumes/cerberus/archive/stash"));
+        assert_eq!(config.legacy_dir(), PathBuf::from("/Volumes/cerberus/archive/libraries/legacy"));
+        assert!(config.legacy_enabled);
         assert_eq!(config.deploy_mappings.len(), 1);
         assert_eq!(config.deploy_mappings[0].corpus_relative_paths.len(), 2);
         assert_eq!(config.deploy_mappings[0].library_names[0], "main");
-        assert!(config.legacy_library.is_some());
-        assert!(config.stash_dir.is_some());
     }
 
     #[test]
-    fn test_old_format_rejected() {
+    fn test_missing_root() {
         let kdl = r#"
-corpus-root "/Volumes/cerberus/archive/music"
-
-library "main" {
-    path "/Volumes/cerberus/library/main"
-}
+legacy-library true
 "#;
 
         let result = parse_kdl_config(kdl);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("Old config format"));
-        assert!(err_msg.contains("MIGRATION REQUIRED"));
+        assert!(err_msg.contains("root not specified"));
     }
 
     #[test]
-    fn test_missing_libraries_root() {
+    fn test_legacy_disabled_by_default() {
         let kdl = r#"
-corpus-root "/Volumes/cerberus/archive/music"
+root "/archive"
 "#;
 
-        let result = parse_kdl_config(kdl);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("libraries-root not specified"));
+        let config = parse_kdl_config(kdl).unwrap();
+        assert!(!config.legacy_enabled);
     }
 
     #[test]
     fn test_opinions_parsing() {
         let kdl = r#"
-corpus-root "/Volumes/cerberus/archive/music"
-libraries-root "/Volumes/cerberus/library"
+root "/archive"
 
 opinions {
     auto_next_save_all
@@ -973,37 +912,26 @@ opinions {
 
         let config = parse_kdl_config(kdl).unwrap();
 
-        // Check auto_next_save_all flag
         assert!(config.opinions.auto_next_save_all);
-
-        // Check fingerprint matching
         assert_eq!(config.opinions.fingerprint_matching.duration_tolerance_percent, 15.0);
         assert!(!config.opinions.fingerprint_matching.require_matching_track_number);
         assert!(config.opinions.fingerprint_matching.require_matching_album);
-
-        // Check quality resolution
         assert!(!config.opinions.quality_resolution.auto_resolve_format_tier);
         assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 75.0);
-
-        // Check canonicalization
         assert!(!config.opinions.canonicalization.case_insensitive);
         assert!(config.opinions.canonicalization.strip_parentheticals);
         assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.90);
-
-        // Check re-releases
         assert_eq!(config.opinions.re_releases.same_fingerprint_different_album, ReReleaseHandling::Flag);
     }
 
     #[test]
     fn test_opinions_defaults() {
         let kdl = r#"
-corpus-root "/Volumes/cerberus/archive/music"
-libraries-root "/Volumes/cerberus/library"
+root "/archive"
 "#;
 
         let config = parse_kdl_config(kdl).unwrap();
 
-        // Should have default values
         assert!(!config.opinions.auto_next_save_all);
         assert_eq!(config.opinions.fingerprint_matching.duration_tolerance_percent, 10.0);
         assert!(config.opinions.fingerprint_matching.require_matching_track_number);

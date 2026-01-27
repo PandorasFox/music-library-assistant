@@ -99,7 +99,7 @@ impl App {
     /// Returns Some if there are unindexed files to confirm, None otherwise.
     pub(super) fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
         // Clone corpus_root to avoid borrow conflict with daemon's db reference
-        let corpus_root = self.config.corpus_root.clone();
+        let corpus_root = self.config.corpus_dir();
 
         let eye_state = self.witch().eye_state();
         crate::logging::log_general(format!(

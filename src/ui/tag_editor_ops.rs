@@ -18,7 +18,7 @@ impl App {
         let resolver = paths::get_resolver();
 
         // Convert absolute path to relative for DB queries (corpus browser uses corpus paths)
-        let rel_path = match resolver.to_relative_corpus(path) {
+        let rel_path = match resolver.to_relative(path) {
             Some(p) => p,
             None => {
                 self.abort_to_insights(format!(
@@ -212,7 +212,7 @@ impl App {
         let resolver = paths::get_resolver();
 
         // Convert absolute path to relative for DB query
-        let rel_dir = match resolver.to_relative_corpus(directory) {
+        let rel_dir = match resolver.to_relative(directory) {
             Some(p) => p,
             None => {
                 self.status_message = Some(format!(

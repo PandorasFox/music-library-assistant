@@ -444,21 +444,21 @@ impl App {
                 continue;
             }
             // Resolve relative paths to absolute
-            let source = resolver.resolve_corpus(std::path::Path::new(&file.corpus_path));
-            let destination = resolver.resolve_library(std::path::Path::new(&file.deploy_path));
+            let source = resolver.resolve(std::path::Path::new(&file.corpus_path));
+            let destination = resolver.resolve(std::path::Path::new(&file.deploy_path));
             mutations.push(Mutation::HardLink { source, destination });
         }
 
         // Stale files: move from wrong path to correct path
         for file in &data.stale {
-            let source = resolver.resolve_library(std::path::Path::new(&file.library_path));
-            let destination = resolver.resolve_library(std::path::Path::new(&file.expected_path));
+            let source = resolver.resolve(std::path::Path::new(&file.library_path));
+            let destination = resolver.resolve(std::path::Path::new(&file.expected_path));
             mutations.push(Mutation::LibraryMove { source, destination });
         }
 
         // Leftover files: move to stash (preserve data, never destroy)
         for file in &data.leftover {
-            let path = resolver.resolve_library(std::path::Path::new(&file.library_path));
+            let path = resolver.resolve(std::path::Path::new(&file.library_path));
             mutations.push(Mutation::MoveToStash {
                 path,
                 stash_name: "library_leftovers".to_string(),
@@ -472,8 +472,8 @@ impl App {
                 .iter()
                 .min_by(|a, b| a.0.cmp(&b.0))
             {
-                let source = resolver.resolve_corpus(std::path::Path::new(corpus_path));
-                let destination = resolver.resolve_library(std::path::Path::new(&group.deploy_path));
+                let source = resolver.resolve(std::path::Path::new(corpus_path));
+                let destination = resolver.resolve(std::path::Path::new(&group.deploy_path));
                 mutations.push(Mutation::HardLink { source, destination });
             }
         }
@@ -895,9 +895,8 @@ impl App {
                 for &track_id in &state.data.track_ids {
                     if let Ok(Some(track)) = db.get_track_by_id(track_id) {
                         // Resolve relative DB path to absolute for filesystem operations
-                        if let Some(abs_path) = resolver.resolve(std::path::Path::new(&track.path), &track.source) {
-                            paths.insert(track_id, abs_path);
-                        }
+                        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+                        paths.insert(track_id, abs_path);
                     }
                 }
                 paths
@@ -979,9 +978,8 @@ impl App {
                 let mut track_paths = std::collections::HashMap::new();
                 for &track_id in &data.track_ids {
                     if let Ok(Some(track)) = db.get_track_by_id(track_id) {
-                        if let Some(abs_path) = resolver.resolve(std::path::Path::new(&track.path), &track.source) {
-                            track_paths.insert(track_id, abs_path);
-                        }
+                        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+                        track_paths.insert(track_id, abs_path);
                     }
                 }
 
@@ -1412,9 +1410,8 @@ impl App {
         for &track_id in &state.data.track_ids {
             if let Ok(Some(track)) = db.get_track_by_id(track_id) {
                 // Resolve relative DB path to absolute for filesystem operations
-                if let Some(abs_path) = resolver.resolve(std::path::Path::new(&track.path), &track.source) {
-                    track_paths.insert(track_id, abs_path);
-                }
+                let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+                track_paths.insert(track_id, abs_path);
             }
         }
 
@@ -1503,17 +1500,16 @@ impl App {
 
         let mutations: Vec<Mutation> = tracks
             .iter()
-            .filter_map(|(track_id, rel_path, _file_type)| {
+            .map(|(track_id, rel_path, _file_type)| {
                 let abs_path = resolver.resolve(
                     std::path::Path::new(rel_path),
-                    "corpus",
-                )?;
-                Some(Mutation::Transcode {
+                );
+                Mutation::Transcode {
                     track_id: *track_id,
                     source_path: abs_path,
                     target_format: target,
                     stash_name: "remux-input".to_string(),
-                })
+                }
             })
             .collect();
 

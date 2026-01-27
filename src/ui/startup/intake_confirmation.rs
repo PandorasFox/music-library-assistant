@@ -89,10 +89,7 @@ impl IntakeConfirmationState {
         for issue in &issues {
             // Resolve relative signal key to absolute path
             let rel_path = std::path::Path::new(&issue.issue_key);
-            let abs_path = match resolver.resolve(rel_path, source) {
-                Some(p) => p,
-                None => continue, // Skip if can't resolve (shouldn't happen)
-            };
+            let abs_path = resolver.resolve(rel_path);
 
             // Verify file still exists and get size
             if abs_path.exists() && abs_path.is_file() {

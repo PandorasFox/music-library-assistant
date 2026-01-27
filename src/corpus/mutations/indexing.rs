@@ -30,12 +30,11 @@ pub fn execute_index_track(
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
-        .to_relative(path, source)
+        .to_relative(path)
         .with_context(|| {
             format!(
-                "Path {} does not match {} root. Check config.kdl roots.",
+                "Path {} does not match root. Check config.kdl roots.",
                 path.display(),
-                source
             )
         })?;
 
@@ -107,12 +106,11 @@ pub fn execute_update_scan_state(
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
-        .to_relative(path, source)
+        .to_relative(path)
         .with_context(|| {
             format!(
-                "Path {} does not match {} root. Check config.kdl roots.",
+                "Path {} does not match root. Check config.kdl roots.",
                 path.display(),
-                source
             )
         })?;
 
@@ -157,19 +155,13 @@ pub fn execute_cleanup_stale(
 pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path) -> Result<()> {
     let resolver = paths::get_resolver();
 
-    // Get track's source to determine which root to use
-    let track = db
-        .get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
-
     // Convert absolute path to relative for storage
     let relative_path = resolver
-        .to_relative(new_path, &track.source)
+        .to_relative(new_path)
         .with_context(|| {
             format!(
-                "Path {} does not match {} root. Check config.kdl roots.",
+                "Path {} does not match root. Check config.kdl roots.",
                 new_path.display(),
-                track.source
             )
         })?;
 
@@ -188,12 +180,11 @@ pub fn execute_update_scan_state_path(
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
-        .to_relative(new_path, source)
+        .to_relative(new_path)
         .with_context(|| {
             format!(
-                "Path {} does not match {} root. Check config.kdl roots.",
+                "Path {} does not match root. Check config.kdl roots.",
                 new_path.display(),
-                source
             )
         })?;
 
@@ -210,7 +201,7 @@ pub fn execute_drop_from_index(
 ) -> Result<()> {
     // Delete the track
     db.delete_track(track_id)
-        .context("Failed to delete track from index")?;
+        .with_context(|| format!("Failed to delete track {} from index", track_id))?;
 
     // Also delete scan_state entry if inode/source provided
     if let (Some(inode), Some(source)) = (inode, source) {
@@ -237,12 +228,11 @@ pub fn execute_update_track(
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
-        .to_relative(path, &existing.source)
+        .to_relative(path)
         .with_context(|| {
             format!(
-                "Path {} does not match {} root. Check config.kdl roots.",
+                "Path {} does not match root. Check config.kdl roots.",
                 path.display(),
-                existing.source
             )
         })?;
 
@@ -409,7 +399,7 @@ pub fn execute_single(
 
     let (success, error) = match result {
         Ok(()) => (true, None),
-        Err(e) => (false, Some(e.to_string())),
+        Err(e) => (false, Some(format!("{:#}", e))),
     };
 
     MutationResult {

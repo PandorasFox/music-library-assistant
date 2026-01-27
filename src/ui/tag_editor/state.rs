@@ -2242,10 +2242,7 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation
             };
 
             // Resolve relative DB path to absolute for filesystem operations
-            let abs_path = match resolver.resolve(Path::new(&track.path), &track.source) {
-                Some(p) => p,
-                None => continue, // Skip if path can't be resolved
-            };
+            let abs_path = resolver.resolve(Path::new(&track.path));
 
             let edits: Vec<TagEdit> = changes
                 .into_iter()
@@ -2302,16 +2299,7 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation
 /// All tags are loaded from the audio file and sorted alphabetically.
 pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
     let resolver = paths::get_resolver();
-    let disk_path = match resolver.resolve(Path::new(&track.path), &track.source) {
-        Some(p) => p,
-        None => {
-            crate::logging::log_error(format!(
-                "Could not resolve path for track: {}",
-                track.path
-            ));
-            return Vec::new();
-        }
-    };
+    let disk_path = resolver.resolve(Path::new(&track.path));
 
     let all_tags = match metadata::read_all_tags(&disk_path) {
         Ok(tags) => tags,

@@ -240,9 +240,9 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
          run MLA to complete migration, then update config with new paths."
     )?;
 
-    let corpus_root = cfg.corpus_root.to_string_lossy();
-    let libraries_root = cfg.libraries_root.to_string_lossy();
-    let legacy_root = cfg.legacy_library.as_ref().map(|p| p.to_string_lossy().into_owned());
+    let corpus_root = cfg.corpus_dir().to_string_lossy().into_owned();
+    let libraries_root = cfg.libraries_dir().to_string_lossy().into_owned();
+    let legacy_root = if cfg.legacy_enabled { Some(cfg.legacy_dir().to_string_lossy().into_owned()) } else { None };
 
     log_general(format!("[MIGRATION v4→v5] corpus_root: {}", corpus_root));
     log_general(format!("[MIGRATION v4→v5] libraries_root: {}", libraries_root));
@@ -475,6 +475,105 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     Ok(())
 }
 
+/// Migration function: Prepend domain prefixes to root-relative paths.
+///
+/// The single-root architecture stores all paths relative to the archive root
+/// with their first component as a domain prefix (corpus/, libraries/, etc.).
+/// This migration converts old-style relative paths to the new format.
+///
+/// Paths before: "Artist/Album/track.flac" (relative to corpus_root)
+/// Paths after:  "corpus/Artist/Album/track.flac" (relative to archive root)
+fn migrate_to_domain_prefixed_paths(db: &Database) -> Result<()> {
+    use crate::logging::log_general;
+
+    log_general("[MIGRATION v5→v6] Starting domain-prefix path conversion");
+
+    // =========================================================================
+    // 1. tracks.path: prepend based on source
+    // =========================================================================
+    let corpus_count: i64 = db.conn.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE source = 'corpus'",
+        params![],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    db.conn.execute(
+        "UPDATE tracks SET path = 'corpus/' || path WHERE source = 'corpus'",
+        params![],
+    ).context("Failed to prefix corpus track paths")?;
+
+    let legacy_count: i64 = db.conn.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE source = 'legacy'",
+        params![],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    db.conn.execute(
+        "UPDATE tracks SET path = 'libraries/legacy/' || path WHERE source = 'legacy'",
+        params![],
+    ).context("Failed to prefix legacy track paths")?;
+
+    log_general(format!(
+        "[MIGRATION v5→v6] Prefixed {} corpus + {} legacy track paths",
+        corpus_count, legacy_count
+    ));
+
+    // =========================================================================
+    // 2. scan_state.path: same logic
+    // =========================================================================
+    db.conn.execute(
+        "UPDATE scan_state SET path = 'corpus/' || path WHERE source = 'corpus'",
+        params![],
+    ).context("Failed to prefix corpus scan_state paths")?;
+
+    db.conn.execute(
+        "UPDATE scan_state SET path = 'libraries/legacy/' || path WHERE source = 'legacy'",
+        params![],
+    ).context("Failed to prefix legacy scan_state paths")?;
+
+    // =========================================================================
+    // 3. deployment_log: different prefix per column
+    // =========================================================================
+    db.conn.execute(
+        "UPDATE deployment_log SET corpus_path = 'corpus/' || corpus_path",
+        params![],
+    ).context("Failed to prefix deployment_log corpus_path")?;
+
+    db.conn.execute(
+        "UPDATE deployment_log SET deployed_path = 'libraries/' || deployed_path",
+        params![],
+    ).context("Failed to prefix deployment_log deployed_path")?;
+
+    // =========================================================================
+    // 4. library_scan_state: all library-relative
+    // =========================================================================
+    db.conn.execute(
+        "UPDATE library_scan_state SET file_path = 'libraries/' || file_path",
+        params![],
+    ).context("Failed to prefix library_scan_state file_path")?;
+
+    db.conn.execute(
+        "UPDATE library_scan_state SET library_root = 'libraries/' || library_root",
+        params![],
+    ).context("Failed to prefix library_scan_state library_root")?;
+
+    // =========================================================================
+    // 5. signals: clear all (recomputed on next observation)
+    // =========================================================================
+    db.conn.execute("DELETE FROM signals", params![])
+        .context("Failed to clear signals")?;
+
+    log_general("[MIGRATION v5→v6] Cleared all signals (will be recomputed)");
+
+    // =========================================================================
+    // 6. Update schema version
+    // =========================================================================
+    db.set_schema_version(6)?;
+    log_general("[MIGRATION v5→v6] Complete - paths now use domain prefixes");
+
+    Ok(())
+}
+
 /// A single database migration.
 pub struct Migration {
     /// Version number this migration starts from.
@@ -568,6 +667,15 @@ impl MigrationRegistry {
             to_version: 5,
             description: "Convert paths from absolute to relative for portability",
             apply: migrate_to_relative_paths,
+        });
+
+        // v5 → v6: Prepend domain prefixes for single-root architecture
+        // All paths become root-relative with domain prefix (corpus/, libraries/, etc.)
+        registry.register(Migration {
+            from_version: 5,
+            to_version: 6,
+            description: "Prepend domain prefixes for single-root architecture",
+            apply: migrate_to_domain_prefixed_paths,
         });
 
         registry
@@ -686,12 +794,12 @@ mod tests {
     fn test_migration_registry() {
         let registry = MigrationRegistry::new();
 
-        // Latest schema version is v5 (after relative paths migration)
-        assert_eq!(registry.latest_version(), 5);
+        // Latest schema version is v6 (after domain-prefix migration)
+        assert_eq!(registry.latest_version(), 6);
 
-        // Four pending migrations from v1
+        // Five pending migrations from v1
         let pending = registry.pending_migrations(1);
-        assert_eq!(pending.len(), 4);
+        assert_eq!(pending.len(), 5);
         assert_eq!(pending[0].from_version, 1);
         assert_eq!(pending[0].to_version, 2);
         assert_eq!(pending[1].from_version, 2);
@@ -700,28 +808,36 @@ mod tests {
         assert_eq!(pending[2].to_version, 4);
         assert_eq!(pending[3].from_version, 4);
         assert_eq!(pending[3].to_version, 5);
+        assert_eq!(pending[4].from_version, 5);
+        assert_eq!(pending[4].to_version, 6);
 
-        // Three pending migrations from v2
+        // Four pending migrations from v2
         let pending_v2 = registry.pending_migrations(2);
-        assert_eq!(pending_v2.len(), 3);
+        assert_eq!(pending_v2.len(), 4);
         assert_eq!(pending_v2[0].from_version, 2);
         assert_eq!(pending_v2[0].to_version, 3);
 
-        // Two pending migrations from v3
+        // Three pending migrations from v3
         let pending_v3 = registry.pending_migrations(3);
-        assert_eq!(pending_v3.len(), 2);
+        assert_eq!(pending_v3.len(), 3);
         assert_eq!(pending_v3[0].from_version, 3);
         assert_eq!(pending_v3[0].to_version, 4);
 
-        // One pending migration from v4
+        // Two pending migrations from v4
         let pending_v4 = registry.pending_migrations(4);
-        assert_eq!(pending_v4.len(), 1);
+        assert_eq!(pending_v4.len(), 2);
         assert_eq!(pending_v4[0].from_version, 4);
         assert_eq!(pending_v4[0].to_version, 5);
 
-        // No pending migrations from v5
+        // One pending migration from v5
         let pending_v5 = registry.pending_migrations(5);
-        assert!(pending_v5.is_empty());
+        assert_eq!(pending_v5.len(), 1);
+        assert_eq!(pending_v5[0].from_version, 5);
+        assert_eq!(pending_v5[0].to_version, 6);
+
+        // No pending migrations from v6
+        let pending_v6 = registry.pending_migrations(6);
+        assert!(pending_v6.is_empty());
     }
 
     #[test]

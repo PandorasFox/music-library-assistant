@@ -2,6 +2,8 @@
 
 Check the docs/ folder for the Architecture overview and UI guidelines/UX consistency notes.
 
+The Rust type system is our friend. Always try to encode information via types whenever possible, rather than attempting inferences on strings.
+
 Do not spawn threads, ever. Only the Witch should spawn new threads for background work. That is *Her* purpose: She enforces orderliness in her domain, providing a consistent and clean way for doing background work, with controlled gates for their side effects. All data that flows properly through Her is guaranteed.
 
 Do not try to "refresh" signals. MLA is designed around precisely recomputing relevant signals in real-time. You keep adding unused (!) refresh hooks that then only get misused, because they're not things we need or want architecturally. They are expensive.

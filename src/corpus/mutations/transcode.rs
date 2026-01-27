@@ -105,11 +105,10 @@ fn execute_transcode(
     // Convert new absolute path to relative for storage
     let resolver = paths::get_resolver();
     let relative_new_path = resolver
-        .to_relative(&dest_path, &existing_track.source)
+        .to_relative(&dest_path)
         .with_context(|| format!(
-            "Path {} does not match {} root. Check config.kdl roots.",
+            "Path {} does not match any configured root. Check config.kdl roots.",
             dest_path.display(),
-            existing_track.source
         ))?;
 
     // Build updated track (preserve fingerprint, duration, sample_rate; update path/inode/size/type)
@@ -180,7 +179,7 @@ pub fn execute_single(
 
     let (success, error) = match result {
         Ok(()) => (true, None),
-        Err(e) => (false, Some(e.to_string())),
+        Err(e) => (false, Some(format!("{:#}", e))),
     };
 
     MutationResult {

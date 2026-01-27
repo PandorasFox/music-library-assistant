@@ -419,7 +419,7 @@ impl App {
     pub(super) fn start_corpus_browser(&mut self) {
         let config = tree_browser::CorpusBrowserConfig::default();
         self.tree_browser = Some(tree_browser::TreeBrowserState::corpus_browser(
-            self.config.corpus_root.clone(),
+            self.config.corpus_dir(),
             config,
         ));
         self.mode = UiMode::CorpusBrowser;
@@ -539,12 +539,8 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     let mut app = App::new(config, log_rx);
 
     // Observing ALWAYS runs at startup
-    // Create progress screen and queue initial observing via the Witch
-    let corpus_root = app.config.corpus_root.clone();
-    let legacy_library = app.config.legacy_library.clone();
-
     // Start observing via the Witch - this sets observation_state and queues work
-    app.witch().start_observing(&corpus_root, legacy_library.as_deref());
+    app.witch().start_observing();
 
     app.progress_screen = Some(progress_screen::ProgressScreen::new_eyeballing());
     app.mode = UiMode::Progress;

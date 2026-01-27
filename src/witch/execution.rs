@@ -26,12 +26,12 @@ pub(super) fn open_db_for_task(label: String, start: Instant, queue_wait_ms: u64
         Ok(db) => Ok(db),
         Err(e) => {
             crate::logging::log_error(format!(
-                "[EXECUTION] DB open FAILED: {}",
+                "[EXECUTION] DB open FAILED: {:#}",
                 e
             ));
             Err(TaskResult {
                 success: false,
-                error: Some(format!("DB error: {}", e)),
+                error: Some(format!("DB error: {:#}", e)),
                 label,
                 spawn: Vec::new(),
                 duration_ms: start.elapsed().as_millis() as u64,
@@ -81,7 +81,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     // Load config for stash_root access (needed by file_ops and transcode)
     let loaded_config = config::load_config().ok();
-    let stash_root = loaded_config.as_ref().and_then(|c| c.stash_dir.clone());
+    let stash_root = loaded_config.as_ref().map(|c| c.stash_dir());
 
     let (success, error) = match mutation.category() {
         MutationCategory::TagEdit => {
@@ -139,8 +139,8 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     if success {
         let resolver = crate::corpus::paths::get_resolver();
         match &mutation {
-            Mutation::IndexTrack { path, source, metadata } if metadata.fingerprint.is_none() => {
-                if let Some(rel) = resolver.to_relative(path, source) {
+            Mutation::IndexTrack { path, metadata, .. } if metadata.fingerprint.is_none() => {
+                if let Some(rel) = resolver.to_relative(path) {
                     if let Some(sender) = db_thread::signal_sender() {
                         sender.ensure_file_signal(
                             CorpusFileSignalType::WaveformReadError.into(),
@@ -150,8 +150,8 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                     }
                 }
             }
-            Mutation::IndexFileFromPath { path, source } => {
-                if let Some(rel) = resolver.to_relative(path, source) {
+            Mutation::IndexFileFromPath { path, .. } => {
+                if let Some(rel) = resolver.to_relative(path) {
                     let rel_str = rel.to_string_lossy();
                     if let Ok(Some(track)) = db.get_track_by_path(&rel_str) {
                         if track.fingerprint.is_none() {
@@ -170,6 +170,24 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         }
     }
 
+    // Wipe per-file signals for affected paths before recomputation.
+    // This prevents stale signals from persisting when mutations change corpus truth
+    // (e.g. MissingFile signals surviving after a DropFromIndex removes the track).
+    // The spawned signal update computations will re-derive any still-valid signals.
+    if success {
+        let resolver = crate::corpus::paths::get_resolver();
+        for path in mutation.affected_paths() {
+            let signal_key = if path.is_absolute() {
+                resolver.to_relative(&path)
+            } else {
+                Some(path)  // already root-relative
+            };
+            if let Some(key) = signal_key {
+                let _ = db.delete_signals_for_path(&key.to_string_lossy());
+            }
+        }
+    }
+
     // Queue per-file signal updates for affected paths
     // This ensures signals like UnindexedFile → HealthyFile are updated
     // Mutations can ONLY spawn awakening-phase computations (phase boundary enforcement)
@@ -177,21 +195,22 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Path-aware spawning: corpus paths → UpdateCorpusFileSignals,
     // library paths → UpdateLibraryFileSignals, others → skip
     let mut spawn: Vec<Computation> = if success {
+        let resolver = crate::corpus::paths::get_resolver();
         mutation
             .affected_paths()
             .into_iter()
             .filter_map(|path| {
-                if let Some(ref cfg) = loaded_config {
-                    if path.starts_with(&cfg.corpus_root) {
-                        Some(Computation::Awakening(awakening::Computation::UpdateCorpusFileSignals { path }))
-                    } else if path.starts_with(&cfg.libraries_root) {
-                        Some(Computation::Awakening(awakening::Computation::UpdateLibraryFileSignals { path }))
-                    } else {
-                        // Path outside corpus/library - skip
-                        None
-                    }
+                let rel = if path.is_absolute() {
+                    resolver.to_relative(&path)?
                 } else {
-                    // No config - skip to be safe
+                    path
+                };
+                let abs = resolver.resolve(&rel);
+                if crate::corpus::paths::is_corpus_path(&rel) {
+                    Some(Computation::Awakening(awakening::Computation::UpdateCorpusFileSignals { path: abs }))
+                } else if crate::corpus::paths::is_library_path(&rel) {
+                    Some(Computation::Awakening(awakening::Computation::UpdateLibraryFileSignals { path: abs }))
+                } else {
                     None
                 }
             })
@@ -272,7 +291,7 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
 
     let (success, error) = match result {
         Ok(()) => (true, None),
-        Err(e) => (false, Some(e.to_string())),
+        Err(e) => (false, Some(format!("{:#}", e))),
     };
 
     TaskResult {

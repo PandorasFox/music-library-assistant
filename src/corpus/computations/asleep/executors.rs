@@ -175,7 +175,7 @@ pub fn execute_scan_corpus_directory(
     // Process each file found on disk
     for (inode, path, disk_mtime_s, disk_mtime_ns) in &disk_state {
         // Convert absolute path to relative for DB queries and signal keys
-        let relative_path = match resolver.to_relative(path, source) {
+        let relative_path = match resolver.to_relative(path) {
             Some(rel) => rel,
             None => {
                 // Path doesn't match expected root - skip
@@ -333,18 +333,15 @@ pub fn execute_verify_tags(
             ));
             if let Some(sender) = crate::db_thread::signal_sender() {
                 let resolver = crate::corpus::paths::get_resolver();
-                // Try to get source for relative path conversion
-                if let Ok(Some(track)) = read_only_db.get_track_by_id(track_id) {
-                    if let Some(rel) = resolver.to_relative(path, &track.source) {
-                        let rel_str = rel.to_string_lossy();
-                        ensure_file_signal_if_missing(
-                            read_only_db,
-                            &sender,
-                            CorpusFileSignalType::TagParseError.into(),
-                            &rel_str,
-                            witness,
-                        );
-                    }
+                if let Some(rel) = resolver.to_relative(path) {
+                    let rel_str = rel.to_string_lossy();
+                    ensure_file_signal_if_missing(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::TagParseError.into(),
+                        &rel_str,
+                        witness,
+                    );
                 }
             }
             // Return success so computation continues processing other files

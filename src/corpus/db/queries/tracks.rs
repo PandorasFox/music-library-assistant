@@ -142,26 +142,17 @@ impl Database {
     }
 
     /// Clear all tracks for a source, cascading to dependent tables.
+    /// Explicitly cascades to tag_edit_history (plain FK, no CASCADE action).
+    /// track_tags and tag_mismatches use ON DELETE CASCADE; known_variants uses ON DELETE SET NULL.
     pub fn clear_source(&self, source: &str) -> Result<()> {
-        // Get all track IDs for this source first
-        let mut stmt = self.conn.prepare("SELECT id FROM tracks WHERE source = ?1")?;
-        let track_ids: Vec<i64> = stmt
-            .query_map(params![source], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        // Delete from dependent tables for each track
-        for track_id in &track_ids {
-            self.conn.execute(
-                "DELETE FROM duplicate_group_members WHERE track_id = ?1",
-                params![track_id],
-            )?;
-            self.conn.execute(
-                "DELETE FROM tag_edit_history WHERE track_id = ?1",
-                params![track_id],
-            )?;
-        }
+        // Delete tag_edit_history for all tracks in this source (plain FK without CASCADE action)
+        self.conn.execute(
+            "DELETE FROM tag_edit_history WHERE track_id IN (SELECT id FROM tracks WHERE source = ?1)",
+            params![source],
+        ).context("Failed to delete tag edit history for source")?;
 
         // Now delete the tracks
+        // (track_tags, tag_mismatches cascade automatically; known_variants set null automatically)
         self.conn
             .execute("DELETE FROM tracks WHERE source = ?1", params![source])
             .context("Failed to clear source")?;
@@ -170,7 +161,8 @@ impl Database {
     }
 
     /// Delete a track from the index by its path.
-    /// Also removes related entries from duplicate_group_members and tag_edit_history.
+    /// Explicitly cascades to tag_edit_history (plain FK, no CASCADE action).
+    /// track_tags and tag_mismatches use ON DELETE CASCADE; known_variants uses ON DELETE SET NULL.
     /// Returns true if a track was deleted.
     pub fn delete_track_by_path(&self, path: &str) -> Result<bool> {
         // First, find the track ID
@@ -188,14 +180,7 @@ impl Database {
             return Ok(false); // Track not found
         };
 
-        // Delete from dependent tables first (foreign key constraints)
-        self.conn
-            .execute(
-                "DELETE FROM duplicate_group_members WHERE track_id = ?1",
-                params![track_id],
-            )
-            .with_context(|| format!("Failed to delete duplicate group members for track: {}", path))?;
-
+        // Delete from tag_edit_history first (plain FK without CASCADE action)
         self.conn
             .execute(
                 "DELETE FROM tag_edit_history WHERE track_id = ?1",
@@ -204,6 +189,7 @@ impl Database {
             .with_context(|| format!("Failed to delete tag edit history for track: {}", path))?;
 
         // Now delete the track itself
+        // (track_tags, tag_mismatches cascade automatically; known_variants set null automatically)
         let deleted = self
             .conn
             .execute("DELETE FROM tracks WHERE id = ?1", params![track_id])
@@ -816,29 +802,24 @@ impl Database {
     }
 
     /// Delete track by ID.
-    /// Cascades to dependent tables (duplicate_group_members, tag_edit_history).
+    /// Explicitly cascades to tag_edit_history (plain FK, no CASCADE action).
+    /// track_tags and tag_mismatches use ON DELETE CASCADE; known_variants uses ON DELETE SET NULL.
     /// Used by MissingFile signal handler.
     pub fn delete_track(&self, track_id: i64) -> Result<bool> {
-        // Delete from dependent tables first (foreign key constraints)
-        self.conn
-            .execute(
-                "DELETE FROM duplicate_group_members WHERE track_id = ?1",
-                params![track_id],
-            )
-            .with_context(|| format!("Failed to delete duplicate group members for track: {}", track_id))?;
-
+        // Delete from tag_edit_history first (plain FK without CASCADE action)
         self.conn
             .execute(
                 "DELETE FROM tag_edit_history WHERE track_id = ?1",
                 params![track_id],
             )
-            .with_context(|| format!("Failed to delete tag edit history for track: {}", track_id))?;
+            .with_context(|| format!("Failed to delete tag edit history for track {}", track_id))?;
 
         // Now delete the track itself
+        // (track_tags, tag_mismatches cascade automatically; known_variants set null automatically)
         let deleted = self
             .conn
             .execute("DELETE FROM tracks WHERE id = ?1", params![track_id])
-            .with_context(|| format!("Failed to delete track: {}", track_id))?;
+            .with_context(|| format!("Failed to delete track {}", track_id))?;
 
         Ok(deleted > 0)
     }

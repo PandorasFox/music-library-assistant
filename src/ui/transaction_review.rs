@@ -181,24 +181,31 @@ impl TransactionReviewState {
 
 /// Count unique tracks affected by a set of mutations.
 fn count_unique_tracks(mutations: &[Mutation]) -> usize {
-    mutations
-        .iter()
-        .filter_map(|m| match m {
-            // Mutations with track_id
+    let mut track_ids = std::collections::HashSet::new();
+
+    for m in mutations {
+        match m {
+            // Mutations with single track_id
             Mutation::TagEditAndFlush { track_id, .. }
             | Mutation::TagEditDb { track_id, .. }
             | Mutation::DropFromIndex { track_id, .. }
             | Mutation::UpdateTrackPath { track_id, .. }
-            | Mutation::UpdateTrack { track_id, .. } => Some(*track_id),
+            | Mutation::UpdateTrack { track_id, .. }
+            | Mutation::Transcode { track_id, .. } => {
+                track_ids.insert(*track_id);
+            }
 
-            // Mutations with optional track_id
-            Mutation::MoveToStash { .. } | Mutation::Move { .. } => None,
-
-            // Mutations with track_id (transcode)
-            Mutation::Transcode { track_id, .. } => Some(*track_id),
+            // OOB resolution mutations with multiple track IDs
+            Mutation::AcknowledgeMtimeOnly { track_ids: ids }
+            | Mutation::ApplyDbTagsToDisk { track_ids: ids }
+            | Mutation::AssimilateDiskTagsToDb { track_ids: ids } => {
+                track_ids.extend(ids.iter().copied());
+            }
 
             // Mutations without track IDs
-            Mutation::TagFlushToDisk { .. }
+            Mutation::MoveToStash { .. }
+            | Mutation::Move { .. }
+            | Mutation::TagFlushToDisk { .. }
             | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateScanState { .. }
@@ -207,10 +214,11 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. } => None,
-        })
-        .collect::<std::collections::HashSet<_>>()
-        .len()
+            | Mutation::UpdateScanStatePath { .. } => {}
+        }
+    }
+
+    track_ids.len()
 }
 
 /// Fetch decision summaries from the Witch's active transaction.

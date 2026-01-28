@@ -547,9 +547,9 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
             + summary.deploy_conflicts
             + summary.library_stale
             + summary.library_leftover
-            + summary.modified_oob
             + summary.oob_tag_sync
             + summary.oob_tag_conflict
+            + summary.mtime_only_mismatch
             + summary.duplicate_inodes;
 
         if total_signals > 0 {
@@ -579,9 +579,9 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
             add_signal!(hs.metadata_duplicates, "meta-dups", Color::Yellow);
             add_signal!(hs.fingerprint_duplicates, "fp-dups", Color::Yellow);
             add_signal!(hs.canonicalization_issues, "canon", Color::Yellow);
-            add_signal!(summary.modified_oob, "modified-oob", Color::Yellow);
             add_signal!(summary.oob_tag_sync, "tags-sync", Color::Yellow);
             add_signal!(summary.oob_tag_conflict, "tags-conflict", Color::Red);
+            add_signal!(summary.mtime_only_mismatch, "mtime-ack", Color::Yellow);
             add_signal!(summary.duplicate_inodes, "dup-inodes", Color::Yellow);
 
             lines.push(Line::from(signal_parts));

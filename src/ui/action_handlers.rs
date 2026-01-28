@@ -933,6 +933,9 @@ impl App {
             oob_conflict_flow::OobConflictAction::Resolve => {
                 self.stage_oob_bucket_resolution();
             }
+            oob_conflict_flow::OobConflictAction::Acknowledge => {
+                self.stage_oob_mtime_acknowledgement();
+            }
             oob_conflict_flow::OobConflictAction::Cancel => {
                 crate::logging::log_general("OOB conflict inspection closed");
                 // Discard any active transaction
@@ -1054,6 +1057,57 @@ impl App {
 
         if let Some(ref mut witch) = self.witch {
             let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
+        }
+
+        // Note: oob_conflict_state is NOT cleared - preserved for Cancel return
+        self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
+    }
+
+    /// Stage acknowledgement mutation for mtime-only files in MtimeOnly bucket.
+    ///
+    /// If selection is active, only selected files are included.
+    /// Otherwise, all files in the bucket are included.
+    fn stage_oob_mtime_acknowledgement(&mut self) {
+        use crate::corpus::mutations::Mutation;
+
+        let files_data = match self.oob_conflict_state.as_ref() {
+            Some(state) => {
+                let bucket_state = state.active_bucket_state();
+
+                // Determine which indices to process
+                let indices = if state.selection.is_active() {
+                    state.selection.selected_indices()
+                } else {
+                    // No selection - process all files in bucket
+                    (0..bucket_state.files.len()).collect()
+                };
+
+                indices
+                    .iter()
+                    .filter_map(|&idx| bucket_state.files.get(idx))
+                    .map(|f| f.track_id)
+                    .collect::<Vec<_>>()
+            }
+            None => return,
+        };
+
+        if files_data.is_empty() {
+            self.status_message = Some("No files selected to acknowledge".to_string());
+            return;
+        }
+
+        // Create single mutation with all track IDs
+        let mutations = vec![Mutation::AcknowledgeMtimeOnly {
+            track_ids: files_data,
+        }];
+
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::operator_decisions::stage_decision(
+                witch,
+                0,
+                "Acknowledge mtime changes",
+                mutations,
+            );
         }
 
         // Note: oob_conflict_state is NOT cleared - preserved for Cancel return
@@ -1898,6 +1952,7 @@ impl App {
                         let action = match button_name {
                             "apply_db" => oob_conflict_flow::OobConflictAction::Resolve,
                             "assimilate_disk" => oob_conflict_flow::OobConflictAction::Resolve,
+                            "acknowledge" => oob_conflict_flow::OobConflictAction::Acknowledge,
                             "cancel" => oob_conflict_flow::OobConflictAction::Cancel,
                             _ => oob_conflict_flow::OobConflictAction::None,
                         };

@@ -360,3 +360,46 @@ impl Database {
             .context("Failed to execute SQL batch")
     }
 }
+
+// ============================================================================
+// Read-Only Database Wrapper
+// ============================================================================
+
+/// A read-only view of the database.
+///
+/// This wrapper only exposes read methods, providing compile-time safety
+/// that UI code cannot accidentally attempt write operations. The underlying
+/// connection also has `PRAGMA query_only = ON` for runtime protection.
+///
+/// # Usage
+///
+/// UI code receives `&ReadOnlyDb` from `Witch::read_db()` and can only
+/// call query methods. Mutation/computation code receives `&Database` directly
+/// and has access to all methods.
+///
+/// # Naming Convention
+///
+/// Variables holding this type should be named `read_db` to make their
+/// read-only nature clear in code.
+pub struct ReadOnlyDb<'a> {
+    db: &'a Database,
+}
+
+impl<'a> ReadOnlyDb<'a> {
+    /// Create a read-only view of a database.
+    ///
+    /// This should only be called from `Witch::read_db()` which ensures
+    /// the underlying connection has `PRAGMA query_only = ON`.
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    /// Get the underlying Database reference.
+    ///
+    /// **For internal use only** - used by computation executors that need
+    /// Database reference for consistency with existing patterns while still
+    /// being read-only at the SQLite level.
+    pub(crate) fn inner(&self) -> &Database {
+        self.db
+    }
+}

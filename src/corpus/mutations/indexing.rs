@@ -382,6 +382,214 @@ pub fn execute_verify_tags(
 }
 
 // ============================================================================
+// OOB Resolution Executors
+// ============================================================================
+
+/// Execute AcknowledgeMtimeOnly mutation.
+///
+/// For each track: updates scan_state mtime to match current disk mtime,
+/// then clears the MtimeOnlyMismatch signal. Used when disk file mtime
+/// changed but tags are identical.
+pub fn execute_acknowledge_mtime_only(
+    db: &Database,
+    track_ids: &[i64],
+    witness: &MutationExecutionWitness,
+) -> Result<Vec<std::path::PathBuf>> {
+    use crate::corpus::db::types::CorpusFileSignalType;
+    use std::os::unix::fs::MetadataExt;
+    use rusqlite::params;
+
+    let resolver = paths::get_resolver();
+    let mut affected_paths = Vec::new();
+
+    for track_id in track_ids {
+        // Get track info
+        let track = match db.get_track_by_id(*track_id)? {
+            Some(t) => t,
+            None => continue, // Skip missing tracks
+        };
+
+        // Resolve absolute path for filesystem access
+        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+
+        // Read current disk mtime
+        let metadata = std::fs::metadata(&abs_path)
+            .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
+        let mtime_secs = metadata.mtime();
+        let mtime_nanos = metadata.mtime_nsec() as i64;
+
+        // Update scan_state mtime
+        db.conn.execute(
+            "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
+            params![mtime_secs, mtime_nanos, track.path],
+        ).context("Failed to update scan_state mtime")?;
+
+        // Clear MtimeOnlyMismatch signal
+        db.clear_file_signal(
+            CorpusFileSignalType::MtimeOnlyMismatch.into(),
+            &track.path,
+            witness,
+        )?;
+
+        affected_paths.push(abs_path);
+    }
+
+    Ok(affected_paths)
+}
+
+/// Execute ApplyDbTagsToDisk mutation.
+///
+/// For each track: writes DB tags to disk file, updates scan_state mtime,
+/// clears tag_mismatches and OOB signals. Used to reject disk-side changes
+/// and restore DB state to disk.
+pub fn execute_apply_db_tags_to_disk(
+    db: &Database,
+    track_ids: &[i64],
+    witness: &MutationExecutionWitness,
+) -> Result<Vec<std::path::PathBuf>> {
+    use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::corpus::metadata;
+    use std::os::unix::fs::MetadataExt;
+    use rusqlite::params;
+
+    let resolver = paths::get_resolver();
+    let token = super::sealed::MutationToken::new();
+    let mut affected_paths = Vec::new();
+
+    for track_id in track_ids {
+        // Get track info
+        let track = match db.get_track_by_id(*track_id)? {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Resolve absolute path for filesystem access
+        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+
+        // Get DB tags
+        let db_tags = db.get_track_tags(*track_id)?;
+        let tags: Vec<(String, String)> = db_tags
+            .into_iter()
+            .map(|t| (t.tag_name, t.tag_value))
+            .collect();
+
+        // Write tags to disk
+        metadata::write_tags_to_file(&abs_path, &tags, &token)
+            .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
+
+        // Read new disk mtime after write
+        let file_metadata = std::fs::metadata(&abs_path)
+            .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
+        let mtime_secs = file_metadata.mtime();
+        let mtime_nanos = file_metadata.mtime_nsec() as i64;
+
+        // Update scan_state mtime
+        db.conn.execute(
+            "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
+            params![mtime_secs, mtime_nanos, track.path],
+        ).context("Failed to update scan_state mtime")?;
+
+        // Clear tag_mismatches for this track
+        db.clear_tag_mismatches_for_track(*track_id)?;
+
+        // Clear OOB signals
+        db.clear_file_signal(
+            CorpusFileSignalType::OutOfBandTagSync.into(),
+            &track.path,
+            witness,
+        )?;
+        db.clear_file_signal(
+            CorpusFileSignalType::OutOfBandTagConflict.into(),
+            &track.path,
+            witness,
+        )?;
+        db.clear_file_signal(
+            CorpusFileSignalType::MtimeOnlyMismatch.into(),
+            &track.path,
+            witness,
+        )?;
+
+        affected_paths.push(abs_path);
+    }
+
+    Ok(affected_paths)
+}
+
+/// Execute AssimilateDiskTagsToDb mutation.
+///
+/// For each track: reads disk tags into DB, updates scan_state mtime,
+/// clears tag_mismatches and OOB signals. Used to accept disk-side changes
+/// and update DB to match disk.
+pub fn execute_assimilate_disk_tags_to_db(
+    db: &Database,
+    track_ids: &[i64],
+    witness: &MutationExecutionWitness,
+) -> Result<Vec<std::path::PathBuf>> {
+    use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::corpus::metadata;
+    use std::os::unix::fs::MetadataExt;
+    use rusqlite::params;
+
+    let resolver = paths::get_resolver();
+    let mut affected_paths = Vec::new();
+
+    for track_id in track_ids {
+        // Get track info
+        let track = match db.get_track_by_id(*track_id)? {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Resolve absolute path for filesystem access
+        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+
+        // Read disk tags
+        let disk_tags = metadata::read_all_tags(&abs_path)
+            .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
+
+        // Update DB with disk tags
+        db.set_track_tags(*track_id, &disk_tags)
+            .with_context(|| format!("Failed to update track tags for track {}", track_id))?;
+
+        // Read disk mtime
+        let file_metadata = std::fs::metadata(&abs_path)
+            .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
+        let mtime_secs = file_metadata.mtime();
+        let mtime_nanos = file_metadata.mtime_nsec() as i64;
+
+        // Update scan_state mtime
+        db.conn.execute(
+            "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
+            params![mtime_secs, mtime_nanos, track.path],
+        ).context("Failed to update scan_state mtime")?;
+
+        // Clear tag_mismatches for this track
+        db.clear_tag_mismatches_for_track(*track_id)?;
+
+        // Clear OOB signals
+        db.clear_file_signal(
+            CorpusFileSignalType::OutOfBandTagSync.into(),
+            &track.path,
+            witness,
+        )?;
+        db.clear_file_signal(
+            CorpusFileSignalType::OutOfBandTagConflict.into(),
+            &track.path,
+            witness,
+        )?;
+        db.clear_file_signal(
+            CorpusFileSignalType::MtimeOnlyMismatch.into(),
+            &track.path,
+            witness,
+        )?;
+
+        affected_paths.push(abs_path);
+    }
+
+    Ok(affected_paths)
+}
+
+// ============================================================================
 // Single Mutation Dispatch
 // ============================================================================
 
@@ -446,6 +654,19 @@ pub fn execute_single(
             path,
             metadata,
         } => execute_update_track(db, *track_id, path, metadata),
+
+        // OOB resolution mutations
+        Mutation::AcknowledgeMtimeOnly { track_ids } => {
+            execute_acknowledge_mtime_only(db, track_ids, _witness).map(|_| ())
+        }
+
+        Mutation::ApplyDbTagsToDisk { track_ids } => {
+            execute_apply_db_tags_to_disk(db, track_ids, _witness).map(|_| ())
+        }
+
+        Mutation::AssimilateDiskTagsToDb { track_ids } => {
+            execute_assimilate_disk_tags_to_db(db, track_ids, _witness).map(|_| ())
+        }
 
         // Note: VerifyTags is now a Computation, not a Mutation.
         // Use corpus::computations::execute_single() instead.

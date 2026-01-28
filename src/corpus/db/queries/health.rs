@@ -6,8 +6,9 @@
 //!
 //! ## Witnessed Operations
 //!
-//! Signal-altering operations require a `ComputationWitness` to ensure they're
-//! only called from computation execution contexts. Use:
+//! Signal-altering operations require a witness (`ComputationWitness` or
+//! `MutationExecutionWitness`) to ensure they're only called from authorized
+//! execution contexts. Use:
 //! - `ensure_signal` - idempotent create (no-op if exists)
 //! - `clear_signal` - idempotent delete (no-op if doesn't exist)
 //! - `replace_signal` - delete existing + insert new (for summary signals)
@@ -16,7 +17,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
 
 use super::Database;
-use crate::corpus::computations::ComputationWitness;
+use crate::db_thread::SignalWitness;
 use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, Signal,
     SignalType, SignalSummary, Track,
@@ -81,12 +82,6 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
 
-        let modified_oob: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signals WHERE issue_type = 'corpus_file_modified_oob'",
-            params![],
-            |row| row.get(0),
-        ).unwrap_or(0);
-
         let oob_tag_sync: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM signals WHERE issue_type = 'oob_tag_sync'",
             params![],
@@ -96,6 +91,12 @@ impl Database {
         let oob_tag_conflict: usize = self.conn.query_row(
             // Include legacy "oob_tag" in conflict count for transition
             "SELECT COUNT(*) FROM signals WHERE issue_type IN ('oob_tag_conflict', 'oob_tag')",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let mtime_only_mismatch: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'mtime_only_mismatch'",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
@@ -157,9 +158,9 @@ impl Database {
             moved_files,
             library_stale,
             library_leftover,
-            modified_oob,
             oob_tag_sync,
             oob_tag_conflict,
+            mtime_only_mismatch,
             duplicate_inodes,
         })
     }
@@ -331,7 +332,7 @@ impl Database {
         issue_type: SignalType,
         issue_key: &str,
         metadata_json: Option<&str>,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<bool> {
         // Single-statement idempotent insert using UNIQUE constraint
         self.conn
@@ -362,7 +363,7 @@ impl Database {
         &self,
         issue_type: SignalType,
         issue_key: &str,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<bool> {
         let deleted = self.conn
             .execute(
@@ -383,7 +384,7 @@ impl Database {
     pub fn replace_signal(
         &self,
         issue: &Signal,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<i64> {
         // Delete existing signal with same type and key
         self.conn
@@ -423,7 +424,7 @@ impl Database {
         &self,
         directory: &std::path::Path,
         issue_type: SignalType,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<usize> {
         let pattern = super::dir_like_pattern(directory);
 
@@ -446,7 +447,7 @@ impl Database {
         &self,
         signal_type: FileSignalType,
         path: &str,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<bool> {
         self.conn
             .execute(
@@ -470,7 +471,7 @@ impl Database {
         signal_type: FileSignalType,
         key: &str,
         metadata_json: Option<&str>,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<bool> {
         self.conn
             .execute(
@@ -491,7 +492,7 @@ impl Database {
         &self,
         signal_type: FileSignalType,
         path: &str,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<bool> {
         let deleted = self.conn
             .execute(
@@ -508,7 +509,7 @@ impl Database {
         &self,
         directory: &std::path::Path,
         signal_type: FileSignalType,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<usize> {
         let pattern = super::dir_like_pattern(directory);
 
@@ -528,7 +529,7 @@ impl Database {
         signal_type: AggregateSignalType,
         key: &str,
         metadata_json: Option<&str>,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<bool> {
         self.conn
             .execute(
@@ -548,7 +549,7 @@ impl Database {
     pub fn replace_aggregate_signal(
         &self,
         signal: &AggregateSignal,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<i64> {
         self.conn
             .execute(
@@ -581,7 +582,7 @@ impl Database {
         &self,
         signal_type: AggregateSignalType,
         key: &str,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) -> Result<bool> {
         let deleted = self
             .conn
@@ -884,11 +885,11 @@ impl Database {
         use crate::corpus::db::types::*;
 
         // OOB signals (highest priority)
-        let modified_oob = self.count_signal_type("corpus_file_modified_oob")?;
         let oob_tag_sync = self.count_signal_type("oob_tag_sync")?;
         // Include legacy "oob_tag" in conflict count for transition
         let oob_tag_conflict = self.count_signal_type("oob_tag_conflict")?
             + self.count_signal_type("oob_tag").unwrap_or(0);
+        let mtime_only_mismatch = self.count_signal_type("mtime_only_mismatch")?;
 
         // Standard corpus file signals
         let files_in_corpus = self.count_signal_type("file_in_corpus")?;
@@ -904,9 +905,9 @@ impl Database {
         let directory_breakdown = self.get_directory_breakdown("file_in_corpus")?;
 
         Ok(CorpusFilesBucket {
-            modified_oob,
             oob_tag_sync,
             oob_tag_conflict,
+            mtime_only_mismatch,
             files_in_corpus,
             files_indexed,
             files_unindexed,

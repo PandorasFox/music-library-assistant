@@ -172,7 +172,19 @@ pub fn execute_derive_directory_signals(
     for (path, _track) in &indexed_paths {
         if corpus_paths.contains(path) {
             clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
+
+            // Check if file has any OOB signal - if so, don't mark as HealthyFile
+            let has_oob_signal =
+                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagConflict.into(), path) ||
+                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagSync.into(), path) ||
+                read_only_db.file_signal_exists(CorpusFileSignalType::MtimeOnlyMismatch.into(), path);
+
+            if has_oob_signal {
+                // File has OOB signal - NOT healthy
+                clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
+            } else {
+                ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
+            }
             // NOTE: Deploy conflicts are handled in bulk by DetectDeployConflicts in Awake phase
         } else {
             clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
@@ -227,7 +239,19 @@ pub fn execute_update_corpus_file_signals(
         if is_indexed {
             clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
             clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+
+            // Check if file has any OOB signal - if so, don't mark as HealthyFile
+            let has_oob_signal =
+                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagConflict.into(), &path_str) ||
+                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagSync.into(), &path_str) ||
+                read_only_db.file_signal_exists(CorpusFileSignalType::MtimeOnlyMismatch.into(), &path_str);
+
+            if has_oob_signal {
+                // File has OOB signal - NOT healthy
+                clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            } else {
+                ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            }
         } else {
             clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
             clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);

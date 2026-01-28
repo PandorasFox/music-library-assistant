@@ -211,22 +211,22 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
 
     match entry.insight_type {
         // Corpus bucket entries
-        InsightType::CorpusModifiedOob => {
+        InsightType::CorpusMtimeOnly => {
             lines.push(Line::from(Span::styled(
-                "Modified Out-of-Band",
+                "Mtime-Only Changes",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Files modified outside MLA since",
+                "Files touched but tags unchanged.",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "indexing. May need re-indexing or",
+                "Acknowledge to update scan state",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "investigation.",
+                "without modifying files.",
                 Style::default().fg(text_color),
             )));
         }

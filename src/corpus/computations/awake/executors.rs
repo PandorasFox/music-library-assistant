@@ -15,10 +15,9 @@ use crate::corpus::computations::helpers::{
     parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, LibraryFileSignalType, SignalType};
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, LibraryFileSignalType, SignalType};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::Database;
-use crate::corpus::paths;
 use crate::db_thread;
 
 use super::{Computation, Result};
@@ -34,6 +33,7 @@ pub fn execute_schedule_content_analysis(
 ) -> Result {
     log_general("[COMPUTE] ScheduleContentAnalysis: spawning all detection computations");
 
+    // Note: OOB tag change classification is now handled in Asleep phase by VerifyTags
     let mut spawn = vec![
         Computation::DetectFingerprintDuplicates,
         Computation::DetectDuplicateInodes,
@@ -42,7 +42,6 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectTagCanonicalizations,
         Computation::DetectInconsistentAlbumArtist,
         Computation::DetectCompoundTagValues,
-        Computation::VerifyOutOfBandChanges,
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
     ];
@@ -763,245 +762,6 @@ pub fn execute_detect_compound_tag_values(
     log_general(format!(
         "[COMPUTE] DetectCompoundTagValues: emitted {} CompoundTagValue signals",
         signal_count
-    ));
-
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
-}
-
-// ============================================================================
-// Out-of-Band Change Verification
-// ============================================================================
-
-/// Execute VerifyOutOfBandChanges - verify files with modified mtime.
-pub fn execute_verify_out_of_band_changes(
-    read_only_db: &Database,
-    witness: &ComputationWitness,
-    start: Instant,
-) -> Result {
-    use crate::corpus::mutations::indexing::execute_verify_tags;
-    use std::os::unix::fs::MetadataExt;
-
-    let computation = Computation::VerifyOutOfBandChanges;
-
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
-
-    let oob_signals = match read_only_db.get_signals(Some(SignalType::CorpusFileModifiedOutOfBand)) {
-        Ok(signals) => signals,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to get OOB signals: {}", e),
-            );
-        }
-    };
-
-    let resolver = paths::get_resolver();
-    let mut verified_count = 0;
-    let mut tag_change_count = 0;
-    let mut mtime_only_count = 0;
-
-    for signal in oob_signals {
-        // Signal issue_key is a relative path (stored in DB)
-        let rel_path = &signal.issue_key;
-
-        let track = match read_only_db.get_track_by_path(rel_path) {
-            Ok(Some(t)) => t,
-            Ok(None) => {
-                sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), rel_path, witness);
-                continue;
-            }
-            Err(_) => continue,
-        };
-
-        let track_id = match track.id {
-            Some(id) => id,
-            None => continue,
-        };
-
-        // Resolve relative path to absolute for filesystem operations
-        let abs_path = resolver.resolve(Path::new(rel_path));
-
-        let verify_result = match execute_verify_tags(read_only_db, track_id, &abs_path, Some((&sender, witness))) {
-            Ok(r) => r,
-            Err(e) => {
-                log_general(format!(
-                    "[COMPUTE] VerifyOutOfBandChanges: tag parse error for {}: {}",
-                    rel_path, e
-                ));
-                ensure_file_signal_if_missing(
-                    read_only_db,
-                    &sender,
-                    CorpusFileSignalType::TagParseError.into(),
-                    rel_path,
-                    witness,
-                );
-                continue;
-            }
-        };
-
-        verified_count += 1;
-
-        // Classify using in-memory result (not the tag_mismatches table, which
-        // may not have committed the async db_thread writes yet).
-        if verify_result.is_conflict() {
-            // Value conflicts or mixed sync directions → conflict signal
-            tag_change_count += 1;
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagConflict.into(), rel_path, witness);
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagSync.into(), rel_path, witness);
-        } else if !verify_result.is_clean() {
-            // Purely one-direction extras → sync signal
-            tag_change_count += 1;
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagSync.into(), rel_path, witness);
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagConflict.into(), rel_path, witness);
-        } else {
-            mtime_only_count += 1;
-            sender.clear_file_signal(CorpusFileSignalType::CorpusFileModifiedOutOfBand.into(), rel_path, witness);
-
-            // Use absolute path for filesystem metadata read
-            if let Ok(metadata) = std::fs::metadata(&abs_path) {
-                let mtime_secs = metadata.mtime();
-                let mtime_nanos = metadata.mtime_nsec() as i64;
-
-                // Routes through db_thread which has write access (uses relative path)
-                sender.update_scan_state_mtime(rel_path, mtime_secs, mtime_nanos, witness);
-            }
-        }
-    }
-
-    log_general(format!(
-        "[COMPUTE] VerifyOutOfBandChanges: verified {} files, {} tag changes, {} mtime-only",
-        verified_count, tag_change_count, mtime_only_count
-    ));
-
-    Result::success(computation, start.elapsed().as_millis() as u64, vec![
-        Computation::ClassifyOobTagChanges,
-    ])
-}
-
-// ============================================================================
-// OOB Tag Mismatch Classification (Last Stage)
-// ============================================================================
-
-/// Execute ClassifyOobTagChanges - ensure tag_mismatches is populated for all OOB signals.
-///
-/// This is a "last stage" computation spawned as a follow-up to VerifyOutOfBandChanges.
-/// By the time this runs, the db_thread should have committed the tag_mismatch writes
-/// from the verify pass. This computation sweeps ALL OOB tag signal files (including
-/// legacy `oob_tag` signals) and ensures each has populated tag_mismatches data.
-///
-/// Files that already have tag_mismatches rows (from the verify pass) are skipped.
-/// Files without tag_mismatches (legacy signals, or verify pass writes not yet committed)
-/// get a fresh verify pass to populate the table.
-pub fn execute_classify_oob_tag_changes(
-    read_only_db: &Database,
-    witness: &ComputationWitness,
-    start: Instant,
-) -> Result {
-    use crate::corpus::mutations::indexing::execute_verify_tags;
-
-    let computation = Computation::ClassifyOobTagChanges;
-
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
-
-    // Get ALL files with any OOB tag signal type (including legacy 'oob_tag').
-    // Uses raw SQL because the signal type API can't query by multiple issue_type strings.
-    let mut stmt = match read_only_db.conn.prepare(
-        "SELECT DISTINCT t.id, s.issue_key
-         FROM signals s
-         INNER JOIN tracks t ON t.path = s.issue_key AND t.source = 'corpus'
-         WHERE s.issue_type IN ('oob_tag_conflict', 'oob_tag', 'oob_tag_sync')"
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to query OOB signals: {}", e),
-            );
-        }
-    };
-
-    let oob_files: Vec<(i64, String)> = match stmt.query_map(params![], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    }) {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to iterate OOB signals: {}", e),
-            );
-        }
-    };
-
-    if oob_files.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
-    }
-
-    let resolver = paths::get_resolver();
-    let mut classified_count = 0;
-    let mut already_populated = 0;
-
-    for (track_id, rel_path) in &oob_files {
-        // Check if tag_mismatches already has data for this track (from the verify pass)
-        let has_mismatches = read_only_db.has_tag_mismatch(*track_id).unwrap_or(false);
-
-        if has_mismatches {
-            already_populated += 1;
-            continue;
-        }
-
-        // No tag_mismatches data yet — run verification to populate the table.
-        // This handles legacy 'oob_tag' signals and any verify-pass writes that
-        // hadn't committed by the time this computation started.
-        let abs_path = resolver.resolve(Path::new(rel_path));
-
-        let verify_result = match execute_verify_tags(read_only_db, *track_id, &abs_path, Some((&sender, witness))) {
-            Ok(r) => r,
-            Err(e) => {
-                log_general(format!(
-                    "[COMPUTE] ClassifyOobTagChanges: verify error for {}: {}",
-                    rel_path, e
-                ));
-                continue;
-            }
-        };
-
-        classified_count += 1;
-
-        // Also ensure the signal type is correct (reclassify legacy signals)
-        if verify_result.is_conflict() {
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagConflict.into(), rel_path, witness);
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagSync.into(), rel_path, witness);
-        } else if !verify_result.is_clean() {
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagSync.into(), rel_path, witness);
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::OutOfBandTagConflict.into(), rel_path, witness);
-        }
-        // If clean: leave existing signal (will be cleared by next verify cycle)
-    }
-
-    log_general(format!(
-        "[COMPUTE] ClassifyOobTagChanges: {} files total, {} already populated, {} freshly classified",
-        oob_files.len(), already_populated, classified_count
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

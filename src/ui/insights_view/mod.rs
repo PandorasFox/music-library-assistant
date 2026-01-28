@@ -124,7 +124,7 @@ pub struct BucketSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsightType {
     // Corpus bucket entries
-    CorpusModifiedOob,
+    CorpusMtimeOnly,
     CorpusOobTagSync,
     CorpusOobTagConflict,
     CorpusFilesInCorpus,
@@ -296,12 +296,12 @@ impl CachedBucketEntries {
     fn build_corpus_entries(corpus: &CorpusFilesBucket) -> Vec<BucketEntry> {
         let mut entries = vec![
             BucketEntry::corpus(
-                InsightType::CorpusModifiedOob,
-                "Modified out-of-band",
-                corpus.modified_oob,
-                if corpus.modified_oob > 0 { 0 } else { 2 },
-                if corpus.modified_oob > 0 { Color::Red } else { Color::DarkGray },
-                InsightAction::NotImplemented, // Future: OOB resolution
+                InsightType::CorpusMtimeOnly,
+                "Mtime changes (ack needed)",
+                corpus.mtime_only_mismatch,
+                if corpus.mtime_only_mismatch > 0 { 0 } else { 2 },
+                if corpus.mtime_only_mismatch > 0 { Color::Yellow } else { Color::DarkGray },
+                InsightAction::LaunchOobTagConflict, // Same flow as conflict, handles MtimeOnly bucket
             ),
             BucketEntry::corpus(
                 InsightType::CorpusOobTagSync,
@@ -652,9 +652,9 @@ mod tests {
     fn mock_insights_data() -> InsightsData {
         InsightsData {
             bucket_corpus: CorpusFilesBucket {
-                modified_oob: 0,
                 oob_tag_sync: 0,
                 oob_tag_conflict: 0,
+                mtime_only_mismatch: 0,
                 files_in_corpus: 100,
                 files_indexed: 90,
                 files_unindexed: 5,

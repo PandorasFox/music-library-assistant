@@ -328,29 +328,29 @@ impl Database {
         Ok(files)
     }
 
-    /// Get ALL OOB tag signal files classified into conflict buckets.
+    /// Get ALL OOB signal files classified into resolution buckets.
     ///
     /// Uses the `tag_mismatches` table for fast SQL-based classification:
-    /// - Bucket 0 (NoChanges): signal exists but no tag_mismatches rows
+    /// - Bucket 0 (MtimeOnly): mtime_only_mismatch signal (mtime changed, tags identical)
     /// - Bucket 1 (DbOnly): all mismatches have disk_value IS NULL
     /// - Bucket 2 (DiskOnly): all mismatches have db_value IS NULL
     /// - Bucket 3 (Conflict): mismatches in both directions or value conflicts
     ///
-    /// Loads from all OOB signal types (conflict + sync + legacy).
+    /// Loads from all OOB signal types (mtime_only_mismatch, conflict, sync, legacy).
     pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::corpus::db::types::BucketedOobFile>> {
         use crate::corpus::db::types::{BucketedOobFile, ConflictBucket};
 
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT t.id, s.issue_key,
                 CASE
-                    WHEN NOT EXISTS(SELECT 1 FROM tag_mismatches tm WHERE tm.track_id = t.id) THEN 0
+                    WHEN s.issue_type = 'mtime_only_mismatch' THEN 0
                     WHEN NOT EXISTS(SELECT 1 FROM tag_mismatches tm WHERE tm.track_id = t.id AND tm.disk_value IS NOT NULL) THEN 1
                     WHEN NOT EXISTS(SELECT 1 FROM tag_mismatches tm WHERE tm.track_id = t.id AND tm.db_value IS NOT NULL) THEN 2
                     ELSE 3
                 END as bucket
              FROM signals s
              INNER JOIN tracks t ON t.path = s.issue_key AND t.source = 'corpus'
-             WHERE s.issue_type IN ('oob_tag_conflict', 'oob_tag', 'oob_tag_sync')
+             WHERE s.issue_type IN ('mtime_only_mismatch', 'oob_tag_conflict', 'oob_tag', 'oob_tag_sync')
              ORDER BY bucket, s.issue_key"
         )?;
 

@@ -321,11 +321,42 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
                 Span::styled(cancel_label, cancel_style),
             ])
         }
-        ConflictBucket::NoChanges => {
-            Line::from(Span::styled(
-                "No resolution needed — tags match (or awaiting classification)",
-                Style::default().fg(Color::DarkGray),
-            ))
+        ConflictBucket::MtimeOnly => {
+            let ack_label = " Acknowledge Mtime ";
+            let cancel_label = " Cancel ";
+            let has_files = !state.active_bucket_state().files.is_empty();
+
+            // Calculate button positions for click detection
+            let total_width = ack_label.len() + 3 + cancel_label.len();
+            let start_x = inner.x + (inner.width.saturating_sub(total_width as u16)) / 2;
+
+            let mut x = start_x;
+
+            // Acknowledge button
+            let ack_rect = Rect::new(x, inner.y, ack_label.len() as u16, 1);
+            state.button_rects.set("acknowledge", ack_rect);
+            x += ack_label.len() as u16 + 3;
+
+            // Cancel button
+            let cancel_rect = Rect::new(x, inner.y, cancel_label.len() as u16, 1);
+            state.button_rects.set("cancel", cancel_rect);
+
+            let ack_style = if is_focused && has_files {
+                Style::default().fg(Color::Black).bg(Color::Green)
+            } else if has_files {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            let cancel_style = Style::default().fg(Color::White);
+
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(ack_label, ack_style),
+                Span::raw("   "),
+                Span::styled(cancel_label, cancel_style),
+            ])
         }
         ConflictBucket::Conflict => {
             Line::from(Span::styled(

@@ -87,8 +87,10 @@ pub enum OobConflictAction {
     None,
     /// File or bucket selection changed — action handler should reload diff
     Navigate,
-    /// Resolve the active bucket (bulk, buckets 1/2 only)
+    /// Resolve the active bucket (bulk, buckets 1/2 only - tag sync/conflict)
     Resolve,
+    /// Acknowledge mtime-only changes (bucket 0 only)
+    Acknowledge,
     /// Close inspector and return to Insights
     Cancel,
     /// Open filter popup (Ctrl+F)
@@ -132,7 +134,7 @@ impl OobConflictState {
 
         for file in files {
             match file.bucket {
-                ConflictBucket::NoChanges => b0.push(file),
+                ConflictBucket::MtimeOnly => b0.push(file),
                 ConflictBucket::DbOnly => b1.push(file),
                 ConflictBucket::DiskOnly => b2.push(file),
                 ConflictBucket::Conflict => b3.push(file),
@@ -146,7 +148,7 @@ impl OobConflictState {
             .iter()
             .find(|b| bucket_counts[b.index()] > 0)
             .copied()
-            .unwrap_or(ConflictBucket::NoChanges);
+            .unwrap_or(ConflictBucket::MtimeOnly);
 
         Self {
             active_bucket: initial_bucket,
@@ -292,10 +294,15 @@ impl OobConflictState {
             // Confirm resolution (when focused on buttons)
             KeyCode::Enter => {
                 if self.focus_pane == FocusPane::Buttons
-                    && self.active_bucket.is_resolvable()
                     && !self.active_bucket_state().files.is_empty()
                 {
-                    OobConflictAction::Resolve
+                    if self.active_bucket.is_acknowledgeable() {
+                        OobConflictAction::Acknowledge
+                    } else if self.active_bucket.is_resolvable() {
+                        OobConflictAction::Resolve
+                    } else {
+                        OobConflictAction::None
+                    }
                 } else {
                     OobConflictAction::None
                 }

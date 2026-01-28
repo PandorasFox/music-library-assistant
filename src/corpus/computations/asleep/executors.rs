@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
-    ensure_file_signal_if_missing,
+    ensure_file_signal_if_missing, clear_file_signal_if_present,
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::CorpusFileSignalType;
@@ -302,9 +302,14 @@ pub fn execute_verify_mtime(
 // Verify Tags
 // ============================================================================
 
-/// Verify tags on disk match database.
+/// Verify tags on disk match database and classify OOB changes.
 ///
-/// Delegates to the existing verify_tags implementation in indexing module.
+/// Performs full classification of out-of-band changes directly:
+/// - `MtimeOnlyMismatch`: mtime changed but tags are identical (requires operator acknowledgement)
+/// - `OutOfBandTagSync`: one-direction tag extras only (syncable without conflict)
+/// - `OutOfBandTagConflict`: value conflicts or mixed-direction extras (requires operator decision)
+///
+/// These three signal types are mutually exclusive - emitting one clears the others.
 pub fn execute_verify_tags(
     read_only_db: &Database,
     track_id: i64,
@@ -320,34 +325,163 @@ pub fn execute_verify_tags(
     };
 
     // Route mismatch writes through db_thread (read-only connection can't write directly)
-    let sender = crate::db_thread::signal_sender().cloned();
-    let sender_ctx = sender.as_ref().map(|s| (s, witness));
+    let sender = match crate::db_thread::signal_sender().cloned() {
+        Some(s) => s,
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+    let sender_ctx = Some((&sender, witness));
+
+    // Get relative path for signal keys
+    let resolver = crate::corpus::paths::get_resolver();
+    let rel_path = match resolver.to_relative(path) {
+        Some(rel) => rel,
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Path {} does not match any configured root", path.display()),
+            );
+        }
+    };
+    let rel_str = rel_path.to_string_lossy().to_string();
 
     match indexing::execute_verify_tags(read_only_db, track_id, path, sender_ctx) {
-        Ok(_verify_result) => Result::success(
-            computation,
-            start.elapsed().as_millis() as u64,
-            Vec::new(),
-        ),
+        Ok(verify_result) => {
+            // Full classification based on TagVerifyResult
+            if verify_result.is_clean() {
+                // Tags match exactly - this is a mtime-only change
+                // Requires operator acknowledgement before marking healthy
+                log_general(format!(
+                    "[COMPUTE] VerifyTags: mtime-only change for track {} ({})",
+                    track_id, path.display()
+                ));
+                ensure_file_signal_if_missing(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::MtimeOnlyMismatch.into(),
+                    &rel_str,
+                    witness,
+                );
+                // Clear mutually exclusive signals
+                clear_file_signal_if_present(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::OutOfBandTagConflict.into(),
+                    &rel_str,
+                    witness,
+                );
+                clear_file_signal_if_present(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::OutOfBandTagSync.into(),
+                    &rel_str,
+                    witness,
+                );
+            } else if verify_result.is_conflict() {
+                // Value conflicts or mixed-direction extras - requires operator decision
+                log_general(format!(
+                    "[COMPUTE] VerifyTags: tag conflict for track {} ({})",
+                    track_id, path.display()
+                ));
+                ensure_file_signal_if_missing(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::OutOfBandTagConflict.into(),
+                    &rel_str,
+                    witness,
+                );
+                // Clear mutually exclusive signals
+                clear_file_signal_if_present(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::OutOfBandTagSync.into(),
+                    &rel_str,
+                    witness,
+                );
+                clear_file_signal_if_present(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::MtimeOnlyMismatch.into(),
+                    &rel_str,
+                    witness,
+                );
+            } else {
+                // One-direction extras only - can be synced without conflict
+                log_general(format!(
+                    "[COMPUTE] VerifyTags: syncable tag diff for track {} ({})",
+                    track_id, path.display()
+                ));
+                ensure_file_signal_if_missing(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::OutOfBandTagSync.into(),
+                    &rel_str,
+                    witness,
+                );
+                // Clear mutually exclusive signals
+                clear_file_signal_if_present(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::OutOfBandTagConflict.into(),
+                    &rel_str,
+                    witness,
+                );
+                clear_file_signal_if_present(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::MtimeOnlyMismatch.into(),
+                    &rel_str,
+                    witness,
+                );
+            }
+
+            Result::success(
+                computation,
+                start.elapsed().as_millis() as u64,
+                Vec::new(),
+            )
+        }
         Err(e) => {
             // Emit TagParseError signal so the issue is tracked in the DB
             log_general(format!(
                 "[COMPUTE] VerifyTags: tag parse error for track {} ({}): {}",
                 track_id, path.display(), e
             ));
-            if let Some(ref sender) = sender {
-                let resolver = crate::corpus::paths::get_resolver();
-                if let Some(rel) = resolver.to_relative(path) {
-                    let rel_str = rel.to_string_lossy();
-                    ensure_file_signal_if_missing(
-                        read_only_db,
-                        sender,
-                        CorpusFileSignalType::TagParseError.into(),
-                        &rel_str,
-                        witness,
-                    );
-                }
-            }
+            ensure_file_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::TagParseError.into(),
+                &rel_str,
+                witness,
+            );
+            // Clear OOB signals on parse error - we can't classify what we can't read
+            clear_file_signal_if_present(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::OutOfBandTagConflict.into(),
+                &rel_str,
+                witness,
+            );
+            clear_file_signal_if_present(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::OutOfBandTagSync.into(),
+                &rel_str,
+                witness,
+            );
+            clear_file_signal_if_present(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::MtimeOnlyMismatch.into(),
+                &rel_str,
+                witness,
+            );
             // Return success so computation continues processing other files
             Result::success(
                 computation,

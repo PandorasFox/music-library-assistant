@@ -229,6 +229,36 @@ pub enum Mutation {
         path: PathBuf,
         metadata: ExtractedMetadata,
     },
+
+    // ========================================================================
+    // OOB Resolution Operations
+    // ========================================================================
+    /// Acknowledge mtime-only change - update scan_state, clear MtimeOnlyMismatch signal.
+    ///
+    /// Used when disk file mtime changed but tags are identical. Updates scan_state
+    /// to match current disk mtime so file is considered synced.
+    AcknowledgeMtimeOnly {
+        /// Track IDs to acknowledge
+        track_ids: Vec<i64>,
+    },
+
+    /// Apply DB tags to disk files (defer to db / reject disk changes).
+    ///
+    /// Writes the tags from the database to the disk files, overwriting any
+    /// disk-side changes. Clears OOB signals and tag_mismatches.
+    ApplyDbTagsToDisk {
+        /// Track IDs to update
+        track_ids: Vec<i64>,
+    },
+
+    /// Assimilate disk tags into DB (defer to corpus / accept disk changes).
+    ///
+    /// Reads tags from disk files and stores them in the database, overwriting
+    /// the database-side values. Clears OOB signals and tag_mismatches.
+    AssimilateDiskTagsToDb {
+        /// Track IDs to update
+        track_ids: Vec<i64>,
+    },
     // Note: VerifyTags has been moved to corpus::computations::Computation.
     // Computations don't alter state - they only emit signals.
 }
@@ -260,7 +290,10 @@ impl Mutation {
             | Mutation::UpdateTrackPath { .. }
             | Mutation::UpdateScanStatePath { .. }
             | Mutation::DropFromIndex { .. }
-            | Mutation::UpdateTrack { .. } => MutationCategory::Indexing,
+            | Mutation::UpdateTrack { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. } => MutationCategory::Indexing,
 
             Mutation::Move { .. } | Mutation::MoveToStash { .. } => MutationCategory::FileMove,
 
@@ -292,7 +325,10 @@ impl Mutation {
             Mutation::TagEditDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. } => None,
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. } => None,
 
             Mutation::UpdateTrackPath { new_path: path, .. }
             | Mutation::DropFromIndex { path, .. }
@@ -311,6 +347,9 @@ impl Mutation {
                 | Mutation::UpdateScanStatePath { .. }
                 | Mutation::DropFromIndex { .. }
                 | Mutation::UpdateTrack { .. }
+                | Mutation::AcknowledgeMtimeOnly { .. }
+                | Mutation::AssimilateDiskTagsToDb { .. }
+            // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
         )
     }
 
@@ -329,7 +368,7 @@ impl Mutation {
             | Mutation::UpdateTrack { track_id, .. }
             | Mutation::Transcode { track_id, .. } => Some(*track_id),
 
-            // These don't have a track_id directly
+            // These don't have a single track_id directly (batch operations or no track)
             Mutation::TagFlushToDisk { .. }
             | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
@@ -343,7 +382,10 @@ impl Mutation {
             | Mutation::MoveToStash { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
-            | Mutation::DbMigration { .. } => None,
+            | Mutation::DbMigration { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. } => None,
         }
     }
 
@@ -442,6 +484,11 @@ impl Mutation {
 
             // Migration doesn't affect signals
             Mutation::DbMigration { .. } => {}
+
+            // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
+            Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. } => {}
         }
 
         // Deduplicate directories
@@ -498,10 +545,14 @@ impl Mutation {
             }
 
             // Operations without specific file paths that need signal updates
+            // (batch OOB resolution paths resolved at execution time)
             Mutation::TagEditDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. } => Vec::new(),
         }
     }
 }

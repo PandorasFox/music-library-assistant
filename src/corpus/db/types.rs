@@ -120,6 +120,8 @@ pub enum SignalType {
     OutOfBandTagSync,
     /// Tags on disk conflict with indexed tags (value differences or mixed directions)
     OutOfBandTagConflict,
+    /// File mtime changed but tags are identical (requires operator acknowledgement)
+    MtimeOnlyMismatch,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
     /// Tag value collision needing canonicalization
@@ -164,6 +166,7 @@ impl SignalType {
             Self::MissingTag => "missing_tag",
             Self::OutOfBandTagSync => "oob_tag_sync",
             Self::OutOfBandTagConflict => "oob_tag_conflict",
+            Self::MtimeOnlyMismatch => "mtime_only_mismatch",
             Self::DuplicateInode => "duplicate_inode",
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
@@ -200,6 +203,7 @@ impl SignalType {
             "missing_tag" => Some(Self::MissingTag),
             "oob_tag_sync" => Some(Self::OutOfBandTagSync),
             "oob_tag_conflict" => Some(Self::OutOfBandTagConflict),
+            "mtime_only_mismatch" => Some(Self::MtimeOnlyMismatch),
             // Legacy: treat old "oob_tag" as conflict (conservative)
             "oob_tag" => Some(Self::OutOfBandTagConflict),
             "duplicate_inode" => Some(Self::DuplicateInode),
@@ -231,6 +235,7 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::MovedFile => Self::MovedFile,
             CorpusFileSignalType::OutOfBandTagSync => Self::OutOfBandTagSync,
             CorpusFileSignalType::OutOfBandTagConflict => Self::OutOfBandTagConflict,
+            CorpusFileSignalType::MtimeOnlyMismatch => Self::MtimeOnlyMismatch,
             CorpusFileSignalType::TagParseError => Self::TagParseError,
             CorpusFileSignalType::WaveformReadError => Self::WaveformReadError,
         }
@@ -288,6 +293,8 @@ pub enum CorpusFileSignalType {
     OutOfBandTagSync,
     /// Tags on disk conflict with indexed tags (value differences or mixed directions)
     OutOfBandTagConflict,
+    /// File mtime changed but tags are identical (requires operator acknowledgement)
+    MtimeOnlyMismatch,
     /// File's tags could not be parsed
     TagParseError,
     /// File's audio waveform could not be decoded for fingerprinting
@@ -305,6 +312,7 @@ impl CorpusFileSignalType {
             Self::MovedFile => "moved_file",
             Self::OutOfBandTagSync => "oob_tag_sync",
             Self::OutOfBandTagConflict => "oob_tag_conflict",
+            Self::MtimeOnlyMismatch => "mtime_only_mismatch",
             Self::TagParseError => "tag_parse_error",
             Self::WaveformReadError => "waveform_read_error",
         }
@@ -320,6 +328,7 @@ impl CorpusFileSignalType {
             "moved_file" | "file_relocated" => Some(Self::MovedFile),
             "oob_tag_sync" => Some(Self::OutOfBandTagSync),
             "oob_tag_conflict" => Some(Self::OutOfBandTagConflict),
+            "mtime_only_mismatch" => Some(Self::MtimeOnlyMismatch),
             // Legacy: treat old "oob_tag" as conflict (conservative)
             "oob_tag" => Some(Self::OutOfBandTagConflict),
             "tag_parse_error" => Some(Self::TagParseError),
@@ -338,6 +347,7 @@ impl CorpusFileSignalType {
             Self::MovedFile => SignalType::MovedFile,
             Self::OutOfBandTagSync => SignalType::OutOfBandTagSync,
             Self::OutOfBandTagConflict => SignalType::OutOfBandTagConflict,
+            Self::MtimeOnlyMismatch => SignalType::MtimeOnlyMismatch,
             Self::TagParseError => SignalType::TagParseError,
             Self::WaveformReadError => SignalType::WaveformReadError,
         }
@@ -630,12 +640,12 @@ pub struct CorpusSummary {
     pub library_leftover: usize,
 
     // Out-of-band change signals
-    /// Files with mtime changed outside MLA
-    pub modified_oob: usize,
     /// Files with syncable tag extras (one direction only)
     pub oob_tag_sync: usize,
     /// Files with tag value conflicts or mixed-direction extras
     pub oob_tag_conflict: usize,
+    /// Files with mtime changed but tags identical (requires acknowledgement)
+    pub mtime_only_mismatch: usize,
     /// Multiple index entries sharing same inode
     pub duplicate_inodes: usize,
 }
@@ -658,9 +668,9 @@ pub struct InsightsData {
 #[derive(Debug, Clone, Default)]
 pub struct CorpusFilesBucket {
     // OOB signals at top - highest priority within bucket
-    pub modified_oob: usize,
     pub oob_tag_sync: usize,
     pub oob_tag_conflict: usize,
+    pub mtime_only_mismatch: usize,
     // Standard corpus file signals
     pub files_in_corpus: usize,
     pub files_indexed: usize,
@@ -828,16 +838,16 @@ pub struct OobSignalFile {
     pub path: String,
 }
 
-/// Classification bucket for OOB tag files.
+/// Classification bucket for OOB signal files.
 ///
-/// Determined by SQL CASE expression against `tag_mismatches` table:
-/// - NoChanges: signal exists but no `tag_mismatches` rows for this track
+/// Determined by SQL CASE expression against signal type and `tag_mismatches` table:
+/// - MtimeOnly: mtime_only_mismatch signal (mtime changed, tags identical) - needs acknowledgement
 /// - DbOnly: all mismatches have `disk_value IS NULL`
 /// - DiskOnly: all mismatches have `db_value IS NULL`
 /// - Conflict: both values present, or mixed null directions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictBucket {
-    NoChanges,
+    MtimeOnly,
     DbOnly,
     DiskOnly,
     Conflict,
@@ -846,7 +856,7 @@ pub enum ConflictBucket {
 impl ConflictBucket {
     pub fn from_int(i: i32) -> Self {
         match i {
-            0 => Self::NoChanges,
+            0 => Self::MtimeOnly,
             1 => Self::DbOnly,
             2 => Self::DiskOnly,
             _ => Self::Conflict,
@@ -855,7 +865,7 @@ impl ConflictBucket {
 
     pub fn label(&self) -> &'static str {
         match self {
-            Self::NoChanges => "No Changes",
+            Self::MtimeOnly => "Mtime Only",
             Self::DbOnly => "DB Only",
             Self::DiskOnly => "Disk Only",
             Self::Conflict => "Conflicts",
@@ -868,32 +878,37 @@ impl ConflictBucket {
 
     pub fn next(&self) -> Self {
         match self {
-            Self::NoChanges => Self::DbOnly,
+            Self::MtimeOnly => Self::DbOnly,
             Self::DbOnly => Self::DiskOnly,
             Self::DiskOnly => Self::Conflict,
-            Self::Conflict => Self::NoChanges,
+            Self::Conflict => Self::MtimeOnly,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            Self::NoChanges => Self::Conflict,
-            Self::DbOnly => Self::NoChanges,
+            Self::MtimeOnly => Self::Conflict,
+            Self::DbOnly => Self::MtimeOnly,
             Self::DiskOnly => Self::DbOnly,
             Self::Conflict => Self::DiskOnly,
         }
     }
 
     pub const ALL: [ConflictBucket; 4] = [
-        ConflictBucket::NoChanges,
+        ConflictBucket::MtimeOnly,
         ConflictBucket::DbOnly,
         ConflictBucket::DiskOnly,
         ConflictBucket::Conflict,
     ];
 
-    /// Whether this bucket supports bulk resolution buttons.
+    /// Whether this bucket supports bulk resolution buttons (tag sync/conflict).
     pub fn is_resolvable(&self) -> bool {
         matches!(self, Self::DbOnly | Self::DiskOnly)
+    }
+
+    /// Whether this bucket supports acknowledgement (mtime-only changes).
+    pub fn is_acknowledgeable(&self) -> bool {
+        matches!(self, Self::MtimeOnly)
     }
 }
 

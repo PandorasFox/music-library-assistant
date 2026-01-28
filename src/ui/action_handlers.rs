@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::corpus::paths;
-use crate::ui::{compound_split, format_standardization, insights_view, missing_file_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets};
+use crate::ui::{compound_split, filter_popup, format_standardization, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -73,6 +73,12 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplit) => {
                         self.start_compound_split_resolution();
+                    }
+                    Some(insights_view::InsightAction::LaunchOobTagSync) => {
+                        self.start_oob_conflict_inspection();
+                    }
+                    Some(insights_view::InsightAction::LaunchOobTagConflict) => {
+                        self.start_oob_conflict_inspection();
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Flow not yet implemented".to_string());
@@ -731,6 +737,329 @@ impl App {
         self.mode = UiMode::CompoundTagSplit;
     }
 
+    /// Start OOB tag sync resolution from Insights view.
+    fn start_oob_sync_resolution(&mut self) {
+        let db = match self.witch.as_mut() {
+            Some(w) => w.read_only_db(),
+            None => {
+                self.status_message = Some("Database not available".to_string());
+                return;
+            }
+        };
+
+        let files = db.get_oob_sync_files().unwrap_or_default();
+        if files.is_empty() {
+            self.status_message = Some("No syncable tag changes".to_string());
+            return;
+        }
+
+        // Start transaction for the sync resolution
+        if let Some(ref mut witch) = self.witch {
+            let _ = witch.start_transaction("OOB tag sync");
+        }
+
+        let state = oob_sync_flow::OobSyncState::new(files);
+        self.oob_sync_state = Some(state);
+        self.mode = UiMode::OobSyncResolution;
+    }
+
+    /// Start OOB tag conflict inspection from Insights view.
+    ///
+    /// Loads all OOB signal files classified into four buckets, starts a
+    /// transaction for potential resolution, and computes the initial diff.
+    fn start_oob_conflict_inspection(&mut self) {
+        // First pass: query bucketed files (scoped borrow)
+        let files = {
+            let db = match self.witch.as_mut() {
+                Some(w) => w.read_only_db(),
+                None => {
+                    self.status_message = Some("Database not available".to_string());
+                    return;
+                }
+            };
+            match db.get_oob_files_bucketed() {
+                Ok(f) => f,
+                Err(e) => {
+                    crate::logging::log_error(format!("get_oob_files_bucketed failed: {}", e));
+                    self.status_message = Some(format!("Query failed: {}", e));
+                    return;
+                }
+            }
+        };
+
+        if files.is_empty() {
+            self.status_message = Some("No OOB tag signals to inspect".to_string());
+            return;
+        }
+
+        // Start transaction for potential resolution
+        if let Some(ref mut witch) = self.witch {
+            let _ = witch.start_transaction("OOB tag resolution");
+        }
+
+        let mut state = oob_conflict_flow::OobConflictState::new(files);
+
+        // Second pass: compute initial diff for first file in the active bucket
+        if let Some(file) = state.active_bucket_state().current_file() {
+            let track_id = file.track_id;
+            let path = file.path.clone();
+            if let Some(w) = self.witch.as_mut() {
+                let db = w.read_only_db();
+                let resolver = paths::get_resolver();
+                let abs_path = resolver.resolve(std::path::Path::new(&path));
+                state.current_diff = oob_conflict_flow::types::compute_tag_diff(&db, track_id, &abs_path);
+            }
+        }
+
+        self.oob_conflict_state = Some(state);
+        self.mode = UiMode::OobConflictInspection;
+    }
+
+    /// Handle OOB sync resolution actions.
+    pub(super) fn handle_oob_sync_action(&mut self, action: oob_sync_flow::OobSyncAction) {
+        match action {
+            oob_sync_flow::OobSyncAction::None => {}
+            oob_sync_flow::OobSyncAction::AcceptDisk => {
+                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::DiskToIndex);
+                // Transition to review
+                self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
+            }
+            oob_sync_flow::OobSyncAction::AcceptDb => {
+                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::IndexToDisk);
+                // Transition to review
+                self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
+            }
+            oob_sync_flow::OobSyncAction::Cancel => {
+                crate::logging::log_general("OOB sync resolution cancelled");
+                // Discard any active transaction
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.oob_sync_state = None;
+                self.start_insights_view();
+            }
+            oob_sync_flow::OobSyncAction::OpenFilter => {
+                // Open filter popup overlay
+                self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
+            }
+        }
+    }
+
+    /// Stage mutations for OOB tag sync (accept one direction).
+    ///
+    /// If selection is active, only selected files are included.
+    /// Otherwise, all files matching the direction are included.
+    fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection) {
+        use crate::corpus::db::types::OobSyncDirection;
+        use crate::corpus::mutations::{Mutation, TagEdit};
+
+        let Some(ref state) = self.oob_sync_state else {
+            return;
+        };
+
+        let resolver = paths::get_resolver();
+        let mut mutations = Vec::new();
+
+        // Determine which indices to process
+        let selected_indices = if state.selection.is_active() {
+            state.selection.selected_indices()
+        } else {
+            // No selection - process all files matching direction
+            (0..state.files.len()).collect()
+        };
+
+        for idx in selected_indices {
+            let Some(file) = state.files.get(idx) else {
+                continue;
+            };
+
+            if file.direction != direction {
+                continue;
+            }
+
+            let abs_path = resolver.resolve(std::path::Path::new(&file.path));
+            let edits: Vec<TagEdit> = file.mismatches.iter().filter_map(|m| {
+                // For DiskToIndex: disk_value is the truth, push it to DB+disk
+                // For IndexToDisk: db_value is the truth, push it to DB+disk
+                let new_value = match direction {
+                    OobSyncDirection::DiskToIndex => m.disk_value.clone(),
+                    OobSyncDirection::IndexToDisk => m.db_value.clone(),
+                };
+
+                new_value.map(|v| TagEdit {
+                    tag_name: m.field.clone(),
+                    old_value: None, // Bypass validation — sync is authoritative
+                    new_value: Some(v),
+                })
+            }).collect();
+
+            if !edits.is_empty() {
+                mutations.push(Mutation::TagEditAndFlush {
+                    track_id: file.track_id,
+                    path: abs_path,
+                    edits,
+                });
+            }
+        }
+
+        if mutations.is_empty() {
+            self.status_message = Some("No mutations to stage".to_string());
+            return;
+        }
+
+        let label = match direction {
+            OobSyncDirection::DiskToIndex => "Sync disk tags → index",
+            OobSyncDirection::IndexToDisk => "Sync index tags → disk",
+        };
+
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
+        }
+    }
+
+    /// Handle OOB conflict inspection actions.
+    pub(super) fn handle_oob_conflict_action(&mut self, action: oob_conflict_flow::OobConflictAction) {
+        match action {
+            oob_conflict_flow::OobConflictAction::None => {}
+            oob_conflict_flow::OobConflictAction::Navigate => {
+                // File or bucket selection changed — recompute diff for the new file
+                let diff = self.compute_current_conflict_diff();
+                if let Some(ref mut state) = self.oob_conflict_state {
+                    state.current_diff = diff;
+                }
+            }
+            oob_conflict_flow::OobConflictAction::Resolve => {
+                self.stage_oob_bucket_resolution();
+            }
+            oob_conflict_flow::OobConflictAction::Cancel => {
+                crate::logging::log_general("OOB conflict inspection closed");
+                // Discard any active transaction
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.oob_conflict_state = None;
+                self.start_insights_view();
+            }
+            oob_conflict_flow::OobConflictAction::OpenFilter => {
+                // Open filter popup overlay
+                self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
+            }
+        }
+    }
+
+    /// Compute the tag diff for the currently selected conflict file.
+    fn compute_current_conflict_diff(&mut self) -> Vec<crate::corpus::db::types::TagMismatchEntry> {
+        let (track_id, path) = match self.oob_conflict_state.as_ref()
+            .and_then(|s| s.active_bucket_state().current_file())
+        {
+            Some(file) => (file.track_id, file.path.clone()),
+            None => return Vec::new(),
+        };
+
+        let db = match self.witch.as_mut() {
+            Some(w) => w.read_only_db(),
+            None => return Vec::new(),
+        };
+
+        let resolver = paths::get_resolver();
+        let abs_path = resolver.resolve(std::path::Path::new(&path));
+        oob_conflict_flow::types::compute_tag_diff(&db, track_id, &abs_path)
+    }
+
+    /// Stage resolution mutations for files in the active bucket.
+    ///
+    /// If selection is active, only selected files are included.
+    /// Otherwise, all files in the bucket are included.
+    ///
+    /// For ApplyDb: set each file's tags to the DB values (write to disk)
+    /// For AssimilateDisk: set each file's tags to the disk values (write to DB+disk)
+    fn stage_oob_bucket_resolution(&mut self) {
+        use crate::corpus::mutations::{Mutation, TagEdit};
+        use crate::ui::oob_conflict_flow::types::ResolutionButton;
+
+        let (files_data, button) = match self.oob_conflict_state.as_ref() {
+            Some(state) => {
+                let bucket_state = state.active_bucket_state();
+
+                // Determine which indices to process
+                let indices = if state.selection.is_active() {
+                    state.selection.selected_indices()
+                } else {
+                    // No selection - process all files in bucket
+                    (0..bucket_state.files.len()).collect()
+                };
+
+                let files: Vec<(i64, String)> = indices
+                    .iter()
+                    .filter_map(|&idx| bucket_state.files.get(idx))
+                    .map(|f| (f.track_id, f.path.clone()))
+                    .collect();
+                (files, state.selected_button)
+            }
+            None => return,
+        };
+
+        if files_data.is_empty() {
+            self.status_message = Some("No files selected to resolve".to_string());
+            return;
+        }
+
+        let db = match self.witch.as_mut() {
+            Some(w) => w.read_only_db(),
+            None => return,
+        };
+
+        let resolver = paths::get_resolver();
+        let mut mutations = Vec::new();
+
+        for (track_id, path) in &files_data {
+            let mismatches = db.get_tag_mismatches_for_track(*track_id).unwrap_or_default();
+            let abs_path = resolver.resolve(std::path::Path::new(path));
+
+            let edits: Vec<TagEdit> = mismatches.iter().filter_map(|(field, db_value, disk_value)| {
+                let new_value = match button {
+                    ResolutionButton::ApplyDb => db_value.clone(),
+                    ResolutionButton::AssimilateDisk => disk_value.clone(),
+                };
+
+                new_value.map(|v| TagEdit {
+                    tag_name: field.clone(),
+                    old_value: None, // Bypass validation — resolution is authoritative
+                    new_value: Some(v),
+                })
+            }).collect();
+
+            if !edits.is_empty() {
+                mutations.push(Mutation::TagEditAndFlush {
+                    track_id: *track_id,
+                    path: abs_path,
+                    edits,
+                });
+            }
+        }
+
+        if mutations.is_empty() {
+            self.status_message = Some("No mutations to stage".to_string());
+            return;
+        }
+
+        let label = match button {
+            ResolutionButton::ApplyDb => "Apply DB tags \u{2192} files",
+            ResolutionButton::AssimilateDisk => "Assimilate file tags \u{2192} DB",
+        };
+
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
+        }
+
+        // Note: oob_conflict_state is NOT cleared - preserved for Cancel return
+        self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
+    }
+
     /// Handle tag canonicity modal actions.
     pub(super) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity::TagCanonicalityAction) {
         match action {
@@ -1223,6 +1552,14 @@ impl App {
                         // format_std state was preserved
                         self.mode = UiMode::FormatStandardization;
                     }
+                    Some(TransactionReviewSource::OobSyncResolution) => {
+                        // oob_sync_state was preserved
+                        self.mode = UiMode::OobSyncResolution;
+                    }
+                    Some(TransactionReviewSource::OobConflictResolution) => {
+                        // oob_conflict_state was preserved
+                        self.mode = UiMode::OobConflictInspection;
+                    }
                     None => self.start_insights_view(),
                 }
             }
@@ -1293,6 +1630,8 @@ impl App {
         self.missing_file_preview = None;
         self.intake_confirmation = None;
         self.format_std = None;
+        self.oob_sync_state = None;
+        self.oob_conflict_state = None;
     }
 
     /// Transition to the standardized transaction review modal.
@@ -1525,5 +1864,59 @@ impl App {
         self.status_message = Some(format!("Staged {} transcode operations", count));
         // Note: format_std state is NOT cleared - preserved for Cancel return
         self.start_transaction_review(transaction_review::TransactionReviewSource::FormatStandardization);
+    }
+
+    // =========================================================================
+    // Mouse Click Handling
+    // =========================================================================
+
+    /// Handle mouse click at the given position.
+    ///
+    /// This dispatches to the current mode's click handler to check for
+    /// button hits. Mouse clicks on decision buttons are equivalent to
+    /// Enter key presses for decision witnessing.
+    pub(super) fn handle_click(&mut self, x: u16, y: u16) {
+        match self.mode {
+            UiMode::OobSyncResolution => {
+                if let Some(ref state) = self.oob_sync_state {
+                    if let Some(button_name) = state.button_rects.hit_test(x, y) {
+                        // Simulate the button press action
+                        let action = match button_name {
+                            "accept_disk" => oob_sync_flow::OobSyncAction::AcceptDisk,
+                            "accept_db" => oob_sync_flow::OobSyncAction::AcceptDb,
+                            "cancel" => oob_sync_flow::OobSyncAction::Cancel,
+                            _ => oob_sync_flow::OobSyncAction::None,
+                        };
+                        self.handle_oob_sync_action(action);
+                    }
+                }
+            }
+            UiMode::OobConflictInspection => {
+                if let Some(ref state) = self.oob_conflict_state {
+                    if let Some(button_name) = state.button_rects.hit_test(x, y) {
+                        // Simulate the button press action
+                        let action = match button_name {
+                            "apply_db" => oob_conflict_flow::OobConflictAction::Resolve,
+                            "assimilate_disk" => oob_conflict_flow::OobConflictAction::Resolve,
+                            "cancel" => oob_conflict_flow::OobConflictAction::Cancel,
+                            _ => oob_conflict_flow::OobConflictAction::None,
+                        };
+                        if button_name == "apply_db" {
+                            // Set button to ApplyDb before handling
+                            if let Some(ref mut state) = self.oob_conflict_state {
+                                state.selected_button = oob_conflict_flow::types::ResolutionButton::ApplyDb;
+                            }
+                        } else if button_name == "assimilate_disk" {
+                            if let Some(ref mut state) = self.oob_conflict_state {
+                                state.selected_button = oob_conflict_flow::types::ResolutionButton::AssimilateDisk;
+                            }
+                        }
+                        self.handle_oob_conflict_action(action);
+                    }
+                }
+            }
+            // Add other modes as needed
+            _ => {}
+        }
     }
 }

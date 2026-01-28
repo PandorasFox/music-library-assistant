@@ -529,7 +529,7 @@ impl UnifiedTagEditorState {
     /// Load health signals for the current track(s)
     pub fn load_signals(&mut self, _db: &crate::corpus::db::Database) {
         // TODO: Query signals table for current track(s)
-        // Set has_oob_signal based on presence of OutOfBandTagChange signal
+        // Set has_oob_signal based on presence of OutOfBandTagSync/Conflict signals
         self.signals.clear();
         self.has_oob_signal = false;
     }

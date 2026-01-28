@@ -111,8 +111,10 @@ pub enum SignalType {
     MetadataDuplicate,
     /// Missing required tags (e.g., album_artist)
     MissingTag,
-    /// Tags on disk differ from indexed tags (out-of-band tag change)
-    OutOfBandTagChange,
+    /// Tags on disk have extras in one direction only (syncable)
+    OutOfBandTagSync,
+    /// Tags on disk conflict with indexed tags (value differences or mixed directions)
+    OutOfBandTagConflict,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
     /// Tag value collision needing canonicalization
@@ -155,7 +157,8 @@ impl SignalType {
             Self::FingerprintDuplicate => "fingerprint_dup",
             Self::MetadataDuplicate => "metadata_dup",
             Self::MissingTag => "missing_tag",
-            Self::OutOfBandTagChange => "oob_tag",
+            Self::OutOfBandTagSync => "oob_tag_sync",
+            Self::OutOfBandTagConflict => "oob_tag_conflict",
             Self::DuplicateInode => "duplicate_inode",
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
@@ -190,7 +193,10 @@ impl SignalType {
             "fingerprint_dup" => Some(Self::FingerprintDuplicate),
             "metadata_dup" => Some(Self::MetadataDuplicate),
             "missing_tag" => Some(Self::MissingTag),
-            "oob_tag" => Some(Self::OutOfBandTagChange),
+            "oob_tag_sync" => Some(Self::OutOfBandTagSync),
+            "oob_tag_conflict" => Some(Self::OutOfBandTagConflict),
+            // Legacy: treat old "oob_tag" as conflict (conservative)
+            "oob_tag" => Some(Self::OutOfBandTagConflict),
             "duplicate_inode" => Some(Self::DuplicateInode),
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
@@ -218,7 +224,8 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::MissingFile => Self::MissingFile,
             CorpusFileSignalType::CorpusFileModifiedOutOfBand => Self::CorpusFileModifiedOutOfBand,
             CorpusFileSignalType::MovedFile => Self::MovedFile,
-            CorpusFileSignalType::OutOfBandTagChange => Self::OutOfBandTagChange,
+            CorpusFileSignalType::OutOfBandTagSync => Self::OutOfBandTagSync,
+            CorpusFileSignalType::OutOfBandTagConflict => Self::OutOfBandTagConflict,
             CorpusFileSignalType::TagParseError => Self::TagParseError,
             CorpusFileSignalType::WaveformReadError => Self::WaveformReadError,
         }
@@ -272,8 +279,10 @@ pub enum CorpusFileSignalType {
     CorpusFileModifiedOutOfBand,
     /// File moved (same inode, different path)
     MovedFile,
-    /// Tags on disk differ from indexed tags
-    OutOfBandTagChange,
+    /// Tags on disk have extras in one direction only (syncable)
+    OutOfBandTagSync,
+    /// Tags on disk conflict with indexed tags (value differences or mixed directions)
+    OutOfBandTagConflict,
     /// File's tags could not be parsed
     TagParseError,
     /// File's audio waveform could not be decoded for fingerprinting
@@ -289,7 +298,8 @@ impl CorpusFileSignalType {
             Self::MissingFile => "missing_file",
             Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
             Self::MovedFile => "moved_file",
-            Self::OutOfBandTagChange => "oob_tag",
+            Self::OutOfBandTagSync => "oob_tag_sync",
+            Self::OutOfBandTagConflict => "oob_tag_conflict",
             Self::TagParseError => "tag_parse_error",
             Self::WaveformReadError => "waveform_read_error",
         }
@@ -303,7 +313,10 @@ impl CorpusFileSignalType {
             "missing_file" | "missing_from_disk" => Some(Self::MissingFile),
             "corpus_file_modified_oob" | "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
             "moved_file" | "file_relocated" => Some(Self::MovedFile),
-            "oob_tag" => Some(Self::OutOfBandTagChange),
+            "oob_tag_sync" => Some(Self::OutOfBandTagSync),
+            "oob_tag_conflict" => Some(Self::OutOfBandTagConflict),
+            // Legacy: treat old "oob_tag" as conflict (conservative)
+            "oob_tag" => Some(Self::OutOfBandTagConflict),
             "tag_parse_error" => Some(Self::TagParseError),
             "waveform_read_error" => Some(Self::WaveformReadError),
             _ => None,
@@ -318,7 +331,8 @@ impl CorpusFileSignalType {
             Self::MissingFile => SignalType::MissingFile,
             Self::CorpusFileModifiedOutOfBand => SignalType::CorpusFileModifiedOutOfBand,
             Self::MovedFile => SignalType::MovedFile,
-            Self::OutOfBandTagChange => SignalType::OutOfBandTagChange,
+            Self::OutOfBandTagSync => SignalType::OutOfBandTagSync,
+            Self::OutOfBandTagConflict => SignalType::OutOfBandTagConflict,
             Self::TagParseError => SignalType::TagParseError,
             Self::WaveformReadError => SignalType::WaveformReadError,
         }
@@ -613,8 +627,10 @@ pub struct CorpusSummary {
     // Out-of-band change signals
     /// Files with mtime changed outside MLA
     pub modified_oob: usize,
-    /// Files with tags changed outside MLA
-    pub tags_changed_oob: usize,
+    /// Files with syncable tag extras (one direction only)
+    pub oob_tag_sync: usize,
+    /// Files with tag value conflicts or mixed-direction extras
+    pub oob_tag_conflict: usize,
     /// Multiple index entries sharing same inode
     pub duplicate_inodes: usize,
 }
@@ -638,7 +654,8 @@ pub struct InsightsData {
 pub struct CorpusFilesBucket {
     // OOB signals at top - highest priority within bucket
     pub modified_oob: usize,
-    pub tags_changed_oob: usize,
+    pub oob_tag_sync: usize,
+    pub oob_tag_conflict: usize,
     // Standard corpus file signals
     pub files_in_corpus: usize,
     pub files_indexed: usize,
@@ -762,5 +779,124 @@ pub struct ConflictGroup {
     pub deploy_path: String,
     /// List of conflicting corpus files: (corpus_path, track_id)
     pub conflicting_files: Vec<(String, i64)>,
+}
+
+// ============================================================================
+// OOB Tag Resolution Types
+// ============================================================================
+
+/// Direction of a syncable OOB tag mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OobSyncDirection {
+    /// Extra tags exist on disk only (db_value IS NULL) — sync disk → index
+    DiskToIndex,
+    /// Extra tags exist in DB only (disk_value IS NULL) — sync index → disk
+    IndexToDisk,
+}
+
+/// A single tag mismatch entry between DB and disk.
+#[derive(Debug, Clone)]
+pub struct TagMismatchEntry {
+    pub field: String,
+    pub db_value: Option<String>,
+    pub disk_value: Option<String>,
+}
+
+/// A file with purely sync-direction tag mismatches (all extras in one direction).
+#[derive(Debug, Clone)]
+pub struct OobSyncFile {
+    pub track_id: i64,
+    /// Relative path (as stored in signals/tracks)
+    pub path: String,
+    pub direction: OobSyncDirection,
+    pub mismatches: Vec<TagMismatchEntry>,
+}
+
+/// A file with an OOB tag signal (conflict or sync).
+/// Lightweight — mismatch detail is computed on-demand from disk+DB tags,
+/// because the tag_mismatches table requires write access that computations
+/// (running on read-only connections) cannot provide.
+#[derive(Debug, Clone)]
+pub struct OobSignalFile {
+    pub track_id: i64,
+    /// Relative path (as stored in signals/tracks)
+    pub path: String,
+}
+
+/// Classification bucket for OOB tag files.
+///
+/// Determined by SQL CASE expression against `tag_mismatches` table:
+/// - NoChanges: signal exists but no `tag_mismatches` rows for this track
+/// - DbOnly: all mismatches have `disk_value IS NULL`
+/// - DiskOnly: all mismatches have `db_value IS NULL`
+/// - Conflict: both values present, or mixed null directions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictBucket {
+    NoChanges,
+    DbOnly,
+    DiskOnly,
+    Conflict,
+}
+
+impl ConflictBucket {
+    pub fn from_int(i: i32) -> Self {
+        match i {
+            0 => Self::NoChanges,
+            1 => Self::DbOnly,
+            2 => Self::DiskOnly,
+            _ => Self::Conflict,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::NoChanges => "No Changes",
+            Self::DbOnly => "DB Only",
+            Self::DiskOnly => "Disk Only",
+            Self::Conflict => "Conflicts",
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        *self as usize
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Self::NoChanges => Self::DbOnly,
+            Self::DbOnly => Self::DiskOnly,
+            Self::DiskOnly => Self::Conflict,
+            Self::Conflict => Self::NoChanges,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            Self::NoChanges => Self::Conflict,
+            Self::DbOnly => Self::NoChanges,
+            Self::DiskOnly => Self::DbOnly,
+            Self::Conflict => Self::DiskOnly,
+        }
+    }
+
+    pub const ALL: [ConflictBucket; 4] = [
+        ConflictBucket::NoChanges,
+        ConflictBucket::DbOnly,
+        ConflictBucket::DiskOnly,
+        ConflictBucket::Conflict,
+    ];
+
+    /// Whether this bucket supports bulk resolution buttons.
+    pub fn is_resolvable(&self) -> bool {
+        matches!(self, Self::DbOnly | Self::DiskOnly)
+    }
+}
+
+/// A file with an OOB tag signal, classified into a conflict bucket.
+#[derive(Debug, Clone)]
+pub struct BucketedOobFile {
+    pub track_id: i64,
+    pub path: String,
+    pub bucket: ConflictBucket,
 }
 

@@ -15,7 +15,7 @@
 //! WalkCorpus ──► CompareInodes ──► VerifyMtime ──► VerifyTags
 //!                    │                   │              │
 //!                    ▼                   ▼              ▼
-//!             MissingFile         (spawn next)   OutOfBandTagChange
+//!             MissingFile         (spawn next)   OutOfBandTagSync/Conflict
 //!             UnindexedFile
 //! ```
 //!

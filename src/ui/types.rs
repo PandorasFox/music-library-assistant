@@ -61,6 +61,10 @@ pub(crate) enum UiMode {
     TagCanonicityResolution,
     /// Compound tag split resolution modal (split "Rock; Metal" into separate values)
     CompoundTagSplit,
+    /// OOB tag sync resolution modal
+    OobSyncResolution,
+    /// OOB tag conflict inspection modal
+    OobConflictInspection,
     /// Standardized transaction review modal - all mutation flows pass through here
     TransactionReview,
     /// Format standardization view (part of lateral view ring)

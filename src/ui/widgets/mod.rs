@@ -14,6 +14,7 @@
 mod controls;
 mod layout;
 mod modal;
+mod resolution_layout;
 pub mod signal_info_pane;
 pub mod tabbed_signal_list;
 mod text_input;
@@ -21,6 +22,7 @@ mod titlebar;
 
 // Layout widgets
 pub use layout::{PaneConfig, ThreePaneLayout};
+pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout};
 
 // Modal widgets
 pub use modal::{centered_rect, centered_rect_fixed, Modal, ModalButton, ModalStyle};

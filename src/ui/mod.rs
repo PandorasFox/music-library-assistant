@@ -28,14 +28,18 @@ pub mod operator_decisions;
 pub mod transaction_review;
 
 pub mod app;
+pub mod bulk_selection;
 pub mod compound_split;
 pub mod deploy_flow;
 pub mod eye;
+pub mod filter_popup;
 pub mod flows;
 pub mod format_standardization;
 pub mod helpers;
 pub mod insights_view;
 pub mod missing_file_flow;
+pub mod oob_conflict_flow;
+pub mod oob_sync_flow;
 pub mod progress_screen;
 pub mod render;
 pub mod startup;
@@ -51,7 +55,7 @@ pub(crate) use types::{UiMode, ExitConfirmModalState};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseButton, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -142,6 +146,10 @@ pub(crate) struct App {
     pub(super) compound_split_state: Option<compound_split::CompoundSplitState>,
     // Compound split cluster navigation (signal IDs and current index)
     pub(super) compound_split_clusters: Option<compound_split::CompoundSplitClusters>,
+    // OOB tag sync resolution
+    pub(super) oob_sync_state: Option<oob_sync_flow::OobSyncState>,
+    // OOB tag conflict inspection
+    pub(super) oob_conflict_state: Option<oob_conflict_flow::OobConflictState>,
     // Standardized transaction review modal
     pub(super) transaction_review: Option<transaction_review::TransactionReviewState>,
     // Unified tag editor (transaction-based)
@@ -170,6 +178,9 @@ pub(crate) struct App {
 
     // Eye animation
     eye: EyeAnimation,
+
+    // Filter popup overlay (Ctrl+F in resolution flows)
+    pub(super) filter_popup_state: Option<filter_popup::FilterPopupState>,
 }
 
 impl App {
@@ -186,6 +197,8 @@ impl App {
             tag_canonicity_clusters: None,
             compound_split_state: None,
             compound_split_clusters: None,
+            oob_sync_state: None,
+            oob_conflict_state: None,
             transaction_review: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
@@ -198,10 +211,35 @@ impl App {
             log_rx: Some(log_rx),
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
+            filter_popup_state: None,
         }
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        // Filter popup intercepts keys when active
+        if let Some(ref mut popup) = self.filter_popup_state {
+            let action = popup.handle_key(key);
+            match action {
+                filter_popup::FilterPopupAction::None => return,
+                filter_popup::FilterPopupAction::Apply => {
+                    // Store filter condition and close popup
+                    // TODO: Wire filter to resolution flows
+                    self.filter_popup_state = None;
+                    return;
+                }
+                filter_popup::FilterPopupAction::Clear => {
+                    // Clear filter and close popup
+                    self.filter_popup_state = None;
+                    return;
+                }
+                filter_popup::FilterPopupAction::Cancel => {
+                    // Just close popup
+                    self.filter_popup_state = None;
+                    return;
+                }
+            }
+        }
+
         match self.mode {
             UiMode::Progress => {
                 // Progress screen ignores keys - can't interact during loading/computation
@@ -305,6 +343,18 @@ impl App {
                 if let Some(ref mut state) = self.compound_split_state {
                     let action = state.handle_key(key);
                     self.handle_compound_split_action(action);
+                }
+            }
+            UiMode::OobSyncResolution => {
+                if let Some(ref mut state) = self.oob_sync_state {
+                    let action = state.handle_key(key);
+                    self.handle_oob_sync_action(action);
+                }
+            }
+            UiMode::OobConflictInspection => {
+                if let Some(ref mut state) = self.oob_conflict_state {
+                    let action = state.handle_key(key);
+                    self.handle_oob_conflict_action(action);
                 }
             }
             UiMode::FormatStandardization => {
@@ -501,6 +551,8 @@ fn render(f: &mut Frame, app: &mut App) {
         missing_file_preview: app.missing_file_preview.as_ref(),
         tag_canonicity_state: app.tag_canonicity_state.as_ref(),
         compound_split_state: app.compound_split_state.as_ref(),
+        oob_sync_state: app.oob_sync_state.as_mut(),
+        oob_conflict_state: app.oob_conflict_state.as_mut(),
         transaction_review: app.transaction_review.as_ref(),
         transaction_review_decisions,
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),
@@ -515,6 +567,7 @@ fn render(f: &mut Frame, app: &mut App) {
         witch_status,
         corpus_summary,
         db_stats,
+        filter_popup_state: app.filter_popup_state.as_ref(),
     };
     render::render(f, &mut ctx);
 }
@@ -662,8 +715,8 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                 }
                 Event::Mouse(mouse) => {
-                    // Map scroll wheel to arrow keys
                     match mouse.kind {
+                        // Map scroll wheel to arrow keys
                         MouseEventKind::ScrollUp => {
                             let key = KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE);
                             app.handle_key(key);
@@ -671,6 +724,10 @@ fn run_app<B: ratatui::backend::Backend>(
                         MouseEventKind::ScrollDown => {
                             let key = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
                             app.handle_key(key);
+                        }
+                        // Handle left mouse button clicks for button detection
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            app.handle_click(mouse.column, mouse.row);
                         }
                         _ => {} // Ignore other mouse events
                     }

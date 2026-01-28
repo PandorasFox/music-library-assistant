@@ -87,8 +87,15 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
 
-        let tags_changed_oob: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signals WHERE issue_type = 'oob_tag'",
+        let oob_tag_sync: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'oob_tag_sync'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let oob_tag_conflict: usize = self.conn.query_row(
+            // Include legacy "oob_tag" in conflict count for transition
+            "SELECT COUNT(*) FROM signals WHERE issue_type IN ('oob_tag_conflict', 'oob_tag')",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
@@ -151,7 +158,8 @@ impl Database {
             library_stale,
             library_leftover,
             modified_oob,
-            tags_changed_oob,
+            oob_tag_sync,
+            oob_tag_conflict,
             duplicate_inodes,
         })
     }
@@ -877,7 +885,10 @@ impl Database {
 
         // OOB signals (highest priority)
         let modified_oob = self.count_signal_type("corpus_file_modified_oob")?;
-        let tags_changed_oob = self.count_signal_type("oob_tag")?;
+        let oob_tag_sync = self.count_signal_type("oob_tag_sync")?;
+        // Include legacy "oob_tag" in conflict count for transition
+        let oob_tag_conflict = self.count_signal_type("oob_tag_conflict")?
+            + self.count_signal_type("oob_tag").unwrap_or(0);
 
         // Standard corpus file signals
         let files_in_corpus = self.count_signal_type("file_in_corpus")?;
@@ -894,7 +905,8 @@ impl Database {
 
         Ok(CorpusFilesBucket {
             modified_oob,
-            tags_changed_oob,
+            oob_tag_sync,
+            oob_tag_conflict,
             files_in_corpus,
             files_indexed,
             files_unindexed,

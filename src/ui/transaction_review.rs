@@ -35,6 +35,8 @@ pub enum TransactionReviewSource {
     MissingFileResolution,
     IntakeConfirmation,
     FormatStandardization,
+    OobSyncResolution,
+    OobConflictResolution,
 }
 
 /// Summary of a single decision for display.

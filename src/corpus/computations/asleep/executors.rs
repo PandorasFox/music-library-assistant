@@ -319,8 +319,12 @@ pub fn execute_verify_tags(
         path: path.to_path_buf(),
     };
 
-    match indexing::execute_verify_tags(read_only_db, track_id, path) {
-        Ok(()) => Result::success(
+    // Route mismatch writes through db_thread (read-only connection can't write directly)
+    let sender = crate::db_thread::signal_sender().cloned();
+    let sender_ctx = sender.as_ref().map(|s| (s, witness));
+
+    match indexing::execute_verify_tags(read_only_db, track_id, path, sender_ctx) {
+        Ok(_verify_result) => Result::success(
             computation,
             start.elapsed().as_millis() as u64,
             Vec::new(),
@@ -331,13 +335,13 @@ pub fn execute_verify_tags(
                 "[COMPUTE] VerifyTags: tag parse error for track {} ({}): {}",
                 track_id, path.display(), e
             ));
-            if let Some(sender) = crate::db_thread::signal_sender() {
+            if let Some(ref sender) = sender {
                 let resolver = crate::corpus::paths::get_resolver();
                 if let Some(rel) = resolver.to_relative(path) {
                     let rel_str = rel.to_string_lossy();
                     ensure_file_signal_if_missing(
                         read_only_db,
-                        &sender,
+                        sender,
                         CorpusFileSignalType::TagParseError.into(),
                         &rel_str,
                         witness,

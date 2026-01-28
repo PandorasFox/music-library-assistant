@@ -125,7 +125,8 @@ pub struct BucketSelection {
 pub enum InsightType {
     // Corpus bucket entries
     CorpusModifiedOob,
-    CorpusTagsChangedOob,
+    CorpusOobTagSync,
+    CorpusOobTagConflict,
     CorpusFilesInCorpus,
     CorpusFilesIndexed,
     CorpusFilesUnindexed,
@@ -155,6 +156,10 @@ pub enum InsightAction {
     LaunchTagCanonicityResolution,
     /// Launch compound tag split flow
     LaunchCompoundTagSplit,
+    /// Launch OOB tag sync resolution flow
+    LaunchOobTagSync,
+    /// Launch OOB tag conflict inspection
+    LaunchOobTagConflict,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -299,12 +304,20 @@ impl CachedBucketEntries {
                 InsightAction::NotImplemented, // Future: OOB resolution
             ),
             BucketEntry::corpus(
-                InsightType::CorpusTagsChangedOob,
-                "Tags changed out-of-band",
-                corpus.tags_changed_oob,
-                if corpus.tags_changed_oob > 0 { 0 } else { 2 },
-                if corpus.tags_changed_oob > 0 { Color::Red } else { Color::DarkGray },
-                InsightAction::NotImplemented, // Future: OOB resolution
+                InsightType::CorpusOobTagSync,
+                "Tags syncable (out-of-band)",
+                corpus.oob_tag_sync,
+                if corpus.oob_tag_sync > 0 { 0 } else { 2 },
+                if corpus.oob_tag_sync > 0 { Color::Yellow } else { Color::DarkGray },
+                InsightAction::LaunchOobTagSync,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusOobTagConflict,
+                "Tag conflicts (out-of-band)",
+                corpus.oob_tag_conflict,
+                if corpus.oob_tag_conflict > 0 { 0 } else { 2 },
+                if corpus.oob_tag_conflict > 0 { Color::Red } else { Color::DarkGray },
+                InsightAction::LaunchOobTagConflict,
             ),
             BucketEntry::corpus(
                 InsightType::CorpusFilesInCorpus,
@@ -640,7 +653,8 @@ mod tests {
         InsightsData {
             bucket_corpus: CorpusFilesBucket {
                 modified_oob: 0,
-                tags_changed_oob: 0,
+                oob_tag_sync: 0,
+                oob_tag_conflict: 0,
                 files_in_corpus: 100,
                 files_indexed: 90,
                 files_unindexed: 5,

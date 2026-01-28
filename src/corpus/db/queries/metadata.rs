@@ -229,4 +229,140 @@ impl Database {
         }
         Ok(result)
     }
+
+    // ========================================================================
+    // OOB Tag Resolution Queries
+    // ========================================================================
+
+    /// Get files with purely one-directional tag mismatches (sync-eligible).
+    ///
+    /// Joins `signals` (type `oob_tag_sync`) with `tracks` and `tag_mismatches`.
+    /// Groups mismatches per track and determines direction:
+    /// - All db_value NULL → DiskToIndex
+    /// - All disk_value NULL → IndexToDisk
+    pub fn get_oob_sync_files(&self) -> Result<Vec<crate::corpus::db::types::OobSyncFile>> {
+        use crate::corpus::db::types::{OobSyncDirection, OobSyncFile, TagMismatchEntry};
+
+        // Get all tracks with oob_tag_sync signals
+        // signals.issue_key stores the file path for file-level signals
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.id, s.issue_key
+             FROM signals s
+             INNER JOIN tracks t ON t.path = s.issue_key AND t.source = 'corpus'
+             WHERE s.issue_type = 'oob_tag_sync'"
+        )?;
+
+        let track_rows: Vec<(i64, String)> = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?.filter_map(|r| r.ok()).collect();
+
+        let mut files = Vec::new();
+
+        // For each track, load mismatches and determine direction
+        let mut mismatch_stmt = self.conn.prepare(
+            "SELECT field, db_value, disk_value FROM tag_mismatches WHERE track_id = ?1 ORDER BY field"
+        )?;
+
+        for (track_id, path) in track_rows {
+            let mismatches: Vec<TagMismatchEntry> = mismatch_stmt.query_map(params![track_id], |row| {
+                Ok(TagMismatchEntry {
+                    field: row.get(0)?,
+                    db_value: row.get(1)?,
+                    disk_value: row.get(2)?,
+                })
+            })?.filter_map(|r| r.ok()).collect();
+
+            if mismatches.is_empty() {
+                continue;
+            }
+
+            // Determine direction: all db NULL → DiskToIndex, all disk NULL → IndexToDisk
+            let all_db_null = mismatches.iter().all(|m| m.db_value.is_none());
+            let all_disk_null = mismatches.iter().all(|m| m.disk_value.is_none());
+
+            let direction = if all_db_null {
+                OobSyncDirection::DiskToIndex
+            } else if all_disk_null {
+                OobSyncDirection::IndexToDisk
+            } else {
+                // Mixed — shouldn't happen for sync signals, skip
+                continue;
+            };
+
+            files.push(OobSyncFile {
+                track_id,
+                path,
+                direction,
+                mismatches,
+            });
+        }
+
+        Ok(files)
+    }
+
+    /// Get files with OOB tag conflict signals.
+    ///
+    /// Returns a flat file list from signals (track_id + path). Mismatch detail
+    /// is computed on-demand per file, because the tag_mismatches table requires
+    /// write access that computations cannot provide on read-only connections.
+    pub fn get_oob_conflict_files(&self) -> Result<Vec<crate::corpus::db::types::OobSignalFile>> {
+        use crate::corpus::db::types::OobSignalFile;
+
+        // Get all tracks with oob_tag_conflict signals (include legacy "oob_tag")
+        // signals.issue_key stores the file path for file-level signals
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.id, s.issue_key
+             FROM signals s
+             INNER JOIN tracks t ON t.path = s.issue_key AND t.source = 'corpus'
+             WHERE s.issue_type IN ('oob_tag_conflict', 'oob_tag')
+             ORDER BY s.issue_key"
+        )?;
+
+        let files: Vec<OobSignalFile> = stmt.query_map(params![], |row| {
+            Ok(OobSignalFile {
+                track_id: row.get(0)?,
+                path: row.get(1)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        Ok(files)
+    }
+
+    /// Get ALL OOB tag signal files classified into conflict buckets.
+    ///
+    /// Uses the `tag_mismatches` table for fast SQL-based classification:
+    /// - Bucket 0 (NoChanges): signal exists but no tag_mismatches rows
+    /// - Bucket 1 (DbOnly): all mismatches have disk_value IS NULL
+    /// - Bucket 2 (DiskOnly): all mismatches have db_value IS NULL
+    /// - Bucket 3 (Conflict): mismatches in both directions or value conflicts
+    ///
+    /// Loads from all OOB signal types (conflict + sync + legacy).
+    pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::corpus::db::types::BucketedOobFile>> {
+        use crate::corpus::db::types::{BucketedOobFile, ConflictBucket};
+
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.id, s.issue_key,
+                CASE
+                    WHEN NOT EXISTS(SELECT 1 FROM tag_mismatches tm WHERE tm.track_id = t.id) THEN 0
+                    WHEN NOT EXISTS(SELECT 1 FROM tag_mismatches tm WHERE tm.track_id = t.id AND tm.disk_value IS NOT NULL) THEN 1
+                    WHEN NOT EXISTS(SELECT 1 FROM tag_mismatches tm WHERE tm.track_id = t.id AND tm.db_value IS NOT NULL) THEN 2
+                    ELSE 3
+                END as bucket
+             FROM signals s
+             INNER JOIN tracks t ON t.path = s.issue_key AND t.source = 'corpus'
+             WHERE s.issue_type IN ('oob_tag_conflict', 'oob_tag', 'oob_tag_sync')
+             ORDER BY bucket, s.issue_key"
+        )?;
+
+        let files: Vec<BucketedOobFile> = stmt.query_map(params![], |row| {
+            let bucket_int: i32 = row.get(2)?;
+            Ok(BucketedOobFile {
+                track_id: row.get(0)?,
+                path: row.get(1)?,
+                bucket: ConflictBucket::from_int(bucket_int),
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        Ok(files)
+    }
 }

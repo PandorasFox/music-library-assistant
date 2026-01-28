@@ -254,13 +254,56 @@ pub fn execute_update_track(
         .context("Failed to update track metadata")
 }
 
+/// Result of tag verification — indicates which types of mismatches were found.
+///
+/// Used by computations to classify signals without querying `tag_mismatches`
+/// (which may not have committed async writes yet).
+pub struct TagVerifyResult {
+    /// At least one tag where both DB and disk have different non-empty values.
+    pub has_conflict: bool,
+    /// At least one tag present on disk but absent in DB.
+    pub has_extra_disk: bool,
+    /// At least one tag present in DB but absent on disk.
+    pub has_extra_db: bool,
+}
+
+impl TagVerifyResult {
+    fn empty() -> Self {
+        Self { has_conflict: false, has_extra_disk: false, has_extra_db: false }
+    }
+
+    /// True if no mismatches at all.
+    pub fn is_clean(&self) -> bool {
+        !self.has_conflict && !self.has_extra_disk && !self.has_extra_db
+    }
+
+    /// True if value conflicts or mixed-direction extras.
+    pub fn is_conflict(&self) -> bool {
+        self.has_conflict || (self.has_extra_disk && self.has_extra_db)
+    }
+}
+
 /// Execute tag verification - compare in-file tags with database, record mismatches.
 ///
 /// This is a read-mostly operation that only writes to the tag_mismatches table.
-/// It's used by both the Mutation system (legacy) and the Computation system.
+/// It's used by both the Mutation system (direct DB writes) and the Computation
+/// system (routed through db_thread for write access on read-only connections).
+///
+/// When `mismatch_sender` is provided, tag mismatch writes are routed through
+/// the db_thread's write connection. When `None`, writes go directly to `db`
+/// (requires a writable connection, e.g. mutation execution context).
+///
+/// Returns a `TagVerifyResult` summarizing the mismatch directions found.
+/// Computations use this for in-memory classification instead of querying
+/// `tag_mismatches` (which may lag due to async db_thread writes).
 ///
 /// Note: This function is public because it's called from corpus::computations.
-pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<()> {
+pub fn execute_verify_tags(
+    db: &Database,
+    track_id: i64,
+    path: &Path,
+    mismatch_sender: Option<(&crate::db_thread::SignalWriteSender, &crate::corpus::computations::ComputationWitness)>,
+) -> Result<TagVerifyResult> {
     use crate::corpus::metadata;
     use std::collections::HashMap;
 
@@ -286,7 +329,7 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
                 path.display(),
                 e
             ));
-            return Ok(());
+            return Ok(TagVerifyResult::empty());
         }
     };
 
@@ -300,6 +343,8 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
     let mut all_tags: std::collections::HashSet<String> = db_map.keys().cloned().collect();
     all_tags.extend(disk_map.keys().cloned());
 
+    let mut result = TagVerifyResult::empty();
+
     for tag_name in all_tags {
         let db_value = db_map.get(&tag_name).map(|s| s.as_str());
         let disk_value = disk_map.get(&tag_name).map(|s| s.as_str());
@@ -309,20 +354,31 @@ pub fn execute_verify_tags(db: &Database, track_id: i64, path: &Path) -> Result<
         let disk_normalized = disk_value.filter(|s| !s.is_empty());
 
         if db_normalized != disk_normalized {
-            // Record mismatch
-            db.record_tag_mismatch(
-                track_id,
-                &tag_name,
-                db_normalized,
-                disk_normalized,
-            )?;
+            // Track mismatch direction for in-memory classification
+            match (db_normalized.is_some(), disk_normalized.is_some()) {
+                (true, true) => result.has_conflict = true,
+                (false, true) => result.has_extra_disk = true,
+                (true, false) => result.has_extra_db = true,
+                (false, false) => {} // Both absent = match (shouldn't reach here)
+            }
+
+            // Record mismatch — route through sender if available (read-only context)
+            if let Some((sender, witness)) = mismatch_sender {
+                sender.record_tag_mismatch(track_id, &tag_name, db_normalized, disk_normalized, witness);
+            } else {
+                db.record_tag_mismatch(track_id, &tag_name, db_normalized, disk_normalized)?;
+            }
         } else {
             // Clear any existing mismatch for this field (now in sync)
-            db.clear_tag_mismatch(track_id, &tag_name)?;
+            if let Some((sender, witness)) = mismatch_sender {
+                sender.clear_tag_mismatch(track_id, &tag_name, witness);
+            } else {
+                db.clear_tag_mismatch(track_id, &tag_name)?;
+            }
         }
     }
 
-    Ok(())
+    Ok(result)
 }
 
 // ============================================================================

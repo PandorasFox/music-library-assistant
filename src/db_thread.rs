@@ -151,6 +151,23 @@ enum SignalWriteOp {
     },
 
     // =========================================================================
+    // Tag Mismatch Operations (OOB verification)
+    // =========================================================================
+
+    /// Record a tag mismatch for a track (DB differs from disk).
+    RecordTagMismatch {
+        track_id: i64,
+        field: String,
+        db_value: Option<String>,
+        disk_value: Option<String>,
+    },
+    /// Clear a specific tag mismatch field for a track.
+    ClearTagMismatch {
+        track_id: i64,
+        field: String,
+    },
+
+    // =========================================================================
     // Shutdown
     // =========================================================================
 
@@ -464,6 +481,42 @@ impl SignalWriteSender {
             mtime_nanos,
         });
     }
+
+    // =========================================================================
+    // Tag Mismatch Operations (OOB verification)
+    // =========================================================================
+
+    /// Record a tag mismatch for a track (routed through db_thread for write access).
+    pub fn record_tag_mismatch(
+        &self,
+        track_id: i64,
+        field: &str,
+        db_value: Option<&str>,
+        disk_value: Option<&str>,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::RecordTagMismatch {
+            track_id,
+            field: field.to_string(),
+            db_value: db_value.map(|s| s.to_string()),
+            disk_value: disk_value.map(|s| s.to_string()),
+        });
+    }
+
+    /// Clear a specific tag mismatch field for a track.
+    pub fn clear_tag_mismatch(
+        &self,
+        track_id: i64,
+        field: &str,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearTagMismatch {
+            track_id,
+            field: field.to_string(),
+        });
+    }
 }
 
 /// Sender for index write operations (Phase 2 placeholder).
@@ -749,6 +802,23 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     )
                     .map(|_| ())
                     .map_err(|e| anyhow::anyhow!(e))
+            });
+        }
+
+        // Tag mismatch operations (OOB verification)
+        SignalWriteOp::RecordTagMismatch {
+            track_id,
+            field,
+            db_value,
+            disk_value,
+        } => {
+            with_retry("record_tag_mismatch", field, || {
+                db.record_tag_mismatch(*track_id, field, db_value.as_deref(), disk_value.as_deref())
+            });
+        }
+        SignalWriteOp::ClearTagMismatch { track_id, field } => {
+            with_retry("clear_tag_mismatch", field, || {
+                db.clear_tag_mismatch(*track_id, field)
             });
         }
 

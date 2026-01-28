@@ -85,7 +85,15 @@ pub enum Computation {
     /// Verify out-of-band changes for files with modified mtime.
     ///
     /// For CorpusFileModifiedOutOfBand signals, checks if tags actually differ.
+    /// Spawns ClassifyOobTagChanges as a follow-up.
     VerifyOutOfBandChanges,
+
+    /// Classify OOB tag changes — last stage after verification.
+    ///
+    /// Ensures tag_mismatches is populated for ALL files with OOB tag signals
+    /// (including legacy `oob_tag`). Runs as a follow-up to VerifyOutOfBandChanges
+    /// so db_thread has time to commit the mismatch writes from the verify pass.
+    ClassifyOobTagChanges,
 
     /// Detect deployment conflicts (bulk).
     ///
@@ -122,6 +130,7 @@ impl Computation {
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::DetectCompoundTagValues => "Detecting compound tag values",
             Computation::VerifyOutOfBandChanges => "Verifying out-of-band changes",
+            Computation::ClassifyOobTagChanges => "Classifying OOB tag changes",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",

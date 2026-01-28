@@ -25,7 +25,10 @@ use ratatui::Frame;
 use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 pub use state::TagSearchState;
-pub use types::{SearchCondition, TagSearchAction, TagSearchMode};
+pub use types::{
+    ComparisonOperator, ConditionType, FileFormat, FileTypeCategory,
+    LogicalOperator, SearchCondition, TagSearchAction, TagSearchMode,
+};
 
 impl TagSearchState {
     /// Handle a key event. Returns an action that may require db access.

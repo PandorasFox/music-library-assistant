@@ -8,7 +8,7 @@ use crate::corpus::db::{Database, Track};
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 
-use super::types::{LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS};
+use super::types::{ConditionType, LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS};
 use super::QueryFieldFocus;
 
 /// A track with its associated tags (for display and filtering).
@@ -183,6 +183,20 @@ impl TagSearchState {
         }
     }
 
+    /// Cycle the condition type for the current condition.
+    pub fn cycle_condition_type(&mut self) {
+        if let Some(condition) = self.conditions.get_mut(self.focused_condition) {
+            condition.condition_type = condition.condition_type.next();
+        }
+    }
+
+    /// Cycle the file type category for the current condition.
+    pub fn cycle_file_type_category(&mut self) {
+        if let Some(condition) = self.conditions.get_mut(self.focused_condition) {
+            condition.file_type_category = condition.file_type_category.next();
+        }
+    }
+
     /// Insert a character at the current field.
     pub fn insert_char(&mut self, c: char) {
         if let Some(condition) = self.conditions.get_mut(self.focused_condition) {
@@ -316,6 +330,17 @@ impl TagSearchState {
 
     /// Evaluate a single condition against a track with tags.
     fn evaluate_single_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+        match condition.condition_type {
+            ConditionType::Tag => self.evaluate_tag_condition(twt, condition),
+            ConditionType::FileType => self.evaluate_file_type_condition(twt, condition),
+            ConditionType::SampleRate => self.evaluate_sample_rate_condition(twt, condition),
+            ConditionType::Bitrate => self.evaluate_bitrate_condition(twt, condition),
+            ConditionType::Duration => self.evaluate_duration_condition(twt, condition),
+        }
+    }
+
+    /// Evaluate a tag-based condition.
+    fn evaluate_tag_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
         use super::types::ComparisonOperator;
 
         if condition.tag_name.is_empty() || condition.value.is_empty() {
@@ -357,6 +382,37 @@ impl TagSearchState {
                     .unwrap_or(false)
             }
         }
+    }
+
+    /// Evaluate a file type condition.
+    fn evaluate_file_type_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+        condition.file_type_category.matches(&twt.track.file_type)
+    }
+
+    /// Evaluate a sample rate range condition.
+    fn evaluate_sample_rate_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+        let sample_rate = twt.track.sample_rate.unwrap_or(0);
+        self.evaluate_range(sample_rate as i64, &condition.range_min, &condition.range_max)
+    }
+
+    /// Evaluate a bitrate range condition (kbps).
+    fn evaluate_bitrate_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+        let bitrate = twt.track.bitrate_kbps.unwrap_or(0);
+        self.evaluate_range(bitrate as i64, &condition.range_min, &condition.range_max)
+    }
+
+    /// Evaluate a duration range condition (seconds).
+    fn evaluate_duration_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+        // duration_ms is in milliseconds, convert to seconds for user-friendly input
+        let duration_secs = twt.track.duration_ms.unwrap_or(0) / 1000;
+        self.evaluate_range(duration_secs, &condition.range_min, &condition.range_max)
+    }
+
+    /// Evaluate a range condition (min <= value <= max).
+    fn evaluate_range(&self, value: i64, min_str: &str, max_str: &str) -> bool {
+        let min = min_str.parse::<i64>().unwrap_or(i64::MIN);
+        let max = max_str.parse::<i64>().unwrap_or(i64::MAX);
+        value >= min && value <= max
     }
 
     /// Match a SQL LIKE pattern (% = any chars, _ = single char).

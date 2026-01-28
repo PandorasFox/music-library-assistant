@@ -18,7 +18,7 @@ use crate::config::Config;
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split, deploy_flow, format_standardization, insights_view, missing_file_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
+use super::{compound_split, deploy_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -31,6 +31,8 @@ pub struct RenderContext<'a> {
     pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
     pub tag_canonicity_state: Option<&'a tag_canonicity::TagCanonicalityState>,
     pub compound_split_state: Option<&'a compound_split::CompoundSplitState>,
+    pub oob_sync_state: Option<&'a mut oob_sync_flow::OobSyncState>,
+    pub oob_conflict_state: Option<&'a mut oob_conflict_flow::OobConflictState>,
     pub transaction_review: Option<&'a transaction_review::TransactionReviewState>,
     pub transaction_review_decisions: Vec<transaction_review::DecisionSummary>,
     pub unified_tag_editor: Option<&'a mut tag_editor::UnifiedTagEditorState>,
@@ -45,6 +47,7 @@ pub struct RenderContext<'a> {
     pub witch_status: Option<crate::witch::DaemonStatus>,
     pub corpus_summary: Option<crate::corpus::db::types::CorpusSummary>,
     pub db_stats: Option<crate::db_thread::DbThreadStats>,
+    pub filter_popup_state: Option<&'a filter_popup::FilterPopupState>,
 }
 
 /// Main render entry point - dispatches to sub-renderers based on mode.
@@ -163,6 +166,8 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::MissingFileResolution => Some("Missing File Resolution"),
         super::UiMode::TagCanonicityResolution => Some("Tag Canonicity"),
         super::UiMode::CompoundTagSplit => Some("Compound Tag Split"),
+        super::UiMode::OobSyncResolution => Some("OOB Tag Sync"),
+        super::UiMode::OobConflictInspection => Some("OOB Tag Conflicts"),
         super::UiMode::TransactionReview => Some("Transaction Review"),
         super::UiMode::FormatStandardization => Some("Format Standardization"),
     };
@@ -256,6 +261,18 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 compound_split::render(f, area, state);
             }
         }
+        super::UiMode::OobSyncResolution => {
+            view_name = "oob_sync_resolution";
+            if let Some(ref mut state) = ctx.oob_sync_state {
+                oob_sync_flow::render(f, area, state);
+            }
+        }
+        super::UiMode::OobConflictInspection => {
+            view_name = "oob_conflict_inspection";
+            if let Some(ref mut state) = ctx.oob_conflict_state {
+                oob_conflict_flow::render(f, area, state);
+            }
+        }
         super::UiMode::TransactionReview => {
             view_name = "transaction_review";
             if let Some(ref state) = ctx.transaction_review {
@@ -268,6 +285,11 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 format_standardization::render::render(f, area, state);
             }
         }
+    }
+
+    // Render filter popup overlay if active
+    if let Some(ref popup_state) = ctx.filter_popup_state {
+        filter_popup::render(f, area, popup_state);
     }
 
     let elapsed = start.elapsed();
@@ -526,7 +548,8 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
             + summary.library_stale
             + summary.library_leftover
             + summary.modified_oob
-            + summary.tags_changed_oob
+            + summary.oob_tag_sync
+            + summary.oob_tag_conflict
             + summary.duplicate_inodes;
 
         if total_signals > 0 {
@@ -557,7 +580,8 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
             add_signal!(hs.fingerprint_duplicates, "fp-dups", Color::Yellow);
             add_signal!(hs.canonicalization_issues, "canon", Color::Yellow);
             add_signal!(summary.modified_oob, "modified-oob", Color::Yellow);
-            add_signal!(summary.tags_changed_oob, "tags-oob", Color::Yellow);
+            add_signal!(summary.oob_tag_sync, "tags-sync", Color::Yellow);
+            add_signal!(summary.oob_tag_conflict, "tags-conflict", Color::Red);
             add_signal!(summary.duplicate_inodes, "dup-inodes", Color::Yellow);
 
             lines.push(Line::from(signal_parts));
@@ -730,6 +754,8 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::MissingFileResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TagCanonicityResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::CompoundTagSplit => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::OobSyncResolution => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::OobConflictInspection => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TransactionReview => control_presets::empty(), // Modal handles its own hints
         super::UiMode::FormatStandardization => control_presets::format_standardization(),
     };

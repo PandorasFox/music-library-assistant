@@ -230,19 +230,52 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 Style::default().fg(text_color),
             )));
         }
-        InsightType::CorpusTagsChangedOob => {
+        InsightType::CorpusOobTagSync => {
             lines.push(Line::from(Span::styled(
-                "Tags Changed Out-of-Band",
+                "Tags Syncable (Out-of-Band)",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "File tags were modified externally.",
+                "Files have extra tags in one direction",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "Database metadata may be stale.",
+                "only: either on disk or in the index.",
                 Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "Can be synced to bring both in line.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to resolve.",
+                Style::default().fg(Color::Cyan),
+            )));
+        }
+        InsightType::CorpusOobTagConflict => {
+            lines.push(Line::from(Span::styled(
+                "Tag Conflicts (Out-of-Band)",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Files have tag values that differ",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "between disk and database, or have",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "extras in both directions.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to inspect.",
+                Style::default().fg(Color::Cyan),
             )));
         }
         InsightType::CorpusFilesInCorpus => {

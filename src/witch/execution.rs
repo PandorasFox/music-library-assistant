@@ -133,15 +133,15 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // success and failure paths, rather than interleaving conditionals.
 
     // When a TagEditAndFlush fails, the most likely cause is stale edits: tags on
-    // disk no longer match what the editor/DB expected. Emit OutOfBandTagChange so
-    // the operator sees the file's tags have diverged from the index.
+    // disk no longer match what the editor/DB expected. Emit OutOfBandTagConflict
+    // so the operator sees the file's tags have diverged from the index.
     if !success {
         if let Mutation::TagEditAndFlush { path, .. } = &mutation {
             let resolver = crate::corpus::paths::get_resolver();
             if let Some(rel) = resolver.to_relative(path) {
                 if let Some(sender) = db_thread::signal_sender() {
                     sender.ensure_file_signal(
-                        CorpusFileSignalType::OutOfBandTagChange.into(),
+                        CorpusFileSignalType::OutOfBandTagConflict.into(),
                         &rel.to_string_lossy(),
                         &witness,
                     );

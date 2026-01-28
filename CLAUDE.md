@@ -17,9 +17,11 @@ DO NOT EVER REMOVE FILES FROM THE *CORPUS FILESYSTEM*. YOU ARE NOT ALLOWED TO IM
 MLA enforces strict separation between read-only UI queries and write mutations:
 
 **Read-Only Access (UI Code):**
-- All UI code uses `witch.read_only_db()` for database queries
+- All UI code uses `witch.read_db()` which returns `ReadOnlyDb<'_>`
+- Use `read_db.inner()` to access query methods on the underlying `Database`
+- Variables should be named `read_db` to make read-only nature clear
 - The Witch caches a single read-only connection (`PRAGMA query_only = ON`)
-- This prevents accidental writes from UI code paths
+- This provides compile-time and runtime protection against accidental writes
 
 **Write Access (Worker Threads Only):**
 - Only the Witch's worker threads create write connections via `Database::open()`
@@ -69,7 +71,10 @@ Adding new cached values to UiCache:
 Use for data that stays fixed while a modal or view is open: tag editor loading track tags, search results populating a list.
 
 ```rust
-// Query once during modal/view initialization:
+// Query once during modal/view initialization (caller uses read_db):
+let read_db = witch.read_db();
+let state = TagEditorState::new(track_id, read_db.inner());
+
 impl TagEditorState {
     pub fn new(track_id: i64, db: &Database) -> Self {
         let tags = db.get_track_tags(track_id).unwrap_or_default();  // Query here, once
@@ -89,8 +94,8 @@ fn render(&self, f: &mut Frame, area: Rect) {
 ```
 
 **Anti-patterns:**
-- `witch.read_only_db().get_*()` in render functions
-- Passing `&Database` to render/display code
+- `witch.read_db().inner().get_*()` in render functions
+- Passing `&Database` or `ReadOnlyDb` to render/display code
 - Any DB query inside `render()` or functions it calls
 
 ### Widget-First UI Development

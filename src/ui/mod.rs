@@ -453,8 +453,8 @@ impl App {
     }
 
     pub(super) fn start_format_standardization(&mut self) {
-        let db = self.db();
-        self.format_std = Some(format_standardization::FormatStdState::new(&db));
+        let read_db = self.read_db();
+        self.format_std = Some(format_standardization::FormatStdState::new(read_db.inner()));
         self.mode = UiMode::FormatStandardization;
     }
 
@@ -509,8 +509,14 @@ impl App {
     }
 
     /// Shorthand for read-only database access.
-    pub(super) fn db(&mut self) -> &crate::corpus::db::Database {
-        self.witch().read_only_db()
+    ///
+    /// Returns a `ReadOnlyDb` wrapper - use `.inner()` to access query methods:
+    /// ```ignore
+    /// let read_db = app.read_db();
+    /// let tracks = read_db.inner().get_all_tracks(None)?;
+    /// ```
+    pub(super) fn read_db(&mut self) -> crate::corpus::db::ReadOnlyDb<'_> {
+        self.witch().read_db()
     }
 
 }

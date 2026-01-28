@@ -14,7 +14,7 @@ impl App {
     /// The input path is an absolute filesystem path. We convert to relative
     /// for database queries since the DB stores paths relative to corpus_root.
     pub(super) fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
-        let db = self.db();
+        let read_db = self.read_db();
         let resolver = paths::get_resolver();
 
         // Convert absolute path to relative for DB queries (corpus browser uses corpus paths)
@@ -32,7 +32,7 @@ impl App {
         // Load tracks from database using relative path
         let (tracks, selected_idx) = if recursive {
             // Get all tracks in directory and subdirectories (no fingerprint filter)
-            match db.get_tracks_for_tag_editing(&rel_path) {
+            match read_db.inner().get_tracks_for_tag_editing(&rel_path) {
                 Ok(t) => (t, 0usize),
                 Err(e) => {
                     self.abort_to_insights(format!(
@@ -57,7 +57,7 @@ impl App {
             };
 
             // Load all tracks from parent directory (non-recursive, just this folder)
-            let dir_tracks = match db.get_tracks_for_tag_editing(rel_parent) {
+            let dir_tracks = match read_db.inner().get_tracks_for_tag_editing(rel_parent) {
                 Ok(t) => t,
                 Err(e) => {
                     self.abort_to_insights(format!(
@@ -93,7 +93,7 @@ impl App {
 
             if tracks_in_dir.is_empty() {
                 // Fallback: try to get just the single track
-                match db.get_track_by_path(&rel_path_str) {
+                match read_db.inner().get_track_by_path(&rel_path_str) {
                     Ok(Some(track)) => (vec![track], 0),
                     Ok(None) => {
                         self.abort_to_insights(format!(
@@ -208,7 +208,7 @@ impl App {
     /// The input is an absolute filesystem path. We convert to relative for DB queries.
     pub(super) fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
         // Query database for tracks in this directory
-        let db = self.db();
+        let read_db = self.read_db();
         let resolver = paths::get_resolver();
 
         // Convert absolute path to relative for DB query
@@ -223,7 +223,7 @@ impl App {
             }
         };
 
-        let tracks = match db.get_tracks_for_tag_editing(&rel_dir) {
+        let tracks = match read_db.inner().get_tracks_for_tag_editing(&rel_dir) {
             Ok(tracks) => tracks,
             Err(e) => {
                 self.status_message = Some(format!("Failed to query tracks: {}", e));

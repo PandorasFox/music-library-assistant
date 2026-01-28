@@ -29,7 +29,9 @@ This document codifies patterns and rules for maintaining a clean, consistent UI
 
 **Never call `Database::open()` in UI code.**
 
-- Always use `witch.read_only_db()` for queries (or the `App::db()` helper)
+- Always use `witch.read_db()` for queries (or the `App::read_db()` helper)
+- This returns `ReadOnlyDb<'_>` - use `.inner()` to access query methods
+- Name variables `read_db` to make read-only nature clear in code
 - Only the Witch's worker threads create write connections
 - Pre-App startup code (migrations, first-time setup) is the exception
 

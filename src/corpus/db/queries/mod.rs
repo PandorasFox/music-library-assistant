@@ -96,7 +96,7 @@ impl Database {
     /// - First-time setup (creating new database)
     /// - Worker thread execution contexts (mutations, migrations, computations)
     ///
-    /// UI code should use `Witch::read_only_db()` instead.
+    /// UI code should use `Witch::read_db()` instead.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
 

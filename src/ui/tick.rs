@@ -107,11 +107,11 @@ impl App {
             eye_state
         ));
 
-        let db = self.db();
+        let read_db = self.read_db();
 
         // Query signal count - this can be slow with many signals
         let signals_start = std::time::Instant::now();
-        let signal_count = db.get_signals(None)
+        let signal_count = read_db.inner().get_signals(None)
             .map(|s| s.len())
             .unwrap_or(0);
         crate::logging::log_general(format!(
@@ -121,7 +121,7 @@ impl App {
         ));
 
         let gather_start = std::time::Instant::now();
-        let result = startup::IntakeConfirmationState::gather(db, &corpus_root, "corpus");
+        let result = startup::IntakeConfirmationState::gather(read_db.inner(), &corpus_root, "corpus");
         crate::logging::log_general(format!(
             "[TRANSITION] IntakeConfirmationState::gather took {}ms",
             gather_start.elapsed().as_millis()

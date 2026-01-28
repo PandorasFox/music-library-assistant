@@ -25,7 +25,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config};
 use crate::corpus::computations::{Computation, asleep, awakening, awake};
-use crate::corpus::db::Database;
+use crate::corpus::db::{Database, ReadOnlyDb};
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths::PathResolver;
 use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
@@ -123,7 +123,7 @@ pub struct Witch {
     pending_transaction: Option<PendingTransaction>,
 
     /// Cached read-only database connection for UI queries.
-    /// Only accessed from the main thread via `read_only_db()`.
+    /// Only accessed from the main thread via `read_db()`.
     /// UI code should use this instead of creating direct connections.
     read_only_conn: Option<Database>,
 
@@ -899,31 +899,43 @@ impl Witch {
     // Read-Only Database Access (UI Queries)
     // -------------------------------------------------------------------------
 
-    /// Get a read-only database connection for UI queries.
+    /// Get a read-only database view for UI queries.
     ///
-    /// This connection is cached for the Witch's lifetime. All UI code
-    /// should use this instead of creating direct `Database::open()` connections.
+    /// Returns a `ReadOnlyDb` wrapper that only exposes read methods, providing
+    /// compile-time safety that UI code cannot accidentally attempt writes.
+    /// The underlying connection also uses `PRAGMA query_only = ON` for runtime
+    /// protection.
     ///
-    /// The connection uses `PRAGMA query_only = ON` to prevent any writes,
-    /// ensuring UI code cannot accidentally mutate the database.
+    /// The connection is cached for the Witch's lifetime. All UI code should use
+    /// this instead of creating direct `Database::open()` connections.
+    ///
+    /// # Naming Convention
+    ///
+    /// Variables holding this should be named `read_db` to make the read-only
+    /// nature clear in code:
+    ///
+    /// ```ignore
+    /// let read_db = witch.read_db();
+    /// let tracks = read_db.inner().get_all_tracks(None)?;
+    /// ```
     ///
     /// # Panics
     ///
     /// Panics if database path is not configured or database cannot be opened.
-    pub fn read_only_db(&mut self) -> &Database {
+    pub fn read_db(&mut self) -> ReadOnlyDb<'_> {
         if self.read_only_conn.is_none() {
             let db_path = config::get_db_path().expect("Database path not configured");
             let db = Database::open_read_only(&db_path)
                 .expect("Failed to open read-only database connection");
             self.read_only_conn = Some(db);
         }
-        self.read_only_conn.as_ref().unwrap()
+        ReadOnlyDb::new(self.read_only_conn.as_ref().unwrap())
     }
 
     /// Invalidate the cached read-only connection.
     ///
     /// Call this after schema migrations to ensure the UI sees the updated schema.
-    /// The next call to `read_only_db()` will open a fresh connection.
+    /// The next call to `read_db()` will open a fresh connection.
     pub fn invalidate_read_only_conn(&mut self) {
         self.read_only_conn = None;
     }

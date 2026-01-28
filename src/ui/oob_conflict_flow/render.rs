@@ -33,10 +33,20 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
+    // Title with filter indicator
+    let filter_indicator = if state.filter.is_some() {
+        let filtered_count = state.get_filtered_indices().len();
+        let bucket_count = state.active_bucket_state().files.len();
+        format!(" [filtered: {}/{}]", filtered_count, bucket_count)
+    } else {
+        String::new()
+    };
+
     let title = format!(
-        " OOB Tag Resolution — {} file{} ",
+        " OOB Tag Resolution — {} file{}{} ",
         state.total_files(),
         if state.total_files() == 1 { "" } else { "s" },
+        filter_indicator,
     );
 
     let block = Block::default()

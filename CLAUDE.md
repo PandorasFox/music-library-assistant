@@ -180,6 +180,23 @@ DecisionWitness and ExecutionWitnesses are our methods of guaranteeing this.
 2. Spawn follow-up computations for items needing further analysis
 3. NOT iterate over "all items in the system" to emit global signals
 
+### Documentation Requirements
+
+When modifying computations, mutations, or signals, you MUST update the corresponding reference documentation:
+
+| Changed | Update |
+|---------|--------|
+| Computation logic, spawn behavior, signal emission | `docs/COMPUTATION_REFERENCE.md` |
+| Mutation behavior, spawned computations, signal effects | `docs/MUTATION_REFERENCE.md` |
+| Signal types, emitters, clearers | `docs/SIGNAL_REFERENCE.md` |
+
+**Requirements:**
+1. Update the relevant reference doc before or alongside code changes
+2. Ensure "Emitted By" / "Cleared By" / "Spawns" columns remain accurate
+3. Add new entries before implementing new signal types or computations
+
+These documents are the source of truth for understanding system behavior. The source code comments reference them, and discrepancies should be treated as bugs.
+
 ### Dead Code Policy
 
 **Never use `#[allow(dead_code)]`.** Dead code accumulates and rots. Instead:

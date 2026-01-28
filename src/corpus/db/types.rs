@@ -60,6 +60,11 @@ pub struct DeploymentStats {
 
 /// Type of health signal detected in the corpus.
 ///
+/// See [`docs/SIGNAL_REFERENCE.md`](../../../../docs/SIGNAL_REFERENCE.md) for the
+/// canonical reference of what emits and clears each signal type.
+///
+/// **Any changes to signal semantics must be reflected in that document.**
+///
 /// Signals are organized into levels:
 /// - **First-level**: Computed directly from corpus + index state (WalkCorpus, etc.)
 /// - **Second-level**: Derived from comparing first-level signals

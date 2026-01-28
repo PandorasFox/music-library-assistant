@@ -75,7 +75,7 @@ impl App {
                         self.start_compound_split_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchOobTagSync) => {
-                        self.start_oob_conflict_inspection();
+                        self.start_oob_sync_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchOobTagConflict) => {
                         self.start_oob_conflict_inspection();

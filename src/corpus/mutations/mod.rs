@@ -1,5 +1,12 @@
 //! Corpus Mutations Module
 //!
+//! See [`docs/MUTATION_REFERENCE.md`](../../../docs/MUTATION_REFERENCE.md) for the
+//! canonical reference of mutation types, spawned computations, and signal effects.
+//!
+//! **Any changes to mutation behavior must be reflected in that document.**
+//!
+//! ## Overview
+//!
 //! Provides a standardized interface for all corpus-mutating operations.
 //! All mutations are resolved to single file/track level.
 //!

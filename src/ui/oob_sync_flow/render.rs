@@ -36,13 +36,21 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobSyncState) {
     let disk_count = state.disk_to_index_count();
     let db_count = state.index_to_disk_count();
 
-    // Title with counts
+    // Title with counts and filter indicator
+    let filter_indicator = if state.filter.is_some() {
+        let filtered_count = state.get_filtered_indices().len();
+        format!(" [filtered: {}/{}]", filtered_count, state.files.len())
+    } else {
+        String::new()
+    };
+
     let title = format!(
-        " OOB Tag Sync — {} file{} ({} disk→index, {} index→disk) ",
+        " OOB Tag Sync — {} file{} ({} disk→index, {} index→disk){} ",
         state.files.len(),
         if state.files.len() == 1 { "" } else { "s" },
         disk_count,
         db_count,
+        filter_indicator,
     );
 
     let block = Block::default()

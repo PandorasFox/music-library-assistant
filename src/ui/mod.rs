@@ -33,7 +33,6 @@ pub mod compound_split;
 pub mod deploy_flow;
 pub mod eye;
 pub mod filter_popup;
-pub mod flows;
 pub mod format_standardization;
 pub mod helpers;
 pub mod insights_view;
@@ -222,13 +221,23 @@ impl App {
             match action {
                 filter_popup::FilterPopupAction::None => return,
                 filter_popup::FilterPopupAction::Apply => {
-                    // Store filter condition and close popup
-                    // TODO: Wire filter to resolution flows
+                    // Apply filter condition to active resolution flow
+                    let condition = popup.condition.clone();
+                    if let Some(ref mut state) = self.oob_sync_state {
+                        state.apply_filter(condition);
+                    } else if let Some(ref mut state) = self.oob_conflict_state {
+                        state.apply_filter(condition);
+                    }
                     self.filter_popup_state = None;
                     return;
                 }
                 filter_popup::FilterPopupAction::Clear => {
-                    // Clear filter and close popup
+                    // Clear filter from active resolution flow
+                    if let Some(ref mut state) = self.oob_sync_state {
+                        state.clear_filter();
+                    } else if let Some(ref mut state) = self.oob_conflict_state {
+                        state.clear_filter();
+                    }
                     self.filter_popup_state = None;
                     return;
                 }

@@ -1,5 +1,12 @@
 //! Computation System - Phase-stratified background processing
 //!
+//! See [`docs/COMPUTATION_REFERENCE.md`](../../../docs/COMPUTATION_REFERENCE.md) for the
+//! canonical reference of computation phases, signal matrices, and spawn relationships.
+//!
+//! **Any changes to computation behavior must be reflected in that document.**
+//!
+//! ## Overview
+//!
 //! Computations are derived facts computed from corpus/index state. Unlike Mutations,
 //! they do not alter state - they only emit signals. This distinction is important
 //! because:

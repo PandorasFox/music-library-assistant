@@ -37,6 +37,7 @@ pub mod format_standardization;
 pub mod helpers;
 pub mod insights_view;
 pub mod missing_file_flow;
+pub mod inode_changed_flow;
 pub mod oob_conflict_flow;
 pub mod oob_sync_flow;
 pub mod progress_screen;
@@ -51,6 +52,17 @@ pub mod widgets;
 
 // Re-export types for convenience
 pub(crate) use types::{UiMode, ExitConfirmModalState};
+
+/// Context for filter popup - determines where to apply filter results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterPopupContext {
+    /// Filter for corpus browser tree
+    CorpusBrowser,
+    /// Filter for OOB sync resolution flow
+    OobSync,
+    /// Filter for OOB conflict resolution flow
+    OobConflict,
+}
 
 use anyhow::Result;
 use crossterm::{
@@ -149,6 +161,8 @@ pub(crate) struct App {
     pub(super) oob_sync_state: Option<oob_sync_flow::OobSyncState>,
     // OOB tag conflict inspection
     pub(super) oob_conflict_state: Option<oob_conflict_flow::OobConflictState>,
+    // Inode changed acknowledgement
+    pub(super) inode_changed_state: Option<inode_changed_flow::InodeChangedState>,
     // Standardized transaction review modal
     pub(super) transaction_review: Option<transaction_review::TransactionReviewState>,
     // Unified tag editor (transaction-based)
@@ -178,8 +192,10 @@ pub(crate) struct App {
     // Eye animation
     eye: EyeAnimation,
 
-    // Filter popup overlay (Ctrl+F in resolution flows)
+    // Filter popup overlay (Ctrl+F in resolution flows and corpus browser)
     pub(super) filter_popup_state: Option<filter_popup::FilterPopupState>,
+    // Context for filter popup (determines where to apply results)
+    pub(super) filter_popup_context: Option<FilterPopupContext>,
 }
 
 impl App {
@@ -198,6 +214,7 @@ impl App {
             compound_split_clusters: None,
             oob_sync_state: None,
             oob_conflict_state: None,
+            inode_changed_state: None,
             transaction_review: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
@@ -211,6 +228,7 @@ impl App {
             throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
             filter_popup_state: None,
+            filter_popup_context: None,
         }
     }
 
@@ -221,29 +239,76 @@ impl App {
             match action {
                 filter_popup::FilterPopupAction::None => return,
                 filter_popup::FilterPopupAction::Apply => {
-                    // Apply filter condition to active resolution flow
+                    // Apply filter condition based on context
                     let condition = popup.condition.clone();
-                    if let Some(ref mut state) = self.oob_sync_state {
-                        state.apply_filter(condition);
-                    } else if let Some(ref mut state) = self.oob_conflict_state {
-                        state.apply_filter(condition);
+                    match self.filter_popup_context {
+                        Some(FilterPopupContext::CorpusBrowser) => {
+                            // Apply to corpus browser tree
+                            if let Some(ref mut browser) = self.tree_browser {
+                                if let Some(ref mut witch) = self.witch {
+                                    let read_db = witch.read_db();
+                                    browser.apply_filter(condition, read_db.inner());
+                                }
+                            }
+                        }
+                        Some(FilterPopupContext::OobSync) => {
+                            if let Some(ref mut state) = self.oob_sync_state {
+                                state.apply_filter(condition);
+                            }
+                        }
+                        Some(FilterPopupContext::OobConflict) => {
+                            if let Some(ref mut state) = self.oob_conflict_state {
+                                state.apply_filter(condition);
+                            }
+                        }
+                        None => {
+                            // Legacy fallback: try OOB flows
+                            if let Some(ref mut state) = self.oob_sync_state {
+                                state.apply_filter(condition);
+                            } else if let Some(ref mut state) = self.oob_conflict_state {
+                                state.apply_filter(condition);
+                            }
+                        }
                     }
                     self.filter_popup_state = None;
+                    self.filter_popup_context = None;
                     return;
                 }
                 filter_popup::FilterPopupAction::Clear => {
-                    // Clear filter from active resolution flow
-                    if let Some(ref mut state) = self.oob_sync_state {
-                        state.clear_filter();
-                    } else if let Some(ref mut state) = self.oob_conflict_state {
-                        state.clear_filter();
+                    // Clear filter based on context
+                    match self.filter_popup_context {
+                        Some(FilterPopupContext::CorpusBrowser) => {
+                            if let Some(ref mut browser) = self.tree_browser {
+                                browser.clear_filter();
+                            }
+                        }
+                        Some(FilterPopupContext::OobSync) => {
+                            if let Some(ref mut state) = self.oob_sync_state {
+                                state.clear_filter();
+                            }
+                        }
+                        Some(FilterPopupContext::OobConflict) => {
+                            if let Some(ref mut state) = self.oob_conflict_state {
+                                state.clear_filter();
+                            }
+                        }
+                        None => {
+                            // Legacy fallback
+                            if let Some(ref mut state) = self.oob_sync_state {
+                                state.clear_filter();
+                            } else if let Some(ref mut state) = self.oob_conflict_state {
+                                state.clear_filter();
+                            }
+                        }
                     }
                     self.filter_popup_state = None;
+                    self.filter_popup_context = None;
                     return;
                 }
                 filter_popup::FilterPopupAction::Cancel => {
                     // Just close popup
                     self.filter_popup_state = None;
+                    self.filter_popup_context = None;
                     return;
                 }
             }
@@ -364,6 +429,12 @@ impl App {
                 if let Some(ref mut state) = self.oob_conflict_state {
                     let action = state.handle_key(key);
                     self.handle_oob_conflict_action(action);
+                }
+            }
+            UiMode::InodeChangedAcknowledge => {
+                if let Some(ref mut state) = self.inode_changed_state {
+                    let action = state.handle_key(key);
+                    self.handle_inode_changed_action(action);
                 }
             }
             UiMode::FormatStandardization => {
@@ -568,6 +639,7 @@ fn render(f: &mut Frame, app: &mut App) {
         compound_split_state: app.compound_split_state.as_ref(),
         oob_sync_state: app.oob_sync_state.as_mut(),
         oob_conflict_state: app.oob_conflict_state.as_mut(),
+        inode_changed_state: app.inode_changed_state.as_mut(),
         transaction_review: app.transaction_review.as_ref(),
         transaction_review_decisions,
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),

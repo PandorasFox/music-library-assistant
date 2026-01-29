@@ -10,7 +10,8 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
-    ensure_file_signal_if_missing, drop_stale_file_signal,
+    ensure_file_signal_if_missing, ensure_file_signal_with_metadata_if_missing,
+    drop_stale_file_signal,
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::CorpusFileSignalType;
@@ -190,7 +191,7 @@ pub fn execute_scan_corpus_directory(
 
         // Check if file is indexed and needs mtime verification
         if let Some(entry) = indexed_by_inode.get(inode) {
-            // File is indexed - check if mtime changed
+            // File is indexed by inode - check if mtime changed
             if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
                 let track = match read_only_db.get_track_by_path(&relative_path_str) {
                     Ok(Some(t)) => t,
@@ -206,6 +207,36 @@ pub fn execute_scan_corpus_directory(
                     expected_mtime_secs: entry.mtime_secs,
                     expected_mtime_nanos: entry.mtime_nanos,
                 });
+            }
+        } else {
+            // Inode not in scan_state - check if path is indexed with different inode
+            // This detects file replacement (same path, new inode)
+            if let Ok(Some(track)) = read_only_db.get_track_by_path(&relative_path_str) {
+                if track.inode != *inode {
+                    // Inode changed! File was replaced.
+                    let Some(track_id) = track.id else { continue };
+
+                    // Emit InodeChanged signal with old/new inode metadata
+                    let metadata = serde_json::json!({
+                        "old_inode": track.inode,
+                        "new_inode": inode,
+                    });
+                    ensure_file_signal_with_metadata_if_missing(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::InodeChanged.into(),
+                        &relative_path_str,
+                        &metadata.to_string(),
+                        witness,
+                    );
+
+                    // Spawn VerifyTags to check for tag differences
+                    // (tags may differ between old and new file)
+                    spawn.push(Computation::VerifyTags {
+                        track_id,
+                        path: path.clone(),
+                    });
+                }
             }
         }
     }

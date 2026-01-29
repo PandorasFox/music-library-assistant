@@ -242,6 +242,16 @@ pub enum Mutation {
         track_ids: Vec<i64>,
     },
 
+    /// Acknowledge inode change - update track.inode and scan_state, clear InodeChanged signal.
+    ///
+    /// Used when a file was replaced (same path, different inode). Updates the stored
+    /// inode to match disk and refreshes scan_state. Tag differences are handled separately
+    /// through the OOB tag resolution flow.
+    AcknowledgeInodeChanged {
+        /// Track IDs to acknowledge (will fetch new inode from signal metadata)
+        track_ids: Vec<i64>,
+    },
+
     /// Apply DB tags to disk files (defer to db / reject disk changes).
     ///
     /// Writes the tags from the database to the disk files, overwriting any
@@ -292,6 +302,7 @@ impl Mutation {
             | Mutation::DropFromIndex { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. } => MutationCategory::Indexing,
 
@@ -327,6 +338,7 @@ impl Mutation {
             | Mutation::DbMigration { .. }
             | Mutation::UpdateScanStatePath { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. } => None,
 
@@ -384,6 +396,7 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. } => None,
         }
@@ -487,6 +500,7 @@ impl Mutation {
 
             // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
             Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. } => {}
         }
@@ -551,6 +565,7 @@ impl Mutation {
             | Mutation::DbMigration { .. }
             | Mutation::UpdateScanStatePath { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. } => Vec::new(),
         }

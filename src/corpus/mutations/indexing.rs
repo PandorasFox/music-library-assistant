@@ -440,6 +440,69 @@ pub fn execute_acknowledge_mtime_only(
     Ok(affected_paths)
 }
 
+/// Execute AcknowledgeInodeChanged mutation.
+///
+/// For each track: updates track.inode to the new inode, deletes old scan_state
+/// entry, creates new scan_state with current mtime, and clears the InodeChanged signal.
+/// Tag differences are handled separately through the OOB tag resolution flow.
+pub fn execute_acknowledge_inode_changed(
+    db: &Database,
+    track_ids: &[i64],
+    witness: &MutationExecutionWitness,
+) -> Result<Vec<std::path::PathBuf>> {
+    use crate::corpus::db::types::{CorpusFileSignalType, ScanStateEntry};
+    use std::os::unix::fs::MetadataExt;
+
+    let resolver = paths::get_resolver();
+    let mut affected_paths = Vec::new();
+
+    for track_id in track_ids {
+        // Get track info
+        let track = match db.get_track_by_id(*track_id)? {
+            Some(t) => t,
+            None => continue, // Skip missing tracks
+        };
+
+        // Resolve absolute path for filesystem access
+        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+
+        // Read current disk metadata
+        let metadata = std::fs::metadata(&abs_path)
+            .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
+        let new_inode = metadata.ino() as i64;
+        let mtime_secs = metadata.mtime();
+        let mtime_nanos = metadata.mtime_nsec() as i64;
+        let file_size = metadata.len() as i64;
+
+        // Update track.inode to the new value
+        db.update_track_inode(*track_id, new_inode, witness)?;
+
+        // Delete old scan_state entry (keyed by old inode)
+        db.delete_scan_state_by_inode(&track.source, track.inode)?;
+
+        // Insert new scan_state entry with new inode and current mtime
+        db.upsert_scan_state(&ScanStateEntry {
+            source: track.source.clone(),
+            inode: new_inode,
+            path: track.path.clone(),
+            mtime_secs,
+            mtime_nanos,
+            file_size,
+        })?;
+
+        // Clear InodeChanged signal
+        db.clear_file_signal(
+            CorpusFileSignalType::InodeChanged.into(),
+            &track.path,
+            witness,
+        )?;
+
+        affected_paths.push(abs_path);
+    }
+
+    Ok(affected_paths)
+}
+
 /// Execute ApplyDbTagsToDisk mutation.
 ///
 /// For each track: writes DB tags to disk file, updates scan_state mtime,
@@ -661,6 +724,10 @@ pub fn execute_single(
         // OOB resolution mutations
         Mutation::AcknowledgeMtimeOnly { track_ids } => {
             execute_acknowledge_mtime_only(db, track_ids, witness).map(|_| ())
+        }
+
+        Mutation::AcknowledgeInodeChanged { track_ids } => {
+            execute_acknowledge_inode_changed(db, track_ids, witness).map(|_| ())
         }
 
         Mutation::ApplyDbTagsToDisk { track_ids } => {

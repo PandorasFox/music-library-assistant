@@ -24,6 +24,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags, TagEditAndFlush | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
+| InodeChanged | ScanCorpusDirectory | AcknowledgeInodeChanged | File was replaced (same path, new inode) |
 | WaveformReadError | IndexTrack, TagEditAndFlush, Transcode | mutations | Audio unreadable |
 
 ---

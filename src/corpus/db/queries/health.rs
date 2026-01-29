@@ -890,6 +890,7 @@ impl Database {
         let oob_tag_conflict = self.count_signal_type("oob_tag_conflict")?
             + self.count_signal_type("oob_tag").unwrap_or(0);
         let mtime_only_mismatch = self.count_signal_type("mtime_only_mismatch")?;
+        let inode_changed = self.count_signal_type("inode_changed")?;
 
         // Standard corpus file signals
         let files_in_corpus = self.count_signal_type("file_in_corpus")?;
@@ -908,6 +909,7 @@ impl Database {
             oob_tag_sync,
             oob_tag_conflict,
             mtime_only_mismatch,
+            inode_changed,
             files_in_corpus,
             files_indexed,
             files_unindexed,

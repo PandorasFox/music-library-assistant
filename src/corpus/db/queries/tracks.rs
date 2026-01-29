@@ -502,6 +502,35 @@ impl Database {
         Ok(tracks)
     }
 
+    /// Get tracks by exact paths (batch lookup).
+    /// Returns HashMap<path, Track> for efficient lookup.
+    /// Used for inode change detection in ScanCorpusDirectory.
+    pub fn get_tracks_by_exact_paths(&self, paths: &[&str]) -> Result<HashMap<String, Track>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders: String = paths.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+             FROM tracks
+             WHERE path IN ({})",
+            placeholders
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let tracks = stmt
+            .query_map(rusqlite::params_from_iter(paths.iter()), Self::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut result = HashMap::new();
+        for track in tracks {
+            result.insert(track.path.clone(), track);
+        }
+        Ok(result)
+    }
+
     /// Get all tracks with fingerprints in a specific directory (recursive).
     ///
     /// **Important**: This filters by `fingerprint IS NOT NULL`, so it only returns
@@ -794,6 +823,18 @@ impl Database {
     // ========================================================================
     // Signal Resolution Operations
     // ========================================================================
+
+    /// Update track inode (for replaced files).
+    /// Used by InodeChanged signal handler.
+    pub fn update_track_inode(&self, track_id: i64, new_inode: i64, _witness: &MutationExecutionWitness) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE tracks SET inode = ?1 WHERE id = ?2",
+                params![new_inode, track_id],
+            )
+            .with_context(|| format!("Failed to update inode for track {}", track_id))?;
+        Ok(())
+    }
 
     /// Update track path (for relocated files).
     /// Used by MovedFile signal handler.

@@ -127,6 +127,7 @@ pub enum InsightType {
     CorpusMtimeOnly,
     CorpusOobTagSync,
     CorpusOobTagConflict,
+    CorpusInodeChanged,
     CorpusFilesInCorpus,
     CorpusFilesIndexed,
     CorpusFilesUnindexed,
@@ -160,6 +161,8 @@ pub enum InsightAction {
     LaunchOobTagSync,
     /// Launch OOB tag conflict inspection
     LaunchOobTagConflict,
+    /// Launch inode changed acknowledgement flow
+    LaunchInodeChangedAcknowledge,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -318,6 +321,14 @@ impl CachedBucketEntries {
                 if corpus.oob_tag_conflict > 0 { 0 } else { 2 },
                 if corpus.oob_tag_conflict > 0 { Color::Red } else { Color::DarkGray },
                 InsightAction::LaunchOobTagConflict,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusInodeChanged,
+                "Files replaced (inode changed)",
+                corpus.inode_changed,
+                if corpus.inode_changed > 0 { 0 } else { 2 },
+                if corpus.inode_changed > 0 { Color::Red } else { Color::DarkGray },
+                InsightAction::LaunchInodeChangedAcknowledge,
             ),
             BucketEntry::corpus(
                 InsightType::CorpusFilesInCorpus,
@@ -655,6 +666,7 @@ mod tests {
                 oob_tag_sync: 0,
                 oob_tag_conflict: 0,
                 mtime_only_mismatch: 0,
+                inode_changed: 0,
                 files_in_corpus: 100,
                 files_indexed: 90,
                 files_unindexed: 5,
@@ -762,12 +774,12 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 1);
 
-        // Navigate to end of corpus bucket (7 items: 0-6)
-        for _ in 0..5 {
+        // Navigate to end of corpus bucket (9 items: 0-8)
+        for _ in 0..7 {
             state.navigate_down();
         }
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 6);
+        assert_eq!(state.current_selection().selected, 8);
 
         // Navigate down should move to Placeholder bucket
         state.navigate_down();
@@ -777,7 +789,7 @@ mod tests {
         // Navigate up should return to Corpus bucket at last item
         state.navigate_up();
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 6);
+        assert_eq!(state.current_selection().selected, 8);
     }
 
     #[test]

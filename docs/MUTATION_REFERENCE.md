@@ -62,6 +62,7 @@ Mutations are operator-confirmed changes to the corpus or index. All mutations:
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
 | AcknowledgeMtimeOnly | UpdateCorpusFileSignals | — | MtimeOnlyMismatch | Update scan_state mtime, acknowledge touch |
+| AcknowledgeInodeChanged | UpdateCorpusFileSignals | — | InodeChanged | Update tracks.inode and scan_state for replaced files |
 | ApplyDbTagsToDisk | UpdateCorpusFileSignals | — | OutOfBandTagSync, OutOfBandTagConflict, tag_mismatches | Write DB tags to file |
 | AssimilateDiskTagsToDb | UpdateCorpusFileSignals | — | OutOfBandTagSync, OutOfBandTagConflict, tag_mismatches | Import disk tags to DB |
 

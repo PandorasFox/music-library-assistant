@@ -124,6 +124,9 @@ pub enum SignalType {
     MtimeOnlyMismatch,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
+    /// File at path was replaced (different inode than indexed)
+    /// issue_key: relative path, metadata: {"old_inode": i64, "new_inode": i64}
+    InodeChanged,
     /// Tag value collision needing canonicalization
     TagCanonicity,
     /// Album has tracks with different artists + missing/inconsistent album_artist
@@ -168,6 +171,7 @@ impl SignalType {
             Self::OutOfBandTagConflict => "oob_tag_conflict",
             Self::MtimeOnlyMismatch => "mtime_only_mismatch",
             Self::DuplicateInode => "duplicate_inode",
+            Self::InodeChanged => "inode_changed",
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
@@ -207,6 +211,7 @@ impl SignalType {
             // Legacy: treat old "oob_tag" as conflict (conservative)
             "oob_tag" => Some(Self::OutOfBandTagConflict),
             "duplicate_inode" => Some(Self::DuplicateInode),
+            "inode_changed" => Some(Self::InodeChanged),
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
@@ -238,6 +243,7 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::MtimeOnlyMismatch => Self::MtimeOnlyMismatch,
             CorpusFileSignalType::TagParseError => Self::TagParseError,
             CorpusFileSignalType::WaveformReadError => Self::WaveformReadError,
+            CorpusFileSignalType::InodeChanged => Self::InodeChanged,
         }
     }
 }
@@ -299,6 +305,8 @@ pub enum CorpusFileSignalType {
     TagParseError,
     /// File's audio waveform could not be decoded for fingerprinting
     WaveformReadError,
+    /// File at path was replaced (different inode than indexed)
+    InodeChanged,
 }
 
 impl CorpusFileSignalType {
@@ -315,6 +323,7 @@ impl CorpusFileSignalType {
             Self::MtimeOnlyMismatch => "mtime_only_mismatch",
             Self::TagParseError => "tag_parse_error",
             Self::WaveformReadError => "waveform_read_error",
+            Self::InodeChanged => "inode_changed",
         }
     }
 
@@ -333,6 +342,7 @@ impl CorpusFileSignalType {
             "oob_tag" => Some(Self::OutOfBandTagConflict),
             "tag_parse_error" => Some(Self::TagParseError),
             "waveform_read_error" => Some(Self::WaveformReadError),
+            "inode_changed" => Some(Self::InodeChanged),
             _ => None,
         }
     }
@@ -350,6 +360,7 @@ impl CorpusFileSignalType {
             Self::MtimeOnlyMismatch => SignalType::MtimeOnlyMismatch,
             Self::TagParseError => SignalType::TagParseError,
             Self::WaveformReadError => SignalType::WaveformReadError,
+            Self::InodeChanged => SignalType::InodeChanged,
         }
     }
 }
@@ -671,6 +682,7 @@ pub struct CorpusFilesBucket {
     pub oob_tag_sync: usize,
     pub oob_tag_conflict: usize,
     pub mtime_only_mismatch: usize,
+    pub inode_changed: usize,
     // Standard corpus file signals
     pub files_in_corpus: usize,
     pub files_indexed: usize,
@@ -918,5 +930,14 @@ pub struct BucketedOobFile {
     pub track_id: i64,
     pub path: String,
     pub bucket: ConflictBucket,
+}
+
+/// A file with an InodeChanged signal (file was replaced).
+#[derive(Debug, Clone)]
+pub struct InodeChangedFile {
+    pub track_id: i64,
+    pub path: String,
+    pub old_inode: i64,
+    pub new_inode: i64,
 }
 

@@ -197,6 +197,7 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
 
             // OOB resolution mutations with multiple track IDs
             Mutation::AcknowledgeMtimeOnly { track_ids: ids }
+            | Mutation::AcknowledgeInodeChanged { track_ids: ids }
             | Mutation::ApplyDbTagsToDisk { track_ids: ids }
             | Mutation::AssimilateDiskTagsToDb { track_ids: ids } => {
                 track_ids.extend(ids.iter().copied());

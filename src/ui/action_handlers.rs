@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::corpus::paths;
-use crate::ui::{compound_split, filter_popup, format_standardization, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets};
+use crate::ui::{compound_split, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -79,6 +79,9 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchOobTagConflict) => {
                         self.start_oob_conflict_inspection();
+                    }
+                    Some(insights_view::InsightAction::LaunchInodeChangedAcknowledge) => {
+                        self.start_inode_changed_acknowledge();
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Flow not yet implemented".to_string());
@@ -250,6 +253,11 @@ impl App {
                 ));
                 self.tree_browser = None;
                 self.start_insights_view();
+            }
+            tree_browser::TreeBrowserAction::OpenFilter => {
+                // Open filter popup for corpus browser
+                self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
+                self.filter_popup_context = Some(FilterPopupContext::CorpusBrowser);
             }
         }
     }
@@ -813,6 +821,91 @@ impl App {
 
         self.oob_conflict_state = Some(state);
         self.mode = UiMode::OobConflictInspection;
+    }
+
+    /// Start inode changed acknowledgement flow.
+    fn start_inode_changed_acknowledge(&mut self) {
+        let Some(ref mut witch) = self.witch else {
+            self.status_message = Some("No database connection".to_string());
+            return;
+        };
+
+        // Query files with inode_changed signals
+        let files = {
+            let read_db = witch.read_db();
+            match read_db.inner().get_inode_changed_files() {
+                Ok(f) => f,
+                Err(e) => {
+                    self.status_message = Some(format!("Failed to query inode changes: {}", e));
+                    return;
+                }
+            }
+        };
+
+        if files.is_empty() {
+            self.status_message = Some("No inode-changed files to acknowledge".to_string());
+            return;
+        }
+
+        crate::logging::log_general(format!(
+            "Starting inode changed acknowledgement: {} files",
+            files.len()
+        ));
+
+        // Start transaction for the acknowledgement
+        let _ = witch.start_transaction("Inode changed acknowledgement");
+
+        self.inode_changed_state = Some(inode_changed_flow::InodeChangedState::new(files));
+        self.mode = UiMode::InodeChangedAcknowledge;
+    }
+
+    /// Handle inode changed acknowledgement actions.
+    pub(super) fn handle_inode_changed_action(&mut self, action: inode_changed_flow::InodeChangedAction) {
+        match action {
+            inode_changed_flow::InodeChangedAction::None => {}
+            inode_changed_flow::InodeChangedAction::Acknowledge => {
+                self.stage_inode_changed_acknowledge();
+                // Transition to review (no source variant needed - just cancel goes to insights)
+                self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
+            }
+            inode_changed_flow::InodeChangedAction::Cancel => {
+                crate::logging::log_general("Inode changed acknowledgement cancelled");
+                // Discard any active transaction
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.inode_changed_state = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Stage mutations for inode changed acknowledgement.
+    fn stage_inode_changed_acknowledge(&mut self) {
+        use crate::corpus::mutations::Mutation;
+
+        let Some(ref state) = self.inode_changed_state else {
+            return;
+        };
+
+        if state.files.is_empty() {
+            return;
+        }
+
+        let track_ids = state.track_ids();
+        let label = format!(
+            "Acknowledge {} inode change{}",
+            track_ids.len(),
+            if track_ids.len() == 1 { "" } else { "s" }
+        );
+        let mutations = vec![Mutation::AcknowledgeInodeChanged { track_ids }];
+
+        // Stage the AcknowledgeInodeChanged mutation
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::operator_decisions::stage_decision(witch, 0, &label, mutations);
+        }
     }
 
     /// Handle OOB sync resolution actions.

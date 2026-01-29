@@ -989,8 +989,8 @@ impl App {
                 let bucket_state = state.active_bucket_state();
 
                 // Determine which indices to process
-                let indices = if state.selection.is_active() {
-                    state.selection.selected_indices()
+                let indices: Vec<usize> = if bucket_state.selection.is_active() {
+                    bucket_state.selection.selected_indices()
                 } else {
                     // No selection - process all files in bucket
                     (0..bucket_state.files.len()).collect()
@@ -1075,8 +1075,8 @@ impl App {
                 let bucket_state = state.active_bucket_state();
 
                 // Determine which indices to process
-                let indices = if state.selection.is_active() {
-                    state.selection.selected_indices()
+                let indices: Vec<usize> = if bucket_state.selection.is_active() {
+                    bucket_state.selection.selected_indices()
                 } else {
                     // No selection - process all files in bucket
                     (0..bucket_state.files.len()).collect()

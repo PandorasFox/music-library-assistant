@@ -903,7 +903,7 @@ impl ConflictBucket {
 
     /// Whether this bucket supports bulk resolution buttons (tag sync/conflict).
     pub fn is_resolvable(&self) -> bool {
-        matches!(self, Self::DbOnly | Self::DiskOnly)
+        matches!(self, Self::DbOnly | Self::DiskOnly | Self::Conflict)
     }
 
     /// Whether this bucket supports acknowledgement (mtime-only changes).

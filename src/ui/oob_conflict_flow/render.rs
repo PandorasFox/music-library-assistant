@@ -33,10 +33,12 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
+    let bucket_state = state.active_bucket_state();
+
     // Title with filter indicator
-    let filter_indicator = if state.filter.is_some() {
-        let filtered_count = state.get_filtered_indices().len();
-        let bucket_count = state.active_bucket_state().files.len();
+    let filter_indicator = if bucket_state.filter.is_some() {
+        let filtered_count = bucket_state.get_filtered_indices().len();
+        let bucket_count = bucket_state.files.len();
         format!(" [filtered: {}/{}]", filtered_count, bucket_count)
     } else {
         String::new()
@@ -108,8 +110,8 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
     let bucket_state = state.active_bucket_state();
 
     // Build title with selection count if active
-    let title = if state.selection.is_active() {
-        format!("Files ({}, {} selected)", bucket_state.files.len(), state.selection.selection_count())
+    let title = if bucket_state.selection.is_active() {
+        format!("Files ({}, {} selected)", bucket_state.files.len(), bucket_state.selection.selection_count())
     } else {
         format!("Files ({})", bucket_state.files.len())
     };
@@ -141,7 +143,8 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         bucket_state.scroll
     };
 
-    let selection_active = state.selection.is_active();
+    // Show selection indicators by default for resolvable buckets
+    let show_selection = state.active_bucket.is_resolvable() || bucket_state.selection.is_active();
 
     let items: Vec<ListItem> = bucket_state.files
         .iter()
@@ -151,18 +154,18 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         .map(|(idx, file)| {
             let is_cursor = idx == bucket_state.cursor;
             let cursor_prefix = if is_cursor { "> " } else { "  " };
-            let selection_marker = if selection_active {
-                state.selection.marker(idx)
+            let selection_marker = if show_selection {
+                bucket_state.selection.marker(idx)
             } else {
                 ""
             };
 
             // Calculate available path width
-            let prefix_len = cursor_prefix.len() + if selection_active { selection_marker.len() + 1 } else { 0 };
+            let prefix_len = cursor_prefix.len() + if show_selection { selection_marker.len() + 1 } else { 0 };
             let path_max = max_width.saturating_sub(prefix_len);
             let truncated_path = truncate_left(&file.path, path_max);
 
-            let marker_style = if state.selection.is_selected(idx) {
+            let marker_style = if bucket_state.selection.is_selected(idx) {
                 Style::default().fg(Color::Green)
             } else {
                 Style::default().fg(Color::DarkGray)
@@ -176,7 +179,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
 
             let mut spans = vec![Span::raw(cursor_prefix.to_string())];
 
-            if selection_active {
+            if show_selection {
                 spans.push(Span::styled(selection_marker.to_string(), marker_style));
                 spans.push(Span::raw(" "));
             }
@@ -268,7 +271,7 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
     state.button_rects.clear();
 
     let content = match state.active_bucket {
-        ConflictBucket::DbOnly | ConflictBucket::DiskOnly => {
+        ConflictBucket::DbOnly | ConflictBucket::DiskOnly | ConflictBucket::Conflict => {
             let apply_label = " Apply DB -> Files ";
             let assimilate_label = " Assimilate Files -> DB ";
             let cancel_label = " Cancel ";
@@ -357,12 +360,6 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
                 Span::raw("   "),
                 Span::styled(cancel_label, cancel_style),
             ])
-        }
-        ConflictBucket::Conflict => {
-            Line::from(Span::styled(
-                "Manual resolution required — tag editor integration pending",
-                Style::default().fg(Color::DarkGray),
-            ))
         }
     };
 

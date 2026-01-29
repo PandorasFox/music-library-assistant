@@ -36,15 +36,57 @@ pub struct BucketFileState {
     pub files: Vec<BucketedOobFile>,
     pub cursor: usize,
     pub scroll: usize,
+    /// Per-bucket selection state
+    pub selection: BulkSelectionState,
+    /// Per-bucket filter condition
+    pub filter: Option<FilterCondition>,
+    /// Per-bucket filtered indices (cached)
+    pub filtered_indices: Option<Vec<usize>>,
 }
 
 impl BucketFileState {
     pub fn new(files: Vec<BucketedOobFile>) -> Self {
-        Self { files, cursor: 0, scroll: 0 }
+        Self {
+            files,
+            cursor: 0,
+            scroll: 0,
+            selection: BulkSelectionState::new(),
+            filter: None,
+            filtered_indices: None,
+        }
     }
 
     pub fn current_file(&self) -> Option<&BucketedOobFile> {
         self.files.get(self.cursor)
+    }
+
+    /// Get indices of files that match the current filter.
+    pub fn get_filtered_indices(&self) -> Vec<usize> {
+        if let Some(ref indices) = self.filtered_indices {
+            indices.clone()
+        } else {
+            (0..self.files.len()).collect()
+        }
+    }
+
+    /// Apply a filter condition and compute filtered indices.
+    pub fn apply_filter(&mut self, condition: FilterCondition) {
+        if condition.is_active() {
+            // For now, accept all (bucket files don't have full metadata)
+            // TODO: Add full metadata filtering when track info is available
+            let indices: Vec<usize> = (0..self.files.len()).collect();
+            self.filtered_indices = Some(indices);
+            self.filter = Some(condition);
+        } else {
+            self.filter = None;
+            self.filtered_indices = None;
+        }
+    }
+
+    /// Clear the current filter.
+    pub fn clear_filter(&mut self) {
+        self.filter = None;
+        self.filtered_indices = None;
     }
 
     fn navigate_up(&mut self) -> bool {
@@ -105,6 +147,7 @@ pub struct OobConflictState {
     /// Active bucket tab
     pub active_bucket: ConflictBucket,
     /// Per-bucket file lists (indexed by ConflictBucket::index())
+    /// Each bucket has its own selection and filter state.
     pub buckets: [BucketFileState; 4],
     /// Counts per bucket (for tab labels)
     pub bucket_counts: [usize; 4],
@@ -116,12 +159,6 @@ pub struct OobConflictState {
     pub focus_pane: FocusPane,
     /// Button rectangles for click detection (set during render)
     pub button_rects: ButtonRects,
-    /// Bulk selection state for multi-file operations
-    pub selection: BulkSelectionState,
-    /// Active filter condition (from Ctrl+F popup)
-    pub filter: Option<FilterCondition>,
-    /// Filtered indices for active bucket (cached, updated when filter changes)
-    pub filtered_indices: Option<Vec<usize>>,
 }
 
 impl OobConflictState {
@@ -163,39 +200,7 @@ impl OobConflictState {
             current_diff: Vec::new(),
             focus_pane: FocusPane::List,
             button_rects: ButtonRects::new(),
-            selection: BulkSelectionState::new(),
-            filter: None,
-            filtered_indices: None,
         }
-    }
-
-    /// Get indices of files in active bucket that match the current filter.
-    pub fn get_filtered_indices(&self) -> Vec<usize> {
-        if let Some(ref indices) = self.filtered_indices {
-            indices.clone()
-        } else {
-            (0..self.active_bucket_state().files.len()).collect()
-        }
-    }
-
-    /// Apply a filter condition and compute filtered indices for active bucket.
-    pub fn apply_filter(&mut self, condition: FilterCondition) {
-        if condition.is_active() {
-            // For now, accept all (bucket files don't have full metadata)
-            // TODO: Add full metadata filtering when track info is available
-            let indices: Vec<usize> = (0..self.active_bucket_state().files.len()).collect();
-            self.filtered_indices = Some(indices);
-            self.filter = Some(condition);
-        } else {
-            self.filter = None;
-            self.filtered_indices = None;
-        }
-    }
-
-    /// Clear the current filter.
-    pub fn clear_filter(&mut self) {
-        self.filter = None;
-        self.filtered_indices = None;
     }
 
     pub fn active_bucket_state(&self) -> &BucketFileState {
@@ -208,6 +213,16 @@ impl OobConflictState {
 
     pub fn total_files(&self) -> usize {
         self.bucket_counts.iter().sum()
+    }
+
+    /// Apply a filter condition to the active bucket.
+    pub fn apply_filter(&mut self, condition: FilterCondition) {
+        self.active_bucket_state_mut().apply_filter(condition);
+    }
+
+    /// Clear the filter from the active bucket.
+    pub fn clear_filter(&mut self) {
+        self.active_bucket_state_mut().clear_filter();
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OobConflictAction {
@@ -228,8 +243,9 @@ impl OobConflictState {
 
         // Ctrl+A: toggle all selection in active bucket (respects filter)
         if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            let indices = self.get_filtered_indices();
-            self.selection.toggle_all_filtered(&indices);
+            let bucket = self.active_bucket_state_mut();
+            let indices = bucket.get_filtered_indices();
+            bucket.selection.toggle_all_filtered(&indices);
             return OobConflictAction::None;
         }
 
@@ -241,9 +257,10 @@ impl OobConflictState {
         match key.code {
             // Space: toggle selection on current file in active bucket
             KeyCode::Char(' ') => {
-                let bucket_state = self.active_bucket_state();
-                if !bucket_state.files.is_empty() {
-                    self.selection.toggle(bucket_state.cursor);
+                let bucket = self.active_bucket_state_mut();
+                if !bucket.files.is_empty() {
+                    let cursor = bucket.cursor;
+                    bucket.selection.toggle(cursor);
                 }
                 OobConflictAction::None
             }

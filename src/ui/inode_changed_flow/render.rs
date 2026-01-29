@@ -187,7 +187,7 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut InodeChangedState) {
         Span::styled(ack_label, ack_style),
         Span::raw("  "),
         Span::styled(cancel_label, cancel_style),
-        Span::raw("  [Y] quick acknowledge  [Esc] cancel"),
+        Span::raw("  [Esc] cancel"),
     ]);
 
     let para = Paragraph::new(buttons).alignment(Alignment::Center);

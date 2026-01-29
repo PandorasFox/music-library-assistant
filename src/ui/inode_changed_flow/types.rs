@@ -141,15 +141,6 @@ impl InodeChangedState {
                 }
             }
 
-            // Y for quick acknowledge
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if !self.files.is_empty() {
-                    InodeChangedAction::Acknowledge
-                } else {
-                    InodeChangedAction::None
-                }
-            }
-
             KeyCode::Esc => InodeChangedAction::Cancel,
 
             _ => InodeChangedAction::None,

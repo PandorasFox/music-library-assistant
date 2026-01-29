@@ -74,6 +74,10 @@ impl App {
                     }
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
+                    // Invalidate insights cache before transitioning - mutations just completed
+                    if let Some(ref witch) = self.witch {
+                        witch.ui_read_cache().invalidate_insights_data();
+                    }
                     // Transition to Insights view
                     self.start_insights_view();
                 }

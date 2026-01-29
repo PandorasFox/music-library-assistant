@@ -105,6 +105,19 @@ impl<T: Clone + Send + Sync + 'static> CacheEntry<T> {
         self.shared.wanted.store(true, Ordering::Relaxed);
     }
 
+    /// Invalidate the cache, bypassing the throttle.
+    ///
+    /// Clears `updated_at` so the next `want()` call will trigger a refresh
+    /// regardless of how recently the data was updated. Use this after
+    /// mutations complete to ensure fresh data on next view.
+    pub fn invalidate(&self) {
+        if let Ok(mut inner) = self.shared.inner.write() {
+            inner.updated_at = None;
+        }
+        // Also set wanted so refresh happens immediately
+        self.shared.wanted.store(true, Ordering::Relaxed);
+    }
+
     /// Read the latest cached value. Never blocks (briefly for RwLock).
     ///
     /// Returns None if the data has never been computed.
@@ -256,6 +269,14 @@ impl UiReadCache {
     /// Returns None if never computed. Never blocks.
     pub fn insights_data(&self) -> Option<InsightsData> {
         self.insights_data.get()
+    }
+
+    /// Invalidate insights data cache, forcing refresh on next want().
+    ///
+    /// Call this after mutations complete to ensure fresh data when
+    /// transitioning to insights view.
+    pub fn invalidate_insights_data(&self) {
+        self.insights_data.invalidate();
     }
 
     // -------------------------------------------------------------------------

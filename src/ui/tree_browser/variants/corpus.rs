@@ -93,8 +93,8 @@ impl CorpusBrowserVariant {
         // Preview pane removed - nothing to update
     }
 
-    /// Handle Escape - clear search and return focus to tree.
-    pub fn handle_escape(&mut self) -> bool {
+    /// Handle Escape - clear filter/search and return focus to tree.
+    pub fn handle_escape(&mut self, nav: &mut TreeNavigator) -> bool {
         if self.match_selection_mode {
             self.cancel_match_selection();
             true
@@ -103,6 +103,10 @@ impl CorpusBrowserVariant {
             self.search_input.clear();
             self.search.clear();
             self.focus = CorpusBrowserFocus::TreeBrowser;
+            true
+        } else if nav.has_path_filter() {
+            // Clear active filter
+            nav.clear_path_filter();
             true
         } else {
             false
@@ -172,15 +176,9 @@ impl CorpusBrowserVariant {
                     TreeBrowserAction::None
                 }
             }
-            // Any printable character starts search
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Move focus to search bar and insert character
-                self.focus = CorpusBrowserFocus::SearchBar;
-                self.search_input.focused = true;
-                self.start_search(nav);
-                self.search_input.insert_char(c);
-                self.update_search_matches(nav);
-                TreeBrowserAction::None
+            // Ctrl+F opens filter popup
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                TreeBrowserAction::OpenFilter
             }
             _ => TreeBrowserAction::None,
         }

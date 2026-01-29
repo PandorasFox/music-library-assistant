@@ -3,6 +3,7 @@
 //! Core tree navigation state shared by all browser variants.
 //! Handles entry management, cursor movement, expand/collapse, and scrolling.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -66,6 +67,9 @@ pub struct TreeNavigator {
     filter: EntryFilter,
     /// Whether root itself is shown as an entry (vs just its children)
     show_root: bool,
+    /// Active path filter - when Some, only paths in this set are shown.
+    /// Includes both files that match and their ancestor directories.
+    active_path_filter: Option<HashSet<PathBuf>>,
 }
 
 impl TreeNavigator {
@@ -82,9 +86,35 @@ impl TreeNavigator {
             visible_height: 20,
             filter,
             show_root,
+            active_path_filter: None,
         };
         nav.load_initial();
         nav
+    }
+
+    /// Set an active path filter. Only paths in this set will be shown.
+    /// The set should include both target files and their ancestor directories.
+    pub fn set_path_filter(&mut self, paths: HashSet<PathBuf>) {
+        self.active_path_filter = Some(paths);
+        self.load_initial();
+    }
+
+    /// Clear the active path filter, restoring full tree view.
+    pub fn clear_path_filter(&mut self) {
+        self.active_path_filter = None;
+        self.load_initial();
+    }
+
+    /// Check if a path filter is currently active.
+    pub fn has_path_filter(&self) -> bool {
+        self.active_path_filter.is_some()
+    }
+
+    /// Get count of matching paths (files only, not directories).
+    pub fn filtered_file_count(&self) -> Option<usize> {
+        self.active_path_filter.as_ref().map(|paths| {
+            paths.iter().filter(|p| p.is_file()).count()
+        })
     }
 
     /// Load initial entries based on configuration.
@@ -285,6 +315,13 @@ impl TreeNavigator {
                 // Skip hidden files/directories unless configured
                 if !self.filter.include_hidden && name.starts_with('.') {
                     continue;
+                }
+
+                // Skip if path filter is active and this path is not in the allowed set
+                if let Some(ref allowed) = self.active_path_filter {
+                    if !allowed.contains(&path) {
+                        continue;
+                    }
                 }
 
                 if path.is_dir() {

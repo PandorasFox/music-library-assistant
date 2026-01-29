@@ -188,6 +188,9 @@ fn detect_multi_value_edits(edits: &[TagEdit]) -> bool {
 }
 
 /// Execute standard single-value tag edits.
+///
+/// Applies each edit surgically using tag container primitives.
+/// Never rebuilds the entire tag state - only touches the specific tags being edited.
 fn execute_combined_single_value(
     db: &Database,
     track_id: i64,
@@ -195,30 +198,47 @@ fn execute_combined_single_value(
     edits: &[TagEdit],
     session_id: &str,
     token: &MutationToken,
-    existing_tags: Vec<(String, String)>,
+    _existing_tags: Vec<(String, String)>, // Validation done in caller
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    // Use pre-read tags (already validated in execute_combined)
-    let mut tag_map: std::collections::HashMap<String, String> = existing_tags.into_iter().collect();
+    use lofty::config::WriteOptions;
+    use lofty::file::{AudioFile, TaggedFileExt};
+    use lofty::probe::Probe;
+    use lofty::tag::Tag;
 
-    // 2. Apply edits
+    let mut tagged_file = Probe::open(path)
+        .with_context(|| format!("Failed to open file: {}", path.display()))?
+        .read()
+        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+    let tag_type = tagged_file.primary_tag_type();
+
+    let tag = match tagged_file.primary_tag_mut() {
+        Some(t) => t,
+        None => {
+            tagged_file.insert_tag(Tag::new(tag_type));
+            tagged_file.primary_tag_mut().unwrap()
+        }
+    };
+
+    // Apply each edit using primitives
     for edit in edits {
         if let Some(ref new_value) = edit.new_value {
-            tag_map.insert(edit.tag_name.clone(), new_value.clone());
-        } else {
-            // new_value is None means delete the tag
-            tag_map.remove(&edit.tag_name);
+            // Set single value
+            metadata::tag_set_single(tag, tag_type, &edit.tag_name, new_value, token);
+        } else if let Some(ref old_value) = edit.old_value {
+            // Delete specific (key, value) pair
+            metadata::tag_remove_value(tag, tag_type, &edit.tag_name, old_value, token);
         }
+        // If both old_value and new_value are None, nothing to do
     }
 
-    // 3. Write to disk (requires token proof)
-    let final_tags: Vec<(String, String)> = tag_map.into_iter().collect();
-    metadata::write_tags_to_file(path, &final_tags, token)
-        .context("Failed to write tags to file")?;
+    tagged_file
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("Failed to save file: {}", path.display()))?;
 
-    // 4. Update database explicitly
+    // Update database
     for edit in edits {
-        // Log to history
         db.log_tag_edit(
             track_id,
             &edit.tag_name,
@@ -228,7 +248,6 @@ fn execute_combined_single_value(
         )
         .context("Failed to log tag edit")?;
 
-        // Update tracks table
         if let Some(ref new_value) = edit.new_value {
             db.update_track_tag(track_id, &edit.tag_name, new_value, witness)
                 .context("Failed to update track tag in database")?;
@@ -325,7 +344,7 @@ pub fn write_tags_to_disk_only(path: &Path, tags: &[(String, String)]) -> Result
     use lofty::config::WriteOptions;
     use lofty::file::{AudioFile, TaggedFileExt};
     use lofty::probe::Probe;
-    use lofty::tag::{Accessor, ItemKey, Tag, TagExt};
+    use lofty::tag::{ItemKey, Tag};
 
     let mut tagged_file = Probe::open(path)
         .with_context(|| format!("Failed to open file for tag writing: {}", path.display()))?
@@ -334,7 +353,6 @@ pub fn write_tags_to_disk_only(path: &Path, tags: &[(String, String)]) -> Result
 
     let tag_type = tagged_file.primary_tag_type();
 
-    // Get or create primary tag
     let tag = match tagged_file.primary_tag_mut() {
         Some(t) => t,
         None => {
@@ -344,34 +362,12 @@ pub fn write_tags_to_disk_only(path: &Path, tags: &[(String, String)]) -> Result
         }
     };
 
-    // Clear existing tags before writing
-    tag.clear();
-
-    // Write all tags
+    // Single-value writes: insert_text does atomic replace (retain + push internally)
     for (key, value) in tags {
-        match key.as_str() {
-            "artist" => tag.set_artist(value.to_string()),
-            "album" => tag.set_album(value.to_string()),
-            "title" => tag.set_title(value.to_string()),
-            "track_number" => {
-                if let Ok(num) = value.parse::<u32>() {
-                    tag.set_track(num);
-                }
-            }
-            "year" | "date" => {
-                if let Ok(year) = value.parse::<u32>() {
-                    tag.set_year(year);
-                }
-            }
-            "genre" => tag.set_genre(value.to_string()),
-            _ => {
-                let item_key = ItemKey::from_key(tag_type, key);
-                tag.insert_text(item_key, value.to_string());
-            }
-        }
+        let item_key = ItemKey::from_key(tag_type, key);
+        tag.insert_text(item_key, value.to_string());
     }
 
-    // Save to file
     tagged_file
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;

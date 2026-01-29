@@ -30,7 +30,7 @@ pub fn render(
     }
 }
 
-/// Render corpus browser layout (titlebar + search bar + tree).
+/// Render corpus browser layout (titlebar + filter bar + tree).
 fn render_corpus_browser(
     f: &mut Frame,
     area: Rect,
@@ -38,12 +38,12 @@ fn render_corpus_browser(
     nav: &mut TreeNavigator,
     variant: &mut CorpusBrowserVariant,
 ) {
-    // Layout: Title bar | Search bar | Tree (full width)
+    // Layout: Title bar | Filter bar | Tree (full width)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(UnifiedTitleBar::height()), // Title bar (3 lines)
-            Constraint::Length(3),                          // Search bar (3 lines: border + content + border)
+            Constraint::Length(3),                          // Filter bar (3 lines: border + content + border)
             Constraint::Min(5),                             // Tree browser
         ])
         .split(area);
@@ -52,14 +52,40 @@ fn render_corpus_browser(
     let titlebar = UnifiedTitleBar::new(LateralView::CorpusBrowser);
     titlebar.render(f, main_chunks[0]);
 
-    // Search bar (persistent)
-    variant.render_search_bar(f, main_chunks[1]);
+    // Filter bar - show filter status or hint
+    render_filter_bar(f, main_chunks[1], nav);
 
     // Tree pane at full width
     render_tree_pane(f, main_chunks[2], nav, variant, true);
 
-    // Overlays (match selection modal)
+    // Overlays (match selection modal) - legacy, can be removed
     variant.render_overlays(f, area);
+}
+
+/// Render the filter status bar for corpus browser.
+fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator) {
+    let (content, style) = if nav.has_path_filter() {
+        // Active filter - show count and hint to clear
+        let count = nav.filtered_file_count().unwrap_or(0);
+        (
+            format!("Filtered: {} files  (Ctrl+F to change, Esc to clear)", count),
+            Style::default().fg(Color::Green),
+        )
+    } else {
+        // No filter - show hint
+        (
+            "Press Ctrl+F to filter files".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title("Filter");
+
+    let paragraph = Paragraph::new(Span::styled(content, style)).block(block);
+    f.render_widget(paragraph, area);
 }
 
 /// Render directory selector layout (header + tree + footer).

@@ -32,11 +32,15 @@ mod navigator;
 mod render;
 pub mod variants;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 use ratatui::Frame;
+
+use crate::corpus::db::Database;
+use crate::ui::filter_popup::FilterCondition;
 
 pub use actions::TreeBrowserAction;
 pub use config::{CorpusBrowserConfig, DirectorySelectorConfig, TreeBrowserConfig};
@@ -153,5 +157,94 @@ impl TreeBrowserState {
     /// Get current path under cursor.
     pub fn current_path(&self) -> Option<&PathBuf> {
         self.navigator.current_path()
+    }
+
+    // =========================================================================
+    // Filtering
+    // =========================================================================
+
+    /// Apply a filter condition, showing only matching files and their ancestors.
+    ///
+    /// Queries the database for tracks matching the filter condition, then
+    /// computes the set of matching paths plus all ancestor directories.
+    pub fn apply_filter(&mut self, condition: FilterCondition, db: &Database) {
+        if !condition.is_active() {
+            self.clear_filter();
+            return;
+        }
+
+        // Query all tracks from database
+        let tracks = match db.get_all_tracks(None) {
+            Ok(t) => t,
+            Err(_) => {
+                self.clear_filter();
+                return;
+            }
+        };
+
+        // Get tags for each track and filter
+        let mut matching_paths: Vec<PathBuf> = Vec::new();
+        for track in tracks {
+            // Get tags for this track and convert to HashMap
+            let tags: HashMap<String, String> = db
+                .get_track_tags(track.id.unwrap_or(0))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tt| (tt.tag_name, tt.tag_value))
+                .collect();
+
+            // Check if track matches filter
+            if condition.matches(
+                &track.path,
+                &track.file_type,
+                track.sample_rate,
+                track.bitrate_kbps,
+                track.duration_ms,
+                &tags,
+            ) {
+                matching_paths.push(PathBuf::from(&track.path));
+            }
+        }
+
+        if matching_paths.is_empty() {
+            // No matches - keep current view but don't apply empty filter
+            return;
+        }
+
+        // Build set of matching paths plus all ancestor directories
+        let mut all_paths: HashSet<PathBuf> = HashSet::new();
+        let root = self.navigator.root_path().clone();
+
+        for path in &matching_paths {
+            all_paths.insert(path.clone());
+
+            // Add all ancestor directories up to (but not including) root
+            let mut current = path.parent();
+            while let Some(parent) = current {
+                if parent == root {
+                    break;
+                }
+                all_paths.insert(parent.to_path_buf());
+                current = parent.parent();
+            }
+        }
+
+        // Apply filter to navigator
+        self.navigator.set_path_filter(all_paths);
+    }
+
+    /// Clear any active filter, restoring full tree view.
+    pub fn clear_filter(&mut self) {
+        self.navigator.clear_path_filter();
+    }
+
+    /// Check if a filter is currently active.
+    pub fn has_filter(&self) -> bool {
+        self.navigator.has_path_filter()
+    }
+
+    /// Get count of filtered files.
+    pub fn filtered_file_count(&self) -> Option<usize> {
+        self.navigator.filtered_file_count()
     }
 }

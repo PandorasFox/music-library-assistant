@@ -9,14 +9,19 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::ui::helpers::centered_rect_fixed;
-use crate::ui::tag_search::ConditionType;
 
-use super::state::{FilterFieldFocus, FilterPopupState};
+use super::state::{FilterConditionType, FilterFieldFocus, FilterPopupState};
 
 /// Render the filter popup overlay.
 pub fn render(f: &mut Frame, area: Rect, state: &FilterPopupState) {
+    // Tag conditions need more height for the extra fields
+    let height = match state.condition.condition_type {
+        FilterConditionType::Tag => 14,
+        _ => 12,
+    };
+
     // Use a fixed-size centered popup
-    let popup_area = centered_rect_fixed(50, 12, area);
+    let popup_area = centered_rect_fixed(55, height, area);
 
     // Clear the background
     f.render_widget(Clear, popup_area);
@@ -31,10 +36,20 @@ pub fn render(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
 
-    // Layout: condition type, value fields, buttons
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+    // Layout depends on condition type - Tag needs more rows
+    let constraints = match state.condition.condition_type {
+        FilterConditionType::Tag => vec![
+            Constraint::Length(1), // Instructions
+            Constraint::Length(1), // Spacing
+            Constraint::Length(1), // Condition type
+            Constraint::Length(1), // Spacing
+            Constraint::Length(1), // Tag name
+            Constraint::Length(1), // Tag comparison + value
+            Constraint::Length(1), // Spacing
+            Constraint::Length(1), // Buttons
+            Constraint::Min(0),    // Remaining space
+        ],
+        _ => vec![
             Constraint::Length(1), // Instructions
             Constraint::Length(1), // Spacing
             Constraint::Length(1), // Condition type
@@ -43,7 +58,12 @@ pub fn render(f: &mut Frame, area: Rect, state: &FilterPopupState) {
             Constraint::Length(1), // Spacing
             Constraint::Length(1), // Buttons
             Constraint::Min(0),    // Remaining space
-        ])
+        ],
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
         .split(inner);
 
     // Instructions
@@ -56,10 +76,17 @@ pub fn render(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     render_condition_type(f, chunks[2], state);
 
     // Value fields (depends on condition type)
-    render_value_fields(f, chunks[4], state);
-
-    // Buttons
-    render_buttons(f, chunks[6], state);
+    match state.condition.condition_type {
+        FilterConditionType::Tag => {
+            render_tag_name_field(f, chunks[4], state);
+            render_tag_value_field(f, chunks[5], state);
+            render_buttons(f, chunks[7], state);
+        }
+        _ => {
+            render_value_fields(f, chunks[4], state);
+            render_buttons(f, chunks[6], state);
+        }
+    }
 }
 
 fn render_condition_type(f: &mut Frame, area: Rect, state: &FilterPopupState) {
@@ -71,11 +98,12 @@ fn render_condition_type(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     };
 
     let label = match state.condition.condition_type {
-        ConditionType::Tag => "Tag (not available)",
-        ConditionType::FileType => "File Type",
-        ConditionType::SampleRate => "Sample Rate (Hz)",
-        ConditionType::Bitrate => "Bitrate (kbps)",
-        ConditionType::Duration => "Duration (seconds)",
+        FilterConditionType::Path => "Path",
+        FilterConditionType::FileType => "File Type",
+        FilterConditionType::SampleRate => "Sample Rate (Hz)",
+        FilterConditionType::Bitrate => "Bitrate (kbps)",
+        FilterConditionType::Duration => "Duration (seconds)",
+        FilterConditionType::Tag => "Tag",
     };
 
     let line = Line::from(vec![
@@ -89,14 +117,99 @@ fn render_condition_type(f: &mut Frame, area: Rect, state: &FilterPopupState) {
 
 fn render_value_fields(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     match state.condition.condition_type {
-        ConditionType::FileType => render_file_type_field(f, area, state),
-        ConditionType::SampleRate | ConditionType::Bitrate | ConditionType::Duration => {
+        FilterConditionType::Path => render_path_field(f, area, state),
+        FilterConditionType::FileType => render_file_type_field(f, area, state),
+        FilterConditionType::SampleRate | FilterConditionType::Bitrate | FilterConditionType::Duration => {
             render_range_fields(f, area, state)
         }
-        ConditionType::Tag => {
-            // Tag not used in filter popup
+        FilterConditionType::Tag => {
+            // Tag fields are rendered separately in main render function
         }
     }
+}
+
+fn render_path_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
+    let is_focused = state.focus == FilterFieldFocus::PathSubstring;
+    let style = if is_focused {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let value_display = if state.condition.path_substring.is_empty() {
+        "type to filter...".to_string()
+    } else {
+        state.condition.path_substring.clone()
+    };
+
+    let value_style = if state.condition.path_substring.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        style
+    };
+
+    let line = Line::from(vec![
+        Span::styled("Contains: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("[{}]", value_display), value_style),
+    ]);
+
+    let para = Paragraph::new(line).alignment(Alignment::Center);
+    f.render_widget(para, area);
+}
+
+fn render_tag_name_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
+    let is_focused = state.focus == FilterFieldFocus::TagName;
+    let style = if is_focused {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let line = Line::from(vec![
+        Span::styled("Tag: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("< {} >", state.condition.tag_name), style),
+    ]);
+
+    let para = Paragraph::new(line).alignment(Alignment::Center);
+    f.render_widget(para, area);
+}
+
+fn render_tag_value_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
+    let comp_focused = state.focus == FilterFieldFocus::TagComparison;
+    let value_focused = state.focus == FilterFieldFocus::TagValue;
+
+    let comp_style = if comp_focused {
+        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Magenta)
+    };
+
+    let value_style = if value_focused {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let value_display = if state.condition.tag_value.is_empty() {
+        "type value...".to_string()
+    } else {
+        state.condition.tag_value.clone()
+    };
+
+    let actual_value_style = if state.condition.tag_value.is_empty() && !value_focused {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        value_style
+    };
+
+    let line = Line::from(vec![
+        Span::styled(format!("< {} >", state.condition.tag_comparison.label()), comp_style),
+        Span::raw(" "),
+        Span::styled(format!("[{}]", value_display), actual_value_style),
+    ]);
+
+    let para = Paragraph::new(line).alignment(Alignment::Center);
+    f.render_widget(para, area);
 }
 
 fn render_file_type_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {

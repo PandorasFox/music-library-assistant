@@ -423,6 +423,70 @@ fn item_key_to_string(key: &lofty::tag::ItemKey) -> String {
     }
 }
 
+/// Convert a string tag name to a lofty ItemKey.
+/// Uses ItemKey::from_key for format-aware mapping, falling back to Unknown for unrecognized keys.
+fn string_to_item_key(key: &str, tag_type: lofty::tag::TagType) -> lofty::tag::ItemKey {
+    lofty::tag::ItemKey::from_key(tag_type, key)
+}
+
+// =============================================================================
+// =============================================================================
+// Tag Container Primitives
+// =============================================================================
+// These three operations are the ONLY ways to modify text tags in a container.
+// They never touch pictures or other binary data.
+// All require MutationToken to prove we're in a mutation context.
+
+/// Set a single (key, value) pair in the tag container.
+/// Replaces any existing value(s) for this key with the single new value.
+pub(crate) fn tag_set_single(
+    tag: &mut lofty::tag::Tag,
+    tag_type: lofty::tag::TagType,
+    key: &str,
+    value: &str,
+    _token: &crate::corpus::mutations::MutationToken,
+) {
+    let item_key = string_to_item_key(key, tag_type);
+    tag.insert_text(item_key, value.to_string());
+}
+
+/// Set multiple values for a single key (e.g., genre=Rock, genre=Metal).
+/// Removes ALL existing values for this key, then adds each new value.
+pub(crate) fn tag_set_multi(
+    tag: &mut lofty::tag::Tag,
+    tag_type: lofty::tag::TagType,
+    key: &str,
+    values: &[&str],
+    _token: &crate::corpus::mutations::MutationToken,
+) {
+    use lofty::tag::{ItemValue, TagItem};
+
+    let item_key = string_to_item_key(key, tag_type);
+    tag.remove_key(&item_key);
+    for value in values {
+        if !value.is_empty() {
+            let item = TagItem::new(item_key.clone(), ItemValue::Text(value.to_string()));
+            tag.push(item);
+        }
+    }
+}
+
+/// Remove a specific (key, value) pair from the tag container.
+/// Only removes exact matches; other values for the same key are preserved.
+pub(crate) fn tag_remove_value(
+    tag: &mut lofty::tag::Tag,
+    tag_type: lofty::tag::TagType,
+    key: &str,
+    value: &str,
+    _token: &crate::corpus::mutations::MutationToken,
+) {
+    let item_key = string_to_item_key(key, tag_type);
+    tag.retain(|item| {
+        // Keep items that don't match both key AND value
+        item.key() != &item_key || item.value().text() != Some(value)
+    });
+}
+
 /// Read all tags from an audio file using lofty.
 /// Returns a vector of (tag_name, tag_value) tuples, deduplicated.
 /// Tag names are normalized (lowercase, clean format - not Debug format).
@@ -520,85 +584,33 @@ pub fn read_all_tags(path: &Path) -> Result<Vec<(String, String)>> {
 pub fn write_tags_to_file(
     path: &Path,
     tags: &[(String, String)],
-    _token: &crate::corpus::mutations::MutationToken,
+    token: &crate::corpus::mutations::MutationToken,
 ) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::{AudioFile, TaggedFileExt};
     use lofty::probe::Probe;
-    use lofty::tag::{Accessor, ItemKey, Tag, TagExt};
-    use std::collections::HashMap;
+    use lofty::tag::Tag;
 
-    // 1. PRESERVE: Read existing tags from file BEFORE making changes
-    let existing_tags = read_all_tags(path)
-        .with_context(|| format!("Failed to read existing tags from {}", path.display()))?;
-
-    // 2. MERGE: Build map of updates and preserve non-updated tags
-    let updates: HashMap<&str, &str> = tags.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-
-    let mut final_tags: Vec<(String, String)> = Vec::new();
-
-    // Add all updates from the user
-    for (key, value) in tags {
-        final_tags.push((key.clone(), value.clone()));
-    }
-
-    // Add existing tags that aren't being updated (PRESERVE)
-    for (key, value) in existing_tags {
-        if !updates.contains_key(key.as_str()) {
-            final_tags.push((key, value));
-        }
-    }
-
-    // 3. Write to file with ALL tags (updated + preserved)
     let mut tagged_file = Probe::open(path)
         .with_context(|| format!("Failed to open file for tag writing: {}", path.display()))?
         .read()
         .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
 
-    // Get the tag type before we take a mutable borrow (to avoid borrowing conflicts)
     let tag_type = tagged_file.primary_tag_type();
 
-    // Get or create primary tag
     let tag = match tagged_file.primary_tag_mut() {
         Some(t) => t,
         None => {
-            // Create a new tag if none exists
             let new_tag = Tag::new(tag_type);
             tagged_file.insert_tag(new_tag);
             tagged_file.primary_tag_mut().unwrap()
         }
     };
 
-    // Clear existing tags before writing merged set
-    tag.clear();
-
-    // Write ALL tags (both updated and preserved)
-    for (key, value) in &final_tags {
-        match key.as_str() {
-            "artist" => tag.set_artist(value.to_string()),
-            "album" => tag.set_album(value.to_string()),
-            "title" => tag.set_title(value.to_string()),
-            "track_number" => {
-                if let Ok(num) = value.parse::<u32>() {
-                    tag.set_track(num);
-                }
-            }
-            "year" | "date" => {
-                if let Ok(year) = value.parse::<u32>() {
-                    tag.set_year(year);
-                }
-            }
-            "genre" => tag.set_genre(value.to_string()),
-            // SUPPORT ARBITRARY TAGS: Use insert_text for non-standard tags
-            _ => {
-                // Try to map to a standard ItemKey for the file's tag type
-                let item_key = ItemKey::from_key(tag_type, key);
-                tag.insert_text(item_key, value.to_string());
-            }
-        }
+    for (key, value) in tags {
+        tag_set_single(tag, tag_type, key, value, token);
     }
 
-    // Save to file with default write options
     tagged_file
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
@@ -627,22 +639,14 @@ pub fn write_tags_to_file(
 pub fn write_tags_to_file_multi_value(
     path: &Path,
     tags: &[(String, String)],
-    _token: &crate::corpus::mutations::MutationToken,
+    token: &crate::corpus::mutations::MutationToken,
 ) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::{AudioFile, TaggedFileExt};
     use lofty::probe::Probe;
-    use lofty::tag::{Accessor, ItemKey, ItemValue, Tag, TagExt, TagItem};
-    use std::collections::HashSet;
+    use lofty::tag::Tag;
+    use std::collections::HashMap;
 
-    // 1. Read existing tags from file
-    let existing_tags = read_all_tags(path)
-        .with_context(|| format!("Failed to read existing tags from {}", path.display()))?;
-
-    // 2. Determine which tag names are being replaced
-    let replaced_keys: HashSet<String> = tags.iter().map(|(k, _)| k.to_lowercase()).collect();
-
-    // 3. Open file for writing
     let mut tagged_file = Probe::open(path)
         .with_context(|| format!("Failed to open file for tag writing: {}", path.display()))?
         .read()
@@ -650,7 +654,6 @@ pub fn write_tags_to_file_multi_value(
 
     let tag_type = tagged_file.primary_tag_type();
 
-    // Get or create primary tag
     let tag = match tagged_file.primary_tag_mut() {
         Some(t) => t,
         None => {
@@ -660,63 +663,24 @@ pub fn write_tags_to_file_multi_value(
         }
     };
 
-    // Clear existing tags before writing
-    tag.clear();
-
-    // 4. Write preserved tags (existing tags not being replaced)
-    for (key, value) in &existing_tags {
-        if replaced_keys.contains(&key.to_lowercase()) {
-            continue; // Skip - this tag is being replaced
-        }
-        write_single_tag(tag, tag_type, key, value);
-    }
-
-    // 5. Write new tags (including multi-value)
+    // Group values by key (preserving order within each key)
+    let mut grouped: HashMap<String, Vec<&str>> = HashMap::new();
     for (key, value) in tags {
-        if value.is_empty() {
-            continue; // Skip empty values
-        }
-        write_single_tag(tag, tag_type, key, value);
+        grouped
+            .entry(key.to_lowercase())
+            .or_default()
+            .push(value.as_str());
     }
 
-    // 6. Save to file
+    // Apply each key's values using tag_set_multi
+    for (key, values) in grouped {
+        tag_set_multi(tag, tag_type, &key, &values, token);
+    }
+
     tagged_file
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
 
     Ok(())
-}
-
-/// Write a single tag value to a tag container.
-///
-/// For multi-value support, this uses push_item() which adds without replacing,
-/// allowing multiple values for the same key (e.g., multiple genres).
-fn write_single_tag(
-    tag: &mut lofty::tag::Tag,
-    tag_type: lofty::tag::TagType,
-    key: &str,
-    value: &str,
-) {
-    use lofty::tag::{Accessor, ItemKey, ItemValue, TagItem};
-
-    // For standard tags, we still use set_* for the first value
-    // but for multi-value we need to use push_item
-    let item_key = match key.to_lowercase().as_str() {
-        "artist" => ItemKey::TrackArtist,
-        "album" => ItemKey::AlbumTitle,
-        "album_artist" => ItemKey::AlbumArtist,
-        "title" => ItemKey::TrackTitle,
-        "track_number" => ItemKey::TrackNumber,
-        "disc_number" => ItemKey::DiscNumber,
-        "year" | "date" => ItemKey::Year,
-        "genre" => ItemKey::Genre,
-        "comment" => ItemKey::Comment,
-        "composer" => ItemKey::Composer,
-        _ => ItemKey::from_key(tag_type, key),
-    };
-
-    // Create tag item and push (allows duplicates for multi-value)
-    let item = TagItem::new(item_key, ItemValue::Text(value.to_string()));
-    tag.push(item);
 }
 

@@ -7,5 +7,8 @@
 mod state;
 mod render;
 
-pub use state::{FilterCondition, FilterPopupState, FilterPopupAction};
+pub use state::{
+    FilterCondition, FilterConditionType, FilterFieldFocus,
+    FilterPopupAction, FilterPopupState, FILTER_SEARCHABLE_TAGS,
+};
 pub use render::render;

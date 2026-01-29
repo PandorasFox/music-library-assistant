@@ -27,6 +27,9 @@ pub enum TreeBrowserAction {
     /// Edit single file (Enter on file)
     EditFile(PathBuf),
 
+    /// Open filter popup (Ctrl+F)
+    OpenFilter,
+
     // === Directory Selector Actions ===
     /// Return selected paths (Enter on selector)
     SelectPaths(Vec<PathBuf>),

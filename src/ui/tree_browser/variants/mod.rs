@@ -43,9 +43,9 @@ impl BrowserVariant {
     }
 
     /// Handle Escape key - return true if handled (don't propagate Cancel).
-    pub fn handle_escape(&mut self, _nav: &mut TreeNavigator) -> bool {
+    pub fn handle_escape(&mut self, nav: &mut TreeNavigator) -> bool {
         match self {
-            BrowserVariant::CorpusBrowser(v) => v.handle_escape(),
+            BrowserVariant::CorpusBrowser(v) => v.handle_escape(nav),
             BrowserVariant::DirectorySelector(_) => false,
         }
     }

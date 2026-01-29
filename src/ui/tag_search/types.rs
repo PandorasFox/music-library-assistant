@@ -48,6 +48,17 @@ impl ConditionType {
             ConditionType::Duration => ConditionType::Tag,
         }
     }
+
+    /// Cycle to the previous condition type.
+    pub fn prev(&self) -> Self {
+        match self {
+            ConditionType::Tag => ConditionType::Duration,
+            ConditionType::FileType => ConditionType::Tag,
+            ConditionType::SampleRate => ConditionType::FileType,
+            ConditionType::Bitrate => ConditionType::SampleRate,
+            ConditionType::Duration => ConditionType::Bitrate,
+        }
+    }
 }
 
 // ============================================================================
@@ -91,6 +102,23 @@ impl FileTypeCategory {
                     FileTypeCategory::Any
                 } else {
                     FileTypeCategory::Specific(next_format)
+                }
+            }
+        }
+    }
+
+    /// Cycle to the previous category.
+    pub fn prev(&self) -> Self {
+        match self {
+            FileTypeCategory::Any => FileTypeCategory::Specific(FileFormat::Aac),
+            FileTypeCategory::Lossless => FileTypeCategory::Any,
+            FileTypeCategory::Lossy => FileTypeCategory::Lossless,
+            FileTypeCategory::Specific(f) => {
+                let prev_format = f.prev();
+                if prev_format == FileFormat::Aac {
+                    FileTypeCategory::Lossy
+                } else {
+                    FileTypeCategory::Specific(prev_format)
                 }
             }
         }
@@ -149,6 +177,18 @@ impl FileFormat {
         }
     }
 
+    /// Cycle to the previous format.
+    pub fn prev(&self) -> Self {
+        match self {
+            FileFormat::Flac => FileFormat::Aac,
+            FileFormat::Mp3 => FileFormat::Flac,
+            FileFormat::Opus => FileFormat::Mp3,
+            FileFormat::Ogg => FileFormat::Opus,
+            FileFormat::Wav => FileFormat::Ogg,
+            FileFormat::Aac => FileFormat::Wav,
+        }
+    }
+
     /// Check if a file type matches this format.
     pub fn matches(&self, file_type: &str) -> bool {
         match self {
@@ -190,6 +230,15 @@ impl LogicalOperator {
             LogicalOperator::Xor => LogicalOperator::And,
         }
     }
+
+    /// Cycle to the previous operator.
+    pub fn prev(&self) -> Self {
+        match self {
+            LogicalOperator::And => LogicalOperator::Xor,
+            LogicalOperator::Or => LogicalOperator::And,
+            LogicalOperator::Xor => LogicalOperator::Or,
+        }
+    }
 }
 
 /// Comparison operators for tag value matching.
@@ -224,6 +273,16 @@ impl ComparisonOperator {
             ComparisonOperator::Not => ComparisonOperator::Contains,
             ComparisonOperator::Contains => ComparisonOperator::Like,
             ComparisonOperator::Like => ComparisonOperator::Is,
+        }
+    }
+
+    /// Cycle to the previous operator.
+    pub fn prev(&self) -> Self {
+        match self {
+            ComparisonOperator::Is => ComparisonOperator::Like,
+            ComparisonOperator::Not => ComparisonOperator::Is,
+            ComparisonOperator::Contains => ComparisonOperator::Not,
+            ComparisonOperator::Like => ComparisonOperator::Contains,
         }
     }
 }

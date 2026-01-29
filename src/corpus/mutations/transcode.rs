@@ -33,6 +33,7 @@ fn execute_transcode(
     target_format: TranscodeTarget,
     stash_name: &str,
     stash_root: Option<&Path>,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     // Validate stash is configured
     let stash_root = stash_root.ok_or_else(|| {
@@ -126,7 +127,7 @@ fn execute_transcode(
     };
 
     // Update track record in database
-    db.update_track_metadata(track_id, &updated_track)
+    db.update_track_metadata(track_id, &updated_track, witness)
         .with_context(|| format!("Failed to update track {} metadata after transcode", track_id))?;
 
     // Update scan_state: delete old entry for old inode, upsert new entry for new file
@@ -162,7 +163,7 @@ pub fn execute_single(
     db: &Database,
     mutation: &Mutation,
     stash_root: Option<&Path>,
-    _witness: &MutationExecutionWitness,
+    witness: &MutationExecutionWitness,
 ) -> MutationResult {
     let start = std::time::Instant::now();
 
@@ -172,7 +173,7 @@ pub fn execute_single(
             source_path,
             target_format,
             stash_name,
-        } => execute_transcode(db, *track_id, source_path, *target_format, stash_name, stash_root),
+        } => execute_transcode(db, *track_id, source_path, *target_format, stash_name, stash_root, witness),
 
         _ => Err(anyhow::anyhow!("Not a transcode mutation")),
     };

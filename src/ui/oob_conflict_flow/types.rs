@@ -211,14 +211,19 @@ impl OobConflictState {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OobConflictAction {
-        // Ctrl+Tab / Ctrl+Shift+Tab: cycle focus pane
-        if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                self.focus_pane = self.focus_pane.prev();
-            } else {
-                self.focus_pane = self.focus_pane.next();
+        // Shift+Up / Shift+Down: cycle focus pane
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Up => {
+                    self.focus_pane = self.focus_pane.prev();
+                    return OobConflictAction::None;
+                }
+                KeyCode::Down => {
+                    self.focus_pane = self.focus_pane.next();
+                    return OobConflictAction::None;
+                }
+                _ => {}
             }
-            return OobConflictAction::None;
         }
 
         // Ctrl+A: toggle all selection in active bucket (respects filter)
@@ -243,7 +248,7 @@ impl OobConflictState {
                 OobConflictAction::None
             }
 
-            // Bucket tab navigation (regular Tab, not Ctrl+Tab)
+            // Bucket tab navigation
             KeyCode::Tab => {
                 self.active_bucket = self.active_bucket.next();
                 OobConflictAction::Navigate

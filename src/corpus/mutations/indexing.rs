@@ -25,6 +25,7 @@ pub fn execute_index_track(
     path: &Path,
     source: &str,
     metadata: &ExtractedMetadata,
+    witness: &MutationExecutionWitness,
 ) -> Result<i64> {
     let resolver = paths::get_resolver();
 
@@ -54,7 +55,7 @@ pub fn execute_index_track(
 
     // Insert track with tags into database
     let track_id = db
-        .insert_track_with_tags(&track, &metadata.tags)
+        .insert_track_with_tags(&track, &metadata.tags, witness)
         .with_context(|| format!("Failed to insert track into database: {}", path.display()))?;
 
     Ok(track_id)
@@ -64,7 +65,7 @@ pub fn execute_index_track(
 ///
 /// Extracts metadata from the file and indexes it. This does the heavy lifting
 /// on the worker thread rather than the UI thread.
-pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str) -> Result<()> {
+pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<()> {
     use crate::corpus::metadata;
 
     // Extract audio properties
@@ -86,7 +87,7 @@ pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str) ->
         tags,
     };
 
-    execute_index_track(db, path, source, &extracted)?;
+    execute_index_track(db, path, source, &extracted, witness)?;
     Ok(())
 }
 
@@ -152,7 +153,7 @@ pub fn execute_cleanup_stale(
 ///
 /// Note: This function needs the source to determine which root to use for
 /// relative path conversion. It fetches the track's source from the database.
-pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path) -> Result<()> {
+pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path, witness: &MutationExecutionWitness) -> Result<()> {
     let resolver = paths::get_resolver();
 
     // Convert absolute path to relative for storage
@@ -165,7 +166,7 @@ pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path) 
             )
         })?;
 
-    db.update_track_path(track_id, relative_path.to_string_lossy().as_ref())
+    db.update_track_path(track_id, relative_path.to_string_lossy().as_ref(), witness)
         .context("Failed to update track path")
 }
 
@@ -198,9 +199,10 @@ pub fn execute_drop_from_index(
     track_id: i64,
     inode: Option<i64>,
     source: Option<&str>,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     // Delete the track
-    db.delete_track(track_id)
+    db.delete_track(track_id, witness)
         .with_context(|| format!("Failed to delete track {} from index", track_id))?;
 
     // Also delete scan_state entry if inode/source provided
@@ -218,6 +220,7 @@ pub fn execute_update_track(
     track_id: i64,
     path: &Path,
     metadata: &ExtractedMetadata,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     let resolver = paths::get_resolver();
 
@@ -250,7 +253,7 @@ pub fn execute_update_track(
         fingerprint: metadata.fingerprint.clone(),
     };
 
-    db.update_track_metadata_with_tags(track_id, &track, &metadata.tags)
+    db.update_track_metadata_with_tags(track_id, &track, &metadata.tags, witness)
         .context("Failed to update track metadata")
 }
 
@@ -548,7 +551,7 @@ pub fn execute_assimilate_disk_tags_to_db(
             .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
         // Update DB with disk tags
-        db.set_track_tags(*track_id, &disk_tags)
+        db.set_track_tags(*track_id, &disk_tags, witness)
             .with_context(|| format!("Failed to update track tags for track {}", track_id))?;
 
         // Read disk mtime
@@ -600,7 +603,7 @@ pub fn execute_assimilate_disk_tags_to_db(
 pub fn execute_single(
     db: &Database,
     mutation: &Mutation,
-    _witness: &MutationExecutionWitness,
+    witness: &MutationExecutionWitness,
 ) -> MutationResult {
     let start = std::time::Instant::now();
 
@@ -609,10 +612,10 @@ pub fn execute_single(
             path,
             source,
             metadata,
-        } => execute_index_track(db, path, source, metadata).map(|_| ()),
+        } => execute_index_track(db, path, source, metadata, witness).map(|_| ()),
 
         Mutation::IndexFileFromPath { path, source } => {
-            execute_index_file_from_path(db, path, source)
+            execute_index_file_from_path(db, path, source, witness)
         }
 
         Mutation::UpdateScanState {
@@ -634,7 +637,7 @@ pub fn execute_single(
             track_id,
             new_path,
             ..
-        } => execute_update_track_path(db, *track_id, new_path),
+        } => execute_update_track_path(db, *track_id, new_path, witness),
 
         Mutation::UpdateScanStatePath {
             source,
@@ -647,25 +650,25 @@ pub fn execute_single(
             inode,
             source,
             ..
-        } => execute_drop_from_index(db, *track_id, *inode, source.as_deref()),
+        } => execute_drop_from_index(db, *track_id, *inode, source.as_deref(), witness),
 
         Mutation::UpdateTrack {
             track_id,
             path,
             metadata,
-        } => execute_update_track(db, *track_id, path, metadata),
+        } => execute_update_track(db, *track_id, path, metadata, witness),
 
         // OOB resolution mutations
         Mutation::AcknowledgeMtimeOnly { track_ids } => {
-            execute_acknowledge_mtime_only(db, track_ids, _witness).map(|_| ())
+            execute_acknowledge_mtime_only(db, track_ids, witness).map(|_| ())
         }
 
         Mutation::ApplyDbTagsToDisk { track_ids } => {
-            execute_apply_db_tags_to_disk(db, track_ids, _witness).map(|_| ())
+            execute_apply_db_tags_to_disk(db, track_ids, witness).map(|_| ())
         }
 
         Mutation::AssimilateDiskTagsToDb { track_ids } => {
-            execute_assimilate_disk_tags_to_db(db, track_ids, _witness).map(|_| ())
+            execute_assimilate_disk_tags_to_db(db, track_ids, witness).map(|_| ())
         }
 
         // Note: VerifyTags is now a Computation, not a Mutation.

@@ -3,7 +3,7 @@
 //! Uses full-area layout with:
 //! - Info bar showing bucket tabs and full path of selected file
 //! - 33% list pane / 67% details pane
-//! - Decision buttons bar (focusable via Ctrl+Tab)
+//! - Decision buttons bar (focusable via Shift+Up/Down)
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};

@@ -148,14 +148,19 @@ impl OobSyncState {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OobSyncAction {
-        // Ctrl+Tab / Ctrl+Shift+Tab: cycle focus pane
-        if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                self.focus_pane = self.focus_pane.prev();
-            } else {
-                self.focus_pane = self.focus_pane.next();
+        // Shift+Up / Shift+Down: cycle focus pane
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Up => {
+                    self.focus_pane = self.focus_pane.prev();
+                    return OobSyncAction::None;
+                }
+                KeyCode::Down => {
+                    self.focus_pane = self.focus_pane.next();
+                    return OobSyncAction::None;
+                }
+                _ => {}
             }
-            return OobSyncAction::None;
         }
 
         // Ctrl+A: toggle all selection (respects active filter)

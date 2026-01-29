@@ -4,7 +4,7 @@
 //! - Info bar at top (full-width, shows untruncated path)
 //! - Left pane (~33%) for file list
 //! - Right pane (~67%) for details (informational, not focusable)
-//! - Bottom bar for decision buttons (focusable via Ctrl+Tab)
+//! - Bottom bar for decision buttons (focusable via Shift+Up/Down)
 //!
 //! ```text
 //! +------------------------------------------+
@@ -32,7 +32,7 @@ pub enum FocusPane {
 }
 
 impl FocusPane {
-    /// Cycle to next focus pane (Ctrl+Tab)
+    /// Cycle to next focus pane (Shift+Down)
     pub fn next(self) -> Self {
         match self {
             Self::List => Self::Buttons,
@@ -40,7 +40,7 @@ impl FocusPane {
         }
     }
 
-    /// Cycle to previous focus pane (Ctrl+Shift+Tab)
+    /// Cycle to previous focus pane (Shift+Up)
     pub fn prev(self) -> Self {
         // With only 2 panes, prev == next
         self.next()

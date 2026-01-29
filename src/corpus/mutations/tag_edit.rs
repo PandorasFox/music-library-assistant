@@ -22,6 +22,7 @@ fn execute_db_only(
     tag_name: &str,
     old_value: Option<&str>,
     new_value: Option<&str>,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     // Log the edit to history
     db.log_tag_edit(track_id, tag_name, old_value, new_value, "mutation")
@@ -29,7 +30,7 @@ fn execute_db_only(
 
     // Update the track record
     if let Some(value) = new_value {
-        db.update_track_tag(track_id, tag_name, value)
+        db.update_track_tag(track_id, tag_name, value, witness)
             .context("Failed to update track tag in database")?;
     }
 
@@ -136,6 +137,7 @@ fn execute_combined(
     path: &Path,
     edits: &[TagEdit],
     session_id: &str,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     // 1. Filter out no-op edits
     let edits = filter_nop_edits(edits);
@@ -163,10 +165,10 @@ fn execute_combined(
     let is_multi_value = detect_multi_value_edits(&edits);
 
     if is_multi_value {
-        execute_combined_multi_value(db, track_id, path, &edits, session_id, &token)
+        execute_combined_multi_value(db, track_id, path, &edits, session_id, &token, witness)
     } else {
         // Pass current_tags to avoid re-reading from disk
-        execute_combined_single_value(db, track_id, path, &edits, session_id, &token, current_tags)
+        execute_combined_single_value(db, track_id, path, &edits, session_id, &token, current_tags, witness)
     }
 }
 
@@ -194,6 +196,7 @@ fn execute_combined_single_value(
     session_id: &str,
     token: &MutationToken,
     existing_tags: Vec<(String, String)>,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     // Use pre-read tags (already validated in execute_combined)
     let mut tag_map: std::collections::HashMap<String, String> = existing_tags.into_iter().collect();
@@ -227,7 +230,7 @@ fn execute_combined_single_value(
 
         // Update tracks table
         if let Some(ref new_value) = edit.new_value {
-            db.update_track_tag(track_id, &edit.tag_name, new_value)
+            db.update_track_tag(track_id, &edit.tag_name, new_value, witness)
                 .context("Failed to update track tag in database")?;
         }
     }
@@ -250,6 +253,7 @@ fn execute_combined_multi_value(
     edits: &[TagEdit],
     session_id: &str,
     token: &MutationToken,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use std::collections::HashSet;
 
@@ -276,7 +280,7 @@ fn execute_combined_multi_value(
         .collect();
 
     for tag_name in &replaced_tags {
-        db.delete_track_tag(track_id, tag_name)
+        db.delete_track_tag(track_id, tag_name, witness)
             .context("Failed to delete old tag value from database")?;
     }
 
@@ -295,7 +299,7 @@ fn execute_combined_multi_value(
     final_db_tags.extend(new_tags.clone());
 
     // Write all tags to DB
-    db.set_track_tags(track_id, &final_db_tags)
+    db.set_track_tags(track_id, &final_db_tags, witness)
         .context("Failed to update track tags in database")?;
 
     // 5. Log all edits to history
@@ -383,7 +387,7 @@ pub fn execute_single(
     db: &Database,
     mutation: &Mutation,
     session_id: &str,
-    _witness: &MutationExecutionWitness,
+    witness: &MutationExecutionWitness,
 ) -> MutationResult {
     let start = std::time::Instant::now();
 
@@ -393,7 +397,7 @@ pub fn execute_single(
             tag_name,
             old_value,
             new_value,
-        } => execute_db_only(db, *track_id, tag_name, old_value.as_deref(), new_value.as_deref()),
+        } => execute_db_only(db, *track_id, tag_name, old_value.as_deref(), new_value.as_deref(), witness),
 
         Mutation::TagFlushToDisk { path, tags } => execute_disk_only(path, tags),
 
@@ -401,7 +405,7 @@ pub fn execute_single(
             track_id,
             path,
             edits,
-        } => execute_combined(db, *track_id, path, edits, session_id),
+        } => execute_combined(db, *track_id, path, edits, session_id, witness),
 
         _ => Err(anyhow::anyhow!("Not a tag edit mutation")),
     };

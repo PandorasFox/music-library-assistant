@@ -10,7 +10,7 @@ use rusqlite::params;
 
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
-    clear_file_signal_if_present, ensure_file_signal_if_missing,
+    drop_stale_file_signal, ensure_file_signal_if_missing,
     ensure_file_signal_with_metadata_if_missing, get_configured_library_names,
     parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
@@ -927,7 +927,7 @@ pub fn execute_derive_deploy_health_signals(
         );
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            clear_file_signal_if_present(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
+            drop_stale_file_signal(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
 
             // Check if stale and capture metadata for the signal
             let stale_metadata = if let Ok(Some(track)) = read_only_db.get_track_by_path(corpus_path) {
@@ -981,12 +981,12 @@ pub fn execute_derive_deploy_health_signals(
                 );
             } else {
                 healthy_count += 1;
-                clear_file_signal_if_present(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
+                drop_stale_file_signal(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
             }
         } else {
             leftover_count += 1;
             ensure_file_signal_if_missing(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
-            clear_file_signal_if_present(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
+            drop_stale_file_signal(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
         }
     }
 
@@ -1089,14 +1089,14 @@ pub fn execute_derive_corpus_deploy_status(
         if !config.is_path_configured_for_deploy(corpus_path_buf) {
             skipped_not_configured += 1;
             // Clear any stale deploy signals for unconfigured files
-            clear_file_signal_if_present(
+            drop_stale_file_signal(
                 read_only_db,
                 &sender,
                 LibraryFileSignalType::DeployReady.into(),
                 corpus_path,
                 witness,
             );
-            clear_file_signal_if_present(
+            drop_stale_file_signal(
                 read_only_db,
                 &sender,
                 LibraryFileSignalType::DeployedHealthy.into(),
@@ -1127,7 +1127,7 @@ pub fn execute_derive_corpus_deploy_status(
                 corpus_path,
                 witness,
             );
-            clear_file_signal_if_present(
+            drop_stale_file_signal(
                 read_only_db,
                 &sender,
                 LibraryFileSignalType::DeployReady.into(),
@@ -1165,7 +1165,7 @@ pub fn execute_derive_corpus_deploy_status(
                 &metadata.to_string(),
                 witness,
             );
-            clear_file_signal_if_present(
+            drop_stale_file_signal(
                 read_only_db,
                 &sender,
                 LibraryFileSignalType::DeployedHealthy.into(),

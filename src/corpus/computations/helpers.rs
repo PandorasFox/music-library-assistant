@@ -144,11 +144,14 @@ pub(super) fn ensure_file_signal_with_metadata_if_missing(
     }
 }
 
-/// Clear a file signal, but only queue the delete if it currently exists.
+/// Drop a stale file signal that this computation determined should not exist.
+///
+/// Use when a computation definitively determines "signal X should NOT exist for this key".
+/// This is the semantic inverse of `ensure_file_signal_if_missing`: where that creates if
+/// absent, this drops if present. Call this in else-branches or when NOT ensuring a signal.
 ///
 /// Uses the read-only DB to check existence before queueing to the write thread.
-/// This dramatically reduces redundant writes during re-computation.
-pub(crate) fn clear_file_signal_if_present(
+pub(crate) fn drop_stale_file_signal(
     read_only_db: &crate::corpus::db::Database,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,

@@ -24,8 +24,8 @@ mod sealed {
     pub struct ComputationWitness(());
 
     impl ComputationWitness {
-        /// Create a new witness. Only callable from within this crate's computation execution.
-        pub(crate) fn new() -> Self {
+        /// Create a new witness. Only callable from within the computations module.
+        pub(in crate::corpus::computations) fn new() -> Self {
             Self(())
         }
 

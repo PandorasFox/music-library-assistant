@@ -1,4 +1,9 @@
 //! Track table operations.
+//!
+//! All write operations to `tracks` and `track_tags` tables require a
+//! `MutationExecutionWitness` to prove execution is within the Witch's
+//! mutation worker context. This enforces the operator-driven invariant:
+//! corpus mutations are only executed as a result of explicit operator decisions.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, OptionalExtension};
@@ -7,6 +12,7 @@ use std::path::PathBuf;
 
 use super::Database;
 use crate::corpus::db::types::{Track, TrackTag};
+use crate::witch::MutationExecutionWitness;
 
 // ============================================================================
 // Fingerprint BLOB Conversion Helpers
@@ -37,7 +43,7 @@ impl Database {
     // Track Operations
     // ========================================================================
 
-    pub fn insert_track(&self, track: &Track) -> Result<i64> {
+    pub fn insert_track(&self, track: &Track, _witness: &MutationExecutionWitness) -> Result<i64> {
         // Convert fingerprint to BLOB if present
         let fp_blob: Option<Vec<u8>> = track.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
 
@@ -72,14 +78,14 @@ impl Database {
     /// Returns the track ID.
     ///
     /// Retries up to 3 times on transient SQLite errors (BUSY, LOCKED).
-    pub fn insert_track_with_tags(&self, track: &Track, tags: &[(String, String)]) -> Result<i64> {
+    pub fn insert_track_with_tags(&self, track: &Track, tags: &[(String, String)], witness: &MutationExecutionWitness) -> Result<i64> {
         const MAX_RETRIES: u32 = 3;
         const BASE_DELAY_MS: u64 = 50;
 
         let mut last_error = None;
 
         for attempt in 0..=MAX_RETRIES {
-            match self.insert_track_with_tags_inner(track, tags) {
+            match self.insert_track_with_tags_inner(track, tags, witness) {
                 Ok(track_id) => return Ok(track_id),
                 Err(e) => {
                     // Check if this is a retryable SQLite error and extract the specific code
@@ -135,16 +141,16 @@ impl Database {
     }
 
     /// Inner implementation without retry logic.
-    fn insert_track_with_tags_inner(&self, track: &Track, tags: &[(String, String)]) -> Result<i64> {
-        let track_id = self.insert_track(track)?;
-        self.set_track_tags(track_id, tags)?;
+    fn insert_track_with_tags_inner(&self, track: &Track, tags: &[(String, String)], witness: &MutationExecutionWitness) -> Result<i64> {
+        let track_id = self.insert_track(track, witness)?;
+        self.set_track_tags(track_id, tags, witness)?;
         Ok(track_id)
     }
 
     /// Clear all tracks for a source, cascading to dependent tables.
     /// Explicitly cascades to tag_edit_history (plain FK, no CASCADE action).
     /// track_tags and tag_mismatches use ON DELETE CASCADE; known_variants uses ON DELETE SET NULL.
-    pub fn clear_source(&self, source: &str) -> Result<()> {
+    pub fn clear_source(&self, source: &str, _witness: &MutationExecutionWitness) -> Result<()> {
         // Delete tag_edit_history for all tracks in this source (plain FK without CASCADE action)
         self.conn.execute(
             "DELETE FROM tag_edit_history WHERE track_id IN (SELECT id FROM tracks WHERE source = ?1)",
@@ -164,7 +170,7 @@ impl Database {
     /// Explicitly cascades to tag_edit_history (plain FK, no CASCADE action).
     /// track_tags and tag_mismatches use ON DELETE CASCADE; known_variants uses ON DELETE SET NULL.
     /// Returns true if a track was deleted.
-    pub fn delete_track_by_path(&self, path: &str) -> Result<bool> {
+    pub fn delete_track_by_path(&self, path: &str, _witness: &MutationExecutionWitness) -> Result<bool> {
         // First, find the track ID
         let track_id: Option<i64> = self
             .conn
@@ -205,10 +211,10 @@ impl Database {
     }
 
     /// Delete multiple tracks by path, returning count deleted.
-    pub fn delete_tracks_by_paths(&self, paths: &[&str]) -> Result<usize> {
+    pub fn delete_tracks_by_paths(&self, paths: &[&str], witness: &MutationExecutionWitness) -> Result<usize> {
         let mut count = 0;
         for path in paths {
-            if self.delete_track_by_path(path)? {
+            if self.delete_track_by_path(path, witness)? {
                 count += 1;
             }
         }
@@ -693,7 +699,7 @@ impl Database {
     }
 
     /// Set all tags for a track (replaces existing tags).
-    pub fn set_track_tags(&self, track_id: i64, tags: &[(String, String)]) -> Result<()> {
+    pub fn set_track_tags(&self, track_id: i64, tags: &[(String, String)], _witness: &MutationExecutionWitness) -> Result<()> {
         // Delete existing tags
         self.conn.execute(
             "DELETE FROM track_tags WHERE track_id = ?1",
@@ -713,7 +719,7 @@ impl Database {
     }
 
     /// Update a single tag for a track (upsert semantics).
-    pub fn update_track_tag(&self, track_id: i64, tag_name: &str, value: &str) -> Result<()> {
+    pub fn update_track_tag(&self, track_id: i64, tag_name: &str, value: &str, _witness: &MutationExecutionWitness) -> Result<()> {
         // Delete existing value for this tag name
         self.conn.execute(
             "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2",
@@ -731,7 +737,7 @@ impl Database {
     }
 
     /// Delete a tag from a track.
-    pub fn delete_track_tag(&self, track_id: i64, tag_name: &str) -> Result<()> {
+    pub fn delete_track_tag(&self, track_id: i64, tag_name: &str, _witness: &MutationExecutionWitness) -> Result<()> {
         self.conn.execute(
             "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2",
             params![track_id, tag_name],
@@ -791,7 +797,7 @@ impl Database {
 
     /// Update track path (for relocated files).
     /// Used by MovedFile signal handler.
-    pub fn update_track_path(&self, track_id: i64, new_path: &str) -> Result<()> {
+    pub fn update_track_path(&self, track_id: i64, new_path: &str, _witness: &MutationExecutionWitness) -> Result<()> {
         self.conn
             .execute(
                 "UPDATE tracks SET path = ?1 WHERE id = ?2",
@@ -805,7 +811,7 @@ impl Database {
     /// Explicitly cascades to tag_edit_history (plain FK, no CASCADE action).
     /// track_tags and tag_mismatches use ON DELETE CASCADE; known_variants uses ON DELETE SET NULL.
     /// Used by MissingFile signal handler.
-    pub fn delete_track(&self, track_id: i64) -> Result<bool> {
+    pub fn delete_track(&self, track_id: i64, _witness: &MutationExecutionWitness) -> Result<bool> {
         // Delete from tag_edit_history first (plain FK without CASCADE action)
         self.conn
             .execute(
@@ -828,7 +834,7 @@ impl Database {
     /// Preserves the track ID but replaces all other fields.
     /// Used by CorpusFileModifiedOutOfBand signal handler.
     /// Note: This only updates the tracks table, not track_tags.
-    pub fn update_track_metadata(&self, track_id: i64, track: &Track) -> Result<()> {
+    pub fn update_track_metadata(&self, track_id: i64, track: &Track, _witness: &MutationExecutionWitness) -> Result<()> {
         // Convert fingerprint to BLOB if present
         let fp_blob: Option<Vec<u8>> = track.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
 
@@ -863,9 +869,10 @@ impl Database {
         track_id: i64,
         track: &Track,
         tags: &[(String, String)],
+        witness: &MutationExecutionWitness,
     ) -> Result<()> {
-        self.update_track_metadata(track_id, track)?;
-        self.set_track_tags(track_id, tags)?;
+        self.update_track_metadata(track_id, track, witness)?;
+        self.set_track_tags(track_id, tags, witness)?;
         Ok(())
     }
 

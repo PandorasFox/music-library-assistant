@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
-    clear_file_signal_if_present, ensure_file_signal_if_missing,
+    drop_stale_file_signal, ensure_file_signal_if_missing,
     ensure_file_signal_with_metadata_if_missing, enumerate_all_directories,
     get_configured_library_names, is_audio_file,
 };
@@ -162,7 +162,7 @@ pub fn execute_derive_directory_signals(
     // Process files in corpus
     for corpus_path in &corpus_paths {
         if indexed_paths.contains_key(corpus_path) {
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), corpus_path, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), corpus_path, witness);
         } else {
             ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), corpus_path, witness);
         }
@@ -171,7 +171,7 @@ pub fn execute_derive_directory_signals(
     // Process indexed tracks
     for (path, _track) in &indexed_paths {
         if corpus_paths.contains(path) {
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
 
             // Check if file has any OOB signal - if so, don't mark as HealthyFile
             let has_oob_signal =
@@ -181,13 +181,13 @@ pub fn execute_derive_directory_signals(
 
             if has_oob_signal {
                 // File has OOB signal - NOT healthy
-                clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
+                drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
             } else {
                 ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
             }
             // NOTE: Deploy conflicts are handled in bulk by DetectDeployConflicts in Awake phase
         } else {
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), path, witness);
             ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
         }
     }
@@ -237,8 +237,8 @@ pub fn execute_update_corpus_file_signals(
         ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
 
         if is_indexed {
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
 
             // Check if file has any OOB signal - if so, don't mark as HealthyFile
             let has_oob_signal =
@@ -248,25 +248,25 @@ pub fn execute_update_corpus_file_signals(
 
             if has_oob_signal {
                 // File has OOB signal - NOT healthy
-                clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+                drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
             } else {
                 ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
             }
         } else {
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
             ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
         }
     } else {
-        clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
-        clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
+        drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
+        drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
 
         if is_indexed {
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
             ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
         } else {
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
-            clear_file_signal_if_present(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
         }
     }
 
@@ -520,7 +520,7 @@ pub fn execute_update_deploy_signals(
     clear_library_signals_for_path(read_only_db, &sender, &library_path_str, witness);
 
     // Clear DeployReady for corpus file
-    clear_file_signal_if_present(
+    drop_stale_file_signal(
         read_only_db,
         &sender,
         LibraryFileSignalType::DeployReady.into(),

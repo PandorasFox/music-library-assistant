@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
-    ensure_file_signal_if_missing, clear_file_signal_if_present,
+    ensure_file_signal_if_missing, drop_stale_file_signal,
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::CorpusFileSignalType;
@@ -369,14 +369,14 @@ pub fn execute_verify_tags(
                     witness,
                 );
                 // Clear mutually exclusive signals
-                clear_file_signal_if_present(
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagConflict.into(),
                     &rel_str,
                     witness,
                 );
-                clear_file_signal_if_present(
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagSync.into(),
@@ -397,14 +397,14 @@ pub fn execute_verify_tags(
                     witness,
                 );
                 // Clear mutually exclusive signals
-                clear_file_signal_if_present(
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagSync.into(),
                     &rel_str,
                     witness,
                 );
-                clear_file_signal_if_present(
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::MtimeOnlyMismatch.into(),
@@ -425,14 +425,14 @@ pub fn execute_verify_tags(
                     witness,
                 );
                 // Clear mutually exclusive signals
-                clear_file_signal_if_present(
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagConflict.into(),
                     &rel_str,
                     witness,
                 );
-                clear_file_signal_if_present(
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::MtimeOnlyMismatch.into(),
@@ -461,21 +461,21 @@ pub fn execute_verify_tags(
                 witness,
             );
             // Clear OOB signals on parse error - we can't classify what we can't read
-            clear_file_signal_if_present(
+            drop_stale_file_signal(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::OutOfBandTagConflict.into(),
                 &rel_str,
                 witness,
             );
-            clear_file_signal_if_present(
+            drop_stale_file_signal(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::OutOfBandTagSync.into(),
                 &rel_str,
                 witness,
             );
-            clear_file_signal_if_present(
+            drop_stale_file_signal(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::MtimeOnlyMismatch.into(),

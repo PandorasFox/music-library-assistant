@@ -3,6 +3,7 @@
 //! Handles format suffixes (EP, LP) as equivalent while preserving
 //! meaningful edition suffixes (Deluxe, Complete, etc.).
 
+use crate::strings::{ceil_char_boundary, floor_char_boundary};
 use std::borrow::Cow;
 
 /// Album format type (stripped for equivalence matching)
@@ -98,15 +99,28 @@ pub fn normalize_album(album: &str) -> NormalizedAlbum {
 
         // Look for pattern in parentheses: "(Deluxe Edition)"
         if let Some(paren_start) = lower.find(&format!("({}", pattern_lower)) {
-            // Find the closing paren
-            if let Some(rel_end) = lower[paren_start..].find(')') {
-                let paren_end = paren_start + rel_end + 1;
-                // Extract the edition text (without parens)
-                let edition_text = trimmed[paren_start + 1..paren_end - 1].trim().to_string();
+            // Find the closing paren - use safe slicing for the substring search
+            let search_start = ceil_char_boundary(&lower, paren_start);
+            if let Some(rel_end) = lower[search_start..].find(')') {
+                let paren_end = search_start + rel_end + 1;
+                // Extract the edition text (without parens) - use safe boundaries
+                let content_start = ceil_char_boundary(trimmed, paren_start + 1);
+                let content_end = floor_char_boundary(trimmed, paren_end.saturating_sub(1));
+                let edition_text = if content_start < content_end {
+                    trimmed[content_start..content_end].trim().to_string()
+                } else {
+                    String::new()
+                };
                 edition = Some(edition_text);
-                // Remove the parenthesized edition from working string
-                let before = working[..paren_start].trim_end();
-                let after = working.get(paren_end..).map(|s| s.trim_start()).unwrap_or("");
+                // Remove the parenthesized edition from working string - use safe boundaries
+                let before_end = floor_char_boundary(&working, paren_start);
+                let after_start = ceil_char_boundary(&working, paren_end);
+                let before = working[..before_end].trim_end();
+                let after = if after_start < working.len() {
+                    working[after_start..].trim_start()
+                } else {
+                    ""
+                };
                 let new_working = if !before.is_empty() && !after.is_empty() {
                     format!("{} {}", before, after)
                 } else if !before.is_empty() {
@@ -121,13 +135,36 @@ pub fn normalize_album(album: &str) -> NormalizedAlbum {
 
         // Look for pattern as suffix: "Album Deluxe Edition"
         if lower.ends_with(&pattern_lower) {
-            let suffix_start = working.len() - pattern.len();
-            // Make sure it's a word boundary (space or start)
-            if suffix_start == 0 || working.as_bytes().get(suffix_start - 1) == Some(&b' ') {
-                let edition_text = trimmed[suffix_start..].trim().to_string();
-                edition = Some(edition_text);
-                working = Cow::Owned(working[..suffix_start].trim().to_string());
-                break;
+            // Calculate suffix start position using char count to handle UTF-8 properly
+            let lower_char_count = lower.chars().count();
+            let pattern_char_count = pattern_lower.chars().count();
+            if lower_char_count >= pattern_char_count {
+                // Find byte position by iterating chars
+                let suffix_char_start = lower_char_count - pattern_char_count;
+                let suffix_start = working
+                    .char_indices()
+                    .nth(suffix_char_start)
+                    .map(|(i, _)| i)
+                    .unwrap_or(working.len());
+
+                // Make sure it's a word boundary (space or start)
+                let is_word_boundary = suffix_start == 0
+                    || working[..suffix_start]
+                        .chars()
+                        .next_back()
+                        .map(|c| c == ' ')
+                        .unwrap_or(false);
+
+                if is_word_boundary {
+                    let edition_text = trimmed
+                        .char_indices()
+                        .nth(suffix_char_start)
+                        .map(|(i, _)| trimmed[i..].trim().to_string())
+                        .unwrap_or_default();
+                    edition = Some(edition_text);
+                    working = Cow::Owned(working[..suffix_start].trim().to_string());
+                    break;
+                }
             }
         }
     }
@@ -148,8 +185,18 @@ pub fn normalize_album(album: &str) -> NormalizedAlbum {
             let suffix_lower = suffix.to_lowercase();
             if lower.ends_with(&suffix_lower) {
                 format_type = *fmt;
-                let new_len = working.len() - suffix.len();
-                working = Cow::Owned(working[..new_len].trim().to_string());
+                // Calculate suffix start using char count for UTF-8 safety
+                let lower_char_count = lower.chars().count();
+                let suffix_char_count = suffix_lower.chars().count();
+                if lower_char_count >= suffix_char_count {
+                    let suffix_char_start = lower_char_count - suffix_char_count;
+                    let new_len = working
+                        .char_indices()
+                        .nth(suffix_char_start)
+                        .map(|(i, _)| i)
+                        .unwrap_or(working.len());
+                    working = Cow::Owned(working[..new_len].trim().to_string());
+                }
                 break;
             }
         }
@@ -416,6 +463,42 @@ mod tests {
         // Whitespace handling
         let norm = normalize_album("  My Album  EP  ");
         assert_eq!(norm.base_name, "My Album");
+        assert_eq!(norm.format_type, AlbumFormat::EP);
+    }
+
+    #[test]
+    fn test_utf8_multibyte_chars() {
+        // Accented characters (2 bytes each in UTF-8)
+        let norm = normalize_album("Café EP");
+        assert_eq!(norm.base_name, "Café");
+        assert_eq!(norm.format_type, AlbumFormat::EP);
+
+        // Japanese characters (3 bytes each)
+        let norm = normalize_album("日本語 LP");
+        assert_eq!(norm.base_name, "日本語");
+        assert_eq!(norm.format_type, AlbumFormat::LP);
+
+        // Mixed ASCII and multi-byte with edition
+        let norm = normalize_album("São Miguel (Deluxe Edition)");
+        assert_eq!(norm.base_name, "São Miguel");
+        assert_eq!(norm.edition, Some("Deluxe Edition".to_string()));
+
+        // Emoji (4 bytes)
+        let norm = normalize_album("🎵 Music 🎵 EP");
+        assert_eq!(norm.base_name, "🎵 Music 🎵");
+        assert_eq!(norm.format_type, AlbumFormat::EP);
+
+        // The crash case: corrupted-looking UTF-8 (but valid)
+        // This should not panic regardless of content
+        let corrupted = "4ÃÂÃÂÃÂÃÂ°`ÃÂ£o Migue";
+        let norm = normalize_album(corrupted);
+        // Just verify it doesn't panic - the result doesn't matter
+        let _ = norm.base_name;
+
+        // Edge case: pattern boundary falls inside multi-byte char
+        // "Ñ" is 2 bytes: 0xC3 0x91
+        let norm = normalize_album("Año Nuevo EP");
+        assert_eq!(norm.base_name, "Año Nuevo");
         assert_eq!(norm.format_type, AlbumFormat::EP);
     }
 }

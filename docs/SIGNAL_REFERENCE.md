@@ -20,7 +20,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | UnindexedFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | On disk but not in index |
 | MissingFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In index but not on disk |
 | HealthyFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In corpus, indexed, mtime matches, no OOB signals |
-| CorruptFile | VerifyTags, IndexFileFromPath, Transcode | MoveToStash, DropFromIndex | Tag read or waveform decode failed |
+| CorruptFile | VerifyTags, VerifyAudio, IndexFileFromPath, Transcode | VerifyAudio (if valid), MoveToStash, DropFromIndex | Tag read or audio decode failed |
 | ShitFormat | IndexFileFromPath, Transcode | Transcode (to Opus/FLAC) | Non-Vorbis container (MP3, M4A, WAV, etc.) |
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags, TagEditAndFlush | VerifyTags, resolution mutations | Two-way tag conflict |

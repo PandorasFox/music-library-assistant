@@ -17,6 +17,7 @@
 //! - `ScanCorpusDirectory` - Scan single directory, emit FileInCorpus signals
 //! - `VerifyMtime` - Check file modification time
 //! - `VerifyTags` - Compare disk tags to indexed tags
+//! - `VerifyAudio` - Deep audio integrity check (decodes entire file)
 
 mod executors;
 
@@ -82,6 +83,15 @@ pub enum Computation {
         track_id: i64,
         path: PathBuf,
     },
+
+    /// Verify audio stream integrity by decoding the entire file.
+    ///
+    /// Catches truncated files, corrupt streams, and other audio-level issues
+    /// that tag verification wouldn't detect. Emits CorruptFile if decode fails.
+    VerifyAudio {
+        track_id: i64,
+        path: PathBuf,
+    },
 }
 
 impl Computation {
@@ -93,6 +103,7 @@ impl Computation {
             Computation::ScanCorpusDirectory { .. } => "Scanning directory",
             Computation::VerifyMtime { .. } => "Verifying mtime",
             Computation::VerifyTags { .. } => "Tag verification",
+            Computation::VerifyAudio { .. } => "Audio verification",
         }
     }
 
@@ -104,6 +115,7 @@ impl Computation {
             Computation::ScanCorpusDirectory { directory, .. } => Some(directory),
             Computation::VerifyMtime { path, .. } => Some(path),
             Computation::VerifyTags { path, .. } => Some(path),
+            Computation::VerifyAudio { path, .. } => Some(path),
         }
     }
 }

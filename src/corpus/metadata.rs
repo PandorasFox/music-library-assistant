@@ -373,6 +373,127 @@ fn convert_audio_buffer_to_i16(decoded: AudioBufferRef) -> Result<Vec<i16>> {
 }
 
 // =============================================================================
+// Audio Integrity Verification
+// =============================================================================
+
+/// Verify audio file integrity by decoding the entire stream.
+///
+/// Returns Ok(()) if the file decodes completely without error.
+/// Returns Err if the file is truncated, corrupt, or otherwise undecodable.
+///
+/// This catches issues like "unexpected end of stream" that ffprobe reports
+/// for corrupt files.
+pub fn verify_audio_integrity(path: &Path) -> Result<()> {
+    use symphonia::core::errors::Error as SymphoniaError;
+
+    // Open audio file with symphonia
+    let file = File::open(path)
+        .with_context(|| format!("Failed to open file: {}", path.display()))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension() {
+        if let Some(ext_str) = ext.to_str() {
+            hint.with_extension(ext_str);
+        }
+    }
+
+    let format_opts = FormatOptions::default();
+    let metadata_opts = MetadataOptions::default();
+
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &format_opts, &metadata_opts)
+        .with_context(|| format!("Failed to probe audio format: {}", path.display()))?;
+
+    let mut format = probed.format;
+    let track = format
+        .default_track()
+        .context("No default audio track found")?;
+    let track_id = track.id;
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &Default::default())
+        .context("Failed to create decoder")?;
+
+    // Decode ALL packets to the end - any error means corruption
+    loop {
+        match format.next_packet() {
+            Ok(packet) => {
+                // Only decode packets for our track
+                if packet.track_id() != track_id {
+                    continue;
+                }
+
+                // Attempt to decode the packet
+                match decoder.decode(&packet) {
+                    Ok(_) => {
+                        // Successfully decoded, continue
+                    }
+                    Err(SymphoniaError::DecodeError(msg)) => {
+                        return Err(anyhow::anyhow!(
+                            "Audio decode error at packet: {}",
+                            msg
+                        ));
+                    }
+                    Err(SymphoniaError::IoError(e)) => {
+                        return Err(anyhow::anyhow!(
+                            "IO error during decode: {}",
+                            e
+                        ));
+                    }
+                    Err(e) => {
+                        // Other errors (ResetRequired, etc.) - try to continue
+                        // ResetRequired can happen at format boundaries
+                        decoder.reset();
+                        crate::logging::log_general(format!(
+                            "[VERIFY] Decoder reset at packet (non-fatal): {:?}",
+                            e
+                        ));
+                    }
+                }
+            }
+            Err(SymphoniaError::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                // Unexpected EOF - file is truncated
+                return Err(anyhow::anyhow!(
+                    "Unexpected end of stream - file appears truncated"
+                ));
+            }
+            Err(SymphoniaError::IoError(_)) => {
+                // Other IO error reading packet - likely corruption
+                return Err(anyhow::anyhow!(
+                    "IO error reading audio stream - file may be corrupt"
+                ));
+            }
+            Err(SymphoniaError::DecodeError(msg)) => {
+                // Decode error at packet level
+                return Err(anyhow::anyhow!(
+                    "Stream decode error: {}",
+                    msg
+                ));
+            }
+            Err(symphonia::core::errors::Error::ResetRequired) => {
+                // End of stream (normal termination)
+                break;
+            }
+            Err(e) => {
+                // Check if this is a normal end-of-stream
+                // Some formats signal EOF differently
+                let err_str = format!("{:?}", e);
+                if err_str.contains("end of stream") || err_str.contains("EndOfStream") {
+                    break;
+                }
+                return Err(anyhow::anyhow!(
+                    "Error reading audio stream: {:?}",
+                    e
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// =============================================================================
 // Tag Operations - MOVED TO corpus/tags.rs
 // =============================================================================
 // All tag reading, writing, and comparison now goes through corpus::tags module.

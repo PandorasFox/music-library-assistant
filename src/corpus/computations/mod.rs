@@ -205,6 +205,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     asleep::Computation::VerifyTags { track_id, path } => {
                         asleep::execute_verify_tags(read_only_db, *track_id, path, &witness, start)
                     }
+                    asleep::Computation::VerifyAudio { track_id, path } => {
+                        asleep::execute_verify_audio(read_only_db, *track_id, path, &witness, start)
+                    }
                 };
                 ComputationResult::from_asleep(result)
             }

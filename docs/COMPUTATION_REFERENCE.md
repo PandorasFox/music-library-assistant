@@ -67,9 +67,10 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 |-------------|--------|-----------------|-----------------|
 | ClearExistingObservationState | — | — | FileInCorpus (all) |
 | WalkCorpus | ScanCorpusDirectory × N (propagates `force_check`) | — | — |
-| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags (all indexed, if `force_check=true`) | FileInCorpus | — |
+| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus | — |
 | VerifyMtime | VerifyTags (if mtime differs) | — | — |
 | VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) |
+| VerifyAudio | — | CorruptFile | CorruptFile (if audio valid) |
 
 ### Awakening Phase Computations
 

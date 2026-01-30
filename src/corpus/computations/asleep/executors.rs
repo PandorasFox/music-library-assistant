@@ -208,7 +208,15 @@ pub fn execute_scan_corpus_directory(
                 };
                 let Some(track_id) = track.id else { continue };
 
+                // Verify tags (metadata)
                 spawn.push(Computation::VerifyTags {
+                    track_id,
+                    path: path.clone(),
+                });
+
+                // Also verify audio integrity (decode entire file)
+                // This catches truncated/corrupt files that tag verification misses
+                spawn.push(Computation::VerifyAudio {
                     track_id,
                     path: path.clone(),
                 });
@@ -534,6 +542,93 @@ pub fn execute_verify_tags(
                 witness,
             );
             // Return success so computation continues processing other files
+            Result::success(
+                computation,
+                start.elapsed().as_millis() as u64,
+                Vec::new(),
+            )
+        }
+    }
+}
+
+// ============================================================================
+// Verify Audio (Deep Integrity Check)
+// ============================================================================
+
+/// Verify audio file integrity by decoding the entire stream.
+///
+/// Catches truncated files, corrupt audio data, and other issues that
+/// tag verification wouldn't detect. Emits CorruptFile if decode fails.
+pub fn execute_verify_audio(
+    read_only_db: &Database,
+    track_id: i64,
+    path: &Path,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = Computation::VerifyAudio {
+        track_id,
+        path: path.to_path_buf(),
+    };
+
+    // Get signal sender for async writes
+    let sender = match crate::db_thread::signal_sender().cloned() {
+        Some(s) => s,
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Get relative path for signal keys
+    let resolver = crate::corpus::paths::get_resolver();
+    let rel_path = match resolver.to_relative(path) {
+        Some(rel) => rel,
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Path {} does not match any configured root", path.display()),
+            );
+        }
+    };
+    let rel_str = rel_path.to_string_lossy().to_string();
+
+    // Verify audio integrity by decoding the entire file
+    match crate::corpus::metadata::verify_audio_integrity(path) {
+        Ok(()) => {
+            // Audio is valid - clear any stale CorruptFile signal
+            drop_stale_file_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::CorruptFile.into(),
+                &rel_str,
+                witness,
+            );
+            Result::success(
+                computation,
+                start.elapsed().as_millis() as u64,
+                Vec::new(),
+            )
+        }
+        Err(e) => {
+            // Audio verification failed - file is corrupt
+            log_general(format!(
+                "[COMPUTE] VerifyAudio: corruption detected for track {} ({}): {}",
+                track_id, path.display(), e
+            ));
+            ensure_file_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::CorruptFile.into(),
+                &rel_str,
+                witness,
+            );
+            // Return success so computation continues processing other files
+            // (the signal emission handles the error state)
             Result::success(
                 computation,
                 start.elapsed().as_millis() as u64,

@@ -129,9 +129,10 @@ impl Default for ReReleaseOpinions {
 /// Opinions for startup behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupOpinions {
-    /// Run last-stage content analysis once at startup, even without mutations (default: false).
-    /// Useful after fixing broken computations to force re-derivation of signals.
+    /// Run last-stage content analysis once at startup (default: true).
+    /// Ensures all detection signals (ShitFormat, duplicates, etc.) are fresh.
     /// This is a one-shot latch: triggers once at startup, then auto-clears.
+    /// Set to false to skip content analysis on startup (faster, but signals may be stale).
     pub freshen_last_stage_at_startup: bool,
     /// Force verification of all indexed files at startup, bypassing mtime optimization (default: false).
     /// Catches out-of-band tag changes (external tools modified tags) and corrupt files.
@@ -142,7 +143,7 @@ pub struct StartupOpinions {
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
-            freshen_last_stage_at_startup: false,
+            freshen_last_stage_at_startup: true,
             force_check_all_files_at_startup: false,
         }
     }

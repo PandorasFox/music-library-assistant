@@ -280,6 +280,16 @@ enum SignalWriteOp {
         tags: Vec<(String, String)>,
     },
 
+    /// Update track path and file metadata (for transcode/format conversion).
+    /// Looks up track by old_path, updates to new_path with new file metadata.
+    UpdateTrackPathWithMetadata {
+        old_path: String,
+        new_path: String,
+        new_inode: i64,
+        new_file_size: i64,
+        new_file_type: String,
+    },
+
     // =========================================================================
     // Scan State Operations (for mutations)
     // =========================================================================
@@ -836,6 +846,27 @@ impl SignalWriteSender {
         });
     }
 
+    /// Update track path and file metadata atomically.
+    /// Used when a file is transcoded/converted to a new format.
+    pub fn update_track_path_with_metadata(
+        &self,
+        old_path: &str,
+        new_path: &str,
+        new_inode: i64,
+        new_file_size: i64,
+        new_file_type: &str,
+        _witness: &MutationExecutionWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::UpdateTrackPathWithMetadata {
+            old_path: old_path.to_string(),
+            new_path: new_path.to_string(),
+            new_inode,
+            new_file_size,
+            new_file_type: new_file_type.to_string(),
+        });
+    }
+
     /// Upsert scan state entry.
     pub fn upsert_scan_state(
         &self,
@@ -1315,6 +1346,20 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
+        SignalWriteOp::UpdateTrackPathWithMetadata {
+            old_path,
+            new_path,
+            new_inode,
+            new_file_size,
+            new_file_type,
+        } => {
+            with_retry("update_track_path_with_metadata", old_path, || {
+                execute_update_track_path_with_metadata(
+                    db, old_path, new_path, *new_inode, *new_file_size, new_file_type,
+                )
+            });
+        }
+
         SignalWriteOp::UpsertScanState { path, source, scan_state } => {
             with_retry("upsert_scan_state", path, || {
                 execute_upsert_scan_state(db, path, source, scan_state)
@@ -1724,6 +1769,29 @@ fn execute_update_track_metadata(
                 params![track_id, name, value],
             )?;
         }
+    }
+
+    Ok(())
+}
+
+/// Execute UpdateTrackPathWithMetadata: update path and file metadata for transcoded file.
+fn execute_update_track_path_with_metadata(
+    db: &Database,
+    old_path: &str,
+    new_path: &str,
+    new_inode: i64,
+    new_file_size: i64,
+    new_file_type: &str,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    let rows_updated = db.conn().execute(
+        "UPDATE tracks SET path = ?1, inode = ?2, file_size = ?3, file_type = ?4 WHERE path = ?5",
+        params![new_path, new_inode, new_file_size, new_file_type, old_path],
+    )?;
+
+    if rows_updated == 0 {
+        anyhow::bail!("Track not found at old path: {}", old_path);
     }
 
     Ok(())

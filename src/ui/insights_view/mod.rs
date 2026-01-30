@@ -798,12 +798,12 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 1);
 
-        // Navigate to end of corpus bucket (9 items: 0-8)
-        for _ in 0..7 {
+        // Navigate to end of corpus bucket (11 items: 0-10)
+        for _ in 0..9 {
             state.navigate_down();
         }
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 8);
+        assert_eq!(state.current_selection().selected, 10);
 
         // Navigate down should move to Placeholder bucket
         state.navigate_down();
@@ -813,7 +813,7 @@ mod tests {
         // Navigate up should return to Corpus bucket at last item
         state.navigate_up();
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 8);
+        assert_eq!(state.current_selection().selected, 10);
     }
 
     #[test]

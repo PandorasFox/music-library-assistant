@@ -113,35 +113,21 @@ fn execute_transcode(
         ))?;
 
     // Get signal_sender for DB writes
-    use crate::db_thread::{self, TrackData, ScanStateData};
+    use crate::db_thread::{self, ScanStateData};
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     let relative_path_str = relative_new_path.to_string_lossy().to_string();
 
-    // Build updated track data (preserve fingerprint, duration, sample_rate; update inode/size/type)
-    let track_data = TrackData {
-        inode: new_inode,
-        file_size: new_file_size,
-        file_type: new_file_type.clone(),
-        duration_ms: existing_track.duration_ms,
-        bitrate_kbps: existing_track.bitrate_kbps,
-        sample_rate: existing_track.sample_rate,
-        fingerprint: existing_track.fingerprint.clone(),
-    };
-
-    // Get existing tags (we're not changing them, but update_track_metadata replaces all)
-    let existing_tags: Vec<(String, String)> = db.get_track_tags(track_id)?
-        .into_iter()
-        .map(|t| (t.tag_name, t.tag_value))
-        .collect();
-
-    // Update track record in database via signal_sender (fire-and-forget)
-    sender.update_track_metadata(
-        &relative_path_str,
-        track_data,
-        existing_tags,
+    // Update track record: path, inode, file_size, file_type
+    // Use old path for lookup, update to new path
+    sender.update_track_path_with_metadata(
+        &existing_track.path,  // Old path (already relative in DB)
+        &relative_path_str,    // New path
+        new_inode,
+        new_file_size,
+        &new_file_type,
         witness,
     );
 

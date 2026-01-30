@@ -848,11 +848,21 @@ pub enum OobSyncDirection {
 }
 
 /// A single tag mismatch entry between DB and disk.
+///
+/// Contains both display strings (for UI) and individual values (for mutations).
+/// Multi-value tags (e.g., multiple TRACKNUMBER fields) are stored as individual
+/// values in the `*_values` vecs, joined for display in `*_value` fields.
 #[derive(Debug, Clone)]
 pub struct TagMismatchEntry {
     pub field: String,
+    /// Display string (values joined with "; ") - for UI
     pub db_value: Option<String>,
+    /// Display string (values joined with "; ") - for UI
     pub disk_value: Option<String>,
+    /// Individual tag values from DB (for mutations)
+    pub db_values: Vec<String>,
+    /// Individual tag values from disk (for mutations)
+    pub disk_values: Vec<String>,
 }
 
 /// A file with purely sync-direction tag mismatches (all extras in one direction).

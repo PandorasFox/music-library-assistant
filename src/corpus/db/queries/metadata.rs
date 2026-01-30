@@ -234,6 +234,10 @@ impl Database {
                     field: row.get(0)?,
                     db_value: row.get(1)?,
                     disk_value: row.get(2)?,
+                    // Individual values not available from tag_mismatches table
+                    // (display-only context, mutations use live disk/DB reads)
+                    db_values: Vec::new(),
+                    disk_values: Vec::new(),
                 })
             })?.filter_map(|r| r.ok()).collect();
 

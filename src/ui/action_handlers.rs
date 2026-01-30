@@ -1118,16 +1118,19 @@ impl App {
     ///
     /// If selection is active, only selected files are included.
     /// Otherwise, all files matching the direction are included.
+    ///
+    /// Uses the dedicated batch mutations which properly handle multi-value tags:
+    /// - IndexToDisk: ApplyDbTagsToDisk (writes DB tags to disk files)
+    /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
     fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection) {
         use crate::corpus::db::types::OobSyncDirection;
-        use crate::corpus::mutations::{Mutation, TagEdit};
+        use crate::corpus::mutations::Mutation;
 
         let Some(ref state) = self.oob_sync_state else {
             return;
         };
 
         let resolver = paths::get_resolver();
-        let mut mutations = Vec::new();
 
         // Determine which indices to process
         let selected_indices = if state.selection.is_active() {
@@ -1137,59 +1140,36 @@ impl App {
             (0..state.files.len()).collect()
         };
 
-        for idx in selected_indices {
-            let Some(file) = state.files.get(idx) else {
-                continue;
-            };
+        // Collect tracks matching the direction
+        let tracks: Vec<(i64, std::path::PathBuf)> = selected_indices
+            .iter()
+            .filter_map(|&idx| state.files.get(idx))
+            .filter(|file| file.direction == direction)
+            .map(|file| {
+                let abs_path = resolver.resolve(std::path::Path::new(&file.path));
+                (file.track_id, abs_path)
+            })
+            .collect();
 
-            if file.direction != direction {
-                continue;
-            }
-
-            let abs_path = resolver.resolve(std::path::Path::new(&file.path));
-            let edits: Vec<TagEdit> = file.mismatches.iter().filter_map(|m| {
-                match direction {
-                    OobSyncDirection::IndexToDisk => {
-                        // Use disk_value as old_value for proper validation
-                        // Handles: value changes, additions (disk_value=None), deletions (db_value=None)
-                        Some(TagEdit {
-                            tag_name: m.field.clone(),
-                            old_value: m.disk_value.clone(),
-                            new_value: m.db_value.clone(),
-                        })
-                    }
-                    OobSyncDirection::DiskToIndex => {
-                        // Keep current behavior (accepting disk values)
-                        m.disk_value.clone().map(|v| TagEdit {
-                            tag_name: m.field.clone(),
-                            old_value: None,
-                            new_value: Some(v),
-                        })
-                    }
-                }
-            }).collect();
-
-            if !edits.is_empty() {
-                mutations.push(Mutation::TagEditAndFlush {
-                    track_id: file.track_id,
-                    path: abs_path,
-                    edits,
-                });
-            }
-        }
-
-        if mutations.is_empty() {
-            self.status_message = Some("No mutations to stage".to_string());
+        if tracks.is_empty() {
+            self.status_message = Some("No files to sync".to_string());
             return;
         }
 
-        let label = match direction {
-            OobSyncDirection::DiskToIndex => "Sync disk tags → index",
-            OobSyncDirection::IndexToDisk => "Sync index tags → disk",
+        // Use the dedicated batch mutations that properly handle multi-value tags
+        let (label, mutation) = match direction {
+            OobSyncDirection::IndexToDisk => (
+                "Sync index tags → disk",
+                Mutation::ApplyDbTagsToDisk { tracks },
+            ),
+            OobSyncDirection::DiskToIndex => (
+                "Sync disk tags → index",
+                Mutation::AssimilateDiskTagsToDb { tracks },
+            ),
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
+            let _ = super::operator_decisions::stage_decision(witch, 0, label, vec![mutation]);
         }
     }
 
@@ -1252,10 +1232,11 @@ impl App {
     /// If selection is active, only selected files are included.
     /// Otherwise, all files in the bucket are included.
     ///
-    /// For ApplyDb: set each file's tags to the DB values (write to disk)
-    /// For AssimilateDisk: set each file's tags to the disk values (write to DB+disk)
+    /// Uses the dedicated batch mutations which properly handle multi-value tags:
+    /// - ApplyDbTagsToDisk: writes DB tags to disk files
+    /// - AssimilateDiskTagsToDb: reads disk tags into DB index
     fn stage_oob_bucket_resolution(&mut self) {
-        use crate::corpus::mutations::{Mutation, TagEdit};
+        use crate::corpus::mutations::Mutation;
         use crate::ui::oob_conflict_flow::types::ResolutionButton;
 
         let (files_data, button) = match self.oob_conflict_state.as_ref() {
@@ -1285,61 +1266,31 @@ impl App {
             return;
         }
 
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => return,
-        };
-
         let resolver = paths::get_resolver();
-        let mut mutations = Vec::new();
 
-        for (track_id, path) in &files_data {
-            let mismatches = read_db.get_tag_mismatches_for_track(*track_id).unwrap_or_default();
-            let abs_path = resolver.resolve(std::path::Path::new(path));
+        // Convert to (track_id, abs_path) pairs for the batch mutations
+        let tracks: Vec<(i64, std::path::PathBuf)> = files_data
+            .iter()
+            .map(|(track_id, path)| {
+                let abs_path = resolver.resolve(std::path::Path::new(path));
+                (*track_id, abs_path)
+            })
+            .collect();
 
-            let edits: Vec<TagEdit> = mismatches.iter().filter_map(|(field, db_value, disk_value)| {
-                match button {
-                    ResolutionButton::ApplyDb => {
-                        // Use disk_value as old_value for proper validation
-                        // Handles: value changes, additions (disk_value=None), deletions (db_value=None)
-                        Some(TagEdit {
-                            tag_name: field.clone(),
-                            old_value: disk_value.clone(),
-                            new_value: db_value.clone(),
-                        })
-                    }
-                    ResolutionButton::AssimilateDisk => {
-                        // Keep current behavior (accepting disk values)
-                        disk_value.clone().map(|v| TagEdit {
-                            tag_name: field.clone(),
-                            old_value: None,
-                            new_value: Some(v),
-                        })
-                    }
-                }
-            }).collect();
-
-            if !edits.is_empty() {
-                mutations.push(Mutation::TagEditAndFlush {
-                    track_id: *track_id,
-                    path: abs_path,
-                    edits,
-                });
-            }
-        }
-
-        if mutations.is_empty() {
-            self.status_message = Some("No mutations to stage".to_string());
-            return;
-        }
-
-        let label = match button {
-            ResolutionButton::ApplyDb => "Apply DB tags \u{2192} files",
-            ResolutionButton::AssimilateDisk => "Assimilate file tags \u{2192} DB",
+        // Use the dedicated batch mutations that properly handle multi-value tags
+        let (label, mutation) = match button {
+            ResolutionButton::ApplyDb => (
+                "Apply DB tags → files",
+                Mutation::ApplyDbTagsToDisk { tracks },
+            ),
+            ResolutionButton::AssimilateDisk => (
+                "Assimilate file tags → DB",
+                Mutation::AssimilateDiskTagsToDb { tracks },
+            ),
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
+            let _ = super::operator_decisions::stage_decision(witch, 0, label, vec![mutation]);
         }
 
         // Note: oob_conflict_state is NOT cleared - preserved for Cancel return

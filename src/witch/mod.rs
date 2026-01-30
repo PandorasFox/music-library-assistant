@@ -1026,11 +1026,34 @@ impl Witch {
 
 impl Drop for Witch {
     fn drop(&mut self) {
-        // Shut down the DB thread first so its shutdown messages get logged
+        // Shutdown order is critical for SQLite WAL cleanup:
+        // 1. Stop UI cache refreshes and wait for in-flight tasks
+        // 2. Close thread-local read-only connections on rayon workers
+        // 3. Close the Witch's cached read-only connection
+        // 4. DB thread checkpoints WAL and closes write connection
+        // 5. With all connections closed, SQLite cleans up -wal and -shm files
+
+        // Step 1: Stop UI cache refreshes and wait for in-flight tasks to complete
+        // These tasks open ephemeral connections that must close before WAL checkpoint
+        ui_read_cache::shutdown_ui_cache();
+
+        // Step 2: Close thread-local read-only connections on all rayon worker threads
+        // These are cached per-thread and must be explicitly closed
+        rayon::broadcast(|_| {
+            crate::corpus::computations::close_thread_local_connection();
+        });
+        crate::logging::log_general("[WITCH] Closed all rayon thread-local DB connections");
+
+        // Step 3: Close the Witch's cached read-only connection
+        if self.read_only_conn.take().is_some() {
+            crate::logging::log_general("[WITCH] Closed read-only database connection");
+        }
+
+        // Step 4: Shut down the DB thread (it will checkpoint and close write connection)
         crate::db_thread::request_shutdown();
         self.db_thread_handle.join();
 
-        // Then shut down the logging thread
+        // Step 5: Shut down the logging thread last so all shutdown messages get logged
         crate::logging::request_shutdown();
         if let Some(ref mut handle) = self.log_thread_handle {
             handle.join();

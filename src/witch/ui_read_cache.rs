@@ -32,6 +32,57 @@ use crate::corpus::db::Database;
 use crate::ui::deploy_flow::DeployModalData;
 
 // ============================================================================
+// Shutdown Coordination
+// ============================================================================
+
+/// Global shutdown flag for UI cache refreshes.
+///
+/// When set to true, no new refresh tasks will be spawned. This is set by
+/// `shutdown_ui_cache()` before closing DB connections.
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Count of in-flight refresh tasks.
+///
+/// Incremented when a refresh task starts, decremented when it completes.
+/// Used during shutdown to wait for all refreshes to finish.
+static IN_FLIGHT_REFRESHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Request shutdown of UI cache refreshes and wait for in-flight tasks.
+///
+/// Called by `Witch::drop()` before closing DB connections. This:
+/// 1. Sets the shutdown flag to prevent new refreshes
+/// 2. Waits for any in-flight refresh tasks to complete
+///
+/// After this returns, no UI cache refresh tasks will have open DB connections.
+pub fn shutdown_ui_cache() {
+    // Signal no new refreshes should start
+    SHUTDOWN_REQUESTED.store(true, Ordering::Release);
+
+    // Wait for in-flight refreshes to complete (with timeout)
+    let start = Instant::now();
+    let timeout = Duration::from_secs(5);
+
+    while IN_FLIGHT_REFRESHES.load(Ordering::Acquire) > 0 {
+        if start.elapsed() > timeout {
+            crate::logging::log_error(format!(
+                "[UI_CACHE] Shutdown timeout: {} refreshes still in-flight after {:?}",
+                IN_FLIGHT_REFRESHES.load(Ordering::Acquire),
+                timeout
+            ));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    crate::logging::log_general("[UI_CACHE] Shutdown complete, all refresh tasks finished");
+}
+
+/// Check if shutdown has been requested for UI cache refreshes.
+fn is_shutdown_requested() -> bool {
+    SHUTDOWN_REQUESTED.load(Ordering::Acquire)
+}
+
+// ============================================================================
 // CacheEntry<T> - Generic cache slot
 // ============================================================================
 
@@ -312,55 +363,70 @@ impl UiReadCache {
     /// The Witch calls this in tick() to spawn refresh tasks for flagged entries.
     ///
     /// Spawns rayon tasks for any entries that need refreshing.
+    /// Respects shutdown flag - no new tasks are spawned after shutdown is requested.
     pub(crate) fn spawn_refreshes(&self) {
+        // Don't spawn new refreshes if shutdown is in progress
+        if is_shutdown_requested() {
+            return;
+        }
+
         // Corpus summary refresh
         if let Some(writer) = self.corpus_summary.take_refresh() {
+            IN_FLIGHT_REFRESHES.fetch_add(1, Ordering::Release);
             rayon::spawn(move || {
                 // Open fresh read-only connection on worker thread
                 if let Ok(db_path) = config::get_db_path() {
                     if let Ok(db) = Database::open_read_only(&db_path) {
                         if let Ok(summary) = db.get_corpus_summary() {
                             writer.complete(summary);
+                            IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
                             return;
                         }
                     }
                 }
                 // On error, abort (allows retry on next want)
                 writer.abort();
+                IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
             });
         }
 
         // Insights data refresh
         if let Some(writer) = self.insights_data.take_refresh() {
+            IN_FLIGHT_REFRESHES.fetch_add(1, Ordering::Release);
             rayon::spawn(move || {
                 // Open fresh read-only connection on worker thread
                 if let Ok(db_path) = config::get_db_path() {
                     if let Ok(db) = Database::open_read_only(&db_path) {
                         if let Ok(data) = db.get_insights_data() {
                             writer.complete(data);
+                            IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
                             return;
                         }
                     }
                 }
                 // On error, abort (allows retry on next want)
                 writer.abort();
+                IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
             });
         }
 
         // Deploy modal data refresh
         if let Some(writer) = self.deploy_modal_data.take_refresh() {
+            IN_FLIGHT_REFRESHES.fetch_add(1, Ordering::Release);
             rayon::spawn(move || {
                 // Open fresh read-only connection on worker thread
                 if let Ok(db_path) = config::get_db_path() {
                     if let Ok(db) = Database::open_read_only(&db_path) {
                         if let Ok(data) = DeployModalData::load(&db) {
                             writer.complete(data);
+                            IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
                             return;
                         }
                     }
                 }
                 // On error, abort (allows retry on next want)
                 writer.abort();
+                IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
             });
         }
     }

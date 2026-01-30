@@ -629,6 +629,18 @@ fn run_db_thread(
         }
     }
 
+    // Checkpoint WAL before closing to ensure -wal and -shm files are cleaned up.
+    // TRUNCATE mode checkpoints fully and truncates WAL to zero length.
+    // This must happen after all read connections have closed.
+    match db.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+        Ok(()) => {
+            crate::logging::log_general("[DB_THREAD] WAL checkpoint completed");
+        }
+        Err(e) => {
+            crate::logging::log_error(format!("[DB_THREAD] WAL checkpoint failed: {}", e));
+        }
+    }
+
     // Explicitly close the database connection
     drop(db);
     crate::logging::log_general("[DB_THREAD] Database connection closed");

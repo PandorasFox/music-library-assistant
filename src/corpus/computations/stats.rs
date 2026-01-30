@@ -115,6 +115,18 @@ pub fn get_thread_stats() -> ThreadStats {
     THREAD_STATS.with(|cell| cell.borrow().clone())
 }
 
+/// Close the thread-local database connection on the current thread.
+///
+/// Called via `rayon::broadcast()` during shutdown to ensure all worker
+/// thread connections are closed before the db_thread attempts WAL checkpoint.
+pub fn close_thread_local_connection() {
+    THREAD_READ_ONLY_DB.with(|cell| {
+        if cell.borrow_mut().take().is_some() {
+            crate::logging::log_general("[STATS] Closed thread-local read-only connection");
+        }
+    });
+}
+
 /// Execute a function with the thread-local READ-ONLY database connection.
 /// Opens and caches the connection on first use per thread.
 /// Tracks DB read timing for performance instrumentation (when enabled).

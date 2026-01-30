@@ -45,7 +45,7 @@ pub mod awake;
 
 // Public re-exports
 pub use types::ComputationWitness;
-pub use stats::{get_thread_stats, ThreadStats};
+pub use stats::{close_thread_local_connection, get_thread_stats, ThreadStats};
 
 // Internal imports for execute functions
 use crate::config;

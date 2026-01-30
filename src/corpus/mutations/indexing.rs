@@ -67,13 +67,14 @@ pub fn execute_index_track(
 /// on the worker thread rather than the UI thread.
 pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<()> {
     use crate::corpus::metadata;
+    use crate::corpus::tags::TagSet;
 
     // Extract audio properties
     let track = metadata::extract_metadata(path, source)
         .with_context(|| format!("Failed to extract metadata from {:?}", path))?;
 
-    // Read tags
-    let tags = metadata::read_all_tags(path)
+    // Read tags using TagSet
+    let tag_set = TagSet::from_file(path)
         .with_context(|| format!("Failed to read tags from {:?}", path))?;
 
     let extracted = ExtractedMetadata {
@@ -84,7 +85,7 @@ pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str, wi
         bitrate_kbps: track.bitrate_kbps,
         sample_rate: track.sample_rate,
         fingerprint: track.fingerprint,
-        tags,
+        tags: tag_set.into_vec(),
     };
 
     execute_index_track(db, path, source, &extracted, witness)?;
@@ -307,23 +308,22 @@ pub fn execute_verify_tags(
     path: &Path,
     mismatch_sender: Option<(&crate::db_thread::SignalWriteSender, &crate::corpus::computations::ComputationWitness)>,
 ) -> Result<TagVerifyResult> {
-    use crate::corpus::metadata;
-    use std::collections::HashMap;
+    use crate::corpus::tags::TagSet;
+    use std::collections::HashSet;
 
     // Verify track exists
     let _track = db
         .get_track_by_id(track_id)?
         .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
 
-    // Get tags from database
+    // Get tags from database as TagSet
     let db_tags = db.get_track_tags(track_id)?;
-    let db_map: HashMap<String, String> = db_tags
-        .into_iter()
-        .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-        .collect();
+    let db_tagset = TagSet::new(
+        db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
+    );
 
-    // Read tags from file
-    let disk_tags = match metadata::read_all_tags(path) {
+    // Read tags from file as TagSet
+    let disk_tagset = match TagSet::from_file(path) {
         Ok(tags) => tags,
         Err(e) => {
             // File might not exist or be unreadable - log but don't fail
@@ -336,40 +336,68 @@ pub fn execute_verify_tags(
         }
     };
 
-    // Build map of disk tags for easier lookup (normalized to lowercase keys)
-    let disk_map: HashMap<String, String> = disk_tags
-        .into_iter()
-        .map(|(k, v)| (k.to_lowercase(), v))
-        .collect();
-
-    // Collect all unique tag names from both sources
-    let mut all_tags: std::collections::HashSet<String> = db_map.keys().cloned().collect();
-    all_tags.extend(disk_map.keys().cloned());
+    // Get all unique tag names from both sources
+    let mut all_tag_names: HashSet<String> = HashSet::new();
+    for (k, _) in db_tagset.iter() {
+        all_tag_names.insert(k.to_string());
+    }
+    for (k, _) in disk_tagset.iter() {
+        all_tag_names.insert(k.to_string());
+    }
 
     let mut result = TagVerifyResult::empty();
 
-    for tag_name in all_tags {
-        let db_value = db_map.get(&tag_name).map(|s| s.as_str());
-        let disk_value = disk_map.get(&tag_name).map(|s| s.as_str());
+    // Compare per-tag-name, handling multi-value properly
+    for tag_name in all_tag_names {
+        // Collect all values for this tag from each source
+        let db_values: Vec<&str> = db_tagset.values_for(&tag_name).collect();
+        let disk_values: Vec<&str> = disk_tagset.values_for(&tag_name).collect();
 
-        // Normalize: treat empty string as None
-        let db_normalized = db_value.filter(|s| !s.is_empty());
-        let disk_normalized = disk_value.filter(|s| !s.is_empty());
+        // Convert to sets for proper comparison (order doesn't matter)
+        let db_set: HashSet<&str> = db_values.iter().copied().collect();
+        let disk_set: HashSet<&str> = disk_values.iter().copied().collect();
 
-        if db_normalized != disk_normalized {
+        if db_set != disk_set {
             // Track mismatch direction for in-memory classification
-            match (db_normalized.is_some(), disk_normalized.is_some()) {
+            let db_has_extras = !db_set.difference(&disk_set).collect::<Vec<_>>().is_empty();
+            let disk_has_extras = !disk_set.difference(&db_set).collect::<Vec<_>>().is_empty();
+
+            match (db_has_extras, disk_has_extras) {
                 (true, true) => result.has_conflict = true,
                 (false, true) => result.has_extra_disk = true,
                 (true, false) => result.has_extra_db = true,
-                (false, false) => {} // Both absent = match (shouldn't reach here)
+                (false, false) => {} // Shouldn't happen if sets differ
             }
+
+            // For mismatch recording, aggregate multi-values into semicolon-separated string
+            // This maintains backward compatibility with the UI
+            let db_display = if db_values.is_empty() {
+                None
+            } else {
+                Some(db_values.join("; "))
+            };
+            let disk_display = if disk_values.is_empty() {
+                None
+            } else {
+                Some(disk_values.join("; "))
+            };
 
             // Record mismatch — route through sender if available (read-only context)
             if let Some((sender, witness)) = mismatch_sender {
-                sender.record_tag_mismatch(track_id, &tag_name, db_normalized, disk_normalized, witness);
+                sender.record_tag_mismatch(
+                    track_id,
+                    &tag_name,
+                    db_display.as_deref(),
+                    disk_display.as_deref(),
+                    witness,
+                );
             } else {
-                db.record_tag_mismatch(track_id, &tag_name, db_normalized, disk_normalized)?;
+                db.record_tag_mismatch(
+                    track_id,
+                    &tag_name,
+                    db_display.as_deref(),
+                    disk_display.as_deref(),
+                )?;
             }
         } else {
             // Clear any existing mismatch for this field (now in sync)
@@ -514,7 +542,7 @@ pub fn execute_apply_db_tags_to_disk(
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
-    use crate::corpus::metadata;
+    use crate::corpus::tags::{write_file_tags, TagSet};
     use std::os::unix::fs::MetadataExt;
     use rusqlite::params;
 
@@ -532,15 +560,14 @@ pub fn execute_apply_db_tags_to_disk(
         // Resolve absolute path for filesystem access
         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
 
-        // Get DB tags
+        // Get DB tags and convert to TagSet
         let db_tags = db.get_track_tags(*track_id)?;
-        let tags: Vec<(String, String)> = db_tags
-            .into_iter()
-            .map(|t| (t.tag_name, t.tag_value))
-            .collect();
+        let tag_set = TagSet::new(
+            db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
+        );
 
-        // Write tags to disk
-        metadata::write_tags_to_file(&abs_path, &tags, &token)
+        // Write tags to disk using the consolidated write path
+        write_file_tags(&abs_path, &tag_set, &token)
             .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
 
         // Read new disk mtime after write
@@ -592,7 +619,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
-    use crate::corpus::metadata;
+    use crate::corpus::tags::TagSet;
     use std::os::unix::fs::MetadataExt;
     use rusqlite::params;
 
@@ -609,12 +636,12 @@ pub fn execute_assimilate_disk_tags_to_db(
         // Resolve absolute path for filesystem access
         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
 
-        // Read disk tags
-        let disk_tags = metadata::read_all_tags(&abs_path)
+        // Read disk tags using TagSet
+        let disk_tagset = TagSet::from_file(&abs_path)
             .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
         // Update DB with disk tags
-        db.set_track_tags(*track_id, &disk_tags, witness)
+        db.set_track_tags(*track_id, disk_tagset.as_slice(), witness)
             .with_context(|| format!("Failed to update track tags for track {}", track_id))?;
 
         // Read disk mtime

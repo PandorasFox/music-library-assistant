@@ -135,8 +135,13 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // When a TagEditAndFlush fails, the most likely cause is stale edits: tags on
     // disk no longer match what the editor/DB expected. Emit OutOfBandTagConflict
     // so the operator sees the file's tags have diverged from the index.
+    //
+    // Also spawn a VerifyTags computation to refresh the tag_mismatches table with
+    // the actual current disk state. This ensures the next retry (or the OOB resolution
+    // UI) has accurate data about what's actually on disk.
+    let mut failure_spawns: Vec<Computation> = Vec::new();
     if !success {
-        if let Mutation::TagEditAndFlush { path, .. } = &mutation {
+        if let Mutation::TagEditAndFlush { track_id, path, .. } = &mutation {
             let resolver = crate::corpus::paths::get_resolver();
             if let Some(rel) = resolver.to_relative(path) {
                 if let Some(sender) = db_thread::signal_sender() {
@@ -146,6 +151,18 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                         &witness,
                     );
                 }
+
+                // Spawn VerifyTags to refresh tag_mismatches with actual disk state
+                crate::logging::log_general(format!(
+                    "[EXECUTION] Stale edit for {} - spawning VerifyTags to refresh mismatches",
+                    path.display()
+                ));
+                failure_spawns.push(Computation::Asleep(
+                    crate::corpus::computations::asleep::Computation::VerifyTags {
+                        track_id: *track_id,
+                        path: path.clone(),
+                    }
+                ));
             }
         }
     }
@@ -258,6 +275,9 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             _ => {}
         }
     }
+
+    // Include failure spawns (e.g., VerifyTags for stale tag edits)
+    spawn.extend(failure_spawns);
 
     TaskResult {
         success,

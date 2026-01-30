@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::corpus::db::{Signal, Track};
-use crate::corpus::metadata;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths;
 
@@ -2297,23 +2296,27 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation
 /// Load tag fields from disk for a track.
 ///
 /// All tags are loaded from the audio file and sorted alphabetically.
+/// Multi-value tags (e.g., multiple genres) are loaded as separate entries.
 pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
+    use crate::corpus::tags::TagSet;
+
     let resolver = paths::get_resolver();
     let disk_path = resolver.resolve(Path::new(&track.path));
 
-    let all_tags = match metadata::read_all_tags(&disk_path) {
+    let tag_set = match TagSet::from_file(&disk_path) {
         Ok(tags) => tags,
         Err(e) => {
             crate::logging::log_error(format!(
                 "Could not read tags from {}: {}",
                 disk_path.display(), e
             ));
-            Vec::new()
+            TagSet::empty()
         }
     };
 
-    // Convert to TagField and sort alphabetically
-    let mut tag_fields: Vec<TagField> = all_tags
+    // Convert to TagField - TagSet is already sorted
+    let mut tag_fields: Vec<TagField> = tag_set
+        .into_vec()
         .into_iter()
         .map(|(name, value)| TagField {
             name,
@@ -2323,8 +2326,6 @@ pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
             deleted: false,
         })
         .collect();
-
-    tag_fields.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
     // Add "New Tag" placeholder at the end
     tag_fields.push(TagField {

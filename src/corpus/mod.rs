@@ -17,6 +17,7 @@ pub mod health;
 pub mod metadata;
 pub mod mutations;
 pub mod paths;
+pub mod tags;
 pub mod transcode;
 
 

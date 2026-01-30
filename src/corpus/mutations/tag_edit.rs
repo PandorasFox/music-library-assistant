@@ -4,12 +4,15 @@
 //! - TagEditDb: Database-only tag changes
 //! - TagFlushToDisk: Disk-only tag writes
 //! - TagEditAndFlush: Combined database + disk operations
+//!
+//! All disk tag operations go through `corpus::tags` module.
+//! This file does NOT directly use lofty.
 
 use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::corpus::db::Database;
-use crate::corpus::metadata;
+use crate::corpus::tags::{apply_edits_to_file, write_file_tags, TagSet};
 use crate::witch::MutationExecutionWitness;
 
 use super::sealed::MutationToken;
@@ -38,23 +41,27 @@ fn execute_db_only(
 }
 
 /// Execute a disk-only tag write (no database update).
-fn execute_disk_only(path: &Path, tags: &[(String, String)]) -> Result<()> {
+///
+/// Reads existing tags, merges new ones in, and writes back.
+/// Uses the consolidated tag writing path in corpus::tags.
+fn execute_disk_only(path: &Path, tags: &[(String, String)], token: &MutationToken) -> Result<()> {
     // Read existing tags
-    let existing = metadata::read_all_tags(path)
+    let existing = TagSet::from_file(path)
         .with_context(|| format!("Failed to read existing tags from {}", path.display()))?;
 
-    // Merge: new tags override existing
-    let mut final_tags: std::collections::HashMap<String, String> = existing.into_iter().collect();
+    // Merge: new tags override existing (keyed by tag name)
+    let mut final_tags: std::collections::HashMap<String, String> =
+        existing.into_vec().into_iter().collect();
 
     for (key, value) in tags {
-        final_tags.insert(key.clone(), value.clone());
+        final_tags.insert(key.to_lowercase(), value.clone());
     }
 
-    // Convert back to vec for writing
-    let merged: Vec<(String, String)> = final_tags.into_iter().collect();
+    // Convert back to TagSet for writing
+    let merged = TagSet::new(final_tags.into_iter().collect::<Vec<_>>());
 
-    // Write to disk only (track_id=0, session_id="" to skip history/db)
-    write_tags_to_disk_only(path, &merged)
+    // Write to disk using the consolidated write path
+    write_file_tags(path, &merged, token)
 }
 
 /// Filter out no-op edits where old_value equals new_value.
@@ -80,22 +87,16 @@ fn filter_nop_edits(edits: &[TagEdit]) -> Vec<TagEdit> {
 /// applying stale edits to files that have changed.
 fn validate_edits_against_current(
     edits: &[TagEdit],
-    current_tags: &[(String, String)],
+    current_tags: &TagSet,
     path: &Path,
 ) -> Result<()> {
     for edit in edits {
         if let Some(ref expected_old) = edit.old_value {
             // Check if a tag with (name, old_value) exists in current tags
-            let found = current_tags.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case(&edit.tag_name) && value == expected_old
-            });
-
-            if !found {
+            if !current_tags.contains(&edit.tag_name, expected_old) {
                 // Collect current values for this tag name for diagnostic logging
                 let current_values: Vec<&str> = current_tags
-                    .iter()
-                    .filter(|(n, _)| n.eq_ignore_ascii_case(&edit.tag_name))
-                    .map(|(_, v)| v.as_str())
+                    .values_for(&edit.tag_name)
                     .collect();
 
                 crate::logging::log_error(format!(
@@ -124,7 +125,7 @@ fn validate_edits_against_current(
 /// This is the proper mutation path: disk write + explicit DB update.
 ///
 /// Supports two modes:
-/// 1. **Standard edits**: Single value per tag, uses HashMap-based merge
+/// 1. **Standard edits**: Single value per tag, surgical edit-in-place
 /// 2. **Multi-value edits**: Multiple values for same tag (e.g., split compound tags)
 ///    Detected when there are multiple edits with same tag_name and new_value != None
 ///
@@ -152,7 +153,7 @@ fn execute_combined(
     }
 
     // 2. Read current tags for validation
-    let current_tags = metadata::read_all_tags(path)
+    let current_tags = TagSet::from_file(path)
         .with_context(|| format!("Failed to read current tags from {}", path.display()))?;
 
     // 3. Validate old_values match current state
@@ -167,8 +168,7 @@ fn execute_combined(
     if is_multi_value {
         execute_combined_multi_value(db, track_id, path, &edits, session_id, &token, witness)
     } else {
-        // Pass current_tags to avoid re-reading from disk
-        execute_combined_single_value(db, track_id, path, &edits, session_id, &token, current_tags, witness)
+        execute_combined_single_value(db, track_id, path, &edits, session_id, &token, witness)
     }
 }
 
@@ -189,8 +189,7 @@ fn detect_multi_value_edits(edits: &[TagEdit]) -> bool {
 
 /// Execute standard single-value tag edits.
 ///
-/// Applies each edit surgically using tag container primitives.
-/// Never rebuilds the entire tag state - only touches the specific tags being edited.
+/// Uses `apply_edits_to_file()` from corpus::tags for surgical edit-in-place.
 fn execute_combined_single_value(
     db: &Database,
     track_id: i64,
@@ -198,44 +197,17 @@ fn execute_combined_single_value(
     edits: &[TagEdit],
     session_id: &str,
     token: &MutationToken,
-    _existing_tags: Vec<(String, String)>, // Validation done in caller
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use lofty::config::WriteOptions;
-    use lofty::file::{AudioFile, TaggedFileExt};
-    use lofty::probe::Probe;
-    use lofty::tag::Tag;
+    // Convert TagEdit to (tag_name, old_value, new_value) triples for apply_edits_to_file
+    let edit_triples: Vec<(String, Option<String>, Option<String>)> = edits
+        .iter()
+        .map(|e| (e.tag_name.clone(), e.old_value.clone(), e.new_value.clone()))
+        .collect();
 
-    let mut tagged_file = Probe::open(path)
-        .with_context(|| format!("Failed to open file: {}", path.display()))?
-        .read()
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
-
-    let tag_type = tagged_file.primary_tag_type();
-
-    let tag = match tagged_file.primary_tag_mut() {
-        Some(t) => t,
-        None => {
-            tagged_file.insert_tag(Tag::new(tag_type));
-            tagged_file.primary_tag_mut().unwrap()
-        }
-    };
-
-    // Apply each edit using primitives
-    for edit in edits {
-        if let Some(ref new_value) = edit.new_value {
-            // Set single value
-            metadata::tag_set_single(tag, tag_type, &edit.tag_name, new_value, token);
-        } else if let Some(ref old_value) = edit.old_value {
-            // Delete specific (key, value) pair
-            metadata::tag_remove_value(tag, tag_type, &edit.tag_name, old_value, token);
-        }
-        // If both old_value and new_value are None, nothing to do
-    }
-
-    tagged_file
-        .save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("Failed to save file: {}", path.display()))?;
+    // Apply edits to file (reads current, applies edits, writes back)
+    apply_edits_to_file(path, &edit_triples, token)
+        .with_context(|| format!("Failed to apply tag edits to {}", path.display()))?;
 
     // Update database
     for edit in edits {
@@ -264,7 +236,7 @@ fn execute_combined_single_value(
 /// - Insert "genre" = "Rock"
 /// - Insert "genre" = "Metal"
 ///
-/// Uses write_tags_to_file_multi_value for proper Vorbis/FLAC support.
+/// Uses `write_file_tags()` from corpus::tags for proper multi-value support.
 fn execute_combined_multi_value(
     db: &Database,
     track_id: i64,
@@ -276,52 +248,64 @@ fn execute_combined_multi_value(
 ) -> Result<()> {
     use std::collections::HashSet;
 
-    // 1. Collect all new values as (tag_name, value) pairs
-    let new_tags: Vec<(String, String)> = edits
-        .iter()
-        .filter_map(|e| {
-            e.new_value
-                .as_ref()
-                .map(|v| (e.tag_name.clone(), v.clone()))
-        })
-        .collect();
+    // 1. Read current tags
+    let current_tags = TagSet::from_file(path)
+        .with_context(|| format!("Failed to read tags from {}", path.display()))?;
 
-    // 2. Write to disk using multi-value function
-    metadata::write_tags_to_file_multi_value(path, &new_tags, token)
-        .context("Failed to write multi-value tags to file")?;
-
-    // 3. Update database
-    // First, delete any old values for tags being replaced
-    let replaced_tags: HashSet<&str> = edits
+    // 2. Determine which tag names are being replaced
+    let replaced_tag_names: HashSet<String> = edits
         .iter()
         .filter(|e| e.old_value.is_some())
-        .map(|e| e.tag_name.as_str())
+        .map(|e| e.tag_name.to_lowercase())
         .collect();
 
-    for tag_name in &replaced_tags {
+    // 3. Start with tags NOT being replaced
+    let mut new_tags: Vec<(String, String)> = current_tags
+        .into_vec()
+        .into_iter()
+        .filter(|(k, _)| !replaced_tag_names.contains(k))
+        .collect();
+
+    // 4. Add all new values from edits
+    for edit in edits {
+        if let Some(ref value) = edit.new_value {
+            new_tags.push((edit.tag_name.to_lowercase(), value.clone()));
+        }
+    }
+
+    // 5. Write to disk using the consolidated write path
+    let final_tagset = TagSet::new(new_tags);
+    write_file_tags(path, &final_tagset, token)
+        .context("Failed to write multi-value tags to file")?;
+
+    // 6. Update database
+    // Delete old values for tags being replaced
+    for tag_name in &replaced_tag_names {
         db.delete_track_tag(track_id, tag_name, witness)
             .context("Failed to delete old tag value from database")?;
     }
 
-    // 4. Insert all new values
-    // We need to use set_track_tags which supports multiple values
-    // But we need to preserve other tags not being edited
-    let existing_tags = db.get_track_tags(track_id)
+    // Get existing DB tags for tags NOT being replaced
+    let existing_db_tags = db.get_track_tags(track_id)
         .with_context(|| format!("Failed to read existing tags for track {}", track_id))?;
-    let mut final_db_tags: Vec<(String, String)> = existing_tags
+    let mut final_db_tags: Vec<(String, String)> = existing_db_tags
         .into_iter()
-        .filter(|t| !replaced_tags.contains(t.tag_name.as_str()))
+        .filter(|t| !replaced_tag_names.contains(&t.tag_name.to_lowercase()))
         .map(|t| (t.tag_name, t.tag_value))
         .collect();
 
     // Add new values
-    final_db_tags.extend(new_tags.clone());
+    for edit in edits {
+        if let Some(ref value) = edit.new_value {
+            final_db_tags.push((edit.tag_name.clone(), value.clone()));
+        }
+    }
 
     // Write all tags to DB
     db.set_track_tags(track_id, &final_db_tags, witness)
         .context("Failed to update track tags in database")?;
 
-    // 5. Log all edits to history
+    // 7. Log all edits to history
     for edit in edits {
         db.log_tag_edit(
             track_id,
@@ -332,45 +316,6 @@ fn execute_combined_multi_value(
         )
         .context("Failed to log tag edit")?;
     }
-
-    Ok(())
-}
-
-/// Write tags to disk only (bypassing database/history).
-///
-/// Used for TagFlushToDisk mutations where we only want to update the file.
-/// This is public so it can be called from the executor for parallel file operations.
-pub fn write_tags_to_disk_only(path: &Path, tags: &[(String, String)]) -> Result<()> {
-    use lofty::config::WriteOptions;
-    use lofty::file::{AudioFile, TaggedFileExt};
-    use lofty::probe::Probe;
-    use lofty::tag::{ItemKey, Tag};
-
-    let mut tagged_file = Probe::open(path)
-        .with_context(|| format!("Failed to open file for tag writing: {}", path.display()))?
-        .read()
-        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
-
-    let tag_type = tagged_file.primary_tag_type();
-
-    let tag = match tagged_file.primary_tag_mut() {
-        Some(t) => t,
-        None => {
-            let new_tag = Tag::new(tag_type);
-            tagged_file.insert_tag(new_tag);
-            tagged_file.primary_tag_mut().unwrap()
-        }
-    };
-
-    // Single-value writes: insert_text does atomic replace (retain + push internally)
-    for (key, value) in tags {
-        let item_key = ItemKey::from_key(tag_type, key);
-        tag.insert_text(item_key, value.to_string());
-    }
-
-    tagged_file
-        .save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
 
     Ok(())
 }
@@ -395,7 +340,10 @@ pub fn execute_single(
             new_value,
         } => execute_db_only(db, *track_id, tag_name, old_value.as_deref(), new_value.as_deref(), witness),
 
-        Mutation::TagFlushToDisk { path, tags } => execute_disk_only(path, tags),
+        Mutation::TagFlushToDisk { path, tags } => {
+            let token = MutationToken::new();
+            execute_disk_only(path, tags, &token)
+        }
 
         Mutation::TagEditAndFlush {
             track_id,
@@ -509,7 +457,7 @@ mod tests {
             new_value: Some("New Artist".to_string()),
         }];
 
-        let current_tags = vec![("artist".to_string(), "Old Artist".to_string())];
+        let current_tags = TagSet::new(vec![("artist".to_string(), "Old Artist".to_string())]);
 
         let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
 
@@ -524,7 +472,7 @@ mod tests {
             new_value: Some("New Artist".to_string()),
         }];
 
-        let current_tags = vec![("artist".to_string(), "Different Artist".to_string())];
+        let current_tags = TagSet::new(vec![("artist".to_string(), "Different Artist".to_string())]);
 
         let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
 
@@ -540,7 +488,7 @@ mod tests {
             new_value: Some("New Artist".to_string()),
         }];
 
-        let current_tags = vec![("artist".to_string(), "Old Artist".to_string())];
+        let current_tags = TagSet::new(vec![("artist".to_string(), "Old Artist".to_string())]);
 
         let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
 
@@ -556,7 +504,7 @@ mod tests {
         }];
 
         // Empty current tags - new tag doesn't need to exist
-        let current_tags: Vec<(String, String)> = vec![];
+        let current_tags = TagSet::empty();
 
         let result = validate_edits_against_current(&edits, &current_tags, Path::new("/test.flac"));
 
@@ -566,10 +514,10 @@ mod tests {
     #[test]
     fn test_validate_edits_multi_value_finds_specific_value() {
         // File has multiple genre tags
-        let current_tags = vec![
+        let current_tags = TagSet::new(vec![
             ("genre".to_string(), "Rock".to_string()),
             ("genre".to_string(), "Metal".to_string()),
-        ];
+        ]);
 
         // Edit specifically targets "Metal"
         let edits = vec![TagEdit {
@@ -586,7 +534,7 @@ mod tests {
     #[test]
     fn test_validate_edits_multi_value_fails_if_specific_value_missing() {
         // File has genre=Rock only
-        let current_tags = vec![("genre".to_string(), "Rock".to_string())];
+        let current_tags = TagSet::new(vec![("genre".to_string(), "Rock".to_string())]);
 
         // Edit targets genre=Metal which doesn't exist
         let edits = vec![TagEdit {

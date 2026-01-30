@@ -345,47 +345,66 @@ impl OobConflictState {
 ///
 /// Reads DB tags from the database and disk tags from the filesystem,
 /// then returns entries for all fields where the values differ.
+/// Properly handles multi-value tags by comparing value sets per key.
 pub fn compute_tag_diff(
     db: &crate::corpus::db::Database,
     track_id: i64,
     abs_path: &std::path::Path,
 ) -> Vec<TagMismatchEntry> {
-    use std::collections::{HashMap, HashSet};
+    use crate::corpus::tags::TagSet;
+    use std::collections::HashSet;
 
-    // Get DB tags
+    // Get DB tags as TagSet
     let db_tags = match db.get_track_tags(track_id) {
         Ok(tags) => tags,
         Err(_) => return Vec::new(),
     };
-    let db_map: HashMap<String, String> = db_tags
-        .into_iter()
-        .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-        .collect();
+    let db_tagset = TagSet::new(
+        db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
+    );
 
-    // Read disk tags
-    let disk_tags = match crate::corpus::metadata::read_all_tags(abs_path) {
+    // Read disk tags as TagSet
+    let disk_tagset = match TagSet::from_file(abs_path) {
         Ok(tags) => tags,
         Err(_) => return Vec::new(),
     };
-    let disk_map: HashMap<String, String> = disk_tags
-        .into_iter()
-        .map(|(k, v)| (k.to_lowercase(), v))
-        .collect();
 
-    // Find all differing fields
-    let mut all_tags: HashSet<String> = db_map.keys().cloned().collect();
-    all_tags.extend(disk_map.keys().cloned());
+    // Get all unique tag names from both sources
+    let mut all_tag_names: HashSet<String> = HashSet::new();
+    for (k, _) in db_tagset.iter() {
+        all_tag_names.insert(k.to_string());
+    }
+    for (k, _) in disk_tagset.iter() {
+        all_tag_names.insert(k.to_string());
+    }
 
     let mut mismatches = Vec::new();
-    for tag_name in all_tags {
-        let db_value = db_map.get(&tag_name).filter(|s| !s.is_empty()).cloned();
-        let disk_value = disk_map.get(&tag_name).filter(|s| !s.is_empty()).cloned();
+    for tag_name in all_tag_names {
+        // Collect all values for this tag from each source
+        let db_values: Vec<&str> = db_tagset.values_for(&tag_name).collect();
+        let disk_values: Vec<&str> = disk_tagset.values_for(&tag_name).collect();
 
-        if db_value != disk_value {
+        // Convert to sets for proper comparison (order doesn't matter)
+        let db_set: HashSet<&str> = db_values.iter().copied().collect();
+        let disk_set: HashSet<&str> = disk_values.iter().copied().collect();
+
+        if db_set != disk_set {
+            // Aggregate multi-values into semicolon-separated string for display
+            let db_display = if db_values.is_empty() {
+                None
+            } else {
+                Some(db_values.join("; "))
+            };
+            let disk_display = if disk_values.is_empty() {
+                None
+            } else {
+                Some(disk_values.join("; "))
+            };
+
             mismatches.push(TagMismatchEntry {
                 field: tag_name,
-                db_value,
-                disk_value,
+                db_value: db_display,
+                disk_value: disk_display,
             });
         }
     }

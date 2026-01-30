@@ -1205,12 +1205,12 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             disk_value,
         } => {
             with_retry("record_tag_mismatch", field, || {
-                db.record_tag_mismatch(*track_id, field, db_value.as_deref(), disk_value.as_deref())
+                db.record_tag_mismatch(*track_id, field, db_value.as_deref(), disk_value.as_deref(), &witness)
             });
         }
         SignalWriteOp::ClearTagMismatch { track_id, field } => {
             with_retry("clear_tag_mismatch", field, || {
-                db.clear_tag_mismatch(*track_id, field)
+                db.clear_tag_mismatch(*track_id, field, &witness)
             });
         }
 

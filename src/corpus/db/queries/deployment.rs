@@ -1,4 +1,4 @@
-//! Deployment logging operations.
+//! Deployment statistics operations.
 
 use anyhow::{Context, Result};
 use rusqlite::params;
@@ -9,28 +9,7 @@ use crate::corpus::db::types::DeploymentStats;
 
 impl Database {
     // ========================================================================
-    // Deployment Operations
-    // ========================================================================
-
-    pub fn log_deployment(
-        &self,
-        library_name: &str,
-        corpus_path: &str,
-        deployed_path: &str,
-        inode: i64,
-    ) -> Result<()> {
-        self.conn
-            .execute(
-                "INSERT INTO deployment_log (library_name, corpus_path, deployed_path, inode)
-             VALUES (?1, ?2, ?3, ?4)",
-                params![library_name, corpus_path, deployed_path, inode],
-            )
-            .context("Failed to log deployment")?;
-        Ok(())
-    }
-
-    // ========================================================================
-    // Corpus Health Operations (Deployment Stats)
+    // Deployment Stats (Read-Only)
     // ========================================================================
 
     pub fn compute_deployment_stats(&self) -> Result<DeploymentStats> {
@@ -82,20 +61,6 @@ impl Database {
             deployment_percentage: percentage,
             last_updated,
         })
-    }
-
-    pub fn update_corpus_health_stats(&self) -> Result<()> {
-        let stats = self.compute_deployment_stats()?;
-        let stats_json =
-            serde_json::to_string(&stats).context("Failed to serialize deployment stats")?;
-
-        self.conn.execute(
-            "INSERT OR REPLACE INTO corpus_health_stats (id, stat_type, data_json, last_updated)
-             VALUES (1, 'deployment', ?1, datetime('now'))",
-            params![stats_json],
-        ).context("Failed to update corpus health stats")?;
-
-        Ok(())
     }
 
     pub fn get_deployment_stats(&self) -> Result<Option<DeploymentStats>> {

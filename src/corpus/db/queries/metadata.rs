@@ -1,68 +1,27 @@
-//! App metadata and tag mismatch operations.
+//! Tag mismatch operations and OOB tag resolution queries.
 
 use anyhow::Result;
 use rusqlite::params;
 
 use super::Database;
+use crate::db_thread::SignalWitness;
 
 impl Database {
-    // ========================================================================
-    // App Metadata
-    // ========================================================================
-
-    /// Get a metadata value by key.
-    pub fn get_metadata(&self, key: &str) -> Result<Option<String>> {
-        let result = self.conn.query_row(
-            "SELECT value FROM app_metadata WHERE key = ?1",
-            params![key],
-            |row| row.get(0),
-        );
-
-        match result {
-            Ok(value) => Ok(Some(value)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Set a metadata value (upsert).
-    pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO app_metadata (key, value, updated_at)
-             VALUES (?1, ?2, CURRENT_TIMESTAMP)
-             ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = CURRENT_TIMESTAMP",
-            params![key, value],
-        )?;
-        Ok(())
-    }
-
-    /// Get health data version from metadata.
-    pub fn get_health_version(&self) -> Result<Option<u32>> {
-        match self.get_metadata("health_version")? {
-            Some(v) => Ok(v.parse().ok()),
-            None => Ok(None),
-        }
-    }
-
-    /// Set health data version.
-    pub fn set_health_version(&self, version: u32) -> Result<()> {
-        self.set_metadata("health_version", &version.to_string())
-    }
-
     // =========================================================================
-    // Tag Mismatch Methods
+    // Tag Mismatch Methods (called from db_thread only)
     // =========================================================================
 
-    /// Record a tag mismatch for a track (DB differs from disk)
-    /// Uses INSERT OR REPLACE to handle updates
+    /// Record a tag mismatch for a track (DB differs from disk).
+    /// Uses INSERT OR REPLACE to handle updates.
+    ///
+    /// Requires witness to prove caller has write authority.
     pub fn record_tag_mismatch(
         &self,
         track_id: i64,
         field: &str,
         db_value: Option<&str>,
         disk_value: Option<&str>,
+        _witness: &impl SignalWitness,
     ) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO tag_mismatches (track_id, field, db_value, disk_value, created_at)
@@ -72,8 +31,15 @@ impl Database {
         Ok(())
     }
 
-    /// Clear a specific tag mismatch for a track
-    pub fn clear_tag_mismatch(&self, track_id: i64, field: &str) -> Result<()> {
+    /// Clear a specific tag mismatch for a track.
+    ///
+    /// Requires witness to prove caller has write authority.
+    pub fn clear_tag_mismatch(
+        &self,
+        track_id: i64,
+        field: &str,
+        _witness: &impl SignalWitness,
+    ) -> Result<()> {
         self.conn.execute(
             "DELETE FROM tag_mismatches WHERE track_id = ?1 AND field = ?2",
             params![track_id, field],
@@ -81,23 +47,9 @@ impl Database {
         Ok(())
     }
 
-    /// Clear all tag mismatches for a track
-    pub fn clear_tag_mismatches_for_track(&self, track_id: i64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM tag_mismatches WHERE track_id = ?1",
-            params![track_id],
-        )?;
-        Ok(())
-    }
-
-    /// Clear tag mismatches by track path
-    pub fn clear_tag_mismatches_by_path(&self, path: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM tag_mismatches WHERE track_id IN (SELECT id FROM tracks WHERE path = ?1)",
-            params![path],
-        )?;
-        Ok(())
-    }
+    // =========================================================================
+    // Tag Mismatch Read Methods
+    // =========================================================================
 
     /// Get count of tracks with tag mismatches
     pub fn get_tag_mismatch_count(&self) -> Result<usize> {

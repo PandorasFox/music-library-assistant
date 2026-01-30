@@ -357,12 +357,7 @@ impl TagVerifyResult {
 /// Execute tag verification - compare in-file tags with database, record mismatches.
 ///
 /// This is a read-mostly operation that only writes to the tag_mismatches table.
-/// It's used by both the Mutation system (direct DB writes) and the Computation
-/// system (routed through db_thread for write access on read-only connections).
-///
-/// When `mismatch_sender` is provided, tag mismatch writes are routed through
-/// the db_thread's write connection. When `None`, writes go directly to `db`
-/// (requires a writable connection, e.g. mutation execution context).
+/// Writes are routed through the db_thread's write connection via the sender.
 ///
 /// Returns a `TagVerifyResult` summarizing the mismatch directions found.
 /// Computations use this for in-memory classification instead of querying
@@ -373,7 +368,8 @@ pub fn execute_verify_tags(
     db: &Database,
     track_id: i64,
     path: &Path,
-    mismatch_sender: Option<(&crate::db_thread::SignalWriteSender, &crate::corpus::computations::ComputationWitness)>,
+    sender: &crate::db_thread::SignalWriteSender,
+    witness: &crate::corpus::computations::ComputationWitness,
 ) -> Result<TagVerifyResult> {
     use crate::corpus::tags::TagSet;
     use std::collections::HashSet;
@@ -449,30 +445,17 @@ pub fn execute_verify_tags(
                 Some(disk_values.join("; "))
             };
 
-            // Record mismatch — route through sender if available (read-only context)
-            if let Some((sender, witness)) = mismatch_sender {
-                sender.record_tag_mismatch(
-                    track_id,
-                    &tag_name,
-                    db_display.as_deref(),
-                    disk_display.as_deref(),
-                    witness,
-                );
-            } else {
-                db.record_tag_mismatch(
-                    track_id,
-                    &tag_name,
-                    db_display.as_deref(),
-                    disk_display.as_deref(),
-                )?;
-            }
+            // Record mismatch via db_thread
+            sender.record_tag_mismatch(
+                track_id,
+                &tag_name,
+                db_display.as_deref(),
+                disk_display.as_deref(),
+                witness,
+            );
         } else {
             // Clear any existing mismatch for this field (now in sync)
-            if let Some((sender, witness)) = mismatch_sender {
-                sender.clear_tag_mismatch(track_id, &tag_name, witness);
-            } else {
-                db.clear_tag_mismatch(track_id, &tag_name)?;
-            }
+            sender.clear_tag_mismatch(track_id, &tag_name, witness);
         }
     }
 

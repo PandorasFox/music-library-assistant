@@ -366,7 +366,6 @@ pub fn execute_verify_tags(
             );
         }
     };
-    let sender_ctx = Some((&sender, witness));
 
     // Get relative path for signal keys
     let resolver = crate::corpus::paths::get_resolver();
@@ -382,7 +381,7 @@ pub fn execute_verify_tags(
     };
     let rel_str = rel_path.to_string_lossy().to_string();
 
-    match indexing::execute_verify_tags(read_only_db, track_id, path, sender_ctx) {
+    match indexing::execute_verify_tags(read_only_db, track_id, path, &sender, witness) {
         Ok(verify_result) => {
             // Full classification based on TagVerifyResult
             if verify_result.is_clean() {

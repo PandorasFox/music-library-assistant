@@ -45,11 +45,11 @@ pub mod awake;
 
 // Public re-exports
 pub use types::ComputationWitness;
-pub use stats::{close_thread_local_connection, get_thread_stats, ThreadStats};
+pub use stats::{close_thread_local_connection, get_thread_stats, with_read_only_db, ThreadStats};
 
 // Internal imports for execute functions
 use crate::config;
-use stats::{ensure_thread_id, record_task_stats, with_read_only_db};
+use stats::{ensure_thread_id, record_task_stats};
 
 // ============================================================================
 // Unified Computation Enum (for daemon's queue)

@@ -85,18 +85,46 @@ pub(crate) fn dir_like_pattern_str(dir: &str) -> String {
 }
 
 /// Central database connection wrapper.
+///
+/// ## Connection Access
+///
+/// The `conn` field is private. Normal code should use:
+/// - Query methods on this struct for reads
+/// - `db_thread::signal_sender()` for writes
+///
+/// Raw connection access via `conn()` is only for:
+/// - `db_thread.rs` - the single write connection
+/// - `migration.rs` - schema migrations (pre-Witch infrastructure)
 pub struct Database {
-    pub(crate) conn: Connection,
+    conn: Connection,
+}
+
+impl Database {
+    /// Raw connection access - **INTERNAL USE ONLY**.
+    ///
+    /// This method exists for:
+    /// - `db_thread.rs` (the authorized write thread)
+    /// - `migration.rs` (infrastructure migrations)
+    ///
+    /// **DO NOT USE** from UI code, mutation executors, or computations.
+    /// Those should use query methods or `signal_sender()`.
+    #[doc(hidden)]
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
 }
 
 impl Database {
     /// Open a read-write database connection.
     ///
-    /// This should only be used in:
-    /// - First-time setup (creating new database)
-    /// - Worker thread execution contexts (mutations, migrations, computations)
+    /// **SEALED: Only callable from authorized locations:**
+    /// - `db_thread::spawn()` - the one true write connection
+    /// - `startup/first_time_setup.rs` - initial database creation
+    /// - `startup/migrations.rs` - pre-Witch schema migrations
     ///
-    /// UI code should use `Witch::read_db()` instead.
+    /// If you're trying to call this elsewhere, you're violating architecture.
+    /// - For writes: Use `db_thread::signal_sender()`
+    /// - For reads: Use `witch.read_db()` (returns `ReadOnlyDb`)
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
 
@@ -367,15 +395,23 @@ impl Database {
 
 /// A read-only view of the database.
 ///
-/// This wrapper only exposes read methods, providing compile-time safety
-/// that UI code cannot accidentally attempt write operations. The underlying
-/// connection also has `PRAGMA query_only = ON` for runtime protection.
+/// This wrapper exposes commonly-used read methods directly, providing
+/// compile-time safety that UI code cannot accidentally attempt write
+/// operations. The underlying connection also has `PRAGMA query_only = ON`
+/// for runtime protection.
 ///
 /// # Usage
 ///
-/// UI code receives `&ReadOnlyDb` from `Witch::read_db()` and can only
-/// call query methods. Mutation/computation code receives `&Database` directly
-/// and has access to all methods.
+/// UI code receives `&ReadOnlyDb` from `Witch::read_db()` and should use
+/// the exposed methods directly:
+///
+/// ```ignore
+/// let read_db = witch.read_db();
+/// let tracks = read_db.get_all_tracks(None)?;
+/// let signals = read_db.get_signals(None)?;
+/// ```
+///
+/// For specialized internal queries not exposed here, use `inner()` (crate-only).
 ///
 /// # Naming Convention
 ///
@@ -396,10 +432,87 @@ impl<'a> ReadOnlyDb<'a> {
 
     /// Get the underlying Database reference.
     ///
-    /// **For internal use only** - used by computation executors that need
-    /// Database reference for consistency with existing patterns while still
-    /// being read-only at the SQLite level.
+    /// **For internal crate use only** - use the pass-through methods on
+    /// `ReadOnlyDb` for common queries. This escape hatch is for specialized
+    /// internal queries that aren't exposed directly.
     pub(crate) fn inner(&self) -> &Database {
         self.db
+    }
+
+    // =========================================================================
+    // Track Queries
+    // =========================================================================
+
+    /// Get all tracks, optionally filtered by source.
+    pub fn get_all_tracks(&self, source: Option<&str>) -> Result<Vec<super::types::Track>> {
+        self.db.get_all_tracks(source)
+    }
+
+    /// Get a track by its ID.
+    pub fn get_track_by_id(&self, track_id: i64) -> Result<Option<super::types::Track>> {
+        self.db.get_track_by_id(track_id)
+    }
+
+    /// Get a track by its path.
+    pub fn get_track_by_path(&self, path: &str) -> Result<Option<super::types::Track>> {
+        self.db.get_track_by_path(path)
+    }
+
+    /// Get tracks in a directory for tag editing.
+    pub fn get_tracks_for_tag_editing(&self, dir_path: &std::path::Path) -> Result<Vec<super::types::Track>> {
+        self.db.get_tracks_for_tag_editing(dir_path)
+    }
+
+    /// Get tracks by file types.
+    pub fn get_tracks_by_file_types(&self, file_types: &[&str]) -> Result<Vec<(i64, String, String)>> {
+        self.db.get_tracks_by_file_types(file_types)
+    }
+
+    /// Get tags for a track.
+    pub fn get_track_tags(&self, track_id: i64) -> Result<Vec<super::types::TrackTag>> {
+        self.db.get_track_tags(track_id)
+    }
+
+    // =========================================================================
+    // Signal Queries
+    // =========================================================================
+
+    /// Get signals, optionally filtered by type.
+    pub fn get_signals(&self, issue_type: Option<super::types::SignalType>) -> Result<Vec<super::types::Signal>> {
+        self.db.get_signals(issue_type)
+    }
+
+    /// Get a signal by its ID.
+    pub fn get_signal_by_id(&self, signal_id: i64) -> Result<Option<super::types::Signal>> {
+        self.db.get_signal_by_id(signal_id)
+    }
+
+    /// Get aggregate signals, optionally filtered by type.
+    pub fn get_aggregate_signals(&self, signal_type: Option<super::types::AggregateSignalType>) -> Result<Vec<super::types::AggregateSignal>> {
+        self.db.get_aggregate_signals(signal_type)
+    }
+
+    // =========================================================================
+    // OOB / Tag Mismatch Queries
+    // =========================================================================
+
+    /// Get files with OOB tag sync issues.
+    pub fn get_oob_sync_files(&self) -> Result<Vec<crate::corpus::db::types::OobSyncFile>> {
+        self.db.get_oob_sync_files()
+    }
+
+    /// Get OOB files bucketed by conflict type.
+    pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::corpus::db::types::BucketedOobFile>> {
+        self.db.get_oob_files_bucketed()
+    }
+
+    /// Get files with changed inodes.
+    pub fn get_inode_changed_files(&self) -> Result<Vec<crate::corpus::db::types::InodeChangedFile>> {
+        self.db.get_inode_changed_files()
+    }
+
+    /// Get tag mismatches for a track.
+    pub fn get_tag_mismatches_for_track(&self, track_id: i64) -> Result<Vec<(String, Option<String>, Option<String>)>> {
+        self.db.get_tag_mismatches_for_track(track_id)
     }
 }

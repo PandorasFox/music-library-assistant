@@ -115,7 +115,7 @@ impl App {
 
         // Query signal count - this can be slow with many signals
         let signals_start = std::time::Instant::now();
-        let signal_count = read_db.inner().get_signals(None)
+        let signal_count = read_db.get_signals(None)
             .map(|s| s.len())
             .unwrap_or(0);
         crate::logging::log_general(format!(

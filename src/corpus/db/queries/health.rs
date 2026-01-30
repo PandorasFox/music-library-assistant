@@ -169,27 +169,6 @@ impl Database {
     // Health Issue Operations
     // ========================================================================
 
-    /// Insert a new health signal.
-    pub fn insert_signal(&self, issue: &Signal) -> Result<i64> {
-        self.conn
-            .execute(
-                r#"
-                INSERT INTO signals
-                (issue_type, issue_key, discovered_at, metadata_json)
-                VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
-                "#,
-                params![
-                    issue.issue_type.as_str(),
-                    &issue.issue_key,
-                    &issue.discovered_at,
-                    &issue.metadata_json,
-                ],
-            )
-            .context("Failed to insert health signal")?;
-
-        Ok(self.conn.last_insert_rowid())
-    }
-
     /// Get health signals, optionally filtered by type.
     pub fn get_signals(
         &self,
@@ -283,31 +262,10 @@ impl Database {
             .is_ok()
     }
 
-    /// Delete a health signal by ID.
-    pub fn delete_signal(&self, signal_id: i64) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM signals WHERE id = ?1", params![signal_id])
-            .context("Failed to delete health signal")?;
-        Ok(())
-    }
-
-    /// Delete health signals by type and key.
-    pub fn delete_signals_by_key(
-        &self,
-        issue_type: SignalType,
-        issue_key: &str,
-    ) -> Result<usize> {
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
-                params![issue_type.as_str(), issue_key],
-            )
-            .context("Failed to delete health signals")?;
-        Ok(deleted)
-    }
-
-    /// Delete all signals of a given type for a specific path.
-    pub fn delete_signals_for_path(&self, path: &str) -> Result<usize> {
+    /// Delete all signals for a specific path.
+    ///
+    /// Used during track deletion to clear all associated signals.
+    pub fn delete_signals_for_path(&self, path: &str, _witness: &impl SignalWitness) -> Result<usize> {
         let deleted = self.conn
             .execute(
                 "DELETE FROM signals WHERE issue_key = ?1",

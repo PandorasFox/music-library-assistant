@@ -134,11 +134,17 @@ pub fn close_thread_local_connection() {
 /// # IMPORTANT: Read-Only Access
 ///
 /// This connection uses `PRAGMA query_only = ON`. All write operations
-/// (INSERT, UPDATE, DELETE) will fail. Computations that need to persist
-/// data must route writes through `db_thread::signal_sender()`.
+/// (INSERT, UPDATE, DELETE) will fail. Computations and mutations that need
+/// to persist data must route writes through `db_thread::signal_sender()`.
 ///
 /// The `read_only_db` parameter name in executor functions reflects this.
-pub(super) fn with_read_only_db<T, F>(f: F) -> Result<T, String>
+///
+/// # Usage
+///
+/// This function is used by both computation and mutation worker threads
+/// to share a single read-only connection per thread, avoiding the overhead
+/// of opening new connections for each task.
+pub fn with_read_only_db<T, F>(f: F) -> Result<T, String>
 where
     F: FnOnce(&crate::corpus::db::Database) -> T,
 {

@@ -112,45 +112,59 @@ fn execute_transcode(
             dest_path.display(),
         ))?;
 
-    // Build updated track (preserve fingerprint, duration, sample_rate; update path/inode/size/type)
-    let updated_track = crate::corpus::db::Track {
-        id: existing_track.id,
-        path: relative_new_path.to_string_lossy().to_string(),
-        source: existing_track.source.clone(),
+    // Get signal_sender for DB writes
+    use crate::db_thread::{self, TrackData, ScanStateData};
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    let relative_path_str = relative_new_path.to_string_lossy().to_string();
+
+    // Build updated track data (preserve fingerprint, duration, sample_rate; update inode/size/type)
+    let track_data = TrackData {
         inode: new_inode,
         file_size: new_file_size,
-        file_type: new_file_type,
+        file_type: new_file_type.clone(),
         duration_ms: existing_track.duration_ms,
         bitrate_kbps: existing_track.bitrate_kbps,
         sample_rate: existing_track.sample_rate,
         fingerprint: existing_track.fingerprint.clone(),
     };
 
-    // Update track record in database
-    db.update_track_metadata(track_id, &updated_track, witness)
-        .with_context(|| format!("Failed to update track {} metadata after transcode", track_id))?;
+    // Get existing tags (we're not changing them, but update_track_metadata replaces all)
+    let existing_tags: Vec<(String, String)> = db.get_track_tags(track_id)?
+        .into_iter()
+        .map(|t| (t.tag_name, t.tag_value))
+        .collect();
 
-    // Update scan_state: delete old entry for old inode, upsert new entry for new file
-    // The old scan_state entry references the old inode which no longer exists at the old path
-    // (it's been stashed). We need a fresh scan_state for the new file.
+    // Update track record in database via signal_sender (fire-and-forget)
+    sender.update_track_metadata(
+        &relative_path_str,
+        track_data,
+        existing_tags,
+        witness,
+    );
+
+    // Update scan_state: upsert new entry for new file
     let mtime_secs = fs_metadata.mtime();
     let mtime_nanos = fs_metadata.mtime_nsec();
 
-    let scan_entry = crate::corpus::db::ScanStateEntry {
-        source: existing_track.source.clone(),
-        inode: new_inode as i64,
-        path: relative_new_path.to_string_lossy().to_string(),
+    let scan_state = ScanStateData {
+        inode: new_inode,
         mtime_secs,
         mtime_nanos,
-        file_size: new_file_size as i64,
+        file_size: new_file_size,
     };
-    db.upsert_scan_state(&scan_entry)
-        .with_context(|| format!("Failed to update scan_state after transcode for track {}", track_id))?;
+    sender.upsert_scan_state(
+        &relative_path_str,
+        &existing_track.source,
+        scan_state,
+        witness,
+    );
 
     // Delete old scan_state entry if inode changed (which it will, since it's a new file)
     if existing_track.inode != new_inode {
-        db.delete_scan_state_by_inode(&existing_track.source, existing_track.inode)
-            .with_context(|| format!("Failed to delete old scan_state for track {}", track_id))?;
+        sender.delete_scan_state_by_inode(&existing_track.source, existing_track.inode, witness);
     }
 
     Ok(())

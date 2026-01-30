@@ -4,12 +4,15 @@
 //! computation phases:
 //! - **Awakening**: ScanLibraryDirectory writes discovered files here
 //! - **Awake**: DeriveDeployHealthSignals reads and processes this data
+//!
+//! Write operations require a witness for authorized execution.
 
 use anyhow::{Context, Result};
 use rusqlite::params;
 use std::path::PathBuf;
 
 use super::Database;
+use crate::db_thread::SignalWitness;
 
 /// A library file discovered during scanning.
 #[derive(Debug, Clone)]
@@ -22,7 +25,7 @@ impl Database {
     /// Clear all scan state for a library before re-scanning.
     ///
     /// Called at the start of WalkLibrary to ensure fresh scan results.
-    pub fn clear_library_scan_state(&self, library_name: &str) -> Result<usize> {
+    pub fn clear_library_scan_state(&self, library_name: &str, _witness: &impl SignalWitness) -> Result<usize> {
         let count = self
             .conn
             .execute(
@@ -43,6 +46,7 @@ impl Database {
         file_path: &std::path::Path,
         inode: i64,
         scanned_at: i64,
+        _witness: &impl SignalWitness,
     ) -> Result<()> {
         self.conn
             .execute(

@@ -1,4 +1,7 @@
 //! Scan state operations for incremental scanning.
+//!
+//! Write operations require a witness to ensure they're called from authorized
+//! execution contexts (db_thread or mutation executors).
 
 use anyhow::{Context, Result};
 use rusqlite::params;
@@ -6,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::Database;
 use crate::corpus::db::types::ScanStateEntry;
+use crate::db_thread::SignalWitness;
 
 impl Database {
     // ========================================================================
@@ -57,36 +61,11 @@ impl Database {
         Ok(map)
     }
 
-    pub fn upsert_scan_state(&self, entry: &ScanStateEntry) -> Result<()> {
-        self.conn
-            .execute(
-                r#"
-            INSERT INTO scan_state (source, inode, path, mtime_secs, mtime_nanos, file_size)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-            ON CONFLICT(source, inode) DO UPDATE SET
-                path = excluded.path,
-                mtime_secs = excluded.mtime_secs,
-                mtime_nanos = excluded.mtime_nanos,
-                file_size = excluded.file_size,
-                scanned_at = CURRENT_TIMESTAMP
-            "#,
-                params![
-                    &entry.source,
-                    &entry.inode,
-                    &entry.path,
-                    &entry.mtime_secs,
-                    &entry.mtime_nanos,
-                    &entry.file_size,
-                ],
-            )
-            .context("Failed to upsert scan state")?;
-        Ok(())
-    }
-
     pub fn cleanup_stale_scan_state(
         &self,
         source: &str,
         current_inodes: &HashSet<i64>,
+        _witness: &impl SignalWitness,
     ) -> Result<usize> {
         if current_inodes.is_empty() {
             let deleted = self
@@ -141,6 +120,7 @@ impl Database {
         source: &str,
         inode: i64,
         new_path: &str,
+        _witness: &impl SignalWitness,
     ) -> Result<()> {
         self.conn
             .execute(
@@ -153,7 +133,7 @@ impl Database {
 
     /// Delete scan state entry by inode.
     /// Used by MissingFile signal handler.
-    pub fn delete_scan_state_by_inode(&self, source: &str, inode: i64) -> Result<bool> {
+    pub fn delete_scan_state_by_inode(&self, source: &str, inode: i64, _witness: &impl SignalWitness) -> Result<bool> {
         let deleted = self
             .conn
             .execute(

@@ -6,10 +6,9 @@
 //! - CleanupStaleScanState: Remove stale scan state entries
 
 use anyhow::{Context, Result};
-use std::collections::HashSet;
 use std::path::Path;
 
-use crate::corpus::db::{Database, ScanStateEntry, Track};
+use crate::corpus::db::Database;
 use crate::corpus::paths;
 use crate::witch::MutationExecutionWitness;
 
@@ -19,15 +18,21 @@ use super::types::{ExtractedMetadata, Mutation, MutationResult};
 ///
 /// Inserts or updates a track in the database from extracted metadata.
 /// Tags are stored in the separate track_tags table.
-/// Returns the track_id of the inserted/updated track.
+///
+/// Routes write through signal_sender (fire-and-forget).
 pub fn execute_index_track(
-    db: &Database,
+    _db: &Database,
     path: &Path,
     source: &str,
     metadata: &ExtractedMetadata,
     witness: &MutationExecutionWitness,
-) -> Result<i64> {
+) -> Result<()> {
+    use crate::db_thread::{self, TrackData, ScanStateData};
+    use std::os::unix::fs::MetadataExt;
+
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
@@ -38,12 +43,10 @@ pub fn execute_index_track(
                 path.display(),
             )
         })?;
+    let rel_path_str = relative_path.to_string_lossy();
 
-    // Build Track from ExtractedMetadata (audio/file metadata only)
-    let track = Track {
-        id: None,
-        path: relative_path.to_string_lossy().to_string(),
-        source: source.to_string(),
+    // Build TrackData from ExtractedMetadata
+    let track_data = TrackData {
         inode: metadata.inode,
         file_size: metadata.file_size,
         file_type: metadata.file_type.clone(),
@@ -53,19 +56,36 @@ pub fn execute_index_track(
         fingerprint: metadata.fingerprint.clone(),
     };
 
-    // Insert track with tags into database
-    let track_id = db
-        .insert_track_with_tags(&track, &metadata.tags, witness)
-        .with_context(|| format!("Failed to insert track into database: {}", path.display()))?;
+    // Get file metadata for scan_state
+    let file_metadata = std::fs::metadata(path)
+        .with_context(|| format!("Failed to read file metadata: {}", path.display()))?;
+    let scan_state = ScanStateData {
+        inode: metadata.inode,
+        mtime_secs: file_metadata.mtime(),
+        mtime_nanos: file_metadata.mtime_nsec() as i64,
+        file_size: metadata.file_size,
+    };
 
-    Ok(track_id)
+    // Route write through signal_sender (fire-and-forget)
+    sender.index_track(
+        &rel_path_str,
+        source,
+        track_data,
+        metadata.tags.clone(),
+        scan_state,
+        witness,
+    );
+
+    Ok(())
 }
 
 /// Execute an IndexFileFromPath mutation.
 ///
 /// Extracts metadata from the file and indexes it. This does the heavy lifting
 /// on the worker thread rather than the UI thread.
-pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<()> {
+///
+/// Routes write through signal_sender (fire-and-forget).
+pub fn execute_index_file_from_path(_db: &Database, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<()> {
     use crate::corpus::metadata;
     use crate::corpus::tags::TagSet;
 
@@ -88,23 +108,30 @@ pub fn execute_index_file_from_path(db: &Database, path: &Path, source: &str, wi
         tags: tag_set.into_vec(),
     };
 
-    execute_index_track(db, path, source, &extracted, witness)?;
-    Ok(())
+    // Note: _db is unused - execute_index_track routes through signal_sender
+    execute_index_track(_db, path, source, &extracted, witness)
 }
 
 /// Execute an UpdateScanState mutation.
 ///
 /// Updates the scan state entry for a file, enabling incremental scanning.
+///
+/// Routes write through signal_sender (fire-and-forget).
 pub fn execute_update_scan_state(
-    db: &Database,
+    _db: &Database,
     source: &str,
     inode: u64,
     mtime_secs: i64,
     mtime_nanos: i64,
     file_size: u64,
     path: &Path,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
+    use crate::db_thread::{self, ScanStateData};
+
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
@@ -116,17 +143,15 @@ pub fn execute_update_scan_state(
             )
         })?;
 
-    let entry = ScanStateEntry {
-        source: source.to_string(),
+    let scan_state = ScanStateData {
         inode: inode as i64,
-        path: relative_path.to_string_lossy().to_string(),
         mtime_secs,
         mtime_nanos,
         file_size: file_size as i64,
     };
 
-    db.upsert_scan_state(&entry)
-        .context("Failed to update scan state")?;
+    // Route write through signal_sender
+    sender.upsert_scan_state(&relative_path.to_string_lossy(), source, scan_state, witness);
 
     Ok(())
 }
@@ -134,16 +159,22 @@ pub fn execute_update_scan_state(
 /// Execute a CleanupStaleScanState mutation.
 ///
 /// Removes scan state entries for files that no longer exist.
-/// Returns the number of entries removed.
+/// Routes write through signal_sender (fire-and-forget).
 pub fn execute_cleanup_stale(
-    db: &Database,
+    _db: &Database,
     source: &str,
     valid_inodes: &[u64],
-) -> Result<usize> {
-    let valid_set: HashSet<i64> = valid_inodes.iter().map(|&i| i as i64).collect();
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::db_thread;
 
-    db.cleanup_stale_scan_state(source, &valid_set)
-        .context("Failed to cleanup stale scan state")
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    let valid_i64: Vec<i64> = valid_inodes.iter().map(|&i| i as i64).collect();
+    sender.cleanup_stale_scan_state(source, valid_i64, witness);
+
+    Ok(())
 }
 
 // ============================================================================
@@ -154,8 +185,19 @@ pub fn execute_cleanup_stale(
 ///
 /// Note: This function needs the source to determine which root to use for
 /// relative path conversion. It fetches the track's source from the database.
+///
+/// Uses read-only DB for lookup, routes write through signal_sender.
 pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path, witness: &MutationExecutionWitness) -> Result<()> {
+    use crate::db_thread;
+
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Get old path from DB (read-only)
+    let track = db.get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+    let old_path = track.path;
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
@@ -167,18 +209,27 @@ pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path, 
             )
         })?;
 
-    db.update_track_path(track_id, relative_path.to_string_lossy().as_ref(), witness)
-        .context("Failed to update track path")
+    // Route write through signal_sender
+    sender.update_track_path(&old_path, &relative_path.to_string_lossy(), witness);
+
+    Ok(())
 }
 
 /// Execute UpdateScanStatePath mutation - update scan state for relocated file.
+///
+/// Routes write through signal_sender (fire-and-forget).
 pub fn execute_update_scan_state_path(
-    db: &Database,
+    _db: &Database,
     source: &str,
     inode: i64,
     new_path: &Path,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
+    use crate::db_thread;
+
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
@@ -190,11 +241,15 @@ pub fn execute_update_scan_state_path(
             )
         })?;
 
-    db.update_scan_state_path(source, inode, relative_path.to_string_lossy().as_ref())
-        .context("Failed to update scan state path")
+    // Route write through signal_sender
+    sender.update_scan_state_path(source, inode, &relative_path.to_string_lossy(), witness);
+
+    Ok(())
 }
 
 /// Execute DropFromIndex mutation - remove track from index.
+///
+/// Uses read-only DB for lookup, routes writes through signal_sender.
 pub fn execute_drop_from_index(
     db: &Database,
     track_id: i64,
@@ -202,33 +257,41 @@ pub fn execute_drop_from_index(
     source: Option<&str>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    // Delete the track
-    db.delete_track(track_id, witness)
-        .with_context(|| format!("Failed to delete track {} from index", track_id))?;
+    use crate::db_thread;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Get track path from DB (read-only)
+    let track = db.get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Delete the track via signal_sender
+    sender.drop_from_index(&track.path, witness);
 
     // Also delete scan_state entry if inode/source provided
     if let (Some(inode), Some(source)) = (inode, source) {
-        db.delete_scan_state_by_inode(source, inode)
-            .context("Failed to delete scan state entry")?;
+        sender.delete_scan_state_by_inode(source, inode, witness);
     }
 
     Ok(())
 }
 
 /// Execute UpdateTrack mutation - full metadata update for out-of-band changes.
+///
+/// Uses read-only DB for lookup, routes write through signal_sender.
 pub fn execute_update_track(
     db: &Database,
-    track_id: i64,
+    _track_id: i64,
     path: &Path,
     metadata: &ExtractedMetadata,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    let resolver = paths::get_resolver();
+    use crate::db_thread::{self, TrackData};
 
-    // Get existing track to preserve source
-    let existing = db
-        .get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+    let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
@@ -239,12 +302,14 @@ pub fn execute_update_track(
                 path.display(),
             )
         })?;
+    let rel_path_str = relative_path.to_string_lossy();
 
-    // Build Track from ExtractedMetadata (audio/file metadata only)
-    let track = Track {
-        id: Some(track_id),
-        path: relative_path.to_string_lossy().to_string(),
-        source: existing.source, // Preserve original source
+    // Verify track exists (read-only check)
+    let _existing = db.get_track_by_path(&rel_path_str)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", rel_path_str))?;
+
+    // Build TrackData from ExtractedMetadata
+    let track_data = TrackData {
         inode: metadata.inode,
         file_size: metadata.file_size,
         file_type: metadata.file_type.clone(),
@@ -254,8 +319,10 @@ pub fn execute_update_track(
         fingerprint: metadata.fingerprint.clone(),
     };
 
-    db.update_track_metadata_with_tags(track_id, &track, &metadata.tags, witness)
-        .context("Failed to update track metadata")
+    // Route write through signal_sender
+    sender.update_track_metadata(&rel_path_str, track_data, metadata.tags.clone(), witness);
+
+    Ok(())
 }
 
 /// Result of tag verification — indicates which types of mismatches were found.
@@ -427,10 +494,12 @@ pub fn execute_acknowledge_mtime_only(
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::db_thread;
     use std::os::unix::fs::MetadataExt;
-    use rusqlite::params;
 
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
     for track_id in track_ids {
@@ -449,18 +518,20 @@ pub fn execute_acknowledge_mtime_only(
         let mtime_secs = metadata.mtime();
         let mtime_nanos = metadata.mtime_nsec() as i64;
 
-        // Update scan_state mtime
-        db.conn.execute(
-            "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
-            params![mtime_secs, mtime_nanos, track.path],
-        ).context("Failed to update scan_state mtime")?;
+        // Update scan_state mtime via db_thread (fire-and-forget)
+        sender.update_scan_state_mtime(
+            &track.path,
+            mtime_secs,
+            mtime_nanos,
+            witness,
+        );
 
-        // Clear MtimeOnlyMismatch signal
-        db.clear_file_signal(
+        // Clear MtimeOnlyMismatch signal via db_thread
+        sender.clear_file_signal(
             CorpusFileSignalType::MtimeOnlyMismatch.into(),
             &track.path,
             witness,
-        )?;
+        );
 
         affected_paths.push(abs_path);
     }
@@ -478,10 +549,13 @@ pub fn execute_acknowledge_inode_changed(
     track_ids: &[i64],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
-    use crate::corpus::db::types::{CorpusFileSignalType, ScanStateEntry};
+    use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::db_thread::{self, ScanStateData};
     use std::os::unix::fs::MetadataExt;
 
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
     for track_id in track_ids {
@@ -502,28 +576,31 @@ pub fn execute_acknowledge_inode_changed(
         let mtime_nanos = metadata.mtime_nsec() as i64;
         let file_size = metadata.len() as i64;
 
-        // Update track.inode to the new value
-        db.update_track_inode(*track_id, new_inode, witness)?;
+        // Update track.inode to the new value via db_thread
+        sender.update_track_inode(&track.path, new_inode, witness);
 
-        // Delete old scan_state entry (keyed by old inode)
-        db.delete_scan_state_by_inode(&track.source, track.inode)?;
+        // Delete old scan_state entry (keyed by old inode) via db_thread
+        sender.delete_scan_state_by_inode(&track.source, track.inode, witness);
 
-        // Insert new scan_state entry with new inode and current mtime
-        db.upsert_scan_state(&ScanStateEntry {
-            source: track.source.clone(),
-            inode: new_inode,
-            path: track.path.clone(),
-            mtime_secs,
-            mtime_nanos,
-            file_size,
-        })?;
+        // Insert new scan_state entry with new inode and current mtime via db_thread
+        sender.upsert_scan_state(
+            &track.path,
+            &track.source,
+            ScanStateData {
+                inode: new_inode,
+                mtime_secs,
+                mtime_nanos,
+                file_size,
+            },
+            witness,
+        );
 
-        // Clear InodeChanged signal
-        db.clear_file_signal(
+        // Clear InodeChanged signal via db_thread
+        sender.clear_file_signal(
             CorpusFileSignalType::InodeChanged.into(),
             &track.path,
             witness,
-        )?;
+        );
 
         affected_paths.push(abs_path);
     }
@@ -543,10 +620,12 @@ pub fn execute_apply_db_tags_to_disk(
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
     use crate::corpus::tags::{write_file_tags, TagSet};
+    use crate::db_thread;
     use std::os::unix::fs::MetadataExt;
-    use rusqlite::params;
 
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let token = super::sealed::MutationToken::new();
     let mut affected_paths = Vec::new();
 
@@ -576,31 +655,33 @@ pub fn execute_apply_db_tags_to_disk(
         let mtime_secs = file_metadata.mtime();
         let mtime_nanos = file_metadata.mtime_nsec() as i64;
 
-        // Update scan_state mtime
-        db.conn.execute(
-            "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
-            params![mtime_secs, mtime_nanos, track.path],
-        ).context("Failed to update scan_state mtime")?;
+        // Update scan_state mtime via db_thread
+        sender.update_scan_state_mtime(
+            &track.path,
+            mtime_secs,
+            mtime_nanos,
+            witness,
+        );
 
-        // Clear tag_mismatches for this track
-        db.clear_tag_mismatches_for_track(*track_id)?;
+        // Clear tag_mismatches for this track via db_thread
+        sender.clear_tag_mismatches_for_track(&track.path, witness);
 
-        // Clear OOB signals
-        db.clear_file_signal(
+        // Clear OOB signals via db_thread
+        sender.clear_file_signal(
             CorpusFileSignalType::OutOfBandTagSync.into(),
             &track.path,
             witness,
-        )?;
-        db.clear_file_signal(
+        );
+        sender.clear_file_signal(
             CorpusFileSignalType::OutOfBandTagConflict.into(),
             &track.path,
             witness,
-        )?;
-        db.clear_file_signal(
+        );
+        sender.clear_file_signal(
             CorpusFileSignalType::MtimeOnlyMismatch.into(),
             &track.path,
             witness,
-        )?;
+        );
 
         affected_paths.push(abs_path);
     }
@@ -620,10 +701,12 @@ pub fn execute_assimilate_disk_tags_to_db(
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
     use crate::corpus::tags::TagSet;
+    use crate::db_thread;
     use std::os::unix::fs::MetadataExt;
-    use rusqlite::params;
 
     let resolver = paths::get_resolver();
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
     for track_id in track_ids {
@@ -640,9 +723,8 @@ pub fn execute_assimilate_disk_tags_to_db(
         let disk_tagset = TagSet::from_file(&abs_path)
             .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
-        // Update DB with disk tags
-        db.set_track_tags(*track_id, disk_tagset.as_slice(), witness)
-            .with_context(|| format!("Failed to update track tags for track {}", track_id))?;
+        // Update DB with disk tags via db_thread
+        sender.set_track_tags(&track.path, disk_tagset.into_vec(), witness);
 
         // Read disk mtime
         let file_metadata = std::fs::metadata(&abs_path)
@@ -650,31 +732,33 @@ pub fn execute_assimilate_disk_tags_to_db(
         let mtime_secs = file_metadata.mtime();
         let mtime_nanos = file_metadata.mtime_nsec() as i64;
 
-        // Update scan_state mtime
-        db.conn.execute(
-            "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
-            params![mtime_secs, mtime_nanos, track.path],
-        ).context("Failed to update scan_state mtime")?;
+        // Update scan_state mtime via db_thread
+        sender.update_scan_state_mtime(
+            &track.path,
+            mtime_secs,
+            mtime_nanos,
+            witness,
+        );
 
-        // Clear tag_mismatches for this track
-        db.clear_tag_mismatches_for_track(*track_id)?;
+        // Clear tag_mismatches for this track via db_thread
+        sender.clear_tag_mismatches_for_track(&track.path, witness);
 
-        // Clear OOB signals
-        db.clear_file_signal(
+        // Clear OOB signals via db_thread
+        sender.clear_file_signal(
             CorpusFileSignalType::OutOfBandTagSync.into(),
             &track.path,
             witness,
-        )?;
-        db.clear_file_signal(
+        );
+        sender.clear_file_signal(
             CorpusFileSignalType::OutOfBandTagConflict.into(),
             &track.path,
             witness,
-        )?;
-        db.clear_file_signal(
+        );
+        sender.clear_file_signal(
             CorpusFileSignalType::MtimeOnlyMismatch.into(),
             &track.path,
             witness,
-        )?;
+        );
 
         affected_paths.push(abs_path);
     }
@@ -715,12 +799,12 @@ pub fn execute_single(
             mtime_nanos,
             file_size,
             path,
-        } => execute_update_scan_state(db, source, *inode, *mtime_secs, *mtime_nanos, *file_size, path),
+        } => execute_update_scan_state(db, source, *inode, *mtime_secs, *mtime_nanos, *file_size, path, witness),
 
         Mutation::CleanupStaleScanState {
             source,
             valid_inodes,
-        } => execute_cleanup_stale(db, source, valid_inodes).map(|_| ()),
+        } => execute_cleanup_stale(db, source, valid_inodes, witness),
 
         // Signal resolution mutations
         Mutation::UpdateTrackPath {
@@ -733,7 +817,7 @@ pub fn execute_single(
             source,
             inode,
             new_path,
-        } => execute_update_scan_state_path(db, source, *inode, new_path),
+        } => execute_update_scan_state_path(db, source, *inode, new_path, witness),
 
         Mutation::DropFromIndex {
             track_id,

@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use super::Database;
 use crate::corpus::db::types::{Track, TrackTag};
+use crate::db_thread::SignalWitness;
 use crate::witch::MutationExecutionWitness;
 
 // ============================================================================
@@ -632,6 +633,7 @@ impl Database {
         old_value: Option<&str>,
         new_value: Option<&str>,
         session_id: &str,
+        _witness: &impl SignalWitness,
     ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO tag_edit_history (track_id, field_name, old_value, new_value, session_id)
@@ -1001,5 +1003,153 @@ impl Database {
             sample_rate: row.get(8)?,
             fingerprint,
         })
+    }
+
+    // ========================================================================
+    // Specialized Aggregate Queries (for computations)
+    // ========================================================================
+
+    /// Get fingerprint groups with duplicates.
+    /// Returns: Vec<(fingerprint_blob, comma_separated_track_ids)>
+    pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
+        let query = "SELECT fingerprint, GROUP_CONCAT(id) as track_ids
+                     FROM tracks
+                     WHERE fingerprint IS NOT NULL
+                     GROUP BY fingerprint
+                     HAVING COUNT(*) > 1";
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            let fp_blob: Vec<u8> = row.get(0)?;
+            let track_ids_str: String = row.get(1)?;
+            Ok((fp_blob, track_ids_str))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get inode groups with duplicates.
+    /// Returns: Vec<(inode, comma_separated_track_ids)>
+    pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {
+        let query = "SELECT inode, GROUP_CONCAT(id) as track_ids
+                     FROM tracks
+                     GROUP BY inode
+                     HAVING COUNT(*) > 1";
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let track_ids_str: String = row.get(1)?;
+            Ok((inode, track_ids_str))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get tracks with their present tag names (for missing tag detection).
+    /// Returns: Vec<(track_id, path, album_or_none, comma_separated_lowercase_tags)>
+    pub fn get_tracks_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
+        let query = "
+            SELECT t.id, t.path,
+                   (SELECT tag_value FROM track_tags WHERE track_id = t.id AND LOWER(tag_name) = 'album' LIMIT 1) as album,
+                   GROUP_CONCAT(LOWER(tt.tag_name), ',') as present_tags
+            FROM tracks t
+            LEFT JOIN track_tags tt ON t.id = tt.track_id
+            GROUP BY t.id
+        ";
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get all track tags ordered by track and tag name (for metadata duplicate detection).
+    /// Returns: Vec<(track_id, tag_name, tag_value)>
+    pub fn get_all_track_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
+        let query = "
+            SELECT t.id, tt.tag_name, tt.tag_value
+            FROM tracks t
+            JOIN track_tags tt ON t.id = tt.track_id
+            ORDER BY t.id, LOWER(tt.tag_name)
+        ";
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get album/artist/album_artist data for all tracks (for inconsistent album artist detection).
+    /// Returns: Vec<(track_id, album, artist, album_artist, catalog_number, isrc)>
+    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
+        let sql = r#"
+            SELECT
+                t.id,
+                COALESCE(album.tag_value, '') as album,
+                COALESCE(artist.tag_value, '') as artist,
+                COALESCE(album_artist.tag_value, '') as album_artist,
+                COALESCE(catalog.tag_value, '') as catalog_number,
+                COALESCE(isrc.tag_value, '') as isrc
+            FROM tracks t
+            LEFT JOIN track_tags album
+                ON t.id = album.track_id AND LOWER(album.tag_name) = 'album'
+            LEFT JOIN track_tags artist
+                ON t.id = artist.track_id AND LOWER(artist.tag_name) = 'artist'
+            LEFT JOIN track_tags album_artist
+                ON t.id = album_artist.track_id AND LOWER(album_artist.tag_name) = 'album_artist'
+            LEFT JOIN track_tags catalog
+                ON t.id = catalog.track_id AND LOWER(catalog.tag_name) = 'catalognumber'
+            LEFT JOIN track_tags isrc
+                ON t.id = isrc.track_id AND LOWER(isrc.tag_name) = 'isrc'
+            WHERE album.tag_value IS NOT NULL AND album.tag_value != ''
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
     }
 }

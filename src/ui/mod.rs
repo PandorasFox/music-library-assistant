@@ -581,10 +581,11 @@ impl App {
 
     /// Shorthand for read-only database access.
     ///
-    /// Returns a `ReadOnlyDb` wrapper - use `.inner()` to access query methods:
+    /// Returns a `ReadOnlyDb` wrapper with common query methods:
     /// ```ignore
     /// let read_db = app.read_db();
-    /// let tracks = read_db.inner().get_all_tracks(None)?;
+    /// let tracks = read_db.get_all_tracks(None)?;
+    /// let signals = read_db.get_signals(None)?;
     /// ```
     pub(super) fn read_db(&mut self) -> crate::corpus::db::ReadOnlyDb<'_> {
         self.witch().read_db()

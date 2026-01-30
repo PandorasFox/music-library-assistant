@@ -363,7 +363,7 @@ impl App {
                 match track_id {
                     Some(id) => {
                         let read_db = self.read_db();
-                        match read_db.inner().get_track_tags(id) {
+                        match read_db.get_track_tags(id) {
                             Ok(tags) => {
                                 // Convert TrackTag to (name, value) pairs
                                 let tag_pairs: Vec<(String, String)> = tags
@@ -628,13 +628,13 @@ impl App {
         // Load signals based on insight type
         let (signals, pre_fill) = match &insight_type {
             insights_view::InsightType::InconsistentAlbumArtist => {
-                let sigs = read_db.inner().get_aggregate_signals(Some(AggregateSignalType::InconsistentAlbumArtist))
+                let sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::InconsistentAlbumArtist))
                     .unwrap_or_default();
                 (sigs, false) // No pre-fill for album_artist
             }
             insights_view::InsightType::TagCanonicity { tag_name } => {
                 // Load all TagCanonicity signals, then filter by tag_name prefix
-                let all_sigs = read_db.inner().get_aggregate_signals(Some(AggregateSignalType::TagCanonicity))
+                let all_sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::TagCanonicity))
                     .unwrap_or_default();
                 let filtered: Vec<_> = all_sigs.into_iter()
                     .filter(|s| s.key.starts_with(&format!("{}:", tag_name)))
@@ -702,7 +702,7 @@ impl App {
         };
 
         // Load all CompoundTagValue signals
-        let signals = read_db.inner().get_aggregate_signals(Some(AggregateSignalType::CompoundTagValue))
+        let signals = read_db.get_aggregate_signals(Some(AggregateSignalType::CompoundTagValue))
             .unwrap_or_default();
 
         if signals.is_empty() {
@@ -755,7 +755,7 @@ impl App {
             }
         };
 
-        let files = read_db.inner().get_oob_sync_files().unwrap_or_default();
+        let files = read_db.get_oob_sync_files().unwrap_or_default();
         if files.is_empty() {
             self.status_message = Some("No syncable tag changes".to_string());
             return;
@@ -785,7 +785,7 @@ impl App {
                     return;
                 }
             };
-            match read_db.inner().get_oob_files_bucketed() {
+            match read_db.get_oob_files_bucketed() {
                 Ok(f) => f,
                 Err(e) => {
                     crate::logging::log_error(format!("get_oob_files_bucketed failed: {}", e));
@@ -833,7 +833,7 @@ impl App {
         // Query files with inode_changed signals
         let files = {
             let read_db = witch.read_db();
-            match read_db.inner().get_inode_changed_files() {
+            match read_db.get_inode_changed_files() {
                 Ok(f) => f,
                 Err(e) => {
                     self.status_message = Some(format!("Failed to query inode changes: {}", e));
@@ -1113,7 +1113,7 @@ impl App {
         let mut mutations = Vec::new();
 
         for (track_id, path) in &files_data {
-            let mismatches = read_db.inner().get_tag_mismatches_for_track(*track_id).unwrap_or_default();
+            let mismatches = read_db.get_tag_mismatches_for_track(*track_id).unwrap_or_default();
             let abs_path = resolver.resolve(std::path::Path::new(path));
 
             let edits: Vec<TagEdit> = mismatches.iter().filter_map(|(field, db_value, disk_value)| {
@@ -1369,7 +1369,7 @@ impl App {
                 let resolver = paths::get_resolver();
                 let mut paths = std::collections::HashMap::new();
                 for &track_id in &state.data.track_ids {
-                    if let Ok(Some(track)) = read_db.inner().get_track_by_id(track_id) {
+                    if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                         // Resolve relative DB path to absolute for filesystem operations
                         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
                         paths.insert(track_id, abs_path);
@@ -1423,7 +1423,7 @@ impl App {
 
             for (idx, signal_id) in signal_ids.iter().enumerate() {
                 // Get signal by ID
-                let signal = match read_db.inner().get_signal_by_id(*signal_id) {
+                let signal = match read_db.get_signal_by_id(*signal_id) {
                     Ok(Some(s)) => s,
                     _ => continue,
                 };
@@ -1453,7 +1453,7 @@ impl App {
                 // Build track paths (resolved to absolute for mutations)
                 let mut track_paths = std::collections::HashMap::new();
                 for &track_id in &data.track_ids {
-                    if let Ok(Some(track)) = read_db.inner().get_track_by_id(track_id) {
+                    if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
                         track_paths.insert(track_id, abs_path);
                     }
@@ -1588,7 +1588,7 @@ impl App {
         };
 
         // Fetch the signal by ID
-        let signal = match read_db.inner().get_signal_by_id(signal_id) {
+        let signal = match read_db.get_signal_by_id(signal_id) {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
@@ -1829,7 +1829,7 @@ impl App {
         };
 
         // Load signal by ID
-        let signal = match read_db.inner().get_signal_by_id(signal_id) {
+        let signal = match read_db.get_signal_by_id(signal_id) {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
@@ -1894,7 +1894,7 @@ impl App {
         let resolver = paths::get_resolver();
         let mut track_paths = std::collections::HashMap::new();
         for &track_id in &state.data.track_ids {
-            if let Ok(Some(track)) = read_db.inner().get_track_by_id(track_id) {
+            if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                 // Resolve relative DB path to absolute for filesystem operations
                 let abs_path = resolver.resolve(std::path::Path::new(&track.path));
                 track_paths.insert(track_id, abs_path);
@@ -1978,7 +1978,7 @@ impl App {
         let read_db = witch.read_db();
         let resolver = paths::get_resolver();
 
-        let tracks = read_db.inner().get_tracks_by_file_types(file_types).unwrap_or_default();
+        let tracks = read_db.get_tracks_by_file_types(file_types).unwrap_or_default();
         if tracks.is_empty() {
             self.status_message = Some("No matching tracks found".to_string());
             return;

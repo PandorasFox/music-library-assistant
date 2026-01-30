@@ -44,7 +44,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
     log_general("[MIGRATION v3→v4] Starting fingerprint TEXT→BLOB conversion");
 
     // Check if we're recovering from a partial migration
-    let has_blob_column: bool = db.conn.query_row(
+    let has_blob_column: bool = db.conn().query_row(
         "SELECT COUNT(*) > 0 FROM pragma_table_info('tracks') WHERE name = 'fingerprint_blob'",
         params![],
         |row| row.get(0),
@@ -59,7 +59,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
 
     // Step 2: Convert existing fingerprints in batches
     // Read all track IDs with TEXT fingerprints that haven't been converted yet
-    let mut stmt = db.conn.prepare(
+    let mut stmt = db.conn().prepare(
         "SELECT id, fingerprint FROM tracks WHERE fingerprint IS NOT NULL AND fingerprint != '' AND fingerprint_blob IS NULL"
     )?;
 
@@ -92,7 +92,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
                 .collect();
 
             if !blob.is_empty() {
-                db.conn.execute(
+                db.conn().execute(
                     "UPDATE tracks SET fingerprint_blob = ?1 WHERE id = ?2",
                     params![blob, track_id],
                 )?;
@@ -101,7 +101,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
     }
 
     // Step 3: Update fingerprint_dup signals to remove redundant fingerprint from metadata
-    let mut signal_stmt = db.conn.prepare(
+    let mut signal_stmt = db.conn().prepare(
         "SELECT id, metadata_json FROM signals WHERE issue_type = 'fingerprint_dup' AND metadata_json IS NOT NULL"
     )?;
 
@@ -123,7 +123,7 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
             if let Some(obj) = json.as_object_mut() {
                 obj.remove("fingerprint");
                 if let Ok(new_json) = serde_json::to_string(&json) {
-                    db.conn.execute(
+                    db.conn().execute(
                         "UPDATE signals SET metadata_json = ?1 WHERE id = ?2",
                         params![new_json, signal_id],
                     )?;
@@ -136,14 +136,14 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
     log_general("[MIGRATION v3→v4] Finalizing schema changes");
 
     // Check if we've already completed the swap (tracks_new doesn't exist, fingerprint is BLOB)
-    let tracks_new_exists: bool = db.conn.query_row(
+    let tracks_new_exists: bool = db.conn().query_row(
         "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='tracks_new'",
         params![],
         |row| row.get(0),
     ).unwrap_or(false);
 
     // Check fingerprint column type - if it's already BLOB, we're done
-    let fp_type: String = db.conn.query_row(
+    let fp_type: String = db.conn().query_row(
         "SELECT type FROM pragma_table_info('tracks') WHERE name = 'fingerprint'",
         params![],
         |row| row.get(0),
@@ -154,10 +154,10 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
     } else {
         // Need to do the table swap
         // Foreign keys must be off for the entire connection, not just the transaction
-        db.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
-        db.conn.execute_batch("DROP INDEX IF EXISTS idx_fingerprint;")?;
+        db.conn().execute_batch("PRAGMA foreign_keys = OFF;")?;
+        db.conn().execute_batch("DROP INDEX IF EXISTS idx_fingerprint;")?;
 
-        db.conn.execute_batch(r#"
+        db.conn().execute_batch(r#"
             CREATE TABLE IF NOT EXISTS tracks_new (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL UNIQUE,
@@ -174,14 +174,14 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
         "#)?;
 
         // Copy data - check if tracks_new already has data (recovery case)
-        let tracks_new_count: i64 = db.conn.query_row(
+        let tracks_new_count: i64 = db.conn().query_row(
             "SELECT COUNT(*) FROM tracks_new",
             params![],
             |row| row.get(0),
         ).unwrap_or(0);
 
         if tracks_new_count == 0 {
-            db.conn.execute_batch(r#"
+            db.conn().execute_batch(r#"
                 INSERT INTO tracks_new (id, path, source, inode, file_size, file_type,
                                         duration_ms, bitrate_kbps, sample_rate, fingerprint, scanned_at)
                 SELECT id, path, source, inode, file_size, file_type,
@@ -191,18 +191,18 @@ fn migrate_fingerprints_to_blob(db: &Database) -> Result<()> {
         }
 
         // Swap tables
-        db.conn.execute_batch("DROP TABLE tracks;")?;
-        db.conn.execute_batch("ALTER TABLE tracks_new RENAME TO tracks;")?;
+        db.conn().execute_batch("DROP TABLE tracks;")?;
+        db.conn().execute_batch("ALTER TABLE tracks_new RENAME TO tracks;")?;
 
         // Recreate indexes
-        db.conn.execute_batch(r#"
+        db.conn().execute_batch(r#"
             CREATE INDEX IF NOT EXISTS idx_source ON tracks(source);
             CREATE INDEX IF NOT EXISTS idx_inode ON tracks(inode);
             CREATE INDEX IF NOT EXISTS idx_duration ON tracks(duration_ms);
             CREATE INDEX IF NOT EXISTS idx_fingerprint ON tracks(fingerprint);
         "#)?;
 
-        db.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        db.conn().execute_batch("PRAGMA foreign_keys = ON;")?;
         log_general("[MIGRATION v3→v4] Table swap complete");
     }
 
@@ -265,7 +265,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
 
     // Corpus tracks
     let corpus_pattern = format!("{}/%", corpus_root.trim_end_matches('/'));
-    let corpus_updated: usize = db.conn.execute(
+    let corpus_updated: usize = db.conn().execute(
         "UPDATE tracks SET path = substr(path, ?1 + 2) WHERE source = 'corpus' AND path LIKE ?2 ESCAPE '\\'",
         params![corpus_root.len() as i64, corpus_pattern],
     )?;
@@ -274,7 +274,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // Legacy tracks (if legacy_library configured)
     if let Some(ref legacy) = legacy_root {
         let legacy_pattern = format!("{}/%", legacy.trim_end_matches('/'));
-        let legacy_updated: usize = db.conn.execute(
+        let legacy_updated: usize = db.conn().execute(
             "UPDATE tracks SET path = substr(path, ?1 + 2) WHERE source = 'legacy' AND path LIKE ?2 ESCAPE '\\'",
             params![legacy.len() as i64, legacy_pattern],
         )?;
@@ -287,7 +287,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     log_general("[MIGRATION v4→v5] Converting scan_state.path");
 
     // Corpus scan state
-    let corpus_scan_updated: usize = db.conn.execute(
+    let corpus_scan_updated: usize = db.conn().execute(
         "UPDATE scan_state SET path = substr(path, ?1 + 2) WHERE source = 'corpus' AND path LIKE ?2 ESCAPE '\\'",
         params![corpus_root.len() as i64, corpus_pattern],
     )?;
@@ -296,7 +296,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // Legacy scan state
     if let Some(ref legacy) = legacy_root {
         let legacy_pattern = format!("{}/%", legacy.trim_end_matches('/'));
-        let legacy_scan_updated: usize = db.conn.execute(
+        let legacy_scan_updated: usize = db.conn().execute(
             "UPDATE scan_state SET path = substr(path, ?1 + 2) WHERE source = 'legacy' AND path LIKE ?2 ESCAPE '\\'",
             params![legacy.len() as i64, legacy_pattern],
         )?;
@@ -305,7 +305,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
 
     // Library scan state (any source that's not corpus or legacy)
     let lib_pattern = format!("{}/%", libraries_root.trim_end_matches('/'));
-    let lib_scan_updated: usize = db.conn.execute(
+    let lib_scan_updated: usize = db.conn().execute(
         "UPDATE scan_state SET path = substr(path, ?1 + 2) WHERE source NOT IN ('corpus', 'legacy') AND path LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
@@ -316,13 +316,13 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // =========================================================================
     log_general("[MIGRATION v4→v5] Converting deployment_log paths");
 
-    let deploy_corpus_updated: usize = db.conn.execute(
+    let deploy_corpus_updated: usize = db.conn().execute(
         "UPDATE deployment_log SET corpus_path = substr(corpus_path, ?1 + 2) WHERE corpus_path LIKE ?2 ESCAPE '\\'",
         params![corpus_root.len() as i64, corpus_pattern],
     )?;
     log_general(format!("[MIGRATION v4→v5] Updated {} deployment_log corpus_path entries", deploy_corpus_updated));
 
-    let deploy_lib_updated: usize = db.conn.execute(
+    let deploy_lib_updated: usize = db.conn().execute(
         "UPDATE deployment_log SET deployed_path = substr(deployed_path, ?1 + 2) WHERE deployed_path LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
@@ -333,14 +333,14 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // =========================================================================
     log_general("[MIGRATION v4→v5] Converting library_scan_state paths");
 
-    let lib_scan_file_updated: usize = db.conn.execute(
+    let lib_scan_file_updated: usize = db.conn().execute(
         "UPDATE library_scan_state SET file_path = substr(file_path, ?1 + 2) WHERE file_path LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
     log_general(format!("[MIGRATION v4→v5] Updated {} library_scan_state file_path entries", lib_scan_file_updated));
 
     // Also convert library_root to relative (or we could drop it, but let's keep it relative for now)
-    let lib_root_updated: usize = db.conn.execute(
+    let lib_root_updated: usize = db.conn().execute(
         "UPDATE library_scan_state SET library_root = substr(library_root, ?1 + 2) WHERE library_root LIKE ?2 ESCAPE '\\'",
         params![libraries_root.len() as i64, lib_pattern],
     )?;
@@ -354,7 +354,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // Corpus signals: file_in_corpus, unindexed_file, missing_file, healthy_file
     let corpus_signal_types = vec!["file_in_corpus", "unindexed_file", "missing_file", "healthy_file"];
     for signal_type in &corpus_signal_types {
-        let updated: usize = db.conn.execute(
+        let updated: usize = db.conn().execute(
             "UPDATE signals SET issue_key = substr(issue_key, ?1 + 2) WHERE issue_type = ?2 AND issue_key LIKE ?3 ESCAPE '\\'",
             params![corpus_root.len() as i64, signal_type, corpus_pattern],
         )?;
@@ -366,7 +366,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // Library signals: library_stale, library_leftover
     let library_signal_types = vec!["library_stale", "library_leftover"];
     for signal_type in &library_signal_types {
-        let updated: usize = db.conn.execute(
+        let updated: usize = db.conn().execute(
             "UPDATE signals SET issue_key = substr(issue_key, ?1 + 2) WHERE issue_type = ?2 AND issue_key LIKE ?3 ESCAPE '\\'",
             params![libraries_root.len() as i64, signal_type, lib_pattern],
         )?;
@@ -377,7 +377,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
 
     // Deploy conflict: key format is "deploy_conflict:{library_name}:{deploy_path}"
     // Need to update the deploy_path part within the key
-    let mut conflict_stmt = db.conn.prepare(
+    let mut conflict_stmt = db.conn().prepare(
         "SELECT id, issue_key FROM signals WHERE issue_type = 'deploy_conflict'"
     )?;
     let conflict_results: Vec<_> = conflict_stmt
@@ -397,7 +397,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
         // Key format: deploy_conflict:{library_name}:{deploy_path}
         // or just the deploy_path directly in newer code
         if let Some(rel_key) = strip_prefix(&key, &libraries_root) {
-            db.conn.execute(
+            db.conn().execute(
                 "UPDATE signals SET issue_key = ?1 WHERE id = ?2",
                 params![rel_key, id],
             )?;
@@ -413,7 +413,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
     // (deploy_conflict metadata has target_path and conflicting_paths)
     log_general("[MIGRATION v4→v5] Updating signal metadata paths");
 
-    let mut metadata_stmt = db.conn.prepare(
+    let mut metadata_stmt = db.conn().prepare(
         "SELECT id, metadata_json FROM signals WHERE issue_type = 'deploy_conflict' AND metadata_json IS NOT NULL"
     )?;
     let metadata_results: Vec<_> = metadata_stmt
@@ -457,7 +457,7 @@ fn migrate_to_relative_paths(db: &Database) -> Result<()> {
 
             if modified {
                 if let Ok(new_json) = serde_json::to_string(&json) {
-                    db.conn.execute(
+                    db.conn().execute(
                         "UPDATE signals SET metadata_json = ?1 WHERE id = ?2",
                         params![new_json, id],
                     )?;
@@ -491,24 +491,24 @@ fn migrate_to_domain_prefixed_paths(db: &Database) -> Result<()> {
     // =========================================================================
     // 1. tracks.path: prepend based on source
     // =========================================================================
-    let corpus_count: i64 = db.conn.query_row(
+    let corpus_count: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM tracks WHERE source = 'corpus'",
         params![],
         |row| row.get(0),
     ).unwrap_or(0);
 
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE tracks SET path = 'corpus/' || path WHERE source = 'corpus'",
         params![],
     ).context("Failed to prefix corpus track paths")?;
 
-    let legacy_count: i64 = db.conn.query_row(
+    let legacy_count: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM tracks WHERE source = 'legacy'",
         params![],
         |row| row.get(0),
     ).unwrap_or(0);
 
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE tracks SET path = 'libraries/legacy/' || path WHERE source = 'legacy'",
         params![],
     ).context("Failed to prefix legacy track paths")?;
@@ -521,12 +521,12 @@ fn migrate_to_domain_prefixed_paths(db: &Database) -> Result<()> {
     // =========================================================================
     // 2. scan_state.path: same logic
     // =========================================================================
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE scan_state SET path = 'corpus/' || path WHERE source = 'corpus'",
         params![],
     ).context("Failed to prefix corpus scan_state paths")?;
 
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE scan_state SET path = 'libraries/legacy/' || path WHERE source = 'legacy'",
         params![],
     ).context("Failed to prefix legacy scan_state paths")?;
@@ -534,12 +534,12 @@ fn migrate_to_domain_prefixed_paths(db: &Database) -> Result<()> {
     // =========================================================================
     // 3. deployment_log: different prefix per column
     // =========================================================================
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE deployment_log SET corpus_path = 'corpus/' || corpus_path",
         params![],
     ).context("Failed to prefix deployment_log corpus_path")?;
 
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE deployment_log SET deployed_path = 'libraries/' || deployed_path",
         params![],
     ).context("Failed to prefix deployment_log deployed_path")?;
@@ -547,12 +547,12 @@ fn migrate_to_domain_prefixed_paths(db: &Database) -> Result<()> {
     // =========================================================================
     // 4. library_scan_state: all library-relative
     // =========================================================================
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE library_scan_state SET file_path = 'libraries/' || file_path",
         params![],
     ).context("Failed to prefix library_scan_state file_path")?;
 
-    db.conn.execute(
+    db.conn().execute(
         "UPDATE library_scan_state SET library_root = 'libraries/' || library_root",
         params![],
     ).context("Failed to prefix library_scan_state library_root")?;
@@ -560,7 +560,7 @@ fn migrate_to_domain_prefixed_paths(db: &Database) -> Result<()> {
     // =========================================================================
     // 5. signals: clear all (recomputed on next observation)
     // =========================================================================
-    db.conn.execute("DELETE FROM signals", params![])
+    db.conn().execute("DELETE FROM signals", params![])
         .context("Failed to clear signals")?;
 
     log_general("[MIGRATION v5→v6] Cleared all signals (will be recomputed)");
@@ -877,27 +877,27 @@ mod integration_tests {
         "#).unwrap();
 
         // Add some tracks with TEXT fingerprints
-        db.conn.execute(
+        db.conn().execute(
             "INSERT INTO tracks (path, source, inode, file_size, file_type, fingerprint) VALUES (?1, 'corpus', 1, 1000, 'flac', ?2)",
             params!["/test/track1.flac", "100,200,300,400"],
         ).unwrap();
-        db.conn.execute(
+        db.conn().execute(
             "INSERT INTO tracks (path, source, inode, file_size, file_type, fingerprint) VALUES (?1, 'corpus', 2, 1000, 'flac', ?2)",
             params!["/test/track2.flac", "100,200,300,400"],  // Same fingerprint = duplicate
         ).unwrap();
-        db.conn.execute(
+        db.conn().execute(
             "INSERT INTO tracks (path, source, inode, file_size, file_type, fingerprint) VALUES (?1, 'corpus', 3, 1000, 'flac', ?2)",
             params!["/test/track3.flac", "500,600,700,800"],  // Different fingerprint
         ).unwrap();
 
         // Add fingerprint_dup signal with redundant fingerprint in metadata
-        db.conn.execute(
+        db.conn().execute(
             r#"INSERT INTO signals (issue_type, issue_key, metadata_json) VALUES ('fingerprint_dup', '100,200,300,400', ?1)"#,
             params![r#"{"fingerprint":"100,200,300,400","track_ids":[1,2]}"#],
         ).unwrap();
 
         // Verify TEXT fingerprints before migration
-        let fp_before: String = db.conn.query_row(
+        let fp_before: String = db.conn().query_row(
             "SELECT fingerprint FROM tracks WHERE id = 1",
             [],
             |row| row.get(0),
@@ -912,7 +912,7 @@ mod integration_tests {
         assert_eq!(version, 4);
 
         // Verify fingerprints are now BLOB
-        let fp_blob: Vec<u8> = db.conn.query_row(
+        let fp_blob: Vec<u8> = db.conn().query_row(
             "SELECT fingerprint FROM tracks WHERE id = 1",
             [],
             |row| row.get(0),
@@ -929,7 +929,7 @@ mod integration_tests {
         assert_eq!(values, vec![100, 200, 300, 400]);
 
         // Verify signal metadata no longer contains fingerprint
-        let metadata_json: String = db.conn.query_row(
+        let metadata_json: String = db.conn().query_row(
             "SELECT metadata_json FROM signals WHERE issue_type = 'fingerprint_dup'",
             [],
             |row| row.get(0),

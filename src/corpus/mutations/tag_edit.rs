@@ -19,6 +19,8 @@ use super::sealed::MutationToken;
 use super::types::{Mutation, MutationResult, TagEdit};
 
 /// Execute a database-only tag edit (no disk write).
+///
+/// Uses read-only DB for path lookup, routes writes through signal_sender.
 fn execute_db_only(
     db: &Database,
     track_id: i64,
@@ -27,14 +29,28 @@ fn execute_db_only(
     new_value: Option<&str>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    // Log the edit to history
-    db.log_tag_edit(track_id, tag_name, old_value, new_value, "mutation")
-        .context("Failed to log tag edit")?;
+    use crate::db_thread;
 
-    // Update the track record
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Get track path from DB (read-only)
+    let track = db.get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Log the edit to history via signal_sender
+    sender.log_tag_edit(
+        &track.path,
+        tag_name,
+        old_value,
+        new_value,
+        "mutation",
+        witness,
+    );
+
+    // Update the track record via signal_sender
     if let Some(value) = new_value {
-        db.update_track_tag(track_id, tag_name, value, witness)
-            .context("Failed to update track tag in database")?;
+        sender.update_track_tag(&track.path, tag_name, value, witness);
     }
 
     Ok(())
@@ -190,15 +206,32 @@ fn detect_multi_value_edits(edits: &[TagEdit]) -> bool {
 /// Execute standard single-value tag edits.
 ///
 /// Uses `apply_edits_to_file()` from corpus::tags for surgical edit-in-place.
+/// Routes DB writes through signal_sender.
 fn execute_combined_single_value(
     db: &Database,
-    track_id: i64,
+    _track_id: i64,
     path: &Path,
     edits: &[TagEdit],
     session_id: &str,
     token: &MutationToken,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
+    use crate::corpus::paths;
+    use crate::db_thread;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let resolver = paths::get_resolver();
+
+    // Get relative path for DB operations
+    let rel_path = resolver.to_relative(path)
+        .ok_or_else(|| anyhow::anyhow!("Path {} not in corpus root", path.display()))?;
+    let rel_path_str = rel_path.to_string_lossy();
+
+    // Verify track exists (read-only check)
+    let _track = db.get_track_by_path(&rel_path_str)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", rel_path_str))?;
+
     // Convert TagEdit to (tag_name, old_value, new_value) triples for apply_edits_to_file
     let edit_triples: Vec<(String, Option<String>, Option<String>)> = edits
         .iter()
@@ -209,20 +242,19 @@ fn execute_combined_single_value(
     apply_edits_to_file(path, &edit_triples, token)
         .with_context(|| format!("Failed to apply tag edits to {}", path.display()))?;
 
-    // Update database
+    // Update database via signal_sender
     for edit in edits {
-        db.log_tag_edit(
-            track_id,
+        sender.log_tag_edit(
+            &rel_path_str,
             &edit.tag_name,
             edit.old_value.as_deref(),
             edit.new_value.as_deref(),
             session_id,
-        )
-        .context("Failed to log tag edit")?;
+            witness,
+        );
 
         if let Some(ref new_value) = edit.new_value {
-            db.update_track_tag(track_id, &edit.tag_name, new_value, witness)
-                .context("Failed to update track tag in database")?;
+            sender.update_track_tag(&rel_path_str, &edit.tag_name, new_value, witness);
         }
     }
 
@@ -237,9 +269,10 @@ fn execute_combined_single_value(
 /// - Insert "genre" = "Metal"
 ///
 /// Uses `write_file_tags()` from corpus::tags for proper multi-value support.
+/// Routes DB writes through signal_sender.
 fn execute_combined_multi_value(
     db: &Database,
-    track_id: i64,
+    _track_id: i64,
     path: &Path,
     edits: &[TagEdit],
     session_id: &str,
@@ -247,6 +280,22 @@ fn execute_combined_multi_value(
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use std::collections::HashSet;
+    use crate::corpus::paths;
+    use crate::db_thread;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let resolver = paths::get_resolver();
+
+    // Get relative path for DB operations
+    let rel_path = resolver.to_relative(path)
+        .ok_or_else(|| anyhow::anyhow!("Path {} not in corpus root", path.display()))?;
+    let rel_path_str = rel_path.to_string_lossy();
+
+    // Verify track exists and get track_id for tag lookup (read-only)
+    let track = db.get_track_by_path(&rel_path_str)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", rel_path_str))?;
+    let track_id = track.id.ok_or_else(|| anyhow::anyhow!("Track has no id"))?;
 
     // 1. Read current tags
     let current_tags = TagSet::from_file(path)
@@ -278,16 +327,15 @@ fn execute_combined_multi_value(
     write_file_tags(path, &final_tagset, token)
         .context("Failed to write multi-value tags to file")?;
 
-    // 6. Update database
+    // 6. Update database via signal_sender
     // Delete old values for tags being replaced
     for tag_name in &replaced_tag_names {
-        db.delete_track_tag(track_id, tag_name, witness)
-            .context("Failed to delete old tag value from database")?;
+        sender.delete_track_tag(&rel_path_str, tag_name, witness);
     }
 
-    // Get existing DB tags for tags NOT being replaced
+    // Get existing DB tags for tags NOT being replaced (read-only via track_id)
     let existing_db_tags = db.get_track_tags(track_id)
-        .with_context(|| format!("Failed to read existing tags for track {}", track_id))?;
+        .with_context(|| format!("Failed to read existing tags for track {}", rel_path_str))?;
     let mut final_db_tags: Vec<(String, String)> = existing_db_tags
         .into_iter()
         .filter(|t| !replaced_tag_names.contains(&t.tag_name.to_lowercase()))
@@ -301,20 +349,19 @@ fn execute_combined_multi_value(
         }
     }
 
-    // Write all tags to DB
-    db.set_track_tags(track_id, &final_db_tags, witness)
-        .context("Failed to update track tags in database")?;
+    // Write all tags to DB via signal_sender
+    sender.set_track_tags(&rel_path_str, final_db_tags, witness);
 
-    // 7. Log all edits to history
+    // 7. Log all edits to history via signal_sender
     for edit in edits {
-        db.log_tag_edit(
-            track_id,
+        sender.log_tag_edit(
+            &rel_path_str,
             &edit.tag_name,
             edit.old_value.as_deref(),
             edit.new_value.as_deref(),
             session_id,
-        )
-        .context("Failed to log tag edit")?;
+            witness,
+        );
     }
 
     Ok(())

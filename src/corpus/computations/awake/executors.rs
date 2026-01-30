@@ -97,36 +97,13 @@ pub fn execute_detect_fingerprint_duplicates(
     };
 
     // Find all fingerprints with duplicates
-    // fingerprint is now BLOB, GROUP BY works on BLOBs in SQLite
-    let query = "SELECT fingerprint, GROUP_CONCAT(id) as track_ids
-                 FROM tracks
-                 WHERE fingerprint IS NOT NULL
-                 GROUP BY fingerprint
-                 HAVING COUNT(*) > 1";
-
-    let mut stmt = match read_only_db.conn.prepare(query) {
-        Ok(s) => s,
+    let duplicate_groups = match read_only_db.get_duplicate_fingerprint_groups() {
+        Ok(groups) => groups,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to prepare query: {}", e),
-            );
-        }
-    };
-
-    let rows = match stmt.query_map(params![], |row| {
-        // fingerprint is BLOB, convert to Vec<u32> then to text for signal key
-        let fp_blob: Vec<u8> = row.get(0)?;
-        let track_ids_str: String = row.get(1)?;
-        Ok((fp_blob, track_ids_str))
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to execute query: {}", e),
+                format!("Failed to query fingerprint duplicates: {}", e),
             );
         }
     };
@@ -135,18 +112,7 @@ pub fn execute_detect_fingerprint_duplicates(
     let mut computed = Vec::new();
     let mut total_tracks = 0;
 
-    for row_result in rows {
-        let (fp_blob, track_ids_str) = match row_result {
-            Ok(r) => r,
-            Err(e) => {
-                log_general(format!(
-                    "[COMPUTE] DetectFingerprintDuplicates: row error: {}",
-                    e
-                ));
-                continue;
-            }
-        };
-
+    for (fp_blob, track_ids_str) in duplicate_groups {
         // Convert BLOB to Vec<u32> then to text for signal key
         let fp_u32: Vec<u32> = fp_blob
             .chunks_exact(4)
@@ -211,33 +177,13 @@ pub fn execute_detect_duplicate_inodes(
         }
     };
 
-    let query = "SELECT inode, GROUP_CONCAT(id) as track_ids
-                 FROM tracks
-                 GROUP BY inode
-                 HAVING COUNT(*) > 1";
-
-    let mut stmt = match read_only_db.conn.prepare(query) {
-        Ok(s) => s,
+    let duplicate_groups = match read_only_db.get_duplicate_inode_groups() {
+        Ok(groups) => groups,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to prepare query: {}", e),
-            );
-        }
-    };
-
-    let rows = match stmt.query_map(params![], |row| {
-        let inode: i64 = row.get(0)?;
-        let track_ids_str: String = row.get(1)?;
-        Ok((inode, track_ids_str))
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to execute query: {}", e),
+                format!("Failed to query duplicate inodes: {}", e),
             );
         }
     };
@@ -245,18 +191,7 @@ pub fn execute_detect_duplicate_inodes(
     // Build computed signals
     let mut computed = Vec::new();
 
-    for row_result in rows {
-        let (inode, track_ids_str) = match row_result {
-            Ok(r) => r,
-            Err(e) => {
-                log_general(format!(
-                    "[COMPUTE] DetectDuplicateInodes: row error: {}",
-                    e
-                ));
-                continue;
-            }
-        };
-
+    for (inode, track_ids_str) in duplicate_groups {
         let track_ids = parse_track_ids_csv(&track_ids_str);
 
         let metadata = serde_json::json!({
@@ -337,50 +272,20 @@ pub fn execute_detect_missing_tags(
     // Clear all existing MissingTag signals (routes through db_thread)
     sender.clear_signals_by_type(SignalType::MissingTag, witness);
 
-    let query = "
-        SELECT t.id, t.path,
-               (SELECT tag_value FROM track_tags WHERE track_id = t.id AND LOWER(tag_name) = 'album' LIMIT 1) as album,
-               GROUP_CONCAT(LOWER(tt.tag_name), ',') as present_tags
-        FROM tracks t
-        LEFT JOIN track_tags tt ON t.id = tt.track_id
-        GROUP BY t.id
-    ";
-
-    let mut stmt = match read_only_db.conn.prepare(query) {
-        Ok(s) => s,
+    let tracks_with_tags = match read_only_db.get_tracks_with_tag_presence() {
+        Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to prepare query: {}", e),
+                format!("Failed to query tracks with tag presence: {}", e),
             );
         }
     };
 
     let mut groups: HashMap<String, (HashSet<String>, Vec<i64>)> = HashMap::new();
 
-    let rows = match stmt.query_map(params![], |row| {
-        let track_id: i64 = row.get(0)?;
-        let path: String = row.get(1)?;
-        let album: Option<String> = row.get(2)?;
-        let present_tags: Option<String> = row.get(3)?;
-        Ok((track_id, path, album, present_tags))
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to execute query: {}", e),
-            );
-        }
-    };
-
-    for row_result in rows {
-        let (track_id, path, album, present_tags_str) = match row_result {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+    for (track_id, path, album, present_tags_str) in tracks_with_tags {
 
         let present_tags: HashSet<String> = present_tags_str
             .unwrap_or_default()
@@ -469,47 +374,20 @@ pub fn execute_detect_metadata_duplicates(
     // Clear all MetadataDuplicate signals (routes through db_thread)
     sender.clear_signals_by_type(SignalType::MetadataDuplicate, witness);
 
-    let query = "
-        SELECT t.id, tt.tag_name, tt.tag_value
-        FROM tracks t
-        JOIN track_tags tt ON t.id = tt.track_id
-        ORDER BY t.id, LOWER(tt.tag_name)
-    ";
-
-    let mut stmt = match read_only_db.conn.prepare(query) {
-        Ok(s) => s,
+    let all_tags = match read_only_db.get_all_track_tags_ordered() {
+        Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to prepare query: {}", e),
+                format!("Failed to query track tags: {}", e),
             );
         }
     };
 
     let mut track_tags: HashMap<i64, Vec<(String, String)>> = HashMap::new();
 
-    let rows = match stmt.query_map(params![], |row| {
-        let track_id: i64 = row.get(0)?;
-        let tag_name: String = row.get(1)?;
-        let tag_value: String = row.get(2)?;
-        Ok((track_id, tag_name, tag_value))
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to execute query: {}", e),
-            );
-        }
-    };
-
-    for row_result in rows {
-        let (track_id, tag_name, tag_value) = match row_result {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+    for (track_id, tag_name, tag_value) in all_tags {
         track_tags
             .entry(track_id)
             .or_default()

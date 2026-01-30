@@ -1,11 +1,18 @@
 //! Task execution for mutations, computations, and migrations.
 //!
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
+//!
+//! ## DB Access Patterns
+//!
+//! - **Mutations**: Use thread-local read-only connection (`with_read_only_db`).
+//!   All writes go through `db_thread::signal_sender()`.
+//! - **Computations**: Use thread-local read-only connection (same pattern).
+//! - **Migrations**: Open write connection via `Database::open()` (requires schema changes).
 
 use std::time::Instant;
 
 use crate::config;
-use crate::corpus::computations::{Computation, awakening};
+use crate::corpus::computations::{Computation, awakening, with_read_only_db};
 use crate::corpus::db::types::{AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::db::Database;
 use crate::corpus::health::normalization::{
@@ -17,11 +24,15 @@ use crate::db_thread;
 use super::types::{Migration, MigrationWitness, MutationExecutionWitness, Task, TaskResult};
 
 // ============================================================================
-// Database Opening Helper
+// Database Opening Helper (Migrations Only)
 // ============================================================================
 
-/// Open database for task execution, returning error TaskResult if it fails.
-pub(super) fn open_db_for_task(label: String, start: Instant, queue_wait_ms: u64) -> Result<Database, TaskResult> {
+/// Open a write-capable database connection for migrations.
+///
+/// Migrations require write access because they may alter the database schema.
+/// Regular mutations and computations use thread-local read-only connections
+/// via `with_read_only_db()` and route writes through `db_thread::signal_sender()`.
+fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> Result<Database, TaskResult> {
     match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
         Ok(db) => Ok(db),
         Err(e) => {
@@ -57,7 +68,10 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
     }
 }
 
-/// Execute a single mutation. Opens DB connection as needed.
+/// Execute a single mutation using thread-local read-only DB connection.
+///
+/// All writes go through `db_thread::signal_sender()`. Read operations use
+/// the same thread-local cached connection as computations.
 pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> TaskResult {
     use crate::corpus::mutations::{file_ops, tag_edit, indexing, MutationCategory};
 
@@ -71,44 +85,62 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Create execution witness - proves we're inside the Witch's execution context
     let witness = MutationExecutionWitness::new();
 
-    // Open database
-    let db = match open_db_for_task(label.clone(), start, queue_wait_ms) {
-        Ok(db) => db,
-        Err(result) => return result,
-    };
-
-    let session_id = "witch";
-
     // Load config for stash_root access (needed by file_ops and transcode)
     let loaded_config = config::load_config().ok();
     let stash_root = loaded_config.as_ref().map(|c| c.stash_dir());
 
-    let (success, error) = match mutation.category() {
-        MutationCategory::TagEdit => {
-            crate::logging::log_mutation(format!(
-                "[EXECUTION] TagEdit mutation: {:?}",
-                mutation
+    let session_id = "witch";
+
+    // Execute mutation using thread-local read-only DB connection.
+    // All writes go through db_thread::signal_sender() (fire-and-forget).
+    let result = with_read_only_db(|read_db| {
+        match mutation.category() {
+            MutationCategory::TagEdit => {
+                crate::logging::log_mutation(format!(
+                    "[EXECUTION] TagEdit mutation: {:?}",
+                    mutation
+                ));
+                let r = tag_edit::execute_single(read_db, &mutation, session_id, &witness);
+                (r.success, r.error)
+            }
+            MutationCategory::FileMove | MutationCategory::FileCopy |
+            MutationCategory::Deployment => {
+                let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
+                (r.success, r.error)
+            }
+            MutationCategory::Indexing => {
+                let r = indexing::execute_single(read_db, &mutation, &witness);
+                (r.success, r.error)
+            }
+            MutationCategory::Migration => {
+                (false, Some("Migrations not supported in Witch executor".to_string()))
+            }
+            MutationCategory::Transcode => {
+                let r = crate::corpus::mutations::transcode::execute_single(
+                    read_db, &mutation, stash_root.as_deref(), &witness,
+                );
+                (r.success, r.error)
+            }
+        }
+    });
+
+    // Handle DB access failure
+    let (success, error) = match result {
+        Ok((s, e)) => (s, e),
+        Err(db_err) => {
+            crate::logging::log_error(format!(
+                "[EXECUTION] DB access FAILED: {}",
+                db_err
             ));
-            let r = tag_edit::execute_single(&db, &mutation, session_id, &witness);
-            (r.success, r.error)
-        }
-        MutationCategory::FileMove | MutationCategory::FileCopy |
-        MutationCategory::Deployment => {
-            let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
-            (r.success, r.error)
-        }
-        MutationCategory::Indexing => {
-            let r = indexing::execute_single(&db, &mutation, &witness);
-            (r.success, r.error)
-        }
-        MutationCategory::Migration => {
-            (false, Some("Migrations not supported in Witch executor".to_string()))
-        }
-        MutationCategory::Transcode => {
-            let r = crate::corpus::mutations::transcode::execute_single(
-                &db, &mutation, stash_root.as_deref(), &witness,
-            );
-            (r.success, r.error)
+            return TaskResult {
+                success: false,
+                error: Some(format!("DB access failed: {}", db_err)),
+                label,
+                spawn: Vec::new(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                queue_wait_ms,
+                thread_stats: None,
+            };
         }
     };
 
@@ -169,9 +201,12 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     // Clear affected TagCanonicity and InconsistentAlbumArtist signals after successful tag edits
     // The next awake-phase computations will recreate any still-valid signals
+    // Uses with_read_only_db for the reads, signal_sender for writes
     if success {
         if let Mutation::TagEditAndFlush { track_id, edits, .. } = &mutation {
-            clear_affected_canonicity_signals(&db, *track_id, edits, &witness);
+            let _ = with_read_only_db(|read_db| {
+                clear_affected_canonicity_signals(read_db, *track_id, edits, &witness);
+            });
         }
     }
 
@@ -193,17 +228,20 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             Mutation::IndexFileFromPath { path, .. } => {
                 if let Some(rel) = resolver.to_relative(path) {
                     let rel_str = rel.to_string_lossy();
-                    if let Ok(Some(track)) = db.get_track_by_path(&rel_str) {
-                        if track.fingerprint.is_none() {
-                            if let Some(sender) = db_thread::signal_sender() {
-                                sender.ensure_file_signal(
-                                    CorpusFileSignalType::WaveformReadError.into(),
-                                    &rel_str,
-                                    &witness,
-                                );
+                    // Check fingerprint via read-only DB
+                    let _ = with_read_only_db(|read_db| {
+                        if let Ok(Some(track)) = read_db.get_track_by_path(&rel_str) {
+                            if track.fingerprint.is_none() {
+                                if let Some(sender) = db_thread::signal_sender() {
+                                    sender.ensure_file_signal(
+                                        CorpusFileSignalType::WaveformReadError.into(),
+                                        &rel_str,
+                                        &witness,
+                                    );
+                                }
                             }
                         }
-                    }
+                    });
                 }
             }
             _ => {}
@@ -214,16 +252,19 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // This prevents stale signals from persisting when mutations change corpus truth
     // (e.g. MissingFile signals surviving after a DropFromIndex removes the track).
     // The spawned signal update computations will re-derive any still-valid signals.
+    // Uses signal_sender for the writes (fire-and-forget).
     if success {
-        let resolver = crate::corpus::paths::get_resolver();
-        for path in mutation.affected_paths() {
-            let signal_key = if path.is_absolute() {
-                resolver.to_relative(&path)
-            } else {
-                Some(path)  // already root-relative
-            };
-            if let Some(key) = signal_key {
-                let _ = db.delete_signals_for_path(&key.to_string_lossy());
+        if let Some(sender) = db_thread::signal_sender() {
+            let resolver = crate::corpus::paths::get_resolver();
+            for path in mutation.affected_paths() {
+                let signal_key = if path.is_absolute() {
+                    resolver.to_relative(&path)
+                } else {
+                    Some(path)  // already root-relative
+                };
+                if let Some(key) = signal_key {
+                    sender.clear_signals_for_path(&key.to_string_lossy(), &witness);
+                }
             }
         }
     }
@@ -270,7 +311,10 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             }
             Mutation::LibraryMove { source, .. } => {
                 // Clear LibraryStale signals for the old (source) path
-                clear_library_stale_signals(&db, source, &witness);
+                // Uses with_read_only_db for reads, signal_sender for writes
+                let _ = with_read_only_db(|read_db| {
+                    clear_library_stale_signals(read_db, source, &witness);
+                });
             }
             _ => {}
         }
@@ -322,8 +366,8 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
     // Create migration witness - proves we're inside the Witch's execution context
     let witness = MigrationWitness::new();
 
-    // Open database
-    let db = match open_db_for_task(label.clone(), start, queue_wait_ms) {
+    // Open write-capable database (migrations require schema changes)
+    let db = match open_db_for_migration(label.clone(), start, queue_wait_ms) {
         Ok(db) => db,
         Err(result) => return result,
     };

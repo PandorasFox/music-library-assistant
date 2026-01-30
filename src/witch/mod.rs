@@ -916,7 +916,7 @@ impl Witch {
     ///
     /// ```ignore
     /// let read_db = witch.read_db();
-    /// let tracks = read_db.inner().get_all_tracks(None)?;
+    /// let tracks = read_db.get_all_tracks(None)?;
     /// ```
     ///
     /// # Panics

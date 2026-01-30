@@ -32,7 +32,7 @@ impl App {
         // Load tracks from database using relative path
         let (tracks, selected_idx) = if recursive {
             // Get all tracks in directory and subdirectories (no fingerprint filter)
-            match read_db.inner().get_tracks_for_tag_editing(&rel_path) {
+            match read_db.get_tracks_for_tag_editing(&rel_path) {
                 Ok(t) => (t, 0usize),
                 Err(e) => {
                     self.abort_to_insights(format!(
@@ -57,7 +57,7 @@ impl App {
             };
 
             // Load all tracks from parent directory (non-recursive, just this folder)
-            let dir_tracks = match read_db.inner().get_tracks_for_tag_editing(rel_parent) {
+            let dir_tracks = match read_db.get_tracks_for_tag_editing(rel_parent) {
                 Ok(t) => t,
                 Err(e) => {
                     self.abort_to_insights(format!(
@@ -93,7 +93,7 @@ impl App {
 
             if tracks_in_dir.is_empty() {
                 // Fallback: try to get just the single track
-                match read_db.inner().get_track_by_path(&rel_path_str) {
+                match read_db.get_track_by_path(&rel_path_str) {
                     Ok(Some(track)) => (vec![track], 0),
                     Ok(None) => {
                         self.abort_to_insights(format!(
@@ -223,7 +223,7 @@ impl App {
             }
         };
 
-        let tracks = match read_db.inner().get_tracks_for_tag_editing(&rel_dir) {
+        let tracks = match read_db.get_tracks_for_tag_editing(&rel_dir) {
             Ok(tracks) => tracks,
             Err(e) => {
                 self.status_message = Some(format!("Failed to query tracks: {}", e));

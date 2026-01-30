@@ -73,9 +73,19 @@ impl InodeChangedState {
         }
     }
 
-    /// Get track IDs for all files (for the mutation)
-    pub fn track_ids(&self) -> Vec<i64> {
-        self.files.iter().map(|f| f.track_id).collect()
+    /// Get track IDs with resolved absolute paths for the mutation.
+    ///
+    /// Uses the path resolver to convert relative DB paths to absolute filesystem paths.
+    pub fn tracks_with_paths(&self) -> Vec<(i64, std::path::PathBuf)> {
+        use crate::corpus::paths;
+        let resolver = paths::get_resolver();
+        self.files
+            .iter()
+            .map(|f| {
+                let abs_path = resolver.resolve(std::path::Path::new(&f.path));
+                (f.track_id, abs_path)
+            })
+            .collect()
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> InodeChangedAction {

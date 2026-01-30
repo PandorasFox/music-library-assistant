@@ -894,13 +894,13 @@ impl App {
             return;
         }
 
-        let track_ids = state.track_ids();
+        let tracks = state.tracks_with_paths();
         let label = format!(
             "Acknowledge {} inode change{}",
-            track_ids.len(),
-            if track_ids.len() == 1 { "" } else { "s" }
+            tracks.len(),
+            if tracks.len() == 1 { "" } else { "s" }
         );
-        let mutations = vec![Mutation::AcknowledgeInodeChanged { track_ids }];
+        let mutations = vec![Mutation::AcknowledgeInodeChanged { tracks }];
 
         // Stage the AcknowledgeInodeChanged mutation
         if let Some(ref mut witch) = self.witch {
@@ -1163,7 +1163,9 @@ impl App {
     fn stage_oob_mtime_acknowledgement(&mut self) {
         use crate::corpus::mutations::Mutation;
 
-        let files_data = match self.oob_conflict_state.as_ref() {
+        let resolver = paths::get_resolver();
+
+        let tracks = match self.oob_conflict_state.as_ref() {
             Some(state) => {
                 let bucket_state = state.active_bucket_state();
 
@@ -1178,21 +1180,22 @@ impl App {
                 indices
                     .iter()
                     .filter_map(|&idx| bucket_state.files.get(idx))
-                    .map(|f| f.track_id)
+                    .map(|f| {
+                        let abs_path = resolver.resolve(std::path::Path::new(&f.path));
+                        (f.track_id, abs_path)
+                    })
                     .collect::<Vec<_>>()
             }
             None => return,
         };
 
-        if files_data.is_empty() {
+        if tracks.is_empty() {
             self.status_message = Some("No files selected to acknowledge".to_string());
             return;
         }
 
-        // Create single mutation with all track IDs
-        let mutations = vec![Mutation::AcknowledgeMtimeOnly {
-            track_ids: files_data,
-        }];
+        // Create single mutation with all tracks (id, path)
+        let mutations = vec![Mutation::AcknowledgeMtimeOnly { tracks }];
 
         if let Some(ref mut witch) = self.witch {
             let _ = super::operator_decisions::stage_decision(
@@ -1362,25 +1365,30 @@ impl App {
             .map(|c| c.current_index())
             .unwrap_or(0);
 
-        // Get track paths from witch (resolved to absolute for mutations)
-        let track_paths = self.witch.as_mut()
+        // Get track info from witch: path and current tag value
+        // This allows mutations_with_paths to verify each track still has the compound value
+        let track_info = self.witch.as_mut()
             .map(|w| {
                 let read_db = w.read_db();
                 let resolver = paths::get_resolver();
-                let mut paths = std::collections::HashMap::new();
+                let mut info = std::collections::HashMap::new();
                 for &track_id in &state.data.track_ids {
                     if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                         // Resolve relative DB path to absolute for filesystem operations
                         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-                        paths.insert(track_id, abs_path);
+                        // Query current value for this tag
+                        let current_value = read_db.get_track_tag_value(track_id, &state.data.tag_name)
+                            .ok()
+                            .flatten();
+                        info.insert(track_id, (abs_path, current_value));
                     }
                 }
-                paths
+                info
             })
             .unwrap_or_default();
 
-        // Generate mutations
-        let mutations = state.mutations_with_paths(&track_paths);
+        // Generate mutations (only for tracks that still have the compound value)
+        let mutations = state.mutations_with_paths(&track_info);
 
         if mutations.is_empty() {
             return;
@@ -1450,18 +1458,21 @@ impl App {
                     continue;
                 };
 
-                // Build track paths (resolved to absolute for mutations)
-                let mut track_paths = std::collections::HashMap::new();
+                // Build track info: path and current tag value
+                let mut track_info = std::collections::HashMap::new();
                 for &track_id in &data.track_ids {
                     if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-                        track_paths.insert(track_id, abs_path);
+                        let current_value = read_db.get_track_tag_value(track_id, &data.tag_name)
+                            .ok()
+                            .flatten();
+                        track_info.insert(track_id, (abs_path, current_value));
                     }
                 }
 
                 // Create temporary state to generate mutations
                 let state = compound_split::CompoundSplitState::new(data.clone(), idx, total);
-                let mutations = state.mutations_with_paths(&track_paths);
+                let mutations = state.mutations_with_paths(&track_info);
 
                 if mutations.is_empty() {
                     continue;

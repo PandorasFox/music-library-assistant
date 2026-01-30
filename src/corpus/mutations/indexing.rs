@@ -473,30 +473,26 @@ pub fn execute_verify_tags(
 /// changed but tags are identical.
 pub fn execute_acknowledge_mtime_only(
     db: &Database,
-    track_ids: &[i64],
+    tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
     use crate::db_thread;
     use std::os::unix::fs::MetadataExt;
 
-    let resolver = paths::get_resolver();
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
-    for track_id in track_ids {
-        // Get track info
+    for (track_id, abs_path) in tracks {
+        // Get track info (need relative path for DB operations)
         let track = match db.get_track_by_id(*track_id)? {
             Some(t) => t,
             None => continue, // Skip missing tracks
         };
 
-        // Resolve absolute path for filesystem access
-        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-
         // Read current disk mtime
-        let metadata = std::fs::metadata(&abs_path)
+        let metadata = std::fs::metadata(abs_path)
             .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
         let mtime_secs = metadata.mtime();
         let mtime_nanos = metadata.mtime_nsec() as i64;
@@ -516,7 +512,7 @@ pub fn execute_acknowledge_mtime_only(
             witness,
         );
 
-        affected_paths.push(abs_path);
+        affected_paths.push(abs_path.clone());
     }
 
     Ok(affected_paths)
@@ -529,30 +525,26 @@ pub fn execute_acknowledge_mtime_only(
 /// Tag differences are handled separately through the OOB tag resolution flow.
 pub fn execute_acknowledge_inode_changed(
     db: &Database,
-    track_ids: &[i64],
+    tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
     use crate::db_thread::{self, ScanStateData};
     use std::os::unix::fs::MetadataExt;
 
-    let resolver = paths::get_resolver();
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
-    for track_id in track_ids {
-        // Get track info
+    for (track_id, abs_path) in tracks {
+        // Get track info (need relative path and old inode for DB operations)
         let track = match db.get_track_by_id(*track_id)? {
             Some(t) => t,
             None => continue, // Skip missing tracks
         };
 
-        // Resolve absolute path for filesystem access
-        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-
         // Read current disk metadata
-        let metadata = std::fs::metadata(&abs_path)
+        let metadata = std::fs::metadata(abs_path)
             .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
         let new_inode = metadata.ino() as i64;
         let mtime_secs = metadata.mtime();
@@ -585,7 +577,7 @@ pub fn execute_acknowledge_inode_changed(
             witness,
         );
 
-        affected_paths.push(abs_path);
+        affected_paths.push(abs_path.clone());
     }
 
     Ok(affected_paths)
@@ -598,25 +590,15 @@ pub fn execute_acknowledge_inode_changed(
 /// Used to reject disk-side changes and restore DB state to disk.
 pub fn execute_apply_db_tags_to_disk(
     db: &Database,
-    track_ids: &[i64],
+    tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::tags::{write_file_tags, TagSet};
 
-    let resolver = paths::get_resolver();
     let token = super::sealed::MutationToken::new();
     let mut affected_paths = Vec::new();
 
-    for track_id in track_ids {
-        // Get track info
-        let track = match db.get_track_by_id(*track_id)? {
-            Some(t) => t,
-            None => continue,
-        };
-
-        // Resolve absolute path for filesystem access
-        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-
+    for (track_id, abs_path) in tracks {
         // Get DB tags and convert to TagSet
         let db_tags = db.get_track_tags(*track_id)?;
         let tag_set = TagSet::new(
@@ -625,10 +607,10 @@ pub fn execute_apply_db_tags_to_disk(
 
         // Write tags to disk using the consolidated write path
         // (also clears OOB signals, tag_mismatches, and updates scan_state mtime)
-        write_file_tags(&abs_path, &tag_set, &token, witness)
+        write_file_tags(abs_path, &tag_set, &token, witness)
             .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
 
-        affected_paths.push(abs_path);
+        affected_paths.push(abs_path.clone());
     }
 
     Ok(affected_paths)
@@ -641,7 +623,7 @@ pub fn execute_apply_db_tags_to_disk(
 /// and update DB to match disk.
 pub fn execute_assimilate_disk_tags_to_db(
     db: &Database,
-    track_ids: &[i64],
+    tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
@@ -649,30 +631,26 @@ pub fn execute_assimilate_disk_tags_to_db(
     use crate::db_thread;
     use std::os::unix::fs::MetadataExt;
 
-    let resolver = paths::get_resolver();
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
-    for track_id in track_ids {
-        // Get track info
+    for (track_id, abs_path) in tracks {
+        // Get track info (need relative path for DB operations)
         let track = match db.get_track_by_id(*track_id)? {
             Some(t) => t,
             None => continue,
         };
 
-        // Resolve absolute path for filesystem access
-        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-
         // Read disk tags using TagSet
-        let disk_tagset = TagSet::from_file(&abs_path)
+        let disk_tagset = TagSet::from_file(abs_path)
             .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
         // Update DB with disk tags via db_thread
         sender.set_track_tags(&track.path, disk_tagset.into_vec(), witness);
 
         // Read disk mtime
-        let file_metadata = std::fs::metadata(&abs_path)
+        let file_metadata = std::fs::metadata(abs_path)
             .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
         let mtime_secs = file_metadata.mtime();
         let mtime_nanos = file_metadata.mtime_nsec() as i64;
@@ -705,7 +683,7 @@ pub fn execute_assimilate_disk_tags_to_db(
             witness,
         );
 
-        affected_paths.push(abs_path);
+        affected_paths.push(abs_path.clone());
     }
 
     Ok(affected_paths)
@@ -778,20 +756,20 @@ pub fn execute_single(
         } => execute_update_track(db, *track_id, path, metadata, witness),
 
         // OOB resolution mutations
-        Mutation::AcknowledgeMtimeOnly { track_ids } => {
-            execute_acknowledge_mtime_only(db, track_ids, witness).map(|_| ())
+        Mutation::AcknowledgeMtimeOnly { tracks } => {
+            execute_acknowledge_mtime_only(db, tracks, witness).map(|_| ())
         }
 
-        Mutation::AcknowledgeInodeChanged { track_ids } => {
-            execute_acknowledge_inode_changed(db, track_ids, witness).map(|_| ())
+        Mutation::AcknowledgeInodeChanged { tracks } => {
+            execute_acknowledge_inode_changed(db, tracks, witness).map(|_| ())
         }
 
-        Mutation::ApplyDbTagsToDisk { track_ids } => {
-            execute_apply_db_tags_to_disk(db, track_ids, witness).map(|_| ())
+        Mutation::ApplyDbTagsToDisk { tracks } => {
+            execute_apply_db_tags_to_disk(db, tracks, witness).map(|_| ())
         }
 
-        Mutation::AssimilateDiskTagsToDb { track_ids } => {
-            execute_assimilate_disk_tags_to_db(db, track_ids, witness).map(|_| ())
+        Mutation::AssimilateDiskTagsToDb { tracks } => {
+            execute_assimilate_disk_tags_to_db(db, tracks, witness).map(|_| ())
         }
 
         // Note: VerifyTags is now a Computation, not a Mutation.

@@ -238,8 +238,8 @@ pub enum Mutation {
     /// Used when disk file mtime changed but tags are identical. Updates scan_state
     /// to match current disk mtime so file is considered synced.
     AcknowledgeMtimeOnly {
-        /// Track IDs to acknowledge
-        track_ids: Vec<i64>,
+        /// Track IDs with their absolute paths: (track_id, abs_path)
+        tracks: Vec<(i64, PathBuf)>,
     },
 
     /// Acknowledge inode change - update track.inode and scan_state, clear InodeChanged signal.
@@ -248,8 +248,8 @@ pub enum Mutation {
     /// inode to match disk and refreshes scan_state. Tag differences are handled separately
     /// through the OOB tag resolution flow.
     AcknowledgeInodeChanged {
-        /// Track IDs to acknowledge (will fetch new inode from signal metadata)
-        track_ids: Vec<i64>,
+        /// Track IDs with their absolute paths: (track_id, abs_path)
+        tracks: Vec<(i64, PathBuf)>,
     },
 
     /// Apply DB tags to disk files (defer to db / reject disk changes).
@@ -257,8 +257,8 @@ pub enum Mutation {
     /// Writes the tags from the database to the disk files, overwriting any
     /// disk-side changes. Clears OOB signals and tag_mismatches.
     ApplyDbTagsToDisk {
-        /// Track IDs to update
-        track_ids: Vec<i64>,
+        /// Track IDs with their absolute paths: (track_id, abs_path)
+        tracks: Vec<(i64, PathBuf)>,
     },
 
     /// Assimilate disk tags into DB (defer to corpus / accept disk changes).
@@ -266,8 +266,8 @@ pub enum Mutation {
     /// Reads tags from disk files and stores them in the database, overwriting
     /// the database-side values. Clears OOB signals and tag_mismatches.
     AssimilateDiskTagsToDb {
-        /// Track IDs to update
-        track_ids: Vec<i64>,
+        /// Track IDs with their absolute paths: (track_id, abs_path)
+        tracks: Vec<(i64, PathBuf)>,
     },
     // Note: VerifyTags has been moved to corpus::computations::Computation.
     // Computations don't alter state - they only emit signals.
@@ -558,16 +558,19 @@ impl Mutation {
                 paths
             }
 
+            // Batch OOB resolution: paths are stored in the mutation
+            Mutation::AcknowledgeMtimeOnly { tracks }
+            | Mutation::AcknowledgeInodeChanged { tracks }
+            | Mutation::ApplyDbTagsToDisk { tracks }
+            | Mutation::AssimilateDiskTagsToDb { tracks } => {
+                tracks.iter().map(|(_, path)| path.clone()).collect()
+            }
+
             // Operations without specific file paths that need signal updates
-            // (batch OOB resolution paths resolved at execution time)
             Mutation::TagEditDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. } => Vec::new(),
+            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
         }
     }
 }

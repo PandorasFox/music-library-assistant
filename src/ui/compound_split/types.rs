@@ -105,23 +105,40 @@ impl CompoundSplitState {
     /// Generate mutations for this split.
     ///
     /// For each affected track:
+    /// - Verify the track still has the compound value (skip if not)
     /// - Delete the compound value
     /// - Insert each split part as a separate tag value
-    pub fn mutations_with_paths(&self, track_paths: &HashMap<i64, PathBuf>) -> Vec<Mutation> {
+    ///
+    /// The `track_info` map contains (path, current_tag_value) for each track.
+    /// This allows verifying the track actually has the compound value before
+    /// generating mutations, preventing no-op mutations when the value has
+    /// already been fixed or changed.
+    pub fn mutations_with_paths(
+        &self,
+        track_info: &HashMap<i64, (PathBuf, Option<String>)>,
+    ) -> Vec<Mutation> {
         let mut mutations = Vec::new();
 
         for &track_id in &self.data.track_ids {
-            let Some(path) = track_paths.get(&track_id) else {
+            let Some((path, current_value)) = track_info.get(&track_id) else {
                 continue;
             };
+
+            // Only generate mutation if track still has the compound value
+            let Some(ref current) = current_value else {
+                continue; // No value means nothing to split
+            };
+            if current != &self.data.compound_value {
+                continue; // Value has changed, skip this track
+            }
 
             // Build edits: delete old compound, insert split parts
             let mut edits = Vec::new();
 
-            // Delete the compound value
+            // Delete the compound value (using actual current value for verification)
             edits.push(TagEdit {
                 tag_name: self.data.tag_name.clone(),
-                old_value: Some(self.data.compound_value.clone()),
+                old_value: Some(current.clone()),
                 new_value: None,
             });
 

@@ -315,9 +315,20 @@ enum SignalWriteOp {
         path: String,
     },
 
+    // TODO: Refactor signal clearing into a unified system with signal categories.
+    // File-inherent signals (CorruptFile, ShitFormat) vs tag-based signals (OOB, mtime)
+    // should be distinguished at the type level, not via SQL string matching.
+
     /// Clear all signals for a specific path.
-    /// Used before recomputation to prevent stale signals from persisting.
+    /// Used by MoveToStash/DropFromIndex to fully clear signals on removal.
     ClearSignalsForPath {
+        path: String,
+    },
+
+    /// Clear mutable signals for a path, preserving file-inherent signals.
+    /// File-inherent signals (CorruptFile, ShitFormat) require specific mutations to clear.
+    /// Used by general mutation handler for signal refresh.
+    ClearMutableSignalsForPath {
         path: String,
     },
 
@@ -899,9 +910,7 @@ impl SignalWriteSender {
 
     /// Clear all signals for a specific path.
     ///
-    /// Used before mutation recomputation to prevent stale signals from persisting
-    /// (e.g., MissingFile signals surviving after a DropFromIndex removes the track).
-    /// The spawned signal update computations will re-derive any still-valid signals.
+    /// Used by MoveToStash/DropFromIndex to fully clear signals when removing a file.
     pub fn clear_signals_for_path(
         &self,
         path: &str,
@@ -909,6 +918,22 @@ impl SignalWriteSender {
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearSignalsForPath {
+            path: path.to_string(),
+        });
+    }
+
+    /// Clear mutable signals for a path, preserving file-inherent signals.
+    ///
+    /// File-inherent signals (CorruptFile, ShitFormat) are preserved because they
+    /// require specific mutations or verification to clear. Tag-based signals
+    /// are cleared and will be recomputed by UpdateCorpusFileSignals.
+    pub fn clear_mutable_signals_for_path(
+        &self,
+        path: &str,
+        _witness: &MutationExecutionWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearMutableSignalsForPath {
             path: path.to_string(),
         });
     }
@@ -1324,6 +1349,12 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::ClearSignalsForPath { path } => {
             with_retry("clear_signals_for_path", path, || {
                 db.delete_signals_for_path(path, &witness).map(|_| ())
+            });
+        }
+
+        SignalWriteOp::ClearMutableSignalsForPath { path } => {
+            with_retry("clear_mutable_signals_for_path", path, || {
+                db.delete_mutable_signals_for_path(path, &witness).map(|_| ())
             });
         }
 

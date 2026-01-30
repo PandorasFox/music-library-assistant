@@ -421,15 +421,30 @@ pub fn execute_verify_tags(
         let disk_set: HashSet<&str> = disk_values.iter().copied().collect();
 
         if db_set != disk_set {
-            // Track mismatch direction for in-memory classification
-            let db_has_extras = !db_set.difference(&disk_set).collect::<Vec<_>>().is_empty();
-            let disk_has_extras = !disk_set.difference(&db_set).collect::<Vec<_>>().is_empty();
+            // Track mismatch direction for in-memory classification.
+            //
+            // IMPORTANT: When both sides have non-empty values but differ, we MUST treat
+            // this as a conflict - even if one is a subset of the other. The mismatch
+            // storage format (tag-level with joined strings) cannot represent subset
+            // relationships, and the OobSync resolution query expects one side to be NULL
+            // for true one-direction syncs.
+            //
+            // One-direction sync classification is only valid when one side is EMPTY
+            // (tag exists on one side only, not a value difference).
+            if !db_values.is_empty() && !disk_values.is_empty() {
+                // Both sides have values - always a conflict regardless of subset relationship
+                result.has_conflict = true;
+            } else {
+                // True one-direction: tag exists on only one side
+                let db_has_extras = !db_set.difference(&disk_set).collect::<Vec<_>>().is_empty();
+                let disk_has_extras = !disk_set.difference(&db_set).collect::<Vec<_>>().is_empty();
 
-            match (db_has_extras, disk_has_extras) {
-                (true, true) => result.has_conflict = true,
-                (false, true) => result.has_extra_disk = true,
-                (true, false) => result.has_extra_db = true,
-                (false, false) => {} // Shouldn't happen if sets differ
+                match (db_has_extras, disk_has_extras) {
+                    (true, true) => result.has_conflict = true,
+                    (false, true) => result.has_extra_disk = true,
+                    (true, false) => result.has_extra_db = true,
+                    (false, false) => {} // Shouldn't happen if sets differ
+                }
             }
 
             // For mismatch recording, aggregate multi-values into semicolon-separated string

@@ -142,17 +142,24 @@ impl Database {
         Ok(result)
     }
 
-    /// Query album values with artist context for collision detection.
-    /// Albums are keyed by (artist_context, album) to avoid false positives
-    /// like "Greatest Hits" by different artists.
+    /// Query album data with artist context and release identifiers for collision detection.
+    /// Returns track-level data to allow filtering by ISRC/catalog_number.
     /// Only considers corpus tracks (excludes library tracks and orphaned tag entries).
-    /// Returns Vec of (album_value, artist_context, track_count).
-    pub fn get_album_values_with_artist_context(&self) -> Result<Vec<(String, String, usize)>> {
+    /// Returns Vec of (album_value, artist_context, isrc, catalog_number).
+    ///
+    /// TODO: Expand query to include additional release identifiers when we need them:
+    /// - MUSICBRAINZ_ALBUMID, MUSICBRAINZ_RELEASEGROUPID
+    /// - DISCOGS_RELEASE_ID
+    /// - BARCODE
+    pub fn get_album_data_for_collision_detection(
+        &self,
+    ) -> Result<Vec<(String, String, String, String)>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT
                    album.tag_value as album,
                    COALESCE(album_artist.tag_value, artist.tag_value, '') as artist_context,
-                   COUNT(DISTINCT album.track_id) as track_count
+                   COALESCE(isrc.tag_value, '') as isrc,
+                   COALESCE(catalog.tag_value, '') as catalog_number
                FROM track_tags album
                INNER JOIN tracks t ON album.track_id = t.id AND t.source = 'corpus'
                LEFT JOIN track_tags album_artist
@@ -161,18 +168,24 @@ impl Database {
                LEFT JOIN track_tags artist
                    ON album.track_id = artist.track_id
                    AND LOWER(artist.tag_name) = 'artist'
+               LEFT JOIN track_tags isrc
+                   ON album.track_id = isrc.track_id
+                   AND LOWER(isrc.tag_name) = 'isrc'
+               LEFT JOIN track_tags catalog
+                   ON album.track_id = catalog.track_id
+                   AND LOWER(catalog.tag_name) = 'catalognumber'
                WHERE LOWER(album.tag_name) = 'album'
                    AND album.tag_value IS NOT NULL
-                   AND album.tag_value != ''
-               GROUP BY album.tag_value, artist_context
-               ORDER BY track_count DESC"#,
+                   AND album.tag_value != ''"#,
         )?;
 
         let rows = stmt.query_map(params![], |row| {
-            let album: String = row.get(0)?;
-            let artist_context: String = row.get(1)?;
-            let count: i64 = row.get(2)?;
-            Ok((album, artist_context, count as usize))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })?;
 
         let mut result = Vec::new();

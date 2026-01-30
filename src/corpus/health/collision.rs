@@ -3,7 +3,7 @@
 //! Detects tag value collisions (multiple spellings that normalize to the same key)
 //! using efficient SQL queries against the track_tags table.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
@@ -109,30 +109,113 @@ pub fn get_album_artist_collisions(db: &Database) -> Result<Vec<TagCollision>> {
 ///
 /// Albums are keyed by artist context to avoid false positives
 /// (e.g., "Greatest Hits" by different artists are NOT collisions).
+///
+/// Additionally, variants with disjoint ISRCs or catalog numbers are considered
+/// distinct releases and NOT collisions (e.g., "Album EP" with ISRCs {A,B,C} and
+/// "Album" with ISRCs {D,E,F,G} are different releases, not canonicalization issues).
 pub fn get_album_collisions(db: &Database) -> Result<Vec<TagCollision>> {
-    let values = db.get_album_values_with_artist_context()?;
+    let rows = db.get_album_data_for_collision_detection()?;
 
     // Group by (normalized_artist, normalized_album)
-    let mut buckets: HashMap<(String, String), HashMap<String, usize>> = HashMap::new();
-    for (album, artist_context, count) in values {
+    // For each group, track: variant -> (count, isrcs, catalog_numbers)
+    let mut buckets: HashMap<(String, String), HashMap<String, VariantData>> = HashMap::new();
+
+    for (album, artist_context, isrc, catalog_number) in rows {
         let normalized_artist = normalize_artist(&artist_context);
         let normalized_album = normalize_album(&album);
         let key = (normalized_artist, normalized_album);
-        buckets
+
+        let variant_data = buckets
             .entry(key)
             .or_default()
-            .insert(album, count);
+            .entry(album)
+            .or_insert_with(VariantData::default);
+
+        variant_data.count += 1;
+        if !isrc.is_empty() {
+            variant_data.isrcs.insert(isrc);
+        }
+        if !catalog_number.is_empty() {
+            variant_data.catalog_numbers.insert(catalog_number);
+        }
     }
 
-    // Convert buckets with multiple variants to collisions
+    // Convert buckets with multiple variants to collisions,
+    // filtering out those where variants have disjoint release identifiers
     Ok(buckets
         .into_iter()
         .filter(|(_, variants)| variants.len() > 1)
+        .filter(|(_, variants)| !variants_have_disjoint_release_ids(variants))
         .map(|((artist_ctx, album_key), variants)| {
             let key = format!("{} :: {}", artist_ctx, album_key);
-            TagCollision::from_variants("album", &key, &variants)
+            let counts: HashMap<String, usize> = variants
+                .into_iter()
+                .map(|(name, data)| (name, data.count))
+                .collect();
+            TagCollision::from_variants("album", &key, &counts)
         })
         .collect())
+}
+
+/// Data collected per album variant for collision detection.
+///
+/// TODO: Expand to include other release identifiers when we parse them:
+/// - MusicBrainz release ID (MUSICBRAINZ_ALBUMID)
+/// - MusicBrainz release group ID (MUSICBRAINZ_RELEASEGROUPID)
+/// - Discogs release ID (DISCOGS_RELEASE_ID)
+/// - Barcode/UPC
+#[derive(Default)]
+struct VariantData {
+    count: usize,
+    isrcs: HashSet<String>,
+    catalog_numbers: HashSet<String>,
+}
+
+/// Check if album variants have disjoint release identifiers.
+///
+/// Returns true if the variants are distinct releases (no collision),
+/// i.e., ALL variants have non-empty, non-overlapping ISRC or catalog number sets.
+///
+/// Returns false (collision) if:
+/// - Any variant has no identifiers (can't distinguish)
+/// - Variants share ISRCs or catalog numbers (same release, different naming)
+///
+/// TODO: When we add support for additional release identifiers (MusicBrainz,
+/// Discogs, barcode), check those here as well. A single disjoint identifier
+/// type should be sufficient to distinguish releases.
+fn variants_have_disjoint_release_ids(variants: &HashMap<String, VariantData>) -> bool {
+    let variant_list: Vec<_> = variants.values().collect();
+
+    // Check ISRC disjointness - ALL variants must have ISRCs and be pairwise disjoint
+    let all_have_isrcs = variant_list.iter().all(|v| !v.isrcs.is_empty());
+    if all_have_isrcs {
+        for (i, v1) in variant_list.iter().enumerate() {
+            for v2 in variant_list.iter().skip(i + 1) {
+                // If any two variants share an ISRC, they're not disjoint
+                if !v1.isrcs.is_disjoint(&v2.isrcs) {
+                    return false;
+                }
+            }
+        }
+        // All variants have ISRCs and are pairwise disjoint
+        return true;
+    }
+
+    // Check catalog number disjointness - ALL variants must have catalog numbers
+    let all_have_catalogs = variant_list.iter().all(|v| !v.catalog_numbers.is_empty());
+    if all_have_catalogs {
+        for (i, v1) in variant_list.iter().enumerate() {
+            for v2 in variant_list.iter().skip(i + 1) {
+                if !v1.catalog_numbers.is_disjoint(&v2.catalog_numbers) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Not all variants have identifiers - can't conclusively distinguish, treat as collision
+    false
 }
 
 /// Detect genre collisions from the database.
@@ -186,5 +269,143 @@ mod tests {
 
         assert_eq!(collision.canonical, "Hip Hop");
         assert!((collision.confidence - 0.5).abs() < 0.01); // 10 out of 20
+    }
+
+    #[test]
+    fn test_disjoint_isrcs_are_distinct_releases() {
+        // "Album EP" with ISRCs {A, B, C} and "Album" with ISRCs {D, E, F}
+        // These are distinct releases, NOT a collision
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 3,
+                isrcs: ["ISRC_A", "ISRC_B", "ISRC_C"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 6,
+                isrcs: ["ISRC_D", "ISRC_E", "ISRC_F"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+
+        assert!(variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_overlapping_isrcs_are_collision() {
+        // "Album EP" and "Album" share ISRC_A - same release, naming inconsistency
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 3,
+                isrcs: ["ISRC_A", "ISRC_B", "ISRC_C"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 6,
+                isrcs: ["ISRC_A", "ISRC_D", "ISRC_E"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+
+        assert!(!variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_no_isrcs_is_collision() {
+        // Neither variant has ISRCs - can't distinguish, treat as collision
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 3,
+                isrcs: HashSet::new(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 6,
+                isrcs: HashSet::new(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+
+        assert!(!variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_disjoint_catalog_numbers_are_distinct_releases() {
+        // Different catalog numbers, no ISRCs - distinct releases
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 3,
+                isrcs: HashSet::new(),
+                catalog_numbers: ["CAT001"].iter().map(|s| s.to_string()).collect(),
+            },
+        );
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 6,
+                isrcs: HashSet::new(),
+                catalog_numbers: ["CAT002"].iter().map(|s| s.to_string()).collect(),
+            },
+        );
+
+        assert!(variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_one_variant_has_isrcs_other_doesnt() {
+        // Only one variant has ISRCs - we can't conclusively say they're different
+        // since the variant without ISRCs could be from the same release
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 3,
+                isrcs: ["ISRC_A", "ISRC_B", "ISRC_C"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 6,
+                isrcs: HashSet::new(),
+                catalog_numbers: HashSet::new(),
+            },
+        );
+
+        // Since not all variants have ISRCs, we can't distinguish - treat as collision
+        assert!(!variants_have_disjoint_release_ids(&variants));
     }
 }

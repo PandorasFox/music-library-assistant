@@ -1126,18 +1126,25 @@ impl App {
 
             let abs_path = resolver.resolve(std::path::Path::new(&file.path));
             let edits: Vec<TagEdit> = file.mismatches.iter().filter_map(|m| {
-                // For DiskToIndex: disk_value is the truth, push it to DB+disk
-                // For IndexToDisk: db_value is the truth, push it to DB+disk
-                let new_value = match direction {
-                    OobSyncDirection::DiskToIndex => m.disk_value.clone(),
-                    OobSyncDirection::IndexToDisk => m.db_value.clone(),
-                };
-
-                new_value.map(|v| TagEdit {
-                    tag_name: m.field.clone(),
-                    old_value: None, // Bypass validation — sync is authoritative
-                    new_value: Some(v),
-                })
+                match direction {
+                    OobSyncDirection::IndexToDisk => {
+                        // Use disk_value as old_value for proper validation
+                        // Handles: value changes, additions (disk_value=None), deletions (db_value=None)
+                        Some(TagEdit {
+                            tag_name: m.field.clone(),
+                            old_value: m.disk_value.clone(),
+                            new_value: m.db_value.clone(),
+                        })
+                    }
+                    OobSyncDirection::DiskToIndex => {
+                        // Keep current behavior (accepting disk values)
+                        m.disk_value.clone().map(|v| TagEdit {
+                            tag_name: m.field.clone(),
+                            old_value: None,
+                            new_value: Some(v),
+                        })
+                    }
+                }
             }).collect();
 
             if !edits.is_empty() {
@@ -1269,16 +1276,25 @@ impl App {
             let abs_path = resolver.resolve(std::path::Path::new(path));
 
             let edits: Vec<TagEdit> = mismatches.iter().filter_map(|(field, db_value, disk_value)| {
-                let new_value = match button {
-                    ResolutionButton::ApplyDb => db_value.clone(),
-                    ResolutionButton::AssimilateDisk => disk_value.clone(),
-                };
-
-                new_value.map(|v| TagEdit {
-                    tag_name: field.clone(),
-                    old_value: None, // Bypass validation — resolution is authoritative
-                    new_value: Some(v),
-                })
+                match button {
+                    ResolutionButton::ApplyDb => {
+                        // Use disk_value as old_value for proper validation
+                        // Handles: value changes, additions (disk_value=None), deletions (db_value=None)
+                        Some(TagEdit {
+                            tag_name: field.clone(),
+                            old_value: disk_value.clone(),
+                            new_value: db_value.clone(),
+                        })
+                    }
+                    ResolutionButton::AssimilateDisk => {
+                        // Keep current behavior (accepting disk values)
+                        disk_value.clone().map(|v| TagEdit {
+                            tag_name: field.clone(),
+                            old_value: None,
+                            new_value: Some(v),
+                        })
+                    }
+                }
             }).collect();
 
             if !edits.is_empty() {

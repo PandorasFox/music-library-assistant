@@ -164,37 +164,74 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // pipeline, e.g. a `PostExecutionContext` that collects side-effects from both
     // success and failure paths, rather than interleaving conditionals.
 
-    // When a TagEditAndFlush fails, the most likely cause is stale edits: tags on
-    // disk no longer match what the editor/DB expected. Emit OutOfBandTagConflict
-    // so the operator sees the file's tags have diverged from the index.
+    // When a TagEditAndFlush fails, determine the appropriate signal based on error type:
     //
-    // Also spawn a VerifyTags computation to refresh the tag_mismatches table with
-    // the actual current disk state. This ensures the next retry (or the OOB resolution
-    // UI) has accurate data about what's actually on disk.
+    // - File corruption (I/O errors like "Too little data"): Emit CorruptFile signal.
+    //   These files cannot be edited at all and need operator attention.
+    //
+    // - Stale edits (expected tag value not found): Emit OutOfBandTagConflict signal.
+    //   Tags on disk changed since the editor was opened; needs re-verification.
+    //
+    // Also spawn a VerifyTags computation to refresh tag_mismatches with the actual
+    // current disk state (unless the file is corrupt and can't be read).
     let mut failure_spawns: Vec<Computation> = Vec::new();
     if !success {
         if let Mutation::TagEditAndFlush { track_id, path, .. } = &mutation {
             let resolver = crate::corpus::paths::get_resolver();
             if let Some(rel) = resolver.to_relative(path) {
                 if let Some(sender) = db_thread::signal_sender() {
-                    sender.ensure_file_signal(
-                        CorpusFileSignalType::OutOfBandTagConflict.into(),
-                        &rel.to_string_lossy(),
-                        &witness,
-                    );
-                }
+                    // Check if the error indicates file corruption vs stale edit
+                    let is_corruption = error.as_ref().map_or(false, |e| {
+                        // Lofty I/O errors that indicate corrupt/truncated files
+                        e.contains("Too little data")
+                            || e.contains("Unexpected end of file")
+                            || e.contains("unexpected eof")
+                            || (e.contains("Failed to read") && e.contains("tags"))
+                    });
 
-                // Spawn VerifyTags to refresh tag_mismatches with actual disk state
-                crate::logging::log_general(format!(
-                    "[EXECUTION] Stale edit for {} - spawning VerifyTags to refresh mismatches",
-                    path.display()
-                ));
-                failure_spawns.push(Computation::Asleep(
-                    crate::corpus::computations::asleep::Computation::VerifyTags {
-                        track_id: *track_id,
-                        path: path.clone(),
+                    let rel_str = rel.to_string_lossy();
+                    if is_corruption {
+                        crate::logging::log_general(format!(
+                            "[EXECUTION] File corruption detected for {} - emitting CorruptFile signal",
+                            path.display()
+                        ));
+                        sender.ensure_file_signal(
+                            CorpusFileSignalType::CorruptFile.into(),
+                            &rel_str,
+                            &witness,
+                        );
+                        // Clear any OOB signals - file can't be verified when corrupt
+                        sender.clear_file_signal(
+                            CorpusFileSignalType::OutOfBandTagConflict.into(),
+                            &rel_str,
+                            &witness,
+                        );
+                        sender.clear_file_signal(
+                            CorpusFileSignalType::OutOfBandTagSync.into(),
+                            &rel_str,
+                            &witness,
+                        );
+                    } else {
+                        // Stale edit - emit OOB conflict for re-verification
+                        sender.ensure_file_signal(
+                            CorpusFileSignalType::OutOfBandTagConflict.into(),
+                            &rel_str,
+                            &witness,
+                        );
+
+                        // Spawn VerifyTags to refresh tag_mismatches with actual disk state
+                        crate::logging::log_general(format!(
+                            "[EXECUTION] Stale edit for {} - spawning VerifyTags to refresh mismatches",
+                            path.display()
+                        ));
+                        failure_spawns.push(Computation::Asleep(
+                            crate::corpus::computations::asleep::Computation::VerifyTags {
+                                track_id: *track_id,
+                                path: path.clone(),
+                            }
+                        ));
                     }
-                ));
+                }
             }
         }
     }
@@ -207,6 +244,47 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             let _ = with_read_only_db(|read_db| {
                 clear_affected_canonicity_signals(read_db, *track_id, edits, &witness);
             });
+        }
+    }
+
+    // Wipe per-file signals for affected paths FIRST, before emitting new signals.
+    // This prevents stale signals from persisting when mutations change corpus truth
+    // (e.g. MissingFile signals surviving after a DropFromIndex removes the track).
+    // The spawned signal update computations will re-derive any still-valid signals.
+    // Uses signal_sender for the writes (fire-and-forget).
+    //
+    // IMPORTANT: This must happen BEFORE CorruptFile/ShitFormat emission below,
+    // otherwise those signals get immediately wiped.
+    //
+    // TODO: Refactor signal clearing to use type-level signal categories instead of
+    // mutation-type matching. See SignalWriteOp TODO for the broader refactoring plan.
+    if success {
+        if let Some(sender) = db_thread::signal_sender() {
+            let resolver = crate::corpus::paths::get_resolver();
+
+            // Determine if this mutation should clear ALL signals (including file-inherent)
+            // or only mutable signals (preserving CorruptFile, ShitFormat).
+            let clear_all = matches!(
+                &mutation,
+                Mutation::MoveToStash { .. }
+                | Mutation::DropFromIndex { .. }
+                | Mutation::Transcode { .. }
+            );
+
+            for path in mutation.affected_paths() {
+                let signal_key = if path.is_absolute() {
+                    resolver.to_relative(&path)
+                } else {
+                    Some(path)  // already root-relative
+                };
+                if let Some(key) = signal_key {
+                    if clear_all {
+                        sender.clear_signals_for_path(&key.to_string_lossy(), &witness);
+                    } else {
+                        sender.clear_mutable_signals_for_path(&key.to_string_lossy(), &witness);
+                    }
+                }
+            }
         }
     }
 
@@ -285,27 +363,6 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 }
             }
             _ => {}
-        }
-    }
-
-    // Wipe per-file signals for affected paths before recomputation.
-    // This prevents stale signals from persisting when mutations change corpus truth
-    // (e.g. MissingFile signals surviving after a DropFromIndex removes the track).
-    // The spawned signal update computations will re-derive any still-valid signals.
-    // Uses signal_sender for the writes (fire-and-forget).
-    if success {
-        if let Some(sender) = db_thread::signal_sender() {
-            let resolver = crate::corpus::paths::get_resolver();
-            for path in mutation.affected_paths() {
-                let signal_key = if path.is_absolute() {
-                    resolver.to_relative(&path)
-                } else {
-                    Some(path)  // already root-relative
-                };
-                if let Some(key) = signal_key {
-                    sender.clear_signals_for_path(&key.to_string_lossy(), &witness);
-                }
-            }
         }
     }
 

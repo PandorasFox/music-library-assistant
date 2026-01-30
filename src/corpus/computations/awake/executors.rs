@@ -42,6 +42,7 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectTagCanonicalizations,
         Computation::DetectInconsistentAlbumArtist,
         Computation::DetectCompoundTagValues,
+        Computation::DetectShitFormats,
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
     ];
@@ -639,6 +640,81 @@ pub fn execute_detect_compound_tag_values(
 
     log_general(format!(
         "[COMPUTE] DetectCompoundTagValues: emitted {} CompoundTagValue signals",
+        signal_count
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Shit Format Detection
+// ============================================================================
+
+/// Execute DetectShitFormats - detect files with non-Vorbis container formats.
+///
+/// Queries all tracks and emits ShitFormat signals for those with file types
+/// that have poor metadata support or inefficient containers (MP3, M4A, WAV, etc).
+pub fn execute_detect_shit_formats(
+    read_only_db: &Database,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    use crate::corpus::db::types::CorpusFileSignalType;
+
+    let computation = Computation::DetectShitFormats;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    /// File types that should trigger ShitFormat signal (non-Vorbis containers)
+    /// Includes lossy formats with poor metadata and lossless needing remux
+    const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
+
+    // Clear all existing ShitFormat signals and rebuild
+    sender.clear_signals_by_type(SignalType::ShitFormat, witness);
+
+    // Query all tracks and filter for shit formats
+    let tracks = match read_only_db.get_all_tracks(None) {
+        Ok(t) => t,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to query tracks: {}", e),
+            );
+        }
+    };
+
+    let mut signal_count = 0;
+
+    for track in tracks {
+        let file_type_lower = track.file_type.to_lowercase();
+        if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
+            let metadata_json = serde_json::json!({
+                "file_type": track.file_type
+            }).to_string();
+
+            sender.ensure_file_signal_with_metadata(
+                CorpusFileSignalType::ShitFormat.into(),
+                &track.path,
+                Some(&metadata_json),
+                witness,
+            );
+
+            signal_count += 1;
+        }
+    }
+
+    log_general(format!(
+        "[COMPUTE] DetectShitFormats: emitted {} ShitFormat signals",
         signal_count
     ));
 

@@ -53,6 +53,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectTagCanonicalizations | Find tag canonicalization opportunities |
 | DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums |
 | DetectCompoundTagValues | Find separators needing splits |
+| DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
 | DetectDeployConflicts | Detect path collisions in deployment |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
 | DeriveCorpusDeployStatus | Derive corpus deploy status |
@@ -96,6 +97,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (all, then recreate) |
 | DetectCompoundTagValues | — | CompoundTagValue | CompoundTagValue (all, then recreate) |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
+| DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |

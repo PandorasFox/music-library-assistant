@@ -275,6 +275,28 @@ impl Database {
         Ok(deleted)
     }
 
+    /// Delete mutable signals for a path, preserving file-inherent signals.
+    ///
+    /// File-inherent signals (CorruptFile, ShitFormat) are properties of the file itself
+    /// and should only be cleared by specific mutations (MoveToStash, DropFromIndex, Transcode)
+    /// or by verification computations (VerifyAudio).
+    ///
+    /// Tag-based signals (OOB conflicts, mtime mismatches, health status) can be cleared
+    /// and recomputed by UpdateCorpusFileSignals.
+    ///
+    /// TODO: Refactor to use signal categories at the type level instead of SQL string matching.
+    /// Consider a SignalCategory enum (FileInherent, TagBased, Aggregate) with methods to
+    /// determine clearing behavior.
+    pub fn delete_mutable_signals_for_path(&self, path: &str, _witness: &impl SignalWitness) -> Result<usize> {
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM signals WHERE issue_key = ?1 AND issue_type NOT IN ('corrupt_file', 'shit_format')",
+                params![path],
+            )
+            .context("Failed to delete mutable signals for path")?;
+        Ok(deleted)
+    }
+
     // ========================================================================
     // Witnessed Signal Operations (require ComputationWitness)
     // ========================================================================

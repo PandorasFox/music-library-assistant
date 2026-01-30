@@ -694,6 +694,8 @@ mod tests {
                 files_unindexed: 5,
                 files_missing: 3,
                 files_relocated: 2,
+                corrupt_files: 0,
+                shit_format_files: 0,
                 file_type_breakdown: vec![],
                 directory_breakdown: Default::default(),
             },

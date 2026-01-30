@@ -267,6 +267,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awake::Computation::DetectCompoundTagValues => {
                         awake::execute_detect_compound_tag_values(read_only_db, &witness, start)
                     }
+                    awake::Computation::DetectShitFormats => {
+                        awake::execute_detect_shit_formats(read_only_db, &witness, start)
+                    }
                     awake::Computation::DetectDeployConflicts => {
                         awake::execute_detect_deploy_conflicts(read_only_db, &witness, start)
                     }

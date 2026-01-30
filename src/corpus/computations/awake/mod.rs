@@ -85,6 +85,12 @@ pub enum Computation {
     /// Finds tag values containing separator characters (e.g., "Rock; Metal" in genre).
     DetectCompoundTagValues,
 
+    /// Detect files with non-Vorbis container formats (MP3, M4A, WAV, etc).
+    ///
+    /// These files have poor metadata support or inefficient containers and
+    /// should be transcoded to Opus (lossy) or FLAC (lossless).
+    DetectShitFormats,
+
     /// Detect deployment conflicts (bulk).
     ///
     /// Groups healthy tracks by deployment path, flags conflicts.
@@ -119,6 +125,7 @@ impl Computation {
             Computation::DetectTagCanonicalizations => "Detecting tag canonicalizations",
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::DetectCompoundTagValues => "Detecting compound tag values",
+            Computation::DetectShitFormats => "Detecting shit format files",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",

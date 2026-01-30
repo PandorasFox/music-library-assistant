@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 use super::Database;
 use crate::corpus::db::types::{Track, TrackTag};
-use crate::db_thread::SignalWitness;
 use crate::witch::MutationExecutionWitness;
 
 // ============================================================================

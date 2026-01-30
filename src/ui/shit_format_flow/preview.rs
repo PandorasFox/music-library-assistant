@@ -173,7 +173,6 @@ impl ShitFormatPreviewState {
     fn render_title(&self, f: &mut Frame, area: Rect) {
         let lossless = self.cached_data.lossless_files.len();
         let lossy = self.cached_data.lossy_files.len();
-        let total = lossless + lossy;
 
         let title = Paragraph::new(Line::from(vec![
             Span::styled(

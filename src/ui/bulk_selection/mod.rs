@@ -9,4 +9,4 @@
 
 mod state;
 
-pub use state::{BulkSelectionState, SelectionMode};
+pub use state::BulkSelectionState;

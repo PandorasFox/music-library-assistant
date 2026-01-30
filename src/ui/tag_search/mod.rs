@@ -26,8 +26,7 @@ use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 pub use state::TagSearchState;
 pub use types::{
-    ComparisonOperator, ConditionType, FileFormat, FileTypeCategory,
-    LogicalOperator, SearchCondition, TagSearchAction, TagSearchMode,
+    ComparisonOperator, FileTypeCategory, SearchCondition, TagSearchAction, TagSearchMode,
 };
 
 impl TagSearchState {

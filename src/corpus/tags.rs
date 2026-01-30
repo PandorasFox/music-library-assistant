@@ -24,7 +24,6 @@
 //! - Duplicate any of this logic
 
 use anyhow::{Context, Result};
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::corpus::db::types::CorpusFileSignalType;

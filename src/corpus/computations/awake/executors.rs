@@ -6,8 +6,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
-use rusqlite::params;
-
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     drop_stale_file_signal, ensure_file_signal_if_missing,

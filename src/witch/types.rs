@@ -145,7 +145,25 @@ pub mod sealed {
         pub(in crate::witch) fn new() -> Self {
             Self(())
         }
+
+        /// Create a SpawnedMutationWitness from this execution witness.
+        ///
+        /// Only callable from within mutation execution context. This allows
+        /// mutations to spawn follow-up mutations with proper witness chain.
+        pub fn spawn(&self) -> SpawnedMutationWitness {
+            SpawnedMutationWitness(())
+        }
     }
+
+    /// A zero-sized token authorizing a mutation spawned by another mutation.
+    ///
+    /// Can ONLY be created inside mutation execution context via
+    /// [`MutationExecutionWitness::spawn()`]. This maintains the witness chain
+    /// for spawned mutations without requiring a new operator decision.
+    ///
+    /// Use case: `SetTrackTagsDb` spawns `ApplyDbTagsToDisk` after DB write succeeds.
+    #[derive(Clone, Copy)]
+    pub struct SpawnedMutationWitness(());
 
     /// A zero-sized token proving code is executing inside the Witch's migration worker.
     ///
@@ -521,6 +539,8 @@ pub(super) struct TaskResult {
     pub label: String,
     /// Follow-up computations to queue (from computation chaining)
     pub spawn: Vec<Computation>,
+    /// Follow-up mutations to queue (from mutation spawn chaining)
+    pub spawn_mutations: Vec<Mutation>,
     /// Task execution duration in milliseconds
     pub duration_ms: u64,
     /// Time task waited in queue before execution (milliseconds)

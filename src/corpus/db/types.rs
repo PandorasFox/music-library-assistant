@@ -141,6 +141,12 @@ pub enum SignalType {
     TagParseError,
     /// File's audio waveform could not be decoded for fingerprinting
     WaveformReadError,
+    /// File is corrupt (unreadable tags or waveform decode failure)
+    /// Actionable signal with resolution flow (stash + drop)
+    CorruptFile,
+    /// File is in a non-Vorbis container format (MP3, M4A, AAC, WMA, or lossless needing remux)
+    /// Actionable signal with resolution flow (transcode to Opus/FLAC)
+    ShitFormat,
 }
 
 impl SignalType {
@@ -179,6 +185,8 @@ impl SignalType {
             // Error signals
             Self::TagParseError => "tag_parse_error",
             Self::WaveformReadError => "waveform_read_error",
+            Self::CorruptFile => "corrupt_file",
+            Self::ShitFormat => "shit_format",
         }
     }
 
@@ -217,6 +225,8 @@ impl SignalType {
             "compound_tag_value" => Some(Self::CompoundTagValue),
             "tag_parse_error" => Some(Self::TagParseError),
             "waveform_read_error" => Some(Self::WaveformReadError),
+            "corrupt_file" => Some(Self::CorruptFile),
+            "shit_format" => Some(Self::ShitFormat),
 
             // Legacy DB values → map to new types
             "missing_from_disk" => Some(Self::MissingFile),
@@ -244,6 +254,8 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::TagParseError => Self::TagParseError,
             CorpusFileSignalType::WaveformReadError => Self::WaveformReadError,
             CorpusFileSignalType::InodeChanged => Self::InodeChanged,
+            CorpusFileSignalType::CorruptFile => Self::CorruptFile,
+            CorpusFileSignalType::ShitFormat => Self::ShitFormat,
         }
     }
 }
@@ -307,6 +319,10 @@ pub enum CorpusFileSignalType {
     WaveformReadError,
     /// File at path was replaced (different inode than indexed)
     InodeChanged,
+    /// File is corrupt (unreadable tags or waveform decode failure)
+    CorruptFile,
+    /// File is in a non-Vorbis container format (MP3, M4A, AAC, WMA, or lossless needing remux)
+    ShitFormat,
 }
 
 impl CorpusFileSignalType {
@@ -324,6 +340,8 @@ impl CorpusFileSignalType {
             Self::TagParseError => "tag_parse_error",
             Self::WaveformReadError => "waveform_read_error",
             Self::InodeChanged => "inode_changed",
+            Self::CorruptFile => "corrupt_file",
+            Self::ShitFormat => "shit_format",
         }
     }
 
@@ -343,6 +361,8 @@ impl CorpusFileSignalType {
             "tag_parse_error" => Some(Self::TagParseError),
             "waveform_read_error" => Some(Self::WaveformReadError),
             "inode_changed" => Some(Self::InodeChanged),
+            "corrupt_file" => Some(Self::CorruptFile),
+            "shit_format" => Some(Self::ShitFormat),
             _ => None,
         }
     }
@@ -361,6 +381,8 @@ impl CorpusFileSignalType {
             Self::TagParseError => SignalType::TagParseError,
             Self::WaveformReadError => SignalType::WaveformReadError,
             Self::InodeChanged => SignalType::InodeChanged,
+            Self::CorruptFile => SignalType::CorruptFile,
+            Self::ShitFormat => SignalType::ShitFormat,
         }
     }
 }
@@ -689,6 +711,10 @@ pub struct CorpusFilesBucket {
     pub files_unindexed: usize,
     pub files_missing: usize,
     pub files_relocated: usize,
+    /// Files that are corrupt (unreadable tags or waveform decode failure)
+    pub corrupt_files: usize,
+    /// Files in non-Vorbis container formats (MP3, M4A, AAC, WMA, etc.)
+    pub shit_format_files: usize,
     /// Filetype breakdown for files_in_corpus
     pub file_type_breakdown: Vec<(String, usize)>,
     /// Directory-level aggregation for selected signal

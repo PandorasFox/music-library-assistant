@@ -30,6 +30,7 @@ pub mod transaction_review;
 pub mod app;
 pub mod bulk_selection;
 pub mod compound_split;
+pub mod corrupt_file_flow;
 pub mod deploy_flow;
 pub mod eye;
 pub mod filter_popup;
@@ -42,6 +43,7 @@ pub mod oob_conflict_flow;
 pub mod oob_sync_flow;
 pub mod progress_screen;
 pub mod render;
+pub mod shit_format_flow;
 pub mod startup;
 pub mod tag_canonicity;
 pub mod tag_editor;
@@ -179,6 +181,10 @@ pub(crate) struct App {
     pub(super) intake_confirmation: Option<startup::IntakeConfirmationState>,
     // Format standardization view (lateral view ring)
     pub(super) format_std: Option<format_standardization::FormatStdState>,
+    // Corrupt file resolution modal
+    pub(super) corrupt_file_preview: Option<corrupt_file_flow::CorruptFilePreviewState>,
+    // Shit format transcode resolution modal
+    pub(super) shit_format_preview: Option<shit_format_flow::ShitFormatPreviewState>,
 
     // The Witch - enforcer of orderliness, handles all mutations and background work
     pub(super) witch: Option<crate::witch::Witch>,
@@ -223,6 +229,8 @@ impl App {
             tag_search: None,
             intake_confirmation: None,
             format_std: None,
+            corrupt_file_preview: None,
+            shit_format_preview: None,
             witch: None,
             log_rx: Some(log_rx),
             throughput_samples: VecDeque::with_capacity(100),
@@ -443,6 +451,18 @@ impl App {
                     self.handle_format_std_action(action);
                 }
             }
+            UiMode::CorruptFileResolution => {
+                if let Some(ref mut preview) = self.corrupt_file_preview {
+                    let action = preview.handle_key(key);
+                    self.handle_corrupt_file_preview_action(action);
+                }
+            }
+            UiMode::ShitFormatResolution => {
+                if let Some(ref mut preview) = self.shit_format_preview {
+                    let action = preview.handle_key(key);
+                    self.handle_shit_format_preview_action(action);
+                }
+            }
         }
     }
 
@@ -573,8 +593,9 @@ impl App {
     pub(super) fn witch(&mut self) -> &mut crate::witch::Witch {
         if self.witch.is_none() {
             let force_freshen = self.config.opinions.startup.freshen_last_stage_at_startup;
+            let force_check = self.config.opinions.startup.force_check_all_files_at_startup;
             let log_rx = self.log_rx.take();
-            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_freshen, log_rx));
+            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_freshen, force_check, log_rx));
         }
         self.witch.as_mut().unwrap()
     }
@@ -649,6 +670,8 @@ fn render(f: &mut Frame, app: &mut App) {
         tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
         format_std: app.format_std.as_ref(),
+        corrupt_file_preview: app.corrupt_file_preview.as_ref(),
+        shit_format_preview: app.shit_format_preview.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         throughput_samples: &app.throughput_samples,

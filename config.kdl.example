@@ -62,6 +62,12 @@ opinions {
         // Useful after fixing broken computations to re-derive signals.
         // One-shot latch: triggers once, then auto-clears.
         // freshen-last-stage false
+
+        // Force verification of all indexed files at startup (default: false)
+        // Bypasses mtime optimization - verifies all files regardless of modification time.
+        // Catches out-of-band tag changes (external tools modified tags) and corrupt files.
+        // Slower startup but ensures database matches reality.
+        // force-check-all-files false
     }
 
     // -------------------------------------------------------------------------

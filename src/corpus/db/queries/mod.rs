@@ -556,6 +556,21 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_missing_file_paths()
     }
 
+    /// Get paths of corrupt files.
+    pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
+        self.db.get_corrupt_file_paths()
+    }
+
+    /// Get shit format files (path, file_type).
+    pub fn get_shit_format_files(&self) -> Result<Vec<(String, String)>> {
+        self.db.get_shit_format_files()
+    }
+
+    /// Get counts of shit format files grouped by file type.
+    pub fn get_shit_format_counts_by_type(&self) -> Result<Vec<(String, i64)>> {
+        self.db.get_shit_format_counts_by_type()
+    }
+
     // =========================================================================
     // Library Scan Queries
     // =========================================================================

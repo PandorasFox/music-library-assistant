@@ -99,6 +99,10 @@ pub struct Witch {
     /// Loaded from config at startup. Useful after fixing broken computations.
     freshen_last_stage_at_startup: bool,
 
+    /// Force verification of all indexed files at startup, bypassing mtime optimization.
+    /// Catches out-of-band tag changes and corrupt files.
+    force_check_all_files_at_startup: bool,
+
     // Session tracking
     session_start: Option<Instant>,
     session_queued: usize,
@@ -198,6 +202,7 @@ impl Witch {
             read_only_mode: false,
             mutations_ran_this_session: false,
             freshen_last_stage_at_startup: false, // Set via with_opinions()
+            force_check_all_files_at_startup: false, // Set via with_opinions()
             session_start: None,
             session_queued: 0,
             total_processed: 0,
@@ -230,13 +235,19 @@ impl Witch {
     }
 
     /// Create a new Witch with opinions applied.
-    pub fn with_opinions(cfg: &Config, read_only_mode: bool, freshen_last_stage_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
+    pub fn with_opinions(cfg: &Config, read_only_mode: bool, freshen_last_stage_at_startup: bool, force_check_all_files_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
         let mut she = Self::new(cfg, log_rx);
         she.read_only_mode = read_only_mode;
         she.freshen_last_stage_at_startup = freshen_last_stage_at_startup;
+        she.force_check_all_files_at_startup = force_check_all_files_at_startup;
         if freshen_last_stage_at_startup {
             crate::logging::log_general(
                 "[WITCH] freshen_last_stage_at_startup=true: will run content analysis once after awakening"
+            );
+        }
+        if force_check_all_files_at_startup {
+            crate::logging::log_general(
+                "[WITCH] force_check_all_files_at_startup=true: will verify all indexed files at startup"
             );
         }
         she
@@ -308,6 +319,7 @@ impl Witch {
     /// Queue observing computations (internal helper).
     fn queue_observing_computations(&mut self) {
         let resolver = crate::corpus::paths::get_resolver();
+        let force_check = self.force_check_all_files_at_startup;
 
         // Clear stale observation state first - ensures deleted files get MissingFile signals
         self.queue_computation_with_label(
@@ -320,6 +332,7 @@ impl Witch {
             Computation::Asleep(asleep::Computation::WalkCorpus {
                 root: resolver.corpus_dir(),
                 source: "corpus".to_string(),
+                force_check,
             }),
             Some("Observing corpus".to_string()),
         );
@@ -330,6 +343,7 @@ impl Witch {
                 Computation::Asleep(asleep::Computation::WalkCorpus {
                     root: resolver.libraries_dir().join("legacy"),
                     source: "legacy".to_string(),
+                    force_check,
                 }),
                 Some("Observing legacy".to_string()),
             );

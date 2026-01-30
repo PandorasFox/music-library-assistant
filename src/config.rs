@@ -133,12 +133,17 @@ pub struct StartupOpinions {
     /// Useful after fixing broken computations to force re-derivation of signals.
     /// This is a one-shot latch: triggers once at startup, then auto-clears.
     pub freshen_last_stage_at_startup: bool,
+    /// Force verification of all indexed files at startup, bypassing mtime optimization (default: false).
+    /// Catches out-of-band tag changes (external tools modified tags) and corrupt files.
+    /// Slower startup but ensures database matches reality.
+    pub force_check_all_files_at_startup: bool,
 }
 
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
             freshen_last_stage_at_startup: false,
+            force_check_all_files_at_startup: false,
         }
     }
 }
@@ -597,6 +602,13 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.freshen_last_stage_at_startup = val;
+                        }
+                    }
+                }
+                "force-check-all-files" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.force_check_all_files_at_startup = val;
                         }
                     }
                 }

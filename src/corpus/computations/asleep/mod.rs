@@ -48,6 +48,8 @@ pub enum Computation {
     WalkCorpus {
         root: PathBuf,
         source: String,
+        /// When true, bypass mtime optimization and verify all indexed files.
+        force_check: bool,
     },
 
     /// Walk and scan a single directory subtree.
@@ -58,6 +60,8 @@ pub enum Computation {
     ScanCorpusDirectory {
         directory: PathBuf,
         source: String,
+        /// When true, bypass mtime optimization and verify all indexed files.
+        force_check: bool,
     },
 
     /// Verify single file mtime.

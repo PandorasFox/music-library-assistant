@@ -24,8 +24,8 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | Computation | Description |
 |-------------|-------------|
 | ClearExistingObservationState | Clear stale FileInCorpus signals before fresh scan |
-| WalkCorpus | Enumerate directories, spawn per-directory scans |
-| ScanCorpusDirectory | Collect disk state, emit FileInCorpus signals |
+| WalkCorpus | Enumerate directories, spawn per-directory scans. Has `force_check` parameter. |
+| ScanCorpusDirectory | Collect disk state, emit FileInCorpus signals. Has `force_check` parameter. |
 | VerifyMtime | Check file modification times for changes |
 | VerifyTags | Verify disk tags match indexed tags, emit classification signals |
 
@@ -66,10 +66,10 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
 | ClearExistingObservationState | — | — | FileInCorpus (all) |
-| WalkCorpus | ScanCorpusDirectory × N | — | — |
-| ScanCorpusDirectory | VerifyMtime (if mtime changed) | FileInCorpus | — |
+| WalkCorpus | ScanCorpusDirectory × N (propagates `force_check`) | — | — |
+| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags (all indexed, if `force_check=true`) | FileInCorpus | — |
 | VerifyMtime | VerifyTags (if mtime differs) | — | — |
-| VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, TagParseError | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) |
+| VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) |
 
 ### Awakening Phase Computations
 

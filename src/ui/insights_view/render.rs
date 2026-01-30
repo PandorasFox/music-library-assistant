@@ -302,6 +302,46 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 Style::default().fg(Color::Cyan),
             )));
         }
+        InsightType::CorpusCorruptFiles => {
+            lines.push(Line::from(Span::styled(
+                "Corrupt Files",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Files that failed to read during",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "tag verification or waveform decoding.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to stash and drop.",
+                Style::default().fg(Color::Cyan),
+            )));
+        }
+        InsightType::CorpusShitFormatFiles => {
+            lines.push(Line::from(Span::styled(
+                "Shit Format Files",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Non-Vorbis container files (MP3, M4A,",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "WAV, etc.) with poor metadata support.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to transcode to Opus.",
+                Style::default().fg(Color::Cyan),
+            )));
+        }
         InsightType::CorpusFilesInCorpus => {
             lines.push(Line::from(Span::styled(
                 "Files in Corpus",

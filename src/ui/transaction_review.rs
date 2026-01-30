@@ -37,6 +37,8 @@ pub enum TransactionReviewSource {
     FormatStandardization,
     OobSyncResolution,
     OobConflictResolution,
+    CorruptFileResolution,
+    ShitFormatResolution,
 }
 
 /// Summary of a single decision for display.

@@ -193,11 +193,11 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     asleep::Computation::ClearExistingObservationState => {
                         asleep::execute_clear_existing_observation_state(read_only_db, &witness, start)
                     }
-                    asleep::Computation::WalkCorpus { root, source } => {
-                        asleep::execute_walk_corpus(read_only_db, root, source, start)
+                    asleep::Computation::WalkCorpus { root, source, force_check } => {
+                        asleep::execute_walk_corpus(read_only_db, root, source, *force_check, start)
                     }
-                    asleep::Computation::ScanCorpusDirectory { directory, source } => {
-                        asleep::execute_scan_corpus_directory(read_only_db, directory, source, &witness, start)
+                    asleep::Computation::ScanCorpusDirectory { directory, source, force_check } => {
+                        asleep::execute_scan_corpus_directory(read_only_db, directory, source, *force_check, &witness, start)
                     }
                     asleep::Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
                         asleep::execute_verify_mtime(read_only_db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)

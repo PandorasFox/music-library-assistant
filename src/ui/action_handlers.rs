@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::corpus::paths;
-use crate::ui::{compound_split, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -82,6 +82,12 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchInodeChangedAcknowledge) => {
                         self.start_inode_changed_acknowledge();
+                    }
+                    Some(insights_view::InsightAction::LaunchCorruptFileResolution) => {
+                        self.start_corrupt_file_resolution();
+                    }
+                    Some(insights_view::InsightAction::LaunchShitFormatTranscode) => {
+                        self.start_shit_format_resolution();
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Flow not yet implemented".to_string());
@@ -582,6 +588,152 @@ impl App {
 
     /// Stage missing file mutations for transaction review.
     fn stage_missing_file_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+        let Some(ref mut witch) = self.witch else {
+            return;
+        };
+
+        // Start transaction and stage the decision
+        let _ = witch.start_transaction(label);
+        let _ = super::operator_decisions::stage_decision(
+            witch,
+            0,
+            label,
+            mutations,
+        );
+    }
+
+    // ========================================================================
+    // Corrupt File Resolution
+    // ========================================================================
+
+    /// Start corrupt file resolution modal from Insights view.
+    fn start_corrupt_file_resolution(&mut self) {
+        // Load corrupt file data
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                corrupt_file_flow::CorruptFileModalData::load(&read_db).ok()
+            })
+            .unwrap_or_default();
+
+        if data.total_count() == 0 {
+            self.status_message = Some("No corrupt files to resolve".to_string());
+            return;
+        }
+
+        // Create preview state with cached data
+        let preview = corrupt_file_flow::CorruptFilePreviewState::new(data);
+        self.corrupt_file_preview = Some(preview);
+        self.mode = UiMode::CorruptFileResolution;
+    }
+
+    /// Handle corrupt file preview actions.
+    pub(super) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_flow::CorruptFilePreviewAction) {
+        match action {
+            corrupt_file_flow::CorruptFilePreviewAction::None => {}
+            corrupt_file_flow::CorruptFilePreviewAction::ConfirmStashAll => {
+                // Generate stash + drop mutations and stage for review
+                if let Some(ref preview) = self.corrupt_file_preview {
+                    let mutations = preview.cached_data.stash_and_drop_mutations();
+                    let count = mutations.len();
+                    if count > 0 {
+                        self.stage_corrupt_file_mutations(mutations, "Stash corrupt files");
+                        // Note: corrupt_file_preview state is NOT cleared - preserved for Cancel return
+                        self.start_transaction_review(transaction_review::TransactionReviewSource::CorruptFileResolution);
+                    } else {
+                        self.status_message = Some("No files to stash".to_string());
+                    }
+                }
+            }
+            corrupt_file_flow::CorruptFilePreviewAction::Cancel => {
+                crate::logging::log_general("Corrupt file resolution cancelled");
+                // Discard any active transaction from review flow
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.corrupt_file_preview = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Stage corrupt file mutations for transaction review.
+    fn stage_corrupt_file_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+        let Some(ref mut witch) = self.witch else {
+            return;
+        };
+
+        // Start transaction and stage the decision
+        let _ = witch.start_transaction(label);
+        let _ = super::operator_decisions::stage_decision(
+            witch,
+            0,
+            label,
+            mutations,
+        );
+    }
+
+    // ========================================================================
+    // Shit Format Resolution
+    // ========================================================================
+
+    /// Start shit format resolution modal from Insights view.
+    fn start_shit_format_resolution(&mut self) {
+        // Load shit format file data
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                shit_format_flow::ShitFormatModalData::load(&read_db).ok()
+            })
+            .unwrap_or_default();
+
+        if data.total_count() == 0 {
+            self.status_message = Some("No shit format files to resolve".to_string());
+            return;
+        }
+
+        // Create preview state with cached data
+        let preview = shit_format_flow::ShitFormatPreviewState::new(data);
+        self.shit_format_preview = Some(preview);
+        self.mode = UiMode::ShitFormatResolution;
+    }
+
+    /// Handle shit format preview actions.
+    pub(super) fn handle_shit_format_preview_action(&mut self, action: shit_format_flow::ShitFormatPreviewAction) {
+        match action {
+            shit_format_flow::ShitFormatPreviewAction::None => {}
+            shit_format_flow::ShitFormatPreviewAction::ConfirmTranscodeAll => {
+                // Generate transcode mutations and stage for review
+                if let Some(ref preview) = self.shit_format_preview {
+                    let mutations = preview.cached_data.transcode_mutations();
+                    let count = mutations.len();
+                    if count > 0 {
+                        self.stage_shit_format_mutations(mutations, "Transcode to Opus");
+                        // Note: shit_format_preview state is NOT cleared - preserved for Cancel return
+                        self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                    } else {
+                        self.status_message = Some("No files to transcode".to_string());
+                    }
+                }
+            }
+            shit_format_flow::ShitFormatPreviewAction::Cancel => {
+                crate::logging::log_general("Shit format resolution cancelled");
+                // Discard any active transaction from review flow
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.shit_format_preview = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Stage shit format mutations for transaction review.
+    fn stage_shit_format_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
         let Some(ref mut witch) = self.witch else {
             return;
         };
@@ -1718,6 +1870,14 @@ impl App {
                         // oob_conflict_state was preserved
                         self.mode = UiMode::OobConflictInspection;
                     }
+                    Some(TransactionReviewSource::CorruptFileResolution) => {
+                        // corrupt_file_preview state was preserved
+                        self.mode = UiMode::CorruptFileResolution;
+                    }
+                    Some(TransactionReviewSource::ShitFormatResolution) => {
+                        // shit_format_preview state was preserved
+                        self.mode = UiMode::ShitFormatResolution;
+                    }
                     None => self.start_insights_view(),
                 }
             }
@@ -1790,6 +1950,8 @@ impl App {
         self.format_std = None;
         self.oob_sync_state = None;
         self.oob_conflict_state = None;
+        self.corrupt_file_preview = None;
+        self.shit_format_preview = None;
     }
 
     /// Transition to the standardized transaction review modal.

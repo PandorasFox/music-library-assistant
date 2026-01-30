@@ -210,32 +210,72 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         }
     }
 
-    // Emit WaveformReadError for indexing mutations where fingerprint extraction failed
+    // Emit CorruptFile for indexing mutations where fingerprint extraction failed
+    // (waveform decode failure indicates corrupt audio data)
+    // Also emit ShitFormat for non-Vorbis container formats (MP3, M4A, AAC, WMA, etc.)
     if success {
+        /// File types that should trigger ShitFormat signal (non-Vorbis containers)
+        /// Includes lossy formats with poor metadata and lossless needing remux
+        const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
+
         let resolver = crate::corpus::paths::get_resolver();
         match &mutation {
-            Mutation::IndexTrack { path, metadata, .. } if metadata.fingerprint.is_none() => {
+            Mutation::IndexTrack { path, metadata, .. } => {
                 if let Some(rel) = resolver.to_relative(path) {
                     if let Some(sender) = db_thread::signal_sender() {
-                        sender.ensure_file_signal(
-                            CorpusFileSignalType::WaveformReadError.into(),
-                            &rel.to_string_lossy(),
-                            &witness,
-                        );
+                        let rel_str = rel.to_string_lossy();
+
+                        // CorruptFile if fingerprint extraction failed
+                        if metadata.fingerprint.is_none() {
+                            sender.ensure_file_signal(
+                                CorpusFileSignalType::CorruptFile.into(),
+                                &rel_str,
+                                &witness,
+                            );
+                        }
+
+                        // ShitFormat if non-Vorbis container
+                        let file_type_lower = metadata.file_type.to_lowercase();
+                        if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
+                            let metadata_json = serde_json::json!({
+                                "file_type": metadata.file_type
+                            }).to_string();
+                            sender.ensure_file_signal_with_metadata(
+                                CorpusFileSignalType::ShitFormat.into(),
+                                &rel_str,
+                                Some(&metadata_json),
+                                &witness,
+                            );
+                        }
                     }
                 }
             }
             Mutation::IndexFileFromPath { path, .. } => {
                 if let Some(rel) = resolver.to_relative(path) {
                     let rel_str = rel.to_string_lossy();
-                    // Check fingerprint via read-only DB
+                    // Check fingerprint and file_type via read-only DB
                     let _ = with_read_only_db(|read_db| {
                         if let Ok(Some(track)) = read_db.get_track_by_path(&rel_str) {
-                            if track.fingerprint.is_none() {
-                                if let Some(sender) = db_thread::signal_sender() {
+                            if let Some(sender) = db_thread::signal_sender() {
+                                // CorruptFile if fingerprint extraction failed
+                                if track.fingerprint.is_none() {
                                     sender.ensure_file_signal(
-                                        CorpusFileSignalType::WaveformReadError.into(),
+                                        CorpusFileSignalType::CorruptFile.into(),
                                         &rel_str,
+                                        &witness,
+                                    );
+                                }
+
+                                // ShitFormat if non-Vorbis container
+                                let file_type_lower = track.file_type.to_lowercase();
+                                if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
+                                    let metadata_json = serde_json::json!({
+                                        "file_type": track.file_type
+                                    }).to_string();
+                                    sender.ensure_file_signal_with_metadata(
+                                        CorpusFileSignalType::ShitFormat.into(),
+                                        &rel_str,
+                                        Some(&metadata_json),
                                         &witness,
                                     );
                                 }

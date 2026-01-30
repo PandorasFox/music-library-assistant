@@ -133,6 +133,8 @@ pub enum InsightType {
     CorpusFilesUnindexed,
     CorpusFilesMissing,
     CorpusFilesRelocated,
+    CorpusCorruptFiles,
+    CorpusShitFormatFiles,
     // Tag resolution bucket entries
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
@@ -163,6 +165,10 @@ pub enum InsightAction {
     LaunchOobTagConflict,
     /// Launch inode changed acknowledgement flow
     LaunchInodeChangedAcknowledge,
+    /// Launch corrupt file resolution flow (stash + drop)
+    LaunchCorruptFileResolution,
+    /// Launch shit format transcode flow
+    LaunchShitFormatTranscode,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -369,6 +375,22 @@ impl CachedBucketEntries {
                 1,
                 if corpus.files_relocated > 0 { Color::Yellow } else { Color::Green },
                 InsightAction::Informational,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusCorruptFiles,
+                "Corrupt files",
+                corpus.corrupt_files,
+                if corpus.corrupt_files > 0 { 0 } else { 2 },
+                if corpus.corrupt_files > 0 { Color::Red } else { Color::DarkGray },
+                InsightAction::LaunchCorruptFileResolution,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusShitFormatFiles,
+                "Shit format files",
+                corpus.shit_format_files,
+                if corpus.shit_format_files > 0 { 0 } else { 2 },
+                if corpus.shit_format_files > 0 { Color::Yellow } else { Color::DarkGray },
+                InsightAction::LaunchShitFormatTranscode,
             ),
         ];
 

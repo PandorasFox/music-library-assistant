@@ -857,6 +857,10 @@ impl Database {
         let files_missing = self.count_signal_type("missing_file")?;
         let files_relocated = self.count_signal_type("moved_file")?;
 
+        // Error/format signals
+        let corrupt_files = self.count_signal_type("corrupt_file")?;
+        let shit_format_files = self.count_signal_type("shit_format")?;
+
         // File type breakdown
         let file_type_breakdown = self.get_file_type_breakdown()?;
 
@@ -873,6 +877,8 @@ impl Database {
             files_unindexed,
             files_missing,
             files_relocated,
+            corrupt_files,
+            shit_format_files,
             file_type_breakdown,
             directory_breakdown,
         })
@@ -1271,6 +1277,74 @@ impl Database {
         let results = stmt
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
+
+        Ok(results)
+    }
+
+    // ========================================================================
+    // Corrupt File Resolution Queries
+    // ========================================================================
+
+    /// Get all corpus paths with CorruptFile signals.
+    ///
+    /// Returns the issue_key (corpus path) for each corrupt_file signal.
+    /// Used by the corrupt file resolution modal.
+    pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT issue_key FROM signals WHERE issue_type = 'corrupt_file' ORDER BY issue_key"
+        )?;
+
+        let results = stmt
+            .query_map(params![], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+
+        Ok(results)
+    }
+
+    // ========================================================================
+    // Shit Format Resolution Queries
+    // ========================================================================
+
+    /// Get all corpus paths with ShitFormat signals.
+    ///
+    /// Returns (issue_key, file_type) for each shit_format signal.
+    /// The file_type is extracted from metadata_json.
+    /// Used by the shit format resolution modal.
+    pub fn get_shit_format_files(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT issue_key, COALESCE(json_extract(metadata_json, '$.file_type'), '')
+               FROM signals
+               WHERE issue_type = 'shit_format'
+               ORDER BY issue_key"#
+        )?;
+
+        let results = stmt
+            .query_map(params![], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<(String, String)>>>()?;
+
+        Ok(results)
+    }
+
+    /// Get counts of shit format files grouped by file type.
+    ///
+    /// Returns (file_type, count) pairs sorted by count descending.
+    pub fn get_shit_format_counts_by_type(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT COALESCE(json_extract(metadata_json, '$.file_type'), 'unknown') as file_type,
+                      COUNT(*) as cnt
+               FROM signals
+               WHERE issue_type = 'shit_format'
+               GROUP BY file_type
+               ORDER BY cnt DESC"#
+        )?;
+
+        let results = stmt
+            .query_map(params![], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<(String, i64)>>>()?;
 
         Ok(results)
     }

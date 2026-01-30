@@ -68,11 +68,13 @@ pub fn execute_walk_corpus(
     _read_only_db: &Database,
     root: &Path,
     source: &str,
+    force_check: bool,
     start: Instant,
 ) -> Result {
     let computation = Computation::WalkCorpus {
         root: root.to_path_buf(),
         source: source.to_string(),
+        force_check,
     };
 
     if !root.exists() {
@@ -94,8 +96,9 @@ pub fn execute_walk_corpus(
     }
 
     log_general(format!(
-        "[COMPUTE] WalkCorpus: found {} directories in {:?}",
-        directories.len(), root
+        "[COMPUTE] WalkCorpus: found {} directories in {:?}{}",
+        directories.len(), root,
+        if force_check { " (force_check=true)" } else { "" }
     ));
 
     // Spawn ScanCorpusDirectory for each directory
@@ -104,6 +107,7 @@ pub fn execute_walk_corpus(
         .map(|directory| Computation::ScanCorpusDirectory {
             directory,
             source: source.to_string(),
+            force_check,
         })
         .collect();
 
@@ -123,12 +127,14 @@ pub fn execute_scan_corpus_directory(
     read_only_db: &Database,
     directory: &Path,
     source: &str,
+    force_check: bool,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = Computation::ScanCorpusDirectory {
         directory: directory.to_path_buf(),
         source: source.to_string(),
+        force_check,
     };
 
     // Get signal sender for async writes
@@ -189,17 +195,32 @@ pub fn execute_scan_corpus_directory(
         // (ClearExistingObservationState cleared all stale signals at start of observation)
         ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &relative_path_str, witness);
 
-        // Check if file is indexed and needs mtime verification
+        // Check if file is indexed and needs verification
         if let Some(entry) = indexed_by_inode.get(inode) {
-            // File is indexed by inode - check if mtime changed
-            if entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns {
+            // File is indexed by inode
+            let mtime_changed = entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns;
+
+            if force_check {
+                // Force-check mode: skip mtime optimization, verify all indexed files directly
                 let track = match read_only_db.get_track_by_path(&relative_path_str) {
                     Ok(Some(t)) => t,
                     _ => continue,
                 };
                 let Some(track_id) = track.id else { continue };
 
-                // Mtime mismatched - verify tags
+                spawn.push(Computation::VerifyTags {
+                    track_id,
+                    path: path.clone(),
+                });
+            } else if mtime_changed {
+                // Normal mode: only verify if mtime changed
+                let track = match read_only_db.get_track_by_path(&relative_path_str) {
+                    Ok(Some(t)) => t,
+                    _ => continue,
+                };
+                let Some(track_id) = track.id else { continue };
+
+                // Mtime mismatched - verify tags via VerifyMtime
                 // Note: path in Computation is still absolute for filesystem operations
                 spawn.push(Computation::VerifyMtime {
                     track_id,
@@ -478,7 +499,7 @@ pub fn execute_verify_tags(
             )
         }
         Err(e) => {
-            // Emit TagParseError signal so the issue is tracked in the DB
+            // Emit CorruptFile signal so the issue is tracked in the DB (actionable)
             log_general(format!(
                 "[COMPUTE] VerifyTags: tag parse error for track {} ({}): {}",
                 track_id, path.display(), e
@@ -486,7 +507,7 @@ pub fn execute_verify_tags(
             ensure_file_signal_if_missing(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::TagParseError.into(),
+                CorpusFileSignalType::CorruptFile.into(),
                 &rel_str,
                 witness,
             );

@@ -143,11 +143,6 @@ enum SignalWriteOp {
         signal_type: AggregateSignalType,
         key: String,
     },
-    /// Clear signals in a directory (for file signals)
-    ClearFileSignalsInDirectory {
-        directory: PathBuf,
-        signal_type: FileSignalType,
-    },
 
     // =========================================================================
     // Library Scan State Operations (Awakening phase)
@@ -236,19 +231,6 @@ enum SignalWriteOp {
     SetTrackTags {
         path: String,
         tags: Vec<(String, String)>,
-    },
-
-    /// Update a single tag value.
-    UpdateTrackTag {
-        path: String,
-        tag_name: String,
-        new_value: String,
-    },
-
-    /// Delete a specific tag from a track.
-    DeleteTrackTag {
-        path: String,
-        tag_name: String,
     },
 
     /// Update track metadata (full replace for out-of-band changes).
@@ -524,20 +506,6 @@ impl SignalWriteSender {
         });
     }
 
-    /// Clear all file signals of a type in a directory.
-    pub fn clear_file_signals_in_directory(
-        &self,
-        directory: &std::path::Path,
-        signal_type: FileSignalType,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearFileSignalsInDirectory {
-            directory: directory.to_path_buf(),
-            signal_type,
-        });
-    }
-
     // =========================================================================
     // Aggregate signal operations
     // =========================================================================
@@ -750,36 +718,6 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::SetTrackTags {
             path: path.to_string(),
             tags,
-        });
-    }
-
-    /// Update a single tag value.
-    pub fn update_track_tag(
-        &self,
-        path: &str,
-        tag_name: &str,
-        new_value: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateTrackTag {
-            path: path.to_string(),
-            tag_name: tag_name.to_string(),
-            new_value: new_value.to_string(),
-        });
-    }
-
-    /// Delete a specific tag from a track.
-    pub fn delete_track_tag(
-        &self,
-        path: &str,
-        tag_name: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::DeleteTrackTag {
-            path: path.to_string(),
-            tag_name: tag_name.to_string(),
         });
     }
 
@@ -1144,15 +1082,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                 db.clear_file_signal(*signal_type, path, &witness).map(|_| ())
             });
         }
-        SignalWriteOp::ClearFileSignalsInDirectory {
-            directory,
-            signal_type,
-        } => {
-            let ctx = directory.display().to_string();
-            with_retry("clear_file_signals_in_directory", &ctx, || {
-                db.clear_file_signals_in_directory(directory, *signal_type, &witness).map(|_| ())
-            });
-        }
 
         // Aggregate signal operations
         SignalWriteOp::EnsureAggregateSignal {
@@ -1286,18 +1215,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::SetTrackTags { path, tags } => {
             with_retry("set_track_tags", path, || {
                 execute_set_track_tags(db, path, tags)
-            });
-        }
-
-        SignalWriteOp::UpdateTrackTag { path, tag_name, new_value } => {
-            with_retry("update_track_tag", path, || {
-                execute_update_track_tag(db, path, tag_name, new_value)
-            });
-        }
-
-        SignalWriteOp::DeleteTrackTag { path, tag_name } => {
-            with_retry("delete_track_tag", path, || {
-                execute_delete_track_tag(db, path, tag_name)
             });
         }
 
@@ -1557,50 +1474,6 @@ fn execute_set_track_tags(db: &Database, path: &str, tags: &[(String, String)]) 
             )?;
         }
     }
-
-    Ok(())
-}
-
-/// Execute UpdateTrackTag: update a single tag value.
-fn execute_update_track_tag(
-    db: &Database,
-    path: &str,
-    tag_name: &str,
-    new_value: &str,
-) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    let track_id = get_track_id_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", path))?;
-
-    // Delete existing value for this tag name
-    db.conn().execute(
-        "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2",
-        params![track_id, tag_name],
-    )?;
-
-    // Insert new value if non-empty
-    if !new_value.is_empty() {
-        db.conn().execute(
-            "INSERT INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-            params![track_id, tag_name, new_value],
-        )?;
-    }
-
-    Ok(())
-}
-
-/// Execute DeleteTrackTag: delete a specific tag.
-fn execute_delete_track_tag(db: &Database, path: &str, tag_name: &str) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    let track_id = get_track_id_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", path))?;
-
-    db.conn().execute(
-        "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2",
-        params![track_id, tag_name],
-    )?;
 
     Ok(())
 }

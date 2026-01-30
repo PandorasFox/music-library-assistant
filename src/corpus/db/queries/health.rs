@@ -204,24 +204,6 @@ impl Database {
     }
 
 
-    /// Get health signal by type and key (e.g., path or fingerprint).
-    pub fn get_signal_by_key(
-        &self,
-        issue_type: SignalType,
-        issue_key: &str,
-    ) -> Result<Option<Signal>> {
-        self.conn
-            .query_row(
-                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-                   FROM signals
-                   WHERE issue_type = ?1 AND issue_key = ?2"#,
-                params![issue_type.as_str(), issue_key],
-                Self::row_to_signal,
-            )
-            .optional()
-            .context("Failed to query health signal by key")
-    }
-
     /// Get signal by ID.
     pub fn get_signal_by_id(&self, signal_id: i64) -> Result<Option<Signal>> {
         self.conn
@@ -234,19 +216,6 @@ impl Database {
             )
             .optional()
             .context("Failed to query signal by ID")
-    }
-
-    /// Fast existence check for a signal (no data fetch).
-    ///
-    /// Use this before emitting signals to avoid redundant DB writes.
-    pub fn signal_exists(&self, issue_type: SignalType, issue_key: &str) -> bool {
-        self.conn
-            .query_row(
-                "SELECT 1 FROM signals WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
-                params![issue_type.as_str(), issue_key],
-                |_| Ok(()),
-            )
-            .is_ok()
     }
 
     /// Fast existence check for a file signal type.
@@ -294,127 +263,6 @@ impl Database {
                 params![path],
             )
             .context("Failed to delete mutable signals for path")?;
-        Ok(deleted)
-    }
-
-    // ========================================================================
-    // Witnessed Signal Operations (require ComputationWitness)
-    // ========================================================================
-
-    /// Ensure a signal exists (idempotent create).
-    ///
-    /// Creates the signal if it doesn't exist; does nothing if it already exists.
-    /// Returns `true` if a new signal was created, `false` if it already existed.
-    ///
-    /// Requires `ComputationWitness` to ensure this is called from computation context.
-    pub fn ensure_signal(
-        &self,
-        issue_type: SignalType,
-        issue_key: &str,
-        metadata_json: Option<&str>,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        // Single-statement idempotent insert using UNIQUE constraint
-        self.conn
-            .execute(
-                r#"
-                INSERT OR IGNORE INTO signals
-                (issue_type, issue_key, discovered_at, metadata_json)
-                VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
-                "#,
-                params![
-                    issue_type.as_str(),
-                    issue_key,
-                    metadata_json,
-                ],
-            )
-            .context("Failed to ensure signal")?;
-
-        Ok(self.conn.changes() > 0)
-    }
-
-    /// Clear a signal if it exists (idempotent delete).
-    ///
-    /// Deletes the signal if it exists; does nothing if it doesn't exist.
-    /// Returns `true` if a signal was deleted, `false` if none existed.
-    ///
-    /// Requires `ComputationWitness` to ensure this is called from computation context.
-    pub fn clear_signal(
-        &self,
-        issue_type: SignalType,
-        issue_key: &str,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
-                params![issue_type.as_str(), issue_key],
-            )
-            .context("Failed to clear signal")?;
-
-        Ok(deleted > 0)
-    }
-
-    /// Replace a signal (delete existing + insert new).
-    ///
-    /// Used for signals like LibrarySignalSummary where we want to update
-    /// with fresh data rather than accumulate.
-    ///
-    /// Requires `ComputationWitness` to ensure this is called from computation context.
-    pub fn replace_signal(
-        &self,
-        issue: &Signal,
-        _witness: &impl SignalWitness,
-    ) -> Result<i64> {
-        // Delete existing signal with same type and key
-        self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
-                params![issue.issue_type.as_str(), &issue.issue_key],
-            )
-            .context("Failed to delete existing signal")?;
-
-        // Insert new signal
-        self.conn
-            .execute(
-                r#"
-                INSERT INTO signals
-                (issue_type, issue_key, discovered_at, metadata_json)
-                VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
-                "#,
-                params![
-                    issue.issue_type.as_str(),
-                    &issue.issue_key,
-                    &issue.discovered_at,
-                    &issue.metadata_json,
-                ],
-            )
-            .context("Failed to replace signal")?;
-
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    /// Clear all signals of a specific type for a directory.
-    ///
-    /// Used before recomputing signals for a directory to ensure stale signals
-    /// are removed.
-    ///
-    /// Requires `ComputationWitness` to ensure this is called from computation context.
-    pub fn clear_signals_in_directory(
-        &self,
-        directory: &std::path::Path,
-        issue_type: SignalType,
-        _witness: &impl SignalWitness,
-    ) -> Result<usize> {
-        let pattern = super::dir_like_pattern(directory);
-
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
-                params![issue_type.as_str(), pattern],
-            )
-            .context("Failed to clear signals in directory")?;
-
         Ok(deleted)
     }
 
@@ -482,25 +330,6 @@ impl Database {
             .context("Failed to clear file signal")?;
 
         Ok(deleted > 0)
-    }
-
-    /// Clear all file signals of a type in a directory.
-    pub fn clear_file_signals_in_directory(
-        &self,
-        directory: &std::path::Path,
-        signal_type: FileSignalType,
-        _witness: &impl SignalWitness,
-    ) -> Result<usize> {
-        let pattern = super::dir_like_pattern(directory);
-
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\\'",
-                params![signal_type.as_str(), pattern],
-            )
-            .context("Failed to clear file signals in directory")?;
-
-        Ok(deleted)
     }
 
     /// Ensure an aggregate signal exists (with metadata).

@@ -464,11 +464,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_track_tags(track_id)
     }
 
-    /// Get a specific tag value for a track (first value if multi-value).
-    pub fn get_track_tag_value(&self, track_id: i64, tag_name: &str) -> Result<Option<String>> {
-        self.db.get_track_tag_value(track_id, tag_name)
-    }
-
     /// Get all tracks with their tags (for search functionality).
     pub fn get_all_tracks_with_tags(&self) -> Result<Vec<(super::types::Track, std::collections::HashMap<String, String>)>> {
         self.db.get_all_tracks_with_tags()
@@ -515,11 +510,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get files with changed inodes.
     pub fn get_inode_changed_files(&self) -> Result<Vec<crate::corpus::db::types::InodeChangedFile>> {
         self.db.get_inode_changed_files()
-    }
-
-    /// Get tag mismatches for a track.
-    pub fn get_tag_mismatches_for_track(&self, track_id: i64) -> Result<Vec<(String, Option<String>, Option<String>)>> {
-        self.db.get_tag_mismatches_for_track(track_id)
     }
 
     // =========================================================================

@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::corpus::db::types::AggregateSignal;
-use crate::corpus::mutations::{Mutation, TagEdit};
+use crate::corpus::mutations::Mutation;
+use crate::corpus::tags::TagSet;
 
 // ============================================================================
 // Data Types (loaded from signal)
@@ -102,59 +103,56 @@ impl CompoundSplitState {
         }
     }
 
-    /// Generate mutations for this split.
+    /// Generate mutations for this split using DB-first pattern.
     ///
     /// For each affected track:
     /// - Verify the track still has the compound value (skip if not)
-    /// - Delete the compound value
-    /// - Insert each split part as a separate tag value
+    /// - Build new TagSet with compound value replaced by split parts
+    /// - Generate SetTrackTagsDb + FlushTagsToDisk mutations
     ///
-    /// The `track_info` map contains (path, current_tag_value) for each track.
+    /// The `track_info` map contains (path, current_tagset) for each track.
     /// This allows verifying the track actually has the compound value before
     /// generating mutations, preventing no-op mutations when the value has
     /// already been fixed or changed.
     pub fn mutations_with_paths(
         &self,
-        track_info: &HashMap<i64, (PathBuf, Option<String>)>,
+        track_info: &HashMap<i64, (PathBuf, TagSet)>,
     ) -> Vec<Mutation> {
         let mut mutations = Vec::new();
 
         for &track_id in &self.data.track_ids {
-            let Some((path, current_value)) = track_info.get(&track_id) else {
+            let Some((path, current_tagset)) = track_info.get(&track_id) else {
                 continue;
             };
 
-            // Only generate mutation if track still has the compound value
-            let Some(ref current) = current_value else {
-                continue; // No value means nothing to split
-            };
-            if current != &self.data.compound_value {
-                continue; // Value has changed, skip this track
+            // Verify track still has the compound value
+            if !current_tagset.contains(&self.data.tag_name, &self.data.compound_value) {
+                continue; // Already fixed or changed, skip this track
             }
 
-            // Build edits: delete old compound, insert split parts
-            let mut edits = Vec::new();
+            // Build new TagSet: remove compound value, add split parts
+            let mut new_tags: Vec<(String, String)> = current_tagset
+                .iter()
+                .filter(|(k, v)| {
+                    // Keep all tags EXCEPT the compound value being split
+                    !(k.eq_ignore_ascii_case(&self.data.tag_name) && v == &self.data.compound_value)
+                })
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
 
-            // Delete the compound value (using actual current value for verification)
-            edits.push(TagEdit {
-                tag_name: self.data.tag_name.clone(),
-                old_value: Some(current.clone()),
-                new_value: None,
-            });
-
-            // Insert each split part
+            // Add split parts as separate values
             for part in &self.data.split_parts {
-                edits.push(TagEdit {
-                    tag_name: self.data.tag_name.clone(),
-                    old_value: None,
-                    new_value: Some(part.clone()),
-                });
+                new_tags.push((self.data.tag_name.clone(), part.clone()));
             }
 
-            mutations.push(Mutation::TagEditAndFlush {
+            // DB-first pattern: SetTrackTagsDb then FlushTagsToDisk
+            mutations.push(Mutation::SetTrackTagsDb {
+                track_id,
+                tags: new_tags,
+            });
+            mutations.push(Mutation::FlushTagsToDisk {
                 track_id,
                 path: path.clone(),
-                edits,
             });
         }
 

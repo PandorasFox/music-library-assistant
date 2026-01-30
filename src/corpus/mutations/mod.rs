@@ -84,31 +84,41 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn test_create_bulk_tag_fill() {
-        // Test the mutation creation structure
+    fn test_create_bulk_tag_mutations() {
+        // Test the DB-first tag mutation creation structure
         let files = vec![
             (1i64, PathBuf::from("/test/a.flac")),
             (2i64, PathBuf::from("/test/b.flac")),
         ];
 
-        // Create mutations manually to test the structure
+        // Create mutations using the two-mutation pattern
         let mutations: Vec<Mutation> = files
             .iter()
-            .map(|(track_id, path)| Mutation::TagEditAndFlush {
-                track_id: *track_id,
-                path: path.clone(),
-                edits: vec![TagEdit {
-                    tag_name: "album_artist".to_string(),
-                    old_value: None,
-                    new_value: Some("Various Artists".to_string()),
-                }],
+            .flat_map(|(track_id, path)| {
+                vec![
+                    Mutation::SetTrackTagsDb {
+                        track_id: *track_id,
+                        tags: vec![("album_artist".to_string(), "Various Artists".to_string())],
+                    },
+                    Mutation::FlushTagsToDisk {
+                        track_id: *track_id,
+                        path: path.clone(),
+                    },
+                ]
             })
             .collect();
 
-        assert_eq!(mutations.len(), 2);
-        for mutation in &mutations {
-            assert_eq!(mutation.category(), MutationCategory::TagEdit);
-            assert!(mutation.primary_path().is_some());
-        }
+        // 2 files × 2 mutations each = 4 mutations
+        assert_eq!(mutations.len(), 4);
+
+        // Verify SetTrackTagsDb mutations
+        assert!(matches!(&mutations[0], Mutation::SetTrackTagsDb { track_id: 1, .. }));
+        assert_eq!(mutations[0].category(), MutationCategory::Indexing); // DB-only
+        assert!(mutations[0].is_db_only());
+
+        // Verify FlushTagsToDisk mutations
+        assert!(matches!(&mutations[1], Mutation::FlushTagsToDisk { track_id: 1, .. }));
+        assert_eq!(mutations[1].category(), MutationCategory::TagEdit);
+        assert!(mutations[1].primary_path().is_some());
     }
 }

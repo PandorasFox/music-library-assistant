@@ -623,27 +623,6 @@ impl Database {
     }
 
     // ========================================================================
-    // Tag Edit Operations
-    // ========================================================================
-
-    pub fn log_tag_edit(
-        &self,
-        track_id: i64,
-        field_name: &str,
-        old_value: Option<&str>,
-        new_value: Option<&str>,
-        session_id: &str,
-        _witness: &impl SignalWitness,
-    ) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO tag_edit_history (track_id, field_name, old_value, new_value, session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![track_id, field_name, old_value, new_value, session_id],
-        ).context("Failed to log tag edit")?;
-        Ok(())
-    }
-
-    // ========================================================================
     // Track Tags Operations
     // ========================================================================
 
@@ -1157,5 +1136,25 @@ impl Database {
             results.push(row?);
         }
         Ok(results)
+    }
+
+    /// Get all tracks with needs_disk_flush = TRUE.
+    ///
+    /// Used for recovery: these tracks have DB tags that haven't been synced to disk.
+    /// The OOB flow can use this to offer "Apply DB → Disk" resolution.
+    pub fn get_tracks_needing_disk_flush(&self) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, source, inode, file_size, file_type,
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
+             FROM tracks
+             WHERE needs_disk_flush = 1
+             ORDER BY path",
+        )?;
+
+        let tracks = stmt
+            .query_map(params![], Self::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(tracks)
     }
 }

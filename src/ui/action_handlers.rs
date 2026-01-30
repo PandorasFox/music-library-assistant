@@ -1530,8 +1530,9 @@ impl App {
             .map(|c| c.current_index())
             .unwrap_or(0);
 
-        // Get track info from witch: path and current tag value
+        // Get track info from witch: path and current TagSet
         // This allows mutations_with_paths to verify each track still has the compound value
+        // and build the complete new tag set for DB-first pattern.
         let track_info = self.witch.as_mut()
             .map(|w| {
                 let read_db = w.read_db();
@@ -1541,11 +1542,10 @@ impl App {
                     if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                         // Resolve relative DB path to absolute for filesystem operations
                         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-                        // Query current value for this tag
-                        let current_value = read_db.get_track_tag_value(track_id, &state.data.tag_name)
-                            .ok()
-                            .flatten();
-                        info.insert(track_id, (abs_path, current_value));
+                        // Load complete TagSet from disk for building new tag set
+                        let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
+                            .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
+                        info.insert(track_id, (abs_path, tagset));
                     }
                 }
                 info
@@ -1623,15 +1623,14 @@ impl App {
                     continue;
                 };
 
-                // Build track info: path and current tag value
+                // Build track info: path and current TagSet
                 let mut track_info = std::collections::HashMap::new();
                 for &track_id in &data.track_ids {
                     if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                         let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-                        let current_value = read_db.get_track_tag_value(track_id, &data.tag_name)
-                            .ok()
-                            .flatten();
-                        track_info.insert(track_id, (abs_path, current_value));
+                        let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
+                            .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
+                        track_info.insert(track_id, (abs_path, tagset));
                     }
                 }
 
@@ -2075,18 +2074,18 @@ impl App {
             return;
         };
 
-        // Get track paths and current tag values from database
+        // Get track paths and current TagSets from disk
         let read_db = witch.read_db();
         let resolver = paths::get_resolver();
-        let tag_name = &state.data.tag_name;
         let mut track_info = std::collections::HashMap::new();
         for &track_id in &state.data.track_ids {
             if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                 // Resolve relative DB path to absolute for filesystem operations
                 let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-                // Get current tag value for this track
-                let current_value = read_db.get_track_tag_value(track_id, tag_name).ok().flatten();
-                track_info.insert(track_id, (abs_path, current_value));
+                // Load complete TagSet from disk for building new tag set
+                let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
+                    .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
+                track_info.insert(track_id, (abs_path, tagset));
             }
         }
 

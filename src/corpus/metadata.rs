@@ -521,5 +521,5 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
 // Tag Operations - MOVED TO corpus/tags.rs
 // =============================================================================
 // All tag reading, writing, and comparison now goes through corpus::tags module.
-// See corpus/tags.rs for TagSet, write_file_tags(), and apply_edits_to_file().
+// See corpus/tags.rs for TagSet and write_file_tags().
 

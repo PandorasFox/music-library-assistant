@@ -62,14 +62,6 @@ pub struct ScanStateData {
     pub file_size: i64,
 }
 
-/// Single tag edit operation for surgical edits.
-#[derive(Debug, Clone)]
-pub struct TagEditOp {
-    pub tag_name: String,
-    pub old_value: Option<String>,
-    pub new_value: Option<String>,
-}
-
 // ============================================================================
 // Signal Witness Trait
 // ============================================================================
@@ -246,22 +238,6 @@ enum SignalWriteOp {
         tags: Vec<(String, String)>,
     },
 
-    /// Surgical tag edits with history logging.
-    EditTrackTags {
-        path: String,
-        edits: Vec<TagEditOp>,
-        session_id: String,
-    },
-
-    /// Log a tag edit to history (for audit trail).
-    LogTagEdit {
-        path: String,
-        tag_name: String,
-        old_value: Option<String>,
-        new_value: Option<String>,
-        session_id: String,
-    },
-
     /// Update a single tag value.
     UpdateTrackTag {
         path: String,
@@ -325,6 +301,14 @@ enum SignalWriteOp {
     /// Clear tag mismatches for a track (after resolution).
     ClearTagMismatchesForTrack {
         path: String,
+    },
+
+    /// Set the needs_disk_flush flag for a track.
+    /// Used by DB-first tag editing pattern: set TRUE after SetTrackTagsDb,
+    /// set FALSE after FlushTagsToDisk completes successfully.
+    SetNeedsDiskFlush {
+        path: String,
+        value: bool,
     },
 
     // TODO: Refactor signal clearing into a unified system with signal categories.
@@ -769,42 +753,6 @@ impl SignalWriteSender {
         });
     }
 
-    /// Apply surgical tag edits with history logging.
-    pub fn edit_track_tags(
-        &self,
-        path: &str,
-        edits: Vec<TagEditOp>,
-        session_id: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::EditTrackTags {
-            path: path.to_string(),
-            edits,
-            session_id: session_id.to_string(),
-        });
-    }
-
-    /// Log a tag edit to history.
-    pub fn log_tag_edit(
-        &self,
-        path: &str,
-        tag_name: &str,
-        old_value: Option<&str>,
-        new_value: Option<&str>,
-        session_id: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::LogTagEdit {
-            path: path.to_string(),
-            tag_name: tag_name.to_string(),
-            old_value: old_value.map(|s| s.to_string()),
-            new_value: new_value.map(|s| s.to_string()),
-            session_id: session_id.to_string(),
-        });
-    }
-
     /// Update a single tag value.
     pub fn update_track_tag(
         &self,
@@ -971,6 +919,25 @@ impl SignalWriteSender {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearMutableSignalsForPath {
             path: path.to_string(),
+        });
+    }
+
+    /// Set the needs_disk_flush flag for a track.
+    ///
+    /// Used by the DB-first tag editing pattern:
+    /// - SetTrackTagsDb sets this to TRUE after writing tags to DB
+    /// - FlushTagsToDisk sets this to FALSE after syncing to disk
+    /// - Tracks with TRUE can be recovered via OOB flow
+    pub fn set_needs_disk_flush(
+        &self,
+        path: &str,
+        value: bool,
+        _witness: &MutationExecutionWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::SetNeedsDiskFlush {
+            path: path.to_string(),
+            value,
         });
     }
 }
@@ -1322,24 +1289,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::EditTrackTags { path, edits, session_id } => {
-            with_retry("edit_track_tags", path, || {
-                execute_edit_track_tags(db, path, edits, session_id)
-            });
-        }
-
-        SignalWriteOp::LogTagEdit {
-            path,
-            tag_name,
-            old_value,
-            new_value,
-            session_id,
-        } => {
-            with_retry("log_tag_edit", path, || {
-                execute_log_tag_edit(db, path, tag_name, old_value.as_deref(), new_value.as_deref(), session_id)
-            });
-        }
-
         SignalWriteOp::UpdateTrackTag { path, tag_name, new_value } => {
             with_retry("update_track_tag", path, || {
                 execute_update_track_tag(db, path, tag_name, new_value)
@@ -1412,6 +1361,12 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::ClearMutableSignalsForPath { path } => {
             with_retry("clear_mutable_signals_for_path", path, || {
                 db.delete_mutable_signals_for_path(path, &witness).map(|_| ())
+            });
+        }
+
+        SignalWriteOp::SetNeedsDiskFlush { path, value } => {
+            with_retry("set_needs_disk_flush", path, || {
+                execute_set_needs_disk_flush(db, path, *value)
             });
         }
 
@@ -1606,89 +1561,6 @@ fn execute_set_track_tags(db: &Database, path: &str, tags: &[(String, String)]) 
     Ok(())
 }
 
-/// Execute EditTrackTags: apply surgical edits with history logging.
-fn execute_edit_track_tags(
-    db: &Database,
-    path: &str,
-    edits: &[TagEditOp],
-    session_id: &str,
-) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    let track_id = get_track_id_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", path))?;
-
-    for edit in edits {
-        // Log the edit to history
-        db.conn().execute(
-            "INSERT INTO tag_edit_history (track_id, field_name, old_value, new_value, session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![track_id, &edit.tag_name, &edit.old_value, &edit.new_value, session_id],
-        )?;
-
-        // Apply the edit
-        match (&edit.old_value, &edit.new_value) {
-            (Some(old), Some(new)) => {
-                // Update: delete old value, insert new
-                db.conn().execute(
-                    "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2 AND tag_value = ?3",
-                    params![track_id, &edit.tag_name, old],
-                )?;
-                if !new.is_empty() {
-                    db.conn().execute(
-                        "INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                        params![track_id, &edit.tag_name, new],
-                    )?;
-                }
-            }
-            (Some(old), None) => {
-                // Delete
-                db.conn().execute(
-                    "DELETE FROM track_tags WHERE track_id = ?1 AND tag_name = ?2 AND tag_value = ?3",
-                    params![track_id, &edit.tag_name, old],
-                )?;
-            }
-            (None, Some(new)) => {
-                // Insert
-                if !new.is_empty() {
-                    db.conn().execute(
-                        "INSERT OR IGNORE INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                        params![track_id, &edit.tag_name, new],
-                    )?;
-                }
-            }
-            (None, None) => {
-                // No-op
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Execute LogTagEdit: log a single tag edit to history.
-fn execute_log_tag_edit(
-    db: &Database,
-    path: &str,
-    tag_name: &str,
-    old_value: Option<&str>,
-    new_value: Option<&str>,
-    session_id: &str,
-) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    let track_id = get_track_id_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", path))?;
-
-    db.conn().execute(
-        "INSERT INTO tag_edit_history (track_id, field_name, old_value, new_value, session_id)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![track_id, tag_name, old_value, new_value, session_id],
-    )?;
-
-    Ok(())
-}
-
 /// Execute UpdateTrackTag: update a single tag value.
 fn execute_update_track_tag(
     db: &Database,
@@ -1855,6 +1727,25 @@ fn execute_clear_tag_mismatches_for_track(db: &Database, path: &str) -> anyhow::
         "DELETE FROM tag_mismatches WHERE track_id = ?1",
         params![track_id],
     )?;
+
+    Ok(())
+}
+
+/// Execute SetNeedsDiskFlush: update the needs_disk_flush flag for a track.
+fn execute_set_needs_disk_flush(db: &Database, path: &str, value: bool) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    let rows_updated = db.conn().execute(
+        "UPDATE tracks SET needs_disk_flush = ?1 WHERE path = ?2",
+        params![value as i32, path],
+    )?;
+
+    if rows_updated == 0 {
+        crate::logging::log_error(format!(
+            "[DB_THREAD] set_needs_disk_flush: no track found for path={}",
+            path
+        ));
+    }
 
     Ok(())
 }

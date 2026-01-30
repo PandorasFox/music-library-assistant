@@ -441,7 +441,7 @@ impl UnifiedTagEditorState {
             TagEditContext::BulkEdit { tracks, .. } => tracks.clone(),
         };
 
-        changes_to_mutations(&changes, &tracks)
+        changes_to_mutations(&changes, &tracks, &self.tag_fields)
     }
 
     /// Generate mutations for the current item only.
@@ -465,7 +465,7 @@ impl UnifiedTagEditorState {
             TagEditContext::BulkEdit { tracks, .. } => tracks.clone(),
         };
 
-        changes_to_mutations(&current_changes, &tracks)
+        changes_to_mutations(&current_changes, &tracks, &self.tag_fields)
     }
 
     /// Revert to original state (all items)
@@ -2215,25 +2215,44 @@ impl std::fmt::Debug for UnifiedTagEditorState {
     }
 }
 
-/// Convert changes to mutations for the daemon
-fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation> {
-    use crate::corpus::mutations::TagEdit;
+/// Convert TagField list to (tag_name, tag_value) pairs for mutations.
+///
+/// Filters out "New Tag" placeholder and deleted fields.
+/// Returns the complete tag set as the final desired state.
+fn tag_fields_to_tags(fields: &[TagField]) -> Vec<(String, String)> {
+    fields
+        .iter()
+        .filter(|f| {
+            f.name != "New Tag"
+                && !f.deleted
+                && !f.value.is_empty()
+                && f.value != "[Press Enter to create]"
+        })
+        .map(|f| (f.name.to_lowercase(), f.value.clone()))
+        .collect()
+}
 
+/// Convert changes to mutations for the daemon.
+///
+/// Uses the DB-first pattern: for each track with changes, generates:
+/// 1. SetTrackTagsDb - writes complete tag set to database, sets needs_disk_flush=true
+/// 2. FlushTagsToDisk - reads from DB and writes to disk, clears needs_disk_flush
+///
+/// This pattern ensures DB is always ahead of or in sync with disk, enabling
+/// recovery via OOB flow if disk write fails/is interrupted.
+fn changes_to_mutations(changes: &[TagChange], tracks: &[Track], all_tag_fields: &[Vec<TagField>]) -> Vec<Mutation> {
     let resolver = paths::get_resolver();
 
-    // Group changes by track
-    let mut track_changes: HashMap<usize, Vec<TagChange>> = HashMap::new();
+    // Get unique track indices that have changes
+    let mut changed_tracks: HashSet<usize> = HashSet::new();
     for change in changes {
-        track_changes
-            .entry(change.track_idx)
-            .or_default()
-            .push(change.clone());
+        changed_tracks.insert(change.track_idx);
     }
 
-    // Create a TagEditAndFlush mutation for each track with changes
+    // Generate two mutations per track: SetTrackTagsDb then FlushTagsToDisk
     let mut mutations = Vec::new();
-    for (track_idx, changes) in track_changes {
-        if let Some(track) = tracks.get(track_idx) {
+    for track_idx in changed_tracks {
+        if let (Some(track), Some(current_fields)) = (tracks.get(track_idx), all_tag_fields.get(track_idx)) {
             // Skip tracks without ID (not yet indexed)
             let track_id = match track.id {
                 Some(id) => id,
@@ -2243,45 +2262,17 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track]) -> Vec<Mutation
             // Resolve relative DB path to absolute for filesystem operations
             let abs_path = resolver.resolve(Path::new(&track.path));
 
-            let edits: Vec<TagEdit> = changes
-                .into_iter()
-                .flat_map(|c| {
-                    if c.deleted {
-                        // Tag marked for deletion - remove it entirely
-                        vec![TagEdit {
-                            tag_name: c.field_name,
-                            old_value: if c.old_value.is_empty() { None } else { Some(c.old_value) },
-                            new_value: None,  // Delete tag
-                        }]
-                    } else if let Some(old_name) = c.old_name {
-                        // Tag was renamed - delete old, set new
-                        vec![
-                            TagEdit {
-                                tag_name: old_name,
-                                old_value: if c.old_value.is_empty() { None } else { Some(c.old_value.clone()) },
-                                new_value: None,  // Delete old tag
-                            },
-                            TagEdit {
-                                tag_name: c.field_name,
-                                old_value: None,  // New tag
-                                new_value: if c.new_value.is_empty() { None } else { Some(c.new_value) },
-                            },
-                        ]
-                    } else {
-                        // Normal value change
-                        vec![TagEdit {
-                            tag_name: c.field_name,
-                            old_value: if c.old_value.is_empty() { None } else { Some(c.old_value) },
-                            new_value: if c.new_value.is_empty() { None } else { Some(c.new_value) },
-                        }]
-                    }
-                })
-                .collect();
+            // Get complete desired tag set from current UI state
+            let tags = tag_fields_to_tags(current_fields);
 
-            mutations.push(Mutation::TagEditAndFlush {
+            // DB-first pattern: SetTrackTagsDb then FlushTagsToDisk
+            mutations.push(Mutation::SetTrackTagsDb {
+                track_id,
+                tags,
+            });
+            mutations.push(Mutation::FlushTagsToDisk {
                 track_id,
                 path: abs_path,
-                edits,
             });
         }
     }

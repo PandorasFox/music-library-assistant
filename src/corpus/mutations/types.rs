@@ -59,14 +59,6 @@ impl ExtractedMetadata {
     }
 }
 
-/// A single tag edit operation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TagEdit {
-    pub tag_name: String,
-    pub old_value: Option<String>,
-    pub new_value: Option<String>,
-}
-
 /// Single atomic mutation operation.
 ///
 /// Each variant represents one logical change to the corpus. Mutations are:
@@ -76,28 +68,33 @@ pub struct TagEdit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mutation {
     // ========================================================================
-    // Tag Operations
+    // Tag Operations (DB-First Pattern)
     // ========================================================================
-    /// Edit tags in database only (no disk write).
-    TagEditDb {
+    /// Set track tags in database only (DB-first pattern, step 1).
+    ///
+    /// - Writes tags to DB via set_track_tags() (full replacement)
+    /// - Sets needs_disk_flush = TRUE
+    ///
+    /// Should be followed by FlushTagsToDisk to sync to disk.
+    /// If interrupted, the flush flag enables recovery via OOB flow.
+    SetTrackTagsDb {
         track_id: i64,
-        tag_name: String,
-        old_value: Option<String>,
-        new_value: Option<String>,
-    },
-
-    /// Flush tags to disk only (file write, no database).
-    TagFlushToDisk {
-        path: PathBuf,
-        /// All tags to write to the file.
+        /// Complete set of tags to store (replaces all existing tags).
         tags: Vec<(String, String)>,
     },
 
-    /// Combined tag edit: update database and write to disk in one operation.
-    TagEditAndFlush {
+    /// Flush DB tags to disk file (DB-first pattern, step 2).
+    ///
+    /// - Reads current tags from DB (source of truth)
+    /// - Writes to disk via write_file_tags()
+    /// - Updates mtime in scan_state
+    /// - Sets needs_disk_flush = FALSE
+    ///
+    /// Idempotent: re-running reads fresh DB state.
+    /// Can be used for OOB recovery of tracks with needs_disk_flush = TRUE.
+    FlushTagsToDisk {
         track_id: i64,
         path: PathBuf,
-        edits: Vec<TagEdit>,
     },
 
     // ========================================================================
@@ -289,11 +286,11 @@ impl Mutation {
     /// Get the category of this mutation for batching.
     pub fn category(&self) -> MutationCategory {
         match self {
-            Mutation::TagEditDb { .. }
-            | Mutation::TagFlushToDisk { .. }
-            | Mutation::TagEditAndFlush { .. } => MutationCategory::TagEdit,
+            Mutation::FlushTagsToDisk { .. } => MutationCategory::TagEdit,
 
-            Mutation::IndexTrack { .. }
+            // SetTrackTagsDb is DB-only and fast, categorized with indexing
+            Mutation::SetTrackTagsDb { .. }
+            | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateScanState { .. }
             | Mutation::CleanupStaleScanState { .. }
@@ -321,8 +318,7 @@ impl Mutation {
     /// Get the primary file path affected by this mutation, if any.
     pub fn primary_path(&self) -> Option<&Path> {
         match self {
-            Mutation::TagFlushToDisk { path, .. }
-            | Mutation::TagEditAndFlush { path, .. }
+            Mutation::FlushTagsToDisk { path, .. }
             | Mutation::IndexTrack { path, .. }
             | Mutation::IndexFileFromPath { path, .. }
             | Mutation::UpdateScanState { path, .. }
@@ -333,7 +329,7 @@ impl Mutation {
             | Mutation::HardLink { source: path, .. }
             | Mutation::LibraryMove { source: path, .. } => Some(path),
 
-            Mutation::TagEditDb { .. }
+            Mutation::SetTrackTagsDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
             | Mutation::UpdateScanStatePath { .. }
@@ -352,7 +348,7 @@ impl Mutation {
     pub fn is_db_only(&self) -> bool {
         matches!(
             self,
-            Mutation::TagEditDb { .. }
+            Mutation::SetTrackTagsDb { .. }
                 | Mutation::CleanupStaleScanState { .. }
                 | Mutation::DbMigration { .. }
                 | Mutation::UpdateTrackPath { .. }
@@ -361,7 +357,7 @@ impl Mutation {
                 | Mutation::UpdateTrack { .. }
                 | Mutation::AcknowledgeMtimeOnly { .. }
                 | Mutation::AssimilateDiskTagsToDb { .. }
-            // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
+            // Note: ApplyDbTagsToDisk and FlushTagsToDisk write to disk, so NOT db-only
         )
     }
 
@@ -375,14 +371,13 @@ impl Mutation {
     /// Used to trigger health signal refresh after mutations.
     pub fn affected_track_id(&self) -> Option<i64> {
         match self {
-            Mutation::TagEditDb { track_id, .. }
-            | Mutation::TagEditAndFlush { track_id, .. }
+            Mutation::SetTrackTagsDb { track_id, .. }
+            | Mutation::FlushTagsToDisk { track_id, .. }
             | Mutation::UpdateTrack { track_id, .. }
             | Mutation::Transcode { track_id, .. } => Some(*track_id),
 
             // These don't have a single track_id directly (batch operations or no track)
-            Mutation::TagFlushToDisk { .. }
-            | Mutation::IndexTrack { .. }
+            Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateScanState { .. }
             | Mutation::CleanupStaleScanState { .. }
@@ -410,14 +405,9 @@ impl Mutation {
         let mut dirs = Vec::new();
 
         match self {
-            // Tag operations don't change file presence
-            Mutation::TagEditDb { .. } => {}
-            Mutation::TagFlushToDisk { path, .. } => {
-                if let Some(parent) = path.parent() {
-                    dirs.push(parent.to_path_buf());
-                }
-            }
-            Mutation::TagEditAndFlush { path, .. } => {
+            // DB-only tag operations don't change file presence
+            Mutation::SetTrackTagsDb { .. } => {}
+            Mutation::FlushTagsToDisk { path, .. } => {
                 if let Some(parent) = path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
@@ -524,8 +514,7 @@ impl Mutation {
             | Mutation::UpdateScanState { path, .. } => vec![path.clone()],
 
             // Tag operations: the file being modified
-            Mutation::TagFlushToDisk { path, .. }
-            | Mutation::TagEditAndFlush { path, .. } => vec![path.clone()],
+            Mutation::FlushTagsToDisk { path, .. } => vec![path.clone()],
 
             // File operations: source and destination
             Mutation::Move { source, destination, .. }
@@ -567,7 +556,7 @@ impl Mutation {
             }
 
             // Operations without specific file paths that need signal updates
-            Mutation::TagEditDb { .. }
+            Mutation::SetTrackTagsDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
             | Mutation::UpdateScanStatePath { .. } => Vec::new(),
@@ -590,13 +579,19 @@ mod tests {
 
     #[test]
     fn test_mutation_category() {
-        let tag_edit = Mutation::TagEditDb {
+        let set_tags = Mutation::SetTrackTagsDb {
             track_id: 1,
-            tag_name: "artist".to_string(),
-            old_value: Some("Old".to_string()),
-            new_value: Some("New".to_string()),
+            tags: vec![("artist".to_string(), "New".to_string())],
         };
-        assert_eq!(tag_edit.category(), MutationCategory::TagEdit);
+        assert_eq!(set_tags.category(), MutationCategory::Indexing);
+        assert!(set_tags.is_db_only());
+
+        let flush_tags = Mutation::FlushTagsToDisk {
+            track_id: 1,
+            path: PathBuf::from("/test/file.flac"),
+        };
+        assert_eq!(flush_tags.category(), MutationCategory::TagEdit);
+        assert!(!flush_tags.is_db_only());
 
         let file_move = Mutation::Move {
             source: PathBuf::from("/a"),
@@ -615,21 +610,19 @@ mod tests {
 
     #[test]
     fn test_mutation_primary_path() {
-        let flush = Mutation::TagFlushToDisk {
+        let flush = Mutation::FlushTagsToDisk {
+            track_id: 1,
             path: PathBuf::from("/test/file.flac"),
-            tags: vec![],
         };
         assert_eq!(
             flush.primary_path(),
             Some(Path::new("/test/file.flac"))
         );
 
-        let db_edit = Mutation::TagEditDb {
+        let set_tags = Mutation::SetTrackTagsDb {
             track_id: 1,
-            tag_name: "artist".to_string(),
-            old_value: None,
-            new_value: Some("Artist".to_string()),
+            tags: vec![("artist".to_string(), "Artist".to_string())],
         };
-        assert_eq!(db_edit.primary_path(), None);
+        assert_eq!(set_tags.primary_path(), None);
     }
 }

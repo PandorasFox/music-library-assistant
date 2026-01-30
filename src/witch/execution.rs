@@ -13,12 +13,9 @@ use std::time::Instant;
 
 use crate::config;
 use crate::corpus::computations::{Computation, awakening, with_read_only_db};
-use crate::corpus::db::types::{AggregateSignalType, CorpusFileSignalType};
+use crate::corpus::db::types::CorpusFileSignalType;
 use crate::corpus::db::Database;
-use crate::corpus::health::normalization::{
-    normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
-};
-use crate::corpus::mutations::{Mutation, TagEdit};
+use crate::corpus::mutations::Mutation;
 use crate::db_thread;
 
 use super::types::{Migration, MigrationWitness, MutationExecutionWitness, Task, TaskResult};
@@ -163,89 +160,6 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // spawn collection) have grown ad-hoc. Refactor into a structured post-execution
     // pipeline, e.g. a `PostExecutionContext` that collects side-effects from both
     // success and failure paths, rather than interleaving conditionals.
-
-    // When a TagEditAndFlush fails, determine the appropriate signal based on error type:
-    //
-    // - File corruption (I/O errors like "Too little data"): Emit CorruptFile signal.
-    //   These files cannot be edited at all and need operator attention.
-    //
-    // - Stale edits (expected tag value not found): Emit OutOfBandTagConflict signal.
-    //   Tags on disk changed since the editor was opened; needs re-verification.
-    //
-    // Also spawn a VerifyTags computation to refresh tag_mismatches with the actual
-    // current disk state (unless the file is corrupt and can't be read).
-    let mut failure_spawns: Vec<Computation> = Vec::new();
-    if !success {
-        if let Mutation::TagEditAndFlush { track_id, path, .. } = &mutation {
-            let resolver = crate::corpus::paths::get_resolver();
-            if let Some(rel) = resolver.to_relative(path) {
-                if let Some(sender) = db_thread::signal_sender() {
-                    // Check if the error indicates file corruption vs stale edit
-                    let is_corruption = error.as_ref().map_or(false, |e| {
-                        // Lofty I/O errors that indicate corrupt/truncated files
-                        e.contains("Too little data")
-                            || e.contains("Unexpected end of file")
-                            || e.contains("unexpected eof")
-                            || (e.contains("Failed to read") && e.contains("tags"))
-                    });
-
-                    let rel_str = rel.to_string_lossy();
-                    if is_corruption {
-                        crate::logging::log_general(format!(
-                            "[EXECUTION] File corruption detected for {} - emitting CorruptFile signal",
-                            path.display()
-                        ));
-                        sender.ensure_file_signal(
-                            CorpusFileSignalType::CorruptFile.into(),
-                            &rel_str,
-                            &witness,
-                        );
-                        // Clear any OOB signals - file can't be verified when corrupt
-                        sender.clear_file_signal(
-                            CorpusFileSignalType::OutOfBandTagConflict.into(),
-                            &rel_str,
-                            &witness,
-                        );
-                        sender.clear_file_signal(
-                            CorpusFileSignalType::OutOfBandTagSync.into(),
-                            &rel_str,
-                            &witness,
-                        );
-                    } else {
-                        // Stale edit - emit OOB conflict for re-verification
-                        sender.ensure_file_signal(
-                            CorpusFileSignalType::OutOfBandTagConflict.into(),
-                            &rel_str,
-                            &witness,
-                        );
-
-                        // Spawn VerifyTags to refresh tag_mismatches with actual disk state
-                        crate::logging::log_general(format!(
-                            "[EXECUTION] Stale edit for {} - spawning VerifyTags to refresh mismatches",
-                            path.display()
-                        ));
-                        failure_spawns.push(Computation::Asleep(
-                            crate::corpus::computations::asleep::Computation::VerifyTags {
-                                track_id: *track_id,
-                                path: path.clone(),
-                            }
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    // Clear affected TagCanonicity and InconsistentAlbumArtist signals after successful tag edits
-    // The next awake-phase computations will recreate any still-valid signals
-    // Uses with_read_only_db for the reads, signal_sender for writes
-    if success {
-        if let Mutation::TagEditAndFlush { track_id, edits, .. } = &mutation {
-            let _ = with_read_only_db(|read_db| {
-                clear_affected_canonicity_signals(read_db, *track_id, edits, &witness);
-            });
-        }
-    }
 
     // Wipe per-file signals for affected paths FIRST, before emitting new signals.
     // This prevents stale signals from persisting when mutations change corpus truth
@@ -417,9 +331,6 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         }
     }
 
-    // Include failure spawns (e.g., VerifyTags for stale tag edits)
-    spawn.extend(failure_spawns);
-
     TaskResult {
         success,
         error,
@@ -523,62 +434,3 @@ fn clear_library_stale_signals(
     }
 }
 
-/// Clear TagCanonicity and InconsistentAlbumArtist signals affected by tag edits.
-///
-/// For each edited tag (artist, album_artist, album, genre), compute the normalized
-/// key from the OLD value and clear the corresponding signal. The next awake-phase
-/// computations will recreate any still-valid signals.
-///
-/// For album_artist edits, also clears InconsistentAlbumArtist signals for the track's album.
-fn clear_affected_canonicity_signals(
-    db: &Database,
-    track_id: i64,
-    edits: &[TagEdit],
-    witness: &MutationExecutionWitness,
-) {
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => return,
-    };
-
-    // Get the track's album and artist for context-aware signal clearing
-    let track_album = db.get_track_tag_value(track_id, "album").ok().flatten().unwrap_or_default();
-    let track_artist = db.get_track_tag_value(track_id, "artist").ok().flatten().unwrap_or_default();
-
-    for edit in edits {
-        // Clear TagCanonicity signals for affected tag types
-        let normalized_key = match edit.tag_name.as_str() {
-            "artist" => edit.old_value.as_ref().map(|v| normalize_artist(v)),
-            "album_artist" => edit.old_value.as_ref().map(|v| normalize_album_artist(v)),
-            "album" => {
-                // Album canonicity uses "{artist}::{album}" format
-                edit.old_value.as_ref().map(|v| {
-                    let norm_artist = normalize_artist(&track_artist);
-                    let norm_album = normalize_album(v);
-                    format!("{} :: {}", norm_artist, norm_album)
-                })
-            }
-            "genre" => edit.old_value.as_ref().map(|v| normalize_genre(v)),
-            _ => None, // Other tag types don't have canonicity signals
-        };
-
-        if let Some(normalized) = normalized_key {
-            let signal_key = format!("{}:{}", edit.tag_name, normalized);
-            sender.clear_aggregate_signal(
-                AggregateSignalType::TagCanonicity,
-                &signal_key,
-                witness,
-            );
-        }
-
-        // For album_artist edits, also clear InconsistentAlbumArtist signals
-        if edit.tag_name == "album_artist" && !track_album.is_empty() {
-            let normalized_album = normalize_album(&track_album);
-            sender.clear_aggregate_signal(
-                AggregateSignalType::InconsistentAlbumArtist,
-                &normalized_album,
-                witness,
-            );
-        }
-    }
-}

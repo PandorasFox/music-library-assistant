@@ -23,9 +23,29 @@ Signals are atomic facts about corpus state. They follow these principles:
 | CorruptFile | VerifyTags, VerifyAudio, IndexFileFromPath, Transcode | VerifyAudio (if valid), MoveToStash, DropFromIndex | Tag read or audio decode failed |
 | ShitFormat | IndexFileFromPath, DetectShitFormats | Transcode (to Opus/FLAC), DetectShitFormats | Non-Vorbis container (MP3, M4A, WAV, etc.) |
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
-| OutOfBandTagConflict | VerifyTags, TagEditAndFlush | VerifyTags, resolution mutations | Two-way tag conflict |
+| OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
 | InodeChanged | ScanCorpusDirectory | AcknowledgeInodeChanged | File was replaced (same path, new inode) |
+
+---
+
+## Database State Flags
+
+These are not signals but database columns that track synchronization state.
+
+| Flag | Set By | Cleared By | Meaning |
+|------|--------|------------|---------|
+| needs_disk_flush | SetTrackTagsDb | FlushTagsToDisk | DB tags changed but not yet synced to disk file |
+
+### Recovery via needs_disk_flush
+
+Tracks with `needs_disk_flush = TRUE` can be recovered via the OOB flow:
+
+```sql
+SELECT * FROM tracks WHERE needs_disk_flush = 1;
+```
+
+For each track, re-queue a `FlushTagsToDisk` mutation. Since `FlushTagsToDisk` reads from the database (source of truth), it's idempotent and can be safely re-run.
 
 ---
 
@@ -50,9 +70,9 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | DuplicateInode | DetectDuplicateInodes | DetectDuplicateInodes | Tracks sharing same inode |
 | MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags |
 | MetadataDuplicate | DetectMetadataDuplicates | DetectMetadataDuplicates | Tracks with identical tag sets |
-| TagCanonicity | DetectTagCanonicalizations | DetectTagCanonicalizations, TagEditDb | Similar tags needing unification |
+| TagCanonicity | DetectTagCanonicalizations | DetectTagCanonicalizations | Similar tags needing unification |
 | CompoundTagValue | DetectCompoundTagValues | DetectCompoundTagValues | Tags with separators needing split |
-| InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist, TagEditDb | Album with inconsistent artist |
+| InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
 
 ---

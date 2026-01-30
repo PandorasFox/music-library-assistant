@@ -17,11 +17,24 @@ Mutations are operator-confirmed changes to the corpus or index. All mutations:
 
 ### Tag Operations
 
+#### DB-First Pattern (Recommended)
+
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| TagEditDb | — | — | TagCanonicity, InconsistentAlbumArtist | DB-only, no file touch |
-| TagFlushToDisk | UpdateCorpusFileSignals | — | (per-file signals wiped) | Writes DB tags to disk |
-| TagEditAndFlush | UpdateCorpusFileSignals | OutOfBandTagConflict (on failure), WaveformReadError | TagCanonicity, InconsistentAlbumArtist, (per-file wiped) | Combined edit + flush |
+| SetTrackTagsDb | — | — | — | Step 1: Write complete tag set to DB, set needs_disk_flush=true |
+| FlushTagsToDisk | UpdateCorpusFileSignals | — | (per-file signals wiped), needs_disk_flush | Step 2: Read from DB, write to disk, clear needs_disk_flush |
+
+The DB-first pattern separates database writes from file I/O:
+
+1. **SetTrackTagsDb**: Fast, DB-only. Replaces all tags for a track in the database and sets `needs_disk_flush=true`.
+2. **FlushTagsToDisk**: Reads tags from DB (source of truth), writes to disk, clears `needs_disk_flush`.
+
+Benefits:
+- DB is always ahead of or in sync with disk
+- If disk write fails/is interrupted, `needs_disk_flush=true` enables recovery via OOB flow
+- Idempotent: FlushTagsToDisk can be safely re-run (reads fresh DB state)
+
+Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, re-queue FlushTagsToDisk for each.
 
 ### Indexing Operations
 
@@ -99,12 +112,4 @@ if is_corpus_path(&rel) {
 ### Signal Emission on Failure
 
 Some mutations emit signals on failure rather than success:
-- `TagEditAndFlush`: Emits `OutOfBandTagConflict` if stale edit detected
 - Index mutations: Emit `WaveformReadError` if fingerprint extraction fails
-
-### Canonicity Signal Clearing
-
-`TagEditAndFlush` clears canonicity signals for affected tag types:
-- Uses OLD values from edit to compute normalized keys
-- Clears `TagCanonicity` for artist, album_artist, album, genre
-- Clears `InconsistentAlbumArtist` when album_artist is edited

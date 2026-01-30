@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use crate::corpus::db::types::AggregateSignal;
 use crate::corpus::health::album_artist_detection::AlbumArtistIssue;
 use crate::corpus::health::collision::TagCollision;
-use crate::corpus::mutations::{Mutation, TagEdit};
+use crate::corpus::mutations::Mutation;
+use crate::corpus::tags::TagSet;
 use crate::ui::widgets::TextInputState;
 
 /// A tag variant with its occurrence count.
@@ -337,14 +338,14 @@ impl TagCanonicalityState {
             .collect()
     }
 
-    /// Generate mutations for the selected variants → canonical value.
+    /// Generate mutations for the selected variants → canonical value using DB-first pattern.
     ///
-    /// Requires track_info: a map from track_id to (path, current_tag_value).
+    /// Requires track_info: a map from track_id to (path, current_tagset).
     /// Each track's current tag value is checked against selected variants.
     /// Only tracks whose current value is a selected non-canonical variant get edits.
     pub fn mutations_with_paths(
         &self,
-        track_info: &std::collections::HashMap<i64, (PathBuf, Option<String>)>,
+        track_info: &std::collections::HashMap<i64, (PathBuf, TagSet)>,
     ) -> Vec<Mutation> {
         let canonical = self.canonical_input.value().trim();
         if canonical.is_empty() {
@@ -360,34 +361,59 @@ impl TagCanonicalityState {
 
         // For each track, create a mutation only if its current value is a selected variant
         for &track_id in &self.data.track_ids {
-            if let Some((path, current_value)) = track_info.get(&track_id) {
-                // Only create an edit if:
-                // 1. Track has a value for this tag
-                // 2. That value is one of the selected variants
-                // 3. That value is not already the canonical value
-                let Some(ref current) = current_value else {
-                    continue; // Track doesn't have this tag - skip
-                };
+            if let Some((path, current_tagset)) = track_info.get(&track_id) {
+                // Get current values for this tag from the TagSet
+                let current_values: Vec<&str> = current_tagset
+                    .values_for(&self.data.tag_name)
+                    .collect();
 
-                if current == canonical {
-                    continue; // Already canonical - no edit needed
+                // Find which values match selected variants
+                let matching_variants: Vec<String> = current_values
+                    .iter()
+                    .filter(|v| selected_variants.contains(*v) && **v != canonical)
+                    .map(|v| v.to_string())
+                    .collect();
+
+                if matching_variants.is_empty() {
+                    continue; // No matching variants to replace
                 }
 
-                if !selected_variants.contains(current.as_str()) {
-                    continue; // Current value is not a selected variant - skip
+                // Build new TagSet: replace matching variants with canonical value
+                let mut new_tags: Vec<(String, String)> = Vec::new();
+                let mut added_canonical = false;
+
+                for (k, v) in current_tagset.iter() {
+                    if k.eq_ignore_ascii_case(&self.data.tag_name) {
+                        // This is the tag we're canonicalizing
+                        if matching_variants.iter().any(|mv| mv == v) {
+                            // Replace with canonical (but only add once)
+                            if !added_canonical {
+                                new_tags.push((k.to_string(), canonical.to_string()));
+                                added_canonical = true;
+                            }
+                        } else {
+                            // Keep other values for this tag unchanged
+                            new_tags.push((k.to_string(), v.to_string()));
+                        }
+                    } else {
+                        // Keep other tags unchanged
+                        new_tags.push((k.to_string(), v.to_string()));
+                    }
                 }
 
-                // Create a single edit for this track's actual current value
-                let edit = TagEdit {
-                    tag_name: self.data.tag_name.clone(),
-                    old_value: Some(current.clone()),
-                    new_value: Some(canonical.to_string()),
-                };
+                // If we replaced variants but didn't add canonical yet (shouldn't happen), add it
+                if !matching_variants.is_empty() && !added_canonical {
+                    new_tags.push((self.data.tag_name.clone(), canonical.to_string()));
+                }
 
-                mutations.push(Mutation::TagEditAndFlush {
+                // DB-first pattern: SetTrackTagsDb then FlushTagsToDisk
+                mutations.push(Mutation::SetTrackTagsDb {
+                    track_id,
+                    tags: new_tags,
+                });
+                mutations.push(Mutation::FlushTagsToDisk {
                     track_id,
                     path: path.clone(),
-                    edits: vec![edit],
                 });
             }
         }

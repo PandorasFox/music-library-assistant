@@ -188,8 +188,8 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
     for m in mutations {
         match m {
             // Mutations with single track_id
-            Mutation::TagEditAndFlush { track_id, .. }
-            | Mutation::TagEditDb { track_id, .. }
+            Mutation::SetTrackTagsDb { track_id, .. }
+            | Mutation::FlushTagsToDisk { track_id, .. }
             | Mutation::DropFromIndex { track_id, .. }
             | Mutation::UpdateTrackPath { track_id, .. }
             | Mutation::UpdateTrack { track_id, .. }
@@ -208,7 +208,6 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
             // Mutations without track IDs
             Mutation::MoveToStash { .. }
             | Mutation::Move { .. }
-            | Mutation::TagFlushToDisk { .. }
             | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateScanState { .. }

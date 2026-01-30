@@ -136,6 +136,7 @@ mod tests {
             bitrate_kbps: None,
             sample_rate: None,
             fingerprint: None,
+            needs_disk_flush: false,
         }
     }
 

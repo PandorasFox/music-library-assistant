@@ -386,8 +386,14 @@ impl App {
                 }
             }
             UiMode::IntakeConfirmation => {
-                if let Some(ref state) = self.intake_confirmation {
-                    let action = state.handle_key(key);
+                if let Some(ref mut state) = self.intake_confirmation {
+                    // Get terminal size to compute visible height for scrolling
+                    let visible_height = crossterm::terminal::size()
+                        .map(|(_, h)| startup::intake_confirmation::compute_list_visible_height(
+                            ratatui::layout::Rect::new(0, 0, 80, h)
+                        ))
+                        .unwrap_or(10);
+                    let action = state.handle_key(key, visible_height);
                     self.handle_intake_confirmation_action(action);
                 }
             }

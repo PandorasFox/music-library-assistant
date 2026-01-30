@@ -226,7 +226,7 @@ impl Database {
     pub fn get_all_tracks_for_source(&self, source: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks WHERE source = ?1 ORDER BY path",
         )?;
 
@@ -278,11 +278,11 @@ impl Database {
     pub fn get_all_tracks(&self, source: Option<&str>) -> Result<Vec<Track>> {
         let query = if source.is_some() {
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks WHERE source = ?1 ORDER BY path"
         } else {
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks ORDER BY path"
         };
 
@@ -322,7 +322,7 @@ impl Database {
     pub fn get_track_by_id(&self, track_id: i64) -> Result<Option<Track>> {
         let result = self.conn.query_row(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks WHERE id = ?1",
             params![track_id],
             Self::row_to_track,
@@ -339,7 +339,7 @@ impl Database {
     pub fn get_track_by_path(&self, path: &str) -> Result<Option<Track>> {
         let result = self.conn.query_row(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks WHERE path = ?1",
             params![path],
             Self::row_to_track,
@@ -358,7 +358,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE fingerprint = ?1
              ORDER BY path",
@@ -375,7 +375,7 @@ impl Database {
     pub fn get_tracks_by_inode(&self, inode: i64) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE inode = ?1
              ORDER BY path",
@@ -398,7 +398,7 @@ impl Database {
         let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE id IN ({})
              ORDER BY path",
@@ -424,7 +424,7 @@ impl Database {
     ) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
-                    t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint
+                    t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint, t.needs_disk_flush
              FROM tracks t
              LEFT JOIN track_tags ta ON t.id = ta.track_id AND ta.tag_name = 'artist'
              LEFT JOIN track_tags tb ON t.id = tb.track_id AND tb.tag_name = 'album'
@@ -447,7 +447,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE source = 'corpus' AND path LIKE ?1 ESCAPE '\\'
              ORDER BY path",
@@ -479,7 +479,7 @@ impl Database {
 
         let query = format!(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE source = ?1 AND fingerprint IS NOT NULL AND ({})
              ORDER BY path",
@@ -514,7 +514,7 @@ impl Database {
         let placeholders: String = paths.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE path IN ({})",
             placeholders
@@ -544,7 +544,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE source = 'corpus' AND fingerprint IS NOT NULL AND path LIKE ?1 ESCAPE '\\'
              ORDER BY path",
@@ -565,7 +565,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             "SELECT id, path, source, inode, file_size, file_type,
-                    duration_ms, bitrate_kbps, sample_rate, fingerprint
+                    duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
              FROM tracks
              WHERE path LIKE ?1 ESCAPE '\\'
              ORDER BY path",
@@ -670,7 +670,7 @@ impl Database {
         let pattern = format!("%{}%", value_pattern.to_lowercase());
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT t.id, t.path, t.source, t.inode, t.file_size, t.file_type,
-                    t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint
+                    t.duration_ms, t.bitrate_kbps, t.sample_rate, t.fingerprint, t.needs_disk_flush
              FROM tracks t
              JOIN track_tags tt ON t.id = tt.track_id
              WHERE LOWER(tt.tag_name) = LOWER(?1) AND LOWER(tt.tag_value) LIKE ?2
@@ -681,6 +681,7 @@ impl Database {
             // Fingerprint is stored as BLOB, convert to Vec<u32>
             let fp_blob: Option<Vec<u8>> = row.get(9)?;
             let fingerprint = fp_blob.map(|blob| blob_to_fingerprint(&blob));
+            let needs_disk_flush: i32 = row.get(10)?;
 
             Ok(Track {
                 id: row.get(0)?,
@@ -693,6 +694,7 @@ impl Database {
                 bitrate_kbps: row.get(7)?,
                 sample_rate: row.get(8)?,
                 fingerprint,
+                needs_disk_flush: needs_disk_flush != 0,
             })
         })?;
 
@@ -985,11 +987,14 @@ impl Database {
 
     /// Convert a database row to a Track struct.
     /// Expected column order: id, path, source, inode, file_size, file_type,
-    ///                        duration_ms, bitrate_kbps, sample_rate, fingerprint
+    ///                        duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_disk_flush
     pub(super) fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
         // Fingerprint is stored as BLOB, convert to Vec<u32>
         let fp_blob: Option<Vec<u8>> = row.get(9)?;
         let fingerprint = fp_blob.map(|blob| blob_to_fingerprint(&blob));
+
+        // needs_disk_flush is stored as INTEGER (0/1), convert to bool
+        let needs_disk_flush: i32 = row.get(10)?;
 
         Ok(Track {
             id: Some(row.get(0)?),
@@ -1002,6 +1007,7 @@ impl Database {
             bitrate_kbps: row.get(7)?,
             sample_rate: row.get(8)?,
             fingerprint,
+            needs_disk_flush: needs_disk_flush != 0,
         })
     }
 

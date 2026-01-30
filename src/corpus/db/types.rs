@@ -22,6 +22,9 @@ pub struct Track {
     /// Chromaprint acoustic fingerprint as raw u32 values.
     /// Stored in DB as BLOB (little-endian bytes).
     pub fingerprint: Option<Vec<u32>>,
+    /// True when DB tags have changed but disk hasn't been updated yet.
+    /// Used for recovery if interrupted between DB write and disk flush.
+    pub needs_disk_flush: bool,
 }
 
 /// A single tag associated with a track.

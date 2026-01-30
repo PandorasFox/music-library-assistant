@@ -678,6 +678,31 @@ impl MigrationRegistry {
             apply: migrate_to_domain_prefixed_paths,
         });
 
+        // v6 → v7: Add needs_disk_flush column for DB-first tag editing pattern
+        // Tracks with needs_disk_flush=TRUE have DB tags that haven't been written to disk yet.
+        // Used for recovery if interrupted between SetTrackTagsDb and FlushTagsToDisk.
+        registry.register(Migration {
+            from_version: 6,
+            to_version: 7,
+            description: "Add needs_disk_flush column for DB-first tag editing",
+            apply: |db| {
+                use crate::logging::log_general;
+
+                log_general("[MIGRATION v6→v7] Adding needs_disk_flush column to tracks");
+
+                // Add boolean column (INTEGER in SQLite, 0 = false, 1 = true)
+                // Default 0 for existing tracks (they're in sync)
+                db.execute_batch(
+                    "ALTER TABLE tracks ADD COLUMN needs_disk_flush INTEGER NOT NULL DEFAULT 0;"
+                )?;
+
+                db.set_schema_version(7)?;
+                log_general("[MIGRATION v6→v7] Complete - tracks table now has needs_disk_flush column");
+
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -794,12 +819,12 @@ mod tests {
     fn test_migration_registry() {
         let registry = MigrationRegistry::new();
 
-        // Latest schema version is v6 (after domain-prefix migration)
-        assert_eq!(registry.latest_version(), 6);
+        // Latest schema version is v7 (after needs_disk_flush migration)
+        assert_eq!(registry.latest_version(), 7);
 
-        // Five pending migrations from v1
+        // Six pending migrations from v1
         let pending = registry.pending_migrations(1);
-        assert_eq!(pending.len(), 5);
+        assert_eq!(pending.len(), 6);
         assert_eq!(pending[0].from_version, 1);
         assert_eq!(pending[0].to_version, 2);
         assert_eq!(pending[1].from_version, 2);
@@ -810,34 +835,42 @@ mod tests {
         assert_eq!(pending[3].to_version, 5);
         assert_eq!(pending[4].from_version, 5);
         assert_eq!(pending[4].to_version, 6);
+        assert_eq!(pending[5].from_version, 6);
+        assert_eq!(pending[5].to_version, 7);
 
-        // Four pending migrations from v2
+        // Five pending migrations from v2
         let pending_v2 = registry.pending_migrations(2);
-        assert_eq!(pending_v2.len(), 4);
+        assert_eq!(pending_v2.len(), 5);
         assert_eq!(pending_v2[0].from_version, 2);
         assert_eq!(pending_v2[0].to_version, 3);
 
-        // Three pending migrations from v3
+        // Four pending migrations from v3
         let pending_v3 = registry.pending_migrations(3);
-        assert_eq!(pending_v3.len(), 3);
+        assert_eq!(pending_v3.len(), 4);
         assert_eq!(pending_v3[0].from_version, 3);
         assert_eq!(pending_v3[0].to_version, 4);
 
-        // Two pending migrations from v4
+        // Three pending migrations from v4
         let pending_v4 = registry.pending_migrations(4);
-        assert_eq!(pending_v4.len(), 2);
+        assert_eq!(pending_v4.len(), 3);
         assert_eq!(pending_v4[0].from_version, 4);
         assert_eq!(pending_v4[0].to_version, 5);
 
-        // One pending migration from v5
+        // Two pending migrations from v5
         let pending_v5 = registry.pending_migrations(5);
-        assert_eq!(pending_v5.len(), 1);
+        assert_eq!(pending_v5.len(), 2);
         assert_eq!(pending_v5[0].from_version, 5);
         assert_eq!(pending_v5[0].to_version, 6);
 
-        // No pending migrations from v6
+        // One pending migration from v6
         let pending_v6 = registry.pending_migrations(6);
-        assert!(pending_v6.is_empty());
+        assert_eq!(pending_v6.len(), 1);
+        assert_eq!(pending_v6[0].from_version, 6);
+        assert_eq!(pending_v6[0].to_version, 7);
+
+        // No pending migrations from v7
+        let pending_v7 = registry.pending_migrations(7);
+        assert!(pending_v7.is_empty());
     }
 
     #[test]

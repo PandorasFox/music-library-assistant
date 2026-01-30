@@ -76,6 +76,7 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
         bitrate_kbps: audio_meta.bitrate_kbps,
         sample_rate: audio_meta.sample_rate,
         fingerprint,
+        needs_disk_flush: false, // Fresh from disk, no pending writes
     })
 }
 

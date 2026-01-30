@@ -305,28 +305,17 @@ impl Config {
         paths
     }
 
-    /// Get all corpus paths configured for deployment (any library).
-    ///
-    /// Returns absolute paths to all corpus directories that have any deploy mapping.
-    pub fn get_all_deploy_corpus_paths(&self) -> Vec<PathBuf> {
-        let corpus_dir = self.corpus_dir();
-        let mut paths = Vec::new();
-        for mapping in &self.deploy_mappings {
-            for corpus_relative_path in &mapping.corpus_relative_paths {
-                paths.push(corpus_dir.join(corpus_relative_path));
-            }
-        }
-        paths
-    }
-
     /// Check if a file path is configured for deployment.
     ///
     /// Returns true if the path starts with any configured deploy corpus path.
+    /// Paths are expected in relative format: `corpus/<relative-path>`.
     pub fn is_path_configured_for_deploy(&self, path: &std::path::Path) -> bool {
-        let deploy_paths = self.get_all_deploy_corpus_paths();
-        for prefix in &deploy_paths {
-            if path.starts_with(prefix) {
-                return true;
+        for mapping in &self.deploy_mappings {
+            for corpus_relative_path in &mapping.corpus_relative_paths {
+                let relative_prefix = std::path::Path::new("corpus").join(corpus_relative_path);
+                if path.starts_with(&relative_prefix) {
+                    return true;
+                }
             }
         }
         false
@@ -942,5 +931,43 @@ root "/archive"
         assert!(!config.opinions.canonicalization.strip_parentheticals);
         assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.85);
         assert_eq!(config.opinions.re_releases.same_fingerprint_different_album, ReReleaseHandling::MarkVariant);
+    }
+
+    #[test]
+    fn test_is_path_configured_for_deploy() {
+        let kdl = r#"
+root "/archive"
+
+deploy "web/releases/bandcamp" {
+    library "music"
+}
+
+deploy "web/releases/steam" {
+    library "soundtracks"
+}
+"#;
+
+        let config = parse_kdl_config(kdl).unwrap();
+
+        // Relative paths (as stored in DB) should match
+        assert!(config.is_path_configured_for_deploy(std::path::Path::new(
+            "corpus/web/releases/bandcamp/Artist/Album/track.flac"
+        )));
+        assert!(config.is_path_configured_for_deploy(std::path::Path::new(
+            "corpus/web/releases/steam/Game/Soundtrack/01.mp3"
+        )));
+
+        // Non-configured paths should not match
+        assert!(!config.is_path_configured_for_deploy(std::path::Path::new(
+            "corpus/web/releases/itunes/Artist/Album/track.flac"
+        )));
+        assert!(!config.is_path_configured_for_deploy(std::path::Path::new(
+            "corpus/physical/cd/Artist/Album/track.flac"
+        )));
+
+        // Exact prefix match (not substring)
+        assert!(!config.is_path_configured_for_deploy(std::path::Path::new(
+            "corpus/web/releases/bandcamp-extra/Artist/track.flac"
+        )));
     }
 }

@@ -169,6 +169,8 @@ pub enum InsightAction {
     LaunchCorruptFileResolution,
     /// Launch shit format transcode flow
     LaunchShitFormatTranscode,
+    /// Launch intake confirmation flow for unindexed files
+    LaunchIntakeConfirmation,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -358,7 +360,7 @@ impl CachedBucketEntries {
                 corpus.files_unindexed,
                 1,
                 if corpus.files_unindexed > 0 { Color::Yellow } else { Color::Green },
-                InsightAction::NotImplemented, // Future: indexing flow
+                InsightAction::LaunchIntakeConfirmation,
             ),
             BucketEntry::corpus(
                 InsightType::CorpusFilesMissing,

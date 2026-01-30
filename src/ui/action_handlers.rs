@@ -89,6 +89,9 @@ impl App {
                     Some(insights_view::InsightAction::LaunchShitFormatTranscode) => {
                         self.start_shit_format_resolution();
                     }
+                    Some(insights_view::InsightAction::LaunchIntakeConfirmation) => {
+                        self.start_intake_confirmation_from_insights();
+                    }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Flow not yet implemented".to_string());
                     }
@@ -127,6 +130,27 @@ impl App {
         self.mode = UiMode::DeploymentPreview;
 
         // Keep insights view alive for return
+    }
+
+    /// Start intake confirmation from Insights view.
+    ///
+    /// Gathers unindexed files and opens the intake confirmation modal.
+    fn start_intake_confirmation_from_insights(&mut self) {
+        let corpus_root = self.config.corpus_dir();
+        let intake_state = self.witch.as_mut().and_then(|w| {
+            let read_db = w.read_db();
+            startup::IntakeConfirmationState::gather(&read_db, &corpus_root, "insights")
+        });
+
+        match intake_state {
+            Some(state) => {
+                self.intake_confirmation = Some(state);
+                self.mode = UiMode::IntakeConfirmation;
+            }
+            None => {
+                self.status_message = Some("No unindexed files to process".to_string());
+            }
+        }
     }
 
     /// Handle tag search actions.

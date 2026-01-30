@@ -512,9 +512,10 @@ pub fn execute_acknowledge_mtime_only(
         let mtime_secs = metadata.mtime();
         let mtime_nanos = metadata.mtime_nsec() as i64;
 
-        // Update scan_state mtime via db_thread (fire-and-forget)
+        // Update scan_state mtime via db_thread using (source, inode) key
         sender.update_scan_state_mtime(
-            &track.path,
+            &track.source,
+            track.inode,
             mtime_secs,
             mtime_nanos,
             witness,
@@ -670,9 +671,10 @@ pub fn execute_assimilate_disk_tags_to_db(
         let mtime_secs = file_metadata.mtime();
         let mtime_nanos = file_metadata.mtime_nsec() as i64;
 
-        // Update scan_state mtime via db_thread
+        // Update scan_state mtime via db_thread using (source, inode) key
         sender.update_scan_state_mtime(
-            &track.path,
+            &track.source,
+            track.inode,
             mtime_secs,
             mtime_nanos,
             witness,

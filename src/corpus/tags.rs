@@ -375,8 +375,18 @@ pub fn write_file_tags(
     let rel_path_str = rel_path.to_string_lossy();
     let file_metadata = std::fs::metadata(path)
         .with_context(|| format!("Failed to read metadata after write: {}", path.display()))?;
+
+    // Determine source from relative path (first component: corpus, legacy, libraries, etc.)
+    let source = rel_path
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .unwrap_or("corpus");
+    let inode = file_metadata.ino() as i64;
+
     sender.update_scan_state_mtime(
-        &rel_path_str,
+        source,
+        inode,
         file_metadata.mtime(),
         file_metadata.mtime_nsec() as i64,
         witness,

@@ -183,8 +183,10 @@ enum SignalWriteOp {
         issue_type: SignalType,
     },
     /// Update scan_state mtime for a file (after OOB verification).
+    /// Uses (source, inode) as the unique key for reliable updates.
     UpdateScanStateMtime {
-        path: String,
+        source: String,
+        inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
     },
@@ -639,16 +641,19 @@ impl SignalWriteSender {
     }
 
     /// Update scan_state mtime for a file (after OOB verification).
+    /// Uses (source, inode) as the unique key for reliable updates.
     pub fn update_scan_state_mtime(
         &self,
-        path: &str,
+        source: &str,
+        inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::UpdateScanStateMtime {
-            path: path.to_string(),
+            source: source.to_string(),
+            inode,
             mtime_secs,
             mtime_nanos,
         });
@@ -1237,19 +1242,26 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
         SignalWriteOp::UpdateScanStateMtime {
-            path,
+            source,
+            inode,
             mtime_secs,
             mtime_nanos,
         } => {
-            with_retry("update_scan_state_mtime", path, || {
+            with_retry("update_scan_state_mtime", source, || {
                 use rusqlite::params;
-                db.conn()
+                let rows_affected = db.conn()
                     .execute(
-                        "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE path = ?3",
-                        params![mtime_secs, mtime_nanos, path],
+                        "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE source = ?3 AND inode = ?4",
+                        params![mtime_secs, mtime_nanos, source, inode],
                     )
-                    .map(|_| ())
-                    .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
+                    .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))?;
+                if rows_affected == 0 {
+                    crate::logging::log_error(format!(
+                        "[DB_THREAD] update_scan_state_mtime: no rows matched for source={}, inode={}",
+                        source, inode
+                    ));
+                }
+                Ok(())
             });
         }
 

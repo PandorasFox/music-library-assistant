@@ -47,51 +47,6 @@ impl Database {
         Ok(())
     }
 
-    // =========================================================================
-    // Tag Mismatch Read Methods
-    // =========================================================================
-
-    /// Get count of tracks with tag mismatches
-    pub fn get_tag_mismatch_count(&self) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT track_id) FROM tag_mismatches",
-            params![],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
-    }
-
-    /// Check if a track has any tag mismatches
-    pub fn has_tag_mismatch(&self, track_id: i64) -> Result<bool> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM tag_mismatches WHERE track_id = ?1",
-            params![track_id],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
-    }
-
-    /// Get all tag mismatches grouped by track
-    /// Returns Vec of (track_id, field, db_value, disk_value)
-    pub fn get_all_tag_mismatches(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT track_id, field, db_value, disk_value FROM tag_mismatches ORDER BY track_id, field"
-        )?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
-    }
-
     /// Get tag mismatches for a specific track
     /// Returns Vec of (field, db_value, disk_value)
     pub fn get_tag_mismatches_for_track(&self, track_id: i64) -> Result<Vec<(String, Option<String>, Option<String>)>> {

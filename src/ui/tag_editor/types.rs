@@ -220,39 +220,6 @@ pub struct TagField {
     pub deleted: bool,
 }
 
-/// A tag field that may have multiple values (FLAC/Vorbis style).
-/// Used for coalescing duplicate tag names into a single editable unit.
-#[derive(Debug, Clone)]
-pub struct CoalescedTagField {
-    /// Display name (uses casing from first occurrence)
-    pub name: String,
-    /// Normalized name for comparison (lowercase)
-    pub normalized_name: String,
-    /// All values for this tag (may be empty after deletions)
-    pub values: Vec<String>,
-    pub editable: bool,
-    /// Marked for deletion (all values will be removed)
-    pub deleted: bool,
-    /// Original values for change detection
-    pub original_values: Vec<String>,
-}
-
-impl CoalescedTagField {
-    /// Display value shown in the tag list
-    pub fn display_value(&self) -> String {
-        match self.values.len() {
-            0 => "(empty)".to_string(),
-            1 => self.values[0].clone(),
-            n => format!("[{} values]", n),
-        }
-    }
-
-    /// Check if field has been modified from original
-    pub fn is_modified(&self) -> bool {
-        self.values != self.original_values || self.deleted
-    }
-}
-
 /// A single change to a tag field
 #[derive(Debug, Clone)]
 pub struct TagChange {

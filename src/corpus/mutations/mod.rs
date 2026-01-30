@@ -119,6 +119,5 @@ mod tests {
         // Verify FlushTagsToDisk mutations
         assert!(matches!(&mutations[1], Mutation::FlushTagsToDisk { track_id: 1, .. }));
         assert_eq!(mutations[1].category(), MutationCategory::TagEdit);
-        assert!(mutations[1].primary_path().is_some());
     }
 }

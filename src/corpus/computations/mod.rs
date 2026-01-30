@@ -76,15 +76,6 @@ impl Computation {
             Computation::Awake(c) => c.label(),
         }
     }
-
-    /// Get the primary file path affected by this computation, if any.
-    pub fn primary_path(&self) -> Option<&std::path::Path> {
-        match self {
-            Computation::Asleep(c) => c.primary_path(),
-            Computation::Awakening(c) => c.primary_path(),
-            Computation::Awake(c) => c.primary_path(),
-        }
-    }
 }
 
 // ============================================================================

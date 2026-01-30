@@ -315,35 +315,6 @@ impl Mutation {
         }
     }
 
-    /// Get the primary file path affected by this mutation, if any.
-    pub fn primary_path(&self) -> Option<&Path> {
-        match self {
-            Mutation::FlushTagsToDisk { path, .. }
-            | Mutation::IndexTrack { path, .. }
-            | Mutation::IndexFileFromPath { path, .. }
-            | Mutation::UpdateScanState { path, .. }
-            | Mutation::Move { source: path, .. }
-            | Mutation::Copy { source: path, .. }
-            | Mutation::MoveToStash { path, .. }
-            | Mutation::Transcode { source_path: path, .. }
-            | Mutation::HardLink { source: path, .. }
-            | Mutation::LibraryMove { source: path, .. } => Some(path),
-
-            Mutation::SetTrackTagsDb { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. } => None,
-
-            Mutation::UpdateTrackPath { new_path: path, .. }
-            | Mutation::DropFromIndex { path, .. }
-            | Mutation::UpdateTrack { path, .. } => Some(path),
-        }
-    }
-
     /// Check if this mutation is database-only (no file system operations).
     pub fn is_db_only(&self) -> bool {
         matches!(
@@ -608,21 +579,4 @@ mod tests {
         assert!(migration.requires_serial());
     }
 
-    #[test]
-    fn test_mutation_primary_path() {
-        let flush = Mutation::FlushTagsToDisk {
-            track_id: 1,
-            path: PathBuf::from("/test/file.flac"),
-        };
-        assert_eq!(
-            flush.primary_path(),
-            Some(Path::new("/test/file.flac"))
-        );
-
-        let set_tags = Mutation::SetTrackTagsDb {
-            track_id: 1,
-            tags: vec![("artist".to_string(), "Artist".to_string())],
-        };
-        assert_eq!(set_tags.primary_path(), None);
-    }
 }

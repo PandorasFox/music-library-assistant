@@ -107,19 +107,6 @@ impl Computation {
             Computation::UpdateDeploySignals { .. } => "Updating deploy signals",
         }
     }
-
-    /// Get the primary file path affected by this computation, if any.
-    pub fn primary_path(&self) -> Option<&std::path::Path> {
-        match self {
-            Computation::ScheduleSecondLevelDerivations => None,
-            Computation::DeriveDirectorySignals { directory } => Some(directory),
-            Computation::UpdateCorpusFileSignals { path } => Some(path),
-            Computation::UpdateLibraryFileSignals { path } => Some(path),
-            Computation::WalkLibrary { library_root, .. } => Some(library_root),
-            Computation::ScanLibraryDirectory { directory, .. } => Some(directory),
-            Computation::UpdateDeploySignals { library_path, .. } => Some(library_path),
-        }
-    }
 }
 
 // ============================================================================

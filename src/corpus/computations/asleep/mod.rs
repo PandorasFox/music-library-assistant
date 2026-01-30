@@ -106,18 +106,6 @@ impl Computation {
             Computation::VerifyAudio { .. } => "Audio verification",
         }
     }
-
-    /// Get the primary file path affected by this computation, if any.
-    pub fn primary_path(&self) -> Option<&std::path::Path> {
-        match self {
-            Computation::ClearExistingObservationState => None,
-            Computation::WalkCorpus { root, .. } => Some(root),
-            Computation::ScanCorpusDirectory { directory, .. } => Some(directory),
-            Computation::VerifyMtime { path, .. } => Some(path),
-            Computation::VerifyTags { path, .. } => Some(path),
-            Computation::VerifyAudio { path, .. } => Some(path),
-        }
-    }
 }
 
 // ============================================================================

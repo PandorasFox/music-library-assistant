@@ -131,14 +131,6 @@ impl Computation {
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
         }
     }
-
-    /// Get the primary file path affected by this computation, if any.
-    pub fn primary_path(&self) -> Option<&std::path::Path> {
-        match self {
-            Computation::DeriveDeployHealthSignals { library_root, .. } => Some(library_root),
-            _ => None,
-        }
-    }
 }
 
 // ============================================================================

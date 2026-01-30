@@ -704,17 +704,39 @@ impl App {
     pub(super) fn handle_shit_format_preview_action(&mut self, action: shit_format_flow::ShitFormatPreviewAction) {
         match action {
             shit_format_flow::ShitFormatPreviewAction::None => {}
-            shit_format_flow::ShitFormatPreviewAction::ConfirmTranscodeAll => {
-                // Generate transcode mutations and stage for review
+            shit_format_flow::ShitFormatPreviewAction::ConfirmRemuxLossless => {
+                // Generate FLAC remux mutations for lossless files only
                 if let Some(ref preview) = self.shit_format_preview {
-                    let mutations = preview.cached_data.transcode_mutations();
-                    let count = mutations.len();
-                    if count > 0 {
-                        self.stage_shit_format_mutations(mutations, "Transcode to Opus");
-                        // Note: shit_format_preview state is NOT cleared - preserved for Cancel return
+                    let mutations = preview.cached_data.lossless_mutations();
+                    if !mutations.is_empty() {
+                        self.stage_shit_format_mutations(mutations, "Remux to FLAC");
                         self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
                     } else {
-                        self.status_message = Some("No files to transcode".to_string());
+                        self.status_message = Some("No lossless files to remux".to_string());
+                    }
+                }
+            }
+            shit_format_flow::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
+                // Generate Opus transcode mutations for lossy files only
+                if let Some(ref preview) = self.shit_format_preview {
+                    let mutations = preview.cached_data.lossy_mutations();
+                    if !mutations.is_empty() {
+                        self.stage_shit_format_mutations(mutations, "Transcode to Opus");
+                        self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                    } else {
+                        self.status_message = Some("No lossy files to transcode".to_string());
+                    }
+                }
+            }
+            shit_format_flow::ShitFormatPreviewAction::ConfirmConvertAll => {
+                // Generate mutations for all files (lossless → FLAC, lossy → Opus)
+                if let Some(ref preview) = self.shit_format_preview {
+                    let mutations = preview.cached_data.all_mutations();
+                    if !mutations.is_empty() {
+                        self.stage_shit_format_mutations(mutations, "Convert all formats");
+                        self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                    } else {
+                        self.status_message = Some("No files to convert".to_string());
                     }
                 }
             }

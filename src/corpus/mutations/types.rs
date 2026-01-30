@@ -8,7 +8,7 @@
 //! - Cancelled mid-execution
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::corpus::transcode::TranscodeTarget;
 
@@ -68,33 +68,20 @@ impl ExtractedMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mutation {
     // ========================================================================
-    // Tag Operations (DB-First Pattern)
+    // Tag Operations (DB-First Pattern with Spawn Chaining)
     // ========================================================================
     /// Set track tags in database only (DB-first pattern, step 1).
     ///
     /// - Writes tags to DB via set_track_tags() (full replacement)
     /// - Sets needs_disk_flush = TRUE
+    /// - **Spawns** ApplyDbTagsToDisk to sync to disk (step 2)
     ///
-    /// Should be followed by FlushTagsToDisk to sync to disk.
-    /// If interrupted, the flush flag enables recovery via OOB flow.
+    /// If interrupted between DB write and disk write, needs_disk_flush=TRUE
+    /// enables recovery via OOB sync flow.
     SetTrackTagsDb {
         track_id: i64,
         /// Complete set of tags to store (replaces all existing tags).
         tags: Vec<(String, String)>,
-    },
-
-    /// Flush DB tags to disk file (DB-first pattern, step 2).
-    ///
-    /// - Reads current tags from DB (source of truth)
-    /// - Writes to disk via write_file_tags()
-    /// - Updates mtime in scan_state
-    /// - Sets needs_disk_flush = FALSE
-    ///
-    /// Idempotent: re-running reads fresh DB state.
-    /// Can be used for OOB recovery of tracks with needs_disk_flush = TRUE.
-    FlushTagsToDisk {
-        track_id: i64,
-        path: PathBuf,
     },
 
     // ========================================================================
@@ -249,22 +236,33 @@ pub enum Mutation {
         tracks: Vec<(i64, PathBuf)>,
     },
 
-    /// Apply DB tags to disk files (defer to db / reject disk changes).
+    /// Apply DB tags to disk file (defer to db / reject disk changes).
     ///
-    /// Writes the tags from the database to the disk files, overwriting any
-    /// disk-side changes. Clears OOB signals and tag_mismatches.
+    /// - Reads tags from database (source of truth)
+    /// - Writes to disk via write_file_tags()
+    /// - Updates mtime in scan_state after write
+    /// - Clears needs_disk_flush flag
+    /// - Clears OOB signals and tag_mismatches
+    ///
+    /// Used for:
+    /// - OOB sync resolution (reject disk changes)
+    /// - Spawned from SetTrackTagsDb (DB-first pattern step 2)
     ApplyDbTagsToDisk {
-        /// Track IDs with their absolute paths: (track_id, abs_path)
-        tracks: Vec<(i64, PathBuf)>,
+        track_id: i64,
+        path: PathBuf,
     },
 
     /// Assimilate disk tags into DB (defer to corpus / accept disk changes).
     ///
-    /// Reads tags from disk files and stores them in the database, overwriting
-    /// the database-side values. Clears OOB signals and tag_mismatches.
+    /// - Reads tags from disk file
+    /// - Writes to database, overwriting DB values
+    /// - Updates mtime in scan_state to match disk
+    /// - Clears OOB signals and tag_mismatches
+    ///
+    /// Used for OOB sync resolution (accept disk changes).
     AssimilateDiskTagsToDb {
-        /// Track IDs with their absolute paths: (track_id, abs_path)
-        tracks: Vec<(i64, PathBuf)>,
+        track_id: i64,
+        path: PathBuf,
     },
     // Note: VerifyTags has been moved to corpus::computations::Computation.
     // Computations don't alter state - they only emit signals.
@@ -286,7 +284,9 @@ impl Mutation {
     /// Get the category of this mutation for batching.
     pub fn category(&self) -> MutationCategory {
         match self {
-            Mutation::FlushTagsToDisk { .. } => MutationCategory::TagEdit,
+            // Tag sync operations (write to disk)
+            Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. } => MutationCategory::TagEdit,
 
             // SetTrackTagsDb is DB-only and fast, categorized with indexing
             Mutation::SetTrackTagsDb { .. }
@@ -299,9 +299,7 @@ impl Mutation {
             | Mutation::DropFromIndex { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. } => MutationCategory::Indexing,
+            | Mutation::AcknowledgeInodeChanged { .. } => MutationCategory::Indexing,
 
             Mutation::Move { .. } | Mutation::MoveToStash { .. } => MutationCategory::FileMove,
 
@@ -328,7 +326,7 @@ impl Mutation {
                 | Mutation::UpdateTrack { .. }
                 | Mutation::AcknowledgeMtimeOnly { .. }
                 | Mutation::AssimilateDiskTagsToDb { .. }
-            // Note: ApplyDbTagsToDisk and FlushTagsToDisk write to disk, so NOT db-only
+            // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
         )
     }
 
@@ -343,9 +341,10 @@ impl Mutation {
     pub fn affected_track_id(&self) -> Option<i64> {
         match self {
             Mutation::SetTrackTagsDb { track_id, .. }
-            | Mutation::FlushTagsToDisk { track_id, .. }
             | Mutation::UpdateTrack { track_id, .. }
-            | Mutation::Transcode { track_id, .. } => Some(*track_id),
+            | Mutation::Transcode { track_id, .. }
+            | Mutation::ApplyDbTagsToDisk { track_id, .. }
+            | Mutation::AssimilateDiskTagsToDb { track_id, .. } => Some(*track_id),
 
             // These don't have a single track_id directly (batch operations or no track)
             Mutation::IndexTrack { .. }
@@ -362,9 +361,7 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. } => None,
+            | Mutation::AcknowledgeInodeChanged { .. } => None,
         }
     }
 
@@ -378,7 +375,10 @@ impl Mutation {
         match self {
             // DB-only tag operations don't change file presence
             Mutation::SetTrackTagsDb { .. } => {}
-            Mutation::FlushTagsToDisk { path, .. } => {
+
+            // Single-track tag sync operations affect the file's directory
+            Mutation::ApplyDbTagsToDisk { path, .. }
+            | Mutation::AssimilateDiskTagsToDb { path, .. } => {
                 if let Some(parent) = path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
@@ -461,9 +461,7 @@ impl Mutation {
 
             // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
             Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. } => {}
+            | Mutation::AcknowledgeInodeChanged { .. } => {}
         }
 
         // Deduplicate directories
@@ -484,8 +482,9 @@ impl Mutation {
             | Mutation::IndexFileFromPath { path, .. }
             | Mutation::UpdateScanState { path, .. } => vec![path.clone()],
 
-            // Tag operations: the file being modified
-            Mutation::FlushTagsToDisk { path, .. } => vec![path.clone()],
+            // Tag operations: single-track mutations with path
+            Mutation::ApplyDbTagsToDisk { path, .. }
+            | Mutation::AssimilateDiskTagsToDb { path, .. } => vec![path.clone()],
 
             // File operations: source and destination
             Mutation::Move { source, destination, .. }
@@ -520,9 +519,7 @@ impl Mutation {
 
             // Batch OOB resolution: paths are stored in the mutation
             Mutation::AcknowledgeMtimeOnly { tracks }
-            | Mutation::AcknowledgeInodeChanged { tracks }
-            | Mutation::ApplyDbTagsToDisk { tracks }
-            | Mutation::AssimilateDiskTagsToDb { tracks } => {
+            | Mutation::AcknowledgeInodeChanged { tracks } => {
                 tracks.iter().map(|(_, path)| path.clone()).collect()
             }
 
@@ -542,6 +539,9 @@ pub struct MutationResult {
     pub success: bool,
     pub error: Option<String>,
     pub duration_ms: u64,
+    /// Follow-up mutations to queue (from spawn chaining).
+    /// E.g., SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
+    pub spawn_mutations: Vec<Mutation>,
 }
 
 #[cfg(test)]
@@ -557,12 +557,12 @@ mod tests {
         assert_eq!(set_tags.category(), MutationCategory::Indexing);
         assert!(set_tags.is_db_only());
 
-        let flush_tags = Mutation::FlushTagsToDisk {
+        let apply_tags = Mutation::ApplyDbTagsToDisk {
             track_id: 1,
             path: PathBuf::from("/test/file.flac"),
         };
-        assert_eq!(flush_tags.category(), MutationCategory::TagEdit);
-        assert!(!flush_tags.is_db_only());
+        assert_eq!(apply_tags.category(), MutationCategory::TagEdit);
+        assert!(!apply_tags.is_db_only());
 
         let file_move = Mutation::Move {
             source: PathBuf::from("/a"),

@@ -85,39 +85,32 @@ mod tests {
 
     #[test]
     fn test_create_bulk_tag_mutations() {
-        // Test the DB-first tag mutation creation structure
+        // Test the DB-first tag mutation creation structure with spawn chaining.
+        // UI only generates SetTrackTagsDb mutations - disk sync is spawned during execution.
         let files = vec![
             (1i64, PathBuf::from("/test/a.flac")),
             (2i64, PathBuf::from("/test/b.flac")),
         ];
 
-        // Create mutations using the two-mutation pattern
+        // Create mutations using the single-mutation pattern (spawns disk sync)
         let mutations: Vec<Mutation> = files
             .iter()
-            .flat_map(|(track_id, path)| {
-                vec![
-                    Mutation::SetTrackTagsDb {
-                        track_id: *track_id,
-                        tags: vec![("album_artist".to_string(), "Various Artists".to_string())],
-                    },
-                    Mutation::FlushTagsToDisk {
-                        track_id: *track_id,
-                        path: path.clone(),
-                    },
-                ]
+            .map(|(track_id, _path)| {
+                Mutation::SetTrackTagsDb {
+                    track_id: *track_id,
+                    tags: vec![("album_artist".to_string(), "Various Artists".to_string())],
+                }
             })
             .collect();
 
-        // 2 files × 2 mutations each = 4 mutations
-        assert_eq!(mutations.len(), 4);
+        // 2 files × 1 mutation each = 2 mutations (disk sync is spawned)
+        assert_eq!(mutations.len(), 2);
 
         // Verify SetTrackTagsDb mutations
         assert!(matches!(&mutations[0], Mutation::SetTrackTagsDb { track_id: 1, .. }));
         assert_eq!(mutations[0].category(), MutationCategory::Indexing); // DB-only
         assert!(mutations[0].is_db_only());
 
-        // Verify FlushTagsToDisk mutations
-        assert!(matches!(&mutations[1], Mutation::FlushTagsToDisk { track_id: 1, .. }));
-        assert_eq!(mutations[1].category(), MutationCategory::TagEdit);
+        assert!(matches!(&mutations[1], Mutation::SetTrackTagsDb { track_id: 2, .. }));
     }
 }

@@ -9,6 +9,7 @@
 //! 3. Stash original file under stash_name
 //! 4. Update track record (path, inode, file_size, file_type)
 //! 5. Update scan_state entry
+//! 6. Spawn AssimilateDiskTagsToDb to sync tags from new file to index
 
 use anyhow::{Context, Result};
 use std::os::unix::fs::MetadataExt;
@@ -159,6 +160,7 @@ fn execute_transcode(
 /// Execute a single transcode mutation.
 ///
 /// Requires a MutationExecutionWitness to prove execution is inside the daemon.
+/// On success, spawns AssimilateDiskTagsToDb to sync tags from the new file.
 pub fn execute_single(
     db: &Database,
     mutation: &Mutation,
@@ -166,6 +168,25 @@ pub fn execute_single(
     witness: &MutationExecutionWitness,
 ) -> MutationResult {
     let start = std::time::Instant::now();
+
+    // Extract mutation parameters before execution for spawn_mutations
+    let (track_id, source_path, target_format) = match mutation {
+        Mutation::Transcode {
+            track_id,
+            source_path,
+            target_format,
+            ..
+        } => (*track_id, source_path.clone(), *target_format),
+        _ => {
+            return MutationResult {
+                mutation: mutation.clone(),
+                success: false,
+                error: Some("Not a transcode mutation".to_string()),
+                duration_ms: start.elapsed().as_millis() as u64,
+                spawn_mutations: Vec::new(),
+            };
+        }
+    };
 
     let result = match mutation {
         Mutation::Transcode {
@@ -178,9 +199,19 @@ pub fn execute_single(
         _ => Err(anyhow::anyhow!("Not a transcode mutation")),
     };
 
-    let (success, error) = match result {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(format!("{:#}", e))),
+    let (success, error, spawn_mutations) = match result {
+        Ok(()) => {
+            // On success, spawn AssimilateDiskTagsToDb to read tags from the new file
+            // and update the index. This picks up any encoder tags added by ffmpeg
+            // while preserving the original metadata that ffmpeg copies.
+            let new_path = source_path.with_extension(target_format.extension());
+            let spawn = vec![Mutation::AssimilateDiskTagsToDb {
+                track_id,
+                path: new_path,
+            }];
+            (true, None, spawn)
+        }
+        Err(e) => (false, Some(format!("{:#}", e)), Vec::new()),
     };
 
     MutationResult {
@@ -188,5 +219,6 @@ pub fn execute_single(
         success,
         error,
         duration_ms: start.elapsed().as_millis() as u64,
+        spawn_mutations,
     }
 }

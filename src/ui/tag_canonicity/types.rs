@@ -406,14 +406,11 @@ impl TagCanonicalityState {
                     new_tags.push((self.data.tag_name.clone(), canonical.to_string()));
                 }
 
-                // DB-first pattern: SetTrackTagsDb then FlushTagsToDisk
+                // DB-first pattern with spawn chaining:
+                // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
                 mutations.push(Mutation::SetTrackTagsDb {
                     track_id,
                     tags: new_tags,
-                });
-                mutations.push(Mutation::FlushTagsToDisk {
-                    track_id,
-                    path: path.clone(),
                 });
             }
         }

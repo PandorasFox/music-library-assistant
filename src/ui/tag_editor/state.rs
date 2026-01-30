@@ -2234,22 +2234,20 @@ fn tag_fields_to_tags(fields: &[TagField]) -> Vec<(String, String)> {
 
 /// Convert changes to mutations for the daemon.
 ///
-/// Uses the DB-first pattern: for each track with changes, generates:
-/// 1. SetTrackTagsDb - writes complete tag set to database, sets needs_disk_flush=true
-/// 2. FlushTagsToDisk - reads from DB and writes to disk, clears needs_disk_flush
+/// Uses the DB-first pattern with spawn chaining: for each track with changes, generates
+/// SetTrackTagsDb which writes tags to DB, sets needs_disk_flush=true, and spawns
+/// ApplyDbTagsToDisk to sync to disk and clear the flag.
 ///
 /// This pattern ensures DB is always ahead of or in sync with disk, enabling
 /// recovery via OOB flow if disk write fails/is interrupted.
 fn changes_to_mutations(changes: &[TagChange], tracks: &[Track], all_tag_fields: &[Vec<TagField>]) -> Vec<Mutation> {
-    let resolver = paths::get_resolver();
-
     // Get unique track indices that have changes
     let mut changed_tracks: HashSet<usize> = HashSet::new();
     for change in changes {
         changed_tracks.insert(change.track_idx);
     }
 
-    // Generate two mutations per track: SetTrackTagsDb then FlushTagsToDisk
+    // Generate one mutation per track: SetTrackTagsDb (spawns ApplyDbTagsToDisk)
     let mut mutations = Vec::new();
     for track_idx in changed_tracks {
         if let (Some(track), Some(current_fields)) = (tracks.get(track_idx), all_tag_fields.get(track_idx)) {
@@ -2259,20 +2257,14 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track], all_tag_fields:
                 None => continue,
             };
 
-            // Resolve relative DB path to absolute for filesystem operations
-            let abs_path = resolver.resolve(Path::new(&track.path));
-
             // Get complete desired tag set from current UI state
             let tags = tag_fields_to_tags(current_fields);
 
-            // DB-first pattern: SetTrackTagsDb then FlushTagsToDisk
+            // DB-first pattern with spawn chaining:
+            // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
             mutations.push(Mutation::SetTrackTagsDb {
                 track_id,
                 tags,
-            });
-            mutations.push(Mutation::FlushTagsToDisk {
-                track_id,
-                path: abs_path,
             });
         }
     }

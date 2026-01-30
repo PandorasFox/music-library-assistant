@@ -239,6 +239,7 @@ pub fn execute_single(
         success,
         error,
         duration_ms: start.elapsed().as_millis() as u64,
+        spawn_mutations: Vec::new(), // File ops don't spawn
     }
 }
 

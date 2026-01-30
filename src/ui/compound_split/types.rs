@@ -103,12 +103,12 @@ impl CompoundSplitState {
         }
     }
 
-    /// Generate mutations for this split using DB-first pattern.
+    /// Generate mutations for this split using DB-first pattern with spawn chaining.
     ///
     /// For each affected track:
     /// - Verify the track still has the compound value (skip if not)
     /// - Build new TagSet with compound value replaced by split parts
-    /// - Generate SetTrackTagsDb + FlushTagsToDisk mutations
+    /// - Generate SetTrackTagsDb mutation (spawns ApplyDbTagsToDisk automatically)
     ///
     /// The `track_info` map contains (path, current_tagset) for each track.
     /// This allows verifying the track actually has the compound value before
@@ -145,14 +145,11 @@ impl CompoundSplitState {
                 new_tags.push((self.data.tag_name.clone(), part.clone()));
             }
 
-            // DB-first pattern: SetTrackTagsDb then FlushTagsToDisk
+            // DB-first pattern with spawn chaining:
+            // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
             mutations.push(Mutation::SetTrackTagsDb {
                 track_id,
                 tags: new_tags,
-            });
-            mutations.push(Mutation::FlushTagsToDisk {
-                track_id,
-                path: path.clone(),
             });
         }
 

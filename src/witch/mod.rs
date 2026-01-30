@@ -374,8 +374,9 @@ impl Witch {
         let mut completed = 0;
         let mut failed = 0;
 
-        // Drain completed results and collect spawned computations
-        let mut spawned: Vec<Computation> = Vec::new();
+        // Drain completed results and collect spawned computations and mutations
+        let mut spawned_computations: Vec<Computation> = Vec::new();
+        let mut spawned_mutations: Vec<Mutation> = Vec::new();
 
         while let Ok(result) = self.result_rx.try_recv() {
             // Task has completed - no longer in flight
@@ -418,15 +419,22 @@ impl Witch {
                 }
             }
 
-            // Collect spawned follow-up computations
-            spawned.extend(result.spawn);
+            // Collect spawned follow-up computations and mutations
+            spawned_computations.extend(result.spawn);
+            spawned_mutations.extend(result.spawn_mutations);
         }
 
         // Queue spawned follow-up computations (chaining)
         // IMPORTANT: This happens BEFORE we check in_flight for state transitions,
         // ensuring spawned tasks are counted before we decide to transition.
-        for comp in spawned {
+        for comp in spawned_computations {
             self.queue_computation_internal(comp, None);
+        }
+
+        // Queue spawned follow-up mutations (chaining from mutations like SetTrackTagsDb)
+        // These are pre-authorized by the parent mutation's witness chain.
+        for mutation in spawned_mutations {
+            self.queue_spawned_mutation(mutation);
         }
 
         // Spawn background cache refresh tasks (demand-driven, throttled)
@@ -691,6 +699,7 @@ impl Witch {
                         error: Some(format!("Task panicked: {}", panic_msg)),
                         label: label_for_panic,
                         spawn: Vec::new(),
+                        spawn_mutations: Vec::new(),
                         duration_ms: queue_time.elapsed().as_millis() as u64,
                         queue_wait_ms: 0,
                         thread_stats: None,
@@ -757,6 +766,26 @@ impl Witch {
             let task_label = self.resolve_label(label.clone(), &task);
             self.spawn_task(task, task_label, queue_time);
         }
+    }
+
+    /// Queue a mutation spawned by another mutation (spawn chaining).
+    ///
+    /// This is called internally from tick() when processing spawn_mutations
+    /// from completed tasks. The spawn chain is already authorized by the
+    /// parent mutation's witness - no additional operator decision required.
+    ///
+    /// Example: SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
+    fn queue_spawned_mutation(&mut self, mutation: Mutation) {
+        // Spawned mutations inherit the working state from their parent
+        // (transition_to_working already happened when parent was queued)
+        self.mutations_ran_this_session = true;
+
+        let task = Task::Mutation(mutation);
+        let task_label = TaskLabel::from_task(&task).0;
+
+        self.session_queued += 1;
+        self.in_flight += 1;
+        self.spawn_task(task, task_label, Instant::now());
     }
 
     // -------------------------------------------------------------------------

@@ -680,7 +680,7 @@ impl MigrationRegistry {
 
         // v6 → v7: Add needs_disk_flush column for DB-first tag editing pattern
         // Tracks with needs_disk_flush=TRUE have DB tags that haven't been written to disk yet.
-        // Used for recovery if interrupted between SetTrackTagsDb and FlushTagsToDisk.
+        // Used for recovery if interrupted between SetTrackTagsDb and ApplyDbTagsToDisk.
         registry.register(Migration {
             from_version: 6,
             to_version: 7,

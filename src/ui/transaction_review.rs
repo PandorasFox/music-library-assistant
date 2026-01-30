@@ -189,7 +189,8 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
         match m {
             // Mutations with single track_id
             Mutation::SetTrackTagsDb { track_id, .. }
-            | Mutation::FlushTagsToDisk { track_id, .. }
+            | Mutation::ApplyDbTagsToDisk { track_id, .. }
+            | Mutation::AssimilateDiskTagsToDb { track_id, .. }
             | Mutation::DropFromIndex { track_id, .. }
             | Mutation::UpdateTrackPath { track_id, .. }
             | Mutation::UpdateTrack { track_id, .. }
@@ -199,9 +200,7 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
 
             // OOB resolution mutations with multiple tracks (id, path)
             Mutation::AcknowledgeMtimeOnly { tracks }
-            | Mutation::AcknowledgeInodeChanged { tracks }
-            | Mutation::ApplyDbTagsToDisk { tracks }
-            | Mutation::AssimilateDiskTagsToDb { tracks } => {
+            | Mutation::AcknowledgeInodeChanged { tracks } => {
                 track_ids.extend(tracks.iter().map(|(id, _)| *id));
             }
 

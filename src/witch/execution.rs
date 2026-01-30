@@ -42,6 +42,7 @@ fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> R
                 error: Some(format!("DB error: {:#}", e)),
                 label,
                 spawn: Vec::new(),
+                spawn_mutations: Vec::new(),
                 duration_ms: start.elapsed().as_millis() as u64,
                 queue_wait_ms,
                 thread_stats: None,
@@ -90,6 +91,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     // Execute mutation using thread-local read-only DB connection.
     // All writes go through db_thread::signal_sender() (fire-and-forget).
+    // Result tuple: (success, error, spawn_mutations)
     let result = with_read_only_db(|read_db| {
         match mutation.category() {
             MutationCategory::TagEdit => {
@@ -98,32 +100,32 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                     mutation
                 ));
                 let r = tag_edit::execute_single(read_db, &mutation, session_id, &witness);
-                (r.success, r.error)
+                (r.success, r.error, r.spawn_mutations)
             }
             MutationCategory::FileMove | MutationCategory::FileCopy |
             MutationCategory::Deployment => {
                 let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
-                (r.success, r.error)
+                (r.success, r.error, r.spawn_mutations)
             }
             MutationCategory::Indexing => {
                 let r = indexing::execute_single(read_db, &mutation, &witness);
-                (r.success, r.error)
+                (r.success, r.error, r.spawn_mutations)
             }
             MutationCategory::Migration => {
-                (false, Some("Migrations not supported in Witch executor".to_string()))
+                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::new())
             }
             MutationCategory::Transcode => {
                 let r = crate::corpus::mutations::transcode::execute_single(
                     read_db, &mutation, stash_root.as_deref(), &witness,
                 );
-                (r.success, r.error)
+                (r.success, r.error, r.spawn_mutations)
             }
         }
     });
 
     // Handle DB access failure
-    let (success, error) = match result {
-        Ok((s, e)) => (s, e),
+    let (success, error, spawn_mutations) = match result {
+        Ok((s, e, sm)) => (s, e, sm),
         Err(db_err) => {
             crate::logging::log_error(format!(
                 "[EXECUTION] DB access FAILED: {}",
@@ -134,6 +136,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 error: Some(format!("DB access failed: {}", db_err)),
                 label,
                 spawn: Vec::new(),
+                spawn_mutations: Vec::new(),
                 duration_ms: start.elapsed().as_millis() as u64,
                 queue_wait_ms,
                 thread_stats: None,
@@ -286,10 +289,25 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     //
     // Path-aware spawning: corpus paths → UpdateCorpusFileSignals,
     // library paths → UpdateLibraryFileSignals, others → skip
+    //
+    // For Transcode: only spawn for the NEW path, not the source path.
+    // The source path no longer exists (it's stashed), and spawning signal updates
+    // for it causes a race where MissingFile is emitted before db_thread processes
+    // the track path update.
     let mut spawn: Vec<Computation> = if success {
         let resolver = crate::corpus::paths::get_resolver();
-        mutation
-            .affected_paths()
+
+        // Get paths to spawn signal updates for
+        let paths_to_update: Vec<std::path::PathBuf> = match &mutation {
+            Mutation::Transcode { source_path, target_format, .. } => {
+                // Only spawn for the new path (target), not the source (which is stashed)
+                let new_path = source_path.with_extension(target_format.extension());
+                vec![new_path]
+            }
+            _ => mutation.affected_paths(),
+        };
+
+        paths_to_update
             .into_iter()
             .filter_map(|path| {
                 let rel = if path.is_absolute() {
@@ -336,6 +354,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         error,
         label,
         spawn,
+        spawn_mutations,
         duration_ms,
         queue_wait_ms,
         thread_stats: None, // Mutations don't use thread-local stats
@@ -359,6 +378,7 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
         error: result.error,
         label,
         spawn,
+        spawn_mutations: Vec::new(), // Computations don't spawn mutations
         duration_ms: result.duration_ms,
         queue_wait_ms,
         thread_stats,
@@ -394,6 +414,7 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
         error,
         label,
         spawn: Vec::new(),
+        spawn_mutations: Vec::new(), // Migrations don't spawn mutations
         duration_ms: start.elapsed().as_millis() as u64,
         queue_wait_ms,
         thread_stats: None, // Migrations don't use thread-local stats

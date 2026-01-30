@@ -609,49 +609,65 @@ pub fn execute_acknowledge_inode_changed(
     Ok(affected_paths)
 }
 
-/// Execute ApplyDbTagsToDisk mutation.
+/// Execute ApplyDbTagsToDisk mutation (single-track).
 ///
-/// For each track: writes DB tags to disk file via `write_file_tags()`,
-/// which handles scan_state mtime, tag_mismatches, and OOB signal cleanup.
-/// Used to reject disk-side changes and restore DB state to disk.
+/// - Reads tags from database (source of truth)
+/// - Writes to disk via write_file_tags()
+/// - Updates mtime in scan_state after write (handled by write_file_tags)
+/// - Clears needs_disk_flush flag
+/// - Clears OOB signals and tag_mismatches (handled by write_file_tags)
+///
+/// Used for:
+/// - OOB sync resolution (reject disk changes, restore DB state to disk)
+/// - Spawned from SetTrackTagsDb (DB-first pattern step 2)
 pub fn execute_apply_db_tags_to_disk(
     db: &Database,
-    tracks: &[(i64, std::path::PathBuf)],
+    track_id: i64,
+    abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
-) -> Result<Vec<std::path::PathBuf>> {
+) -> Result<()> {
     use crate::corpus::tags::{write_file_tags, TagSet};
+    use crate::db_thread;
 
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Get track info (need relative path for DB operations)
+    let track = db.get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Get DB tags and convert to TagSet
+    let db_tags = db.get_track_tags(track_id)?;
+    let tag_set = TagSet::new(
+        db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
+    );
+
+    // Write tags to disk using the consolidated write path
+    // (also clears OOB signals, tag_mismatches, and updates scan_state mtime)
     let token = super::sealed::MutationToken::new();
-    let mut affected_paths = Vec::new();
+    write_file_tags(abs_path, &tag_set, &token, witness)
+        .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
 
-    for (track_id, abs_path) in tracks {
-        // Get DB tags and convert to TagSet
-        let db_tags = db.get_track_tags(*track_id)?;
-        let tag_set = TagSet::new(
-            db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
-        );
+    // Clear needs_disk_flush flag
+    sender.set_needs_disk_flush(&track.path, false, witness);
 
-        // Write tags to disk using the consolidated write path
-        // (also clears OOB signals, tag_mismatches, and updates scan_state mtime)
-        write_file_tags(abs_path, &tag_set, &token, witness)
-            .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
-
-        affected_paths.push(abs_path.clone());
-    }
-
-    Ok(affected_paths)
+    Ok(())
 }
 
-/// Execute AssimilateDiskTagsToDb mutation.
+/// Execute AssimilateDiskTagsToDb mutation (single-track).
 ///
-/// For each track: reads disk tags into DB, updates scan_state mtime,
-/// clears tag_mismatches and OOB signals. Used to accept disk-side changes
-/// and update DB to match disk.
+/// - Reads tags from disk file
+/// - Writes to database, overwriting DB values
+/// - Updates mtime in scan_state to match disk
+/// - Clears OOB signals and tag_mismatches
+///
+/// Used for OOB sync resolution (accept disk changes, update DB to match disk).
 pub fn execute_assimilate_disk_tags_to_db(
     db: &Database,
-    tracks: &[(i64, std::path::PathBuf)],
+    track_id: i64,
+    abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
-) -> Result<Vec<std::path::PathBuf>> {
+) -> Result<()> {
     use crate::corpus::db::types::CorpusFileSignalType;
     use crate::corpus::tags::TagSet;
     use crate::db_thread;
@@ -659,93 +675,56 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-    let mut affected_paths = Vec::new();
 
-    for (track_id, abs_path) in tracks {
-        // Get track info (need relative path for DB operations)
-        let track = match db.get_track_by_id(*track_id)? {
-            Some(t) => t,
-            None => continue,
-        };
-
-        // Read disk tags using TagSet
-        let disk_tagset = TagSet::from_file(abs_path)
-            .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
-
-        // Update DB with disk tags via db_thread
-        sender.set_track_tags(&track.path, disk_tagset.into_vec(), witness);
-
-        // Read disk mtime using portable API (consistent with comparison code)
-        let file_metadata = std::fs::metadata(abs_path)
-            .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
-        let (mtime_secs, mtime_nanos) = file_metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-            .unwrap_or((0, 0));
-
-        // Update scan_state mtime via db_thread using (source, inode) key
-        sender.update_scan_state_mtime(
-            &track.source,
-            track.inode,
-            mtime_secs,
-            mtime_nanos,
-            witness,
-        );
-
-        // Clear tag_mismatches for this track via db_thread
-        sender.clear_tag_mismatches_for_track(&track.path, witness);
-
-        // Clear OOB signals via db_thread
-        sender.clear_file_signal(
-            CorpusFileSignalType::OutOfBandTagSync.into(),
-            &track.path,
-            witness,
-        );
-        sender.clear_file_signal(
-            CorpusFileSignalType::OutOfBandTagConflict.into(),
-            &track.path,
-            witness,
-        );
-        sender.clear_file_signal(
-            CorpusFileSignalType::MtimeOnlyMismatch.into(),
-            &track.path,
-            witness,
-        );
-
-        affected_paths.push(abs_path.clone());
-    }
-
-    Ok(affected_paths)
-}
-
-/// Execute SetTrackTagsDb: set track tags in database only (DB-first pattern, step 1).
-///
-/// - Writes complete tag set to DB via set_track_tags()
-/// - Sets needs_disk_flush = TRUE
-///
-/// Should be followed by FlushTagsToDisk (in tag_edit) to sync to disk.
-fn execute_set_track_tags_db(
-    db: &Database,
-    track_id: i64,
-    tags: &[(String, String)],
-    witness: &MutationExecutionWitness,
-) -> Result<()> {
-    use crate::db_thread;
-
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-
-    // Get track path from DB (read-only)
+    // Get track info (need relative path for DB operations)
     let track = db.get_track_by_id(track_id)?
         .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
 
-    // Write tags to DB (full replacement)
-    sender.set_track_tags(&track.path, tags.to_vec(), witness);
+    // Read disk tags using TagSet
+    let disk_tagset = TagSet::from_file(abs_path)
+        .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
-    // Mark as needing disk flush
-    sender.set_needs_disk_flush(&track.path, true, witness);
+    // Update DB with disk tags via db_thread
+    sender.set_track_tags(&track.path, disk_tagset.into_vec(), witness);
+
+    // Read disk mtime using portable API (consistent with comparison code)
+    let file_metadata = std::fs::metadata(abs_path)
+        .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
+    let (mtime_secs, mtime_nanos) = file_metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+        .unwrap_or((0, 0));
+
+    // Update scan_state mtime via db_thread using (source, inode) key
+    sender.update_scan_state_mtime(
+        &track.source,
+        track.inode,
+        mtime_secs,
+        mtime_nanos,
+        witness,
+    );
+
+    // Clear tag_mismatches for this track via db_thread
+    sender.clear_tag_mismatches_for_track(&track.path, witness);
+
+    // Clear OOB signals via db_thread
+    sender.clear_file_signal(
+        CorpusFileSignalType::OutOfBandTagSync.into(),
+        &track.path,
+        witness,
+    );
+    sender.clear_file_signal(
+        CorpusFileSignalType::OutOfBandTagConflict.into(),
+        &track.path,
+        witness,
+    );
+    sender.clear_file_signal(
+        CorpusFileSignalType::MtimeOnlyMismatch.into(),
+        &track.path,
+        witness,
+    );
 
     Ok(())
 }
@@ -816,7 +795,7 @@ pub fn execute_single(
             metadata,
         } => execute_update_track(db, *track_id, path, metadata, witness),
 
-        // OOB resolution mutations
+        // OOB resolution mutations (batch, for legacy support)
         Mutation::AcknowledgeMtimeOnly { tracks } => {
             execute_acknowledge_mtime_only(db, tracks, witness).map(|_| ())
         }
@@ -825,22 +804,17 @@ pub fn execute_single(
             execute_acknowledge_inode_changed(db, tracks, witness).map(|_| ())
         }
 
-        Mutation::ApplyDbTagsToDisk { tracks } => {
-            execute_apply_db_tags_to_disk(db, tracks, witness).map(|_| ())
+        // Single-track tag sync mutations
+        Mutation::ApplyDbTagsToDisk { track_id, path } => {
+            execute_apply_db_tags_to_disk(db, *track_id, path, witness)
         }
 
-        Mutation::AssimilateDiskTagsToDb { tracks } => {
-            execute_assimilate_disk_tags_to_db(db, tracks, witness).map(|_| ())
+        Mutation::AssimilateDiskTagsToDb { track_id, path } => {
+            execute_assimilate_disk_tags_to_db(db, *track_id, path, witness)
         }
 
-        // DB-first tag pattern: SetTrackTagsDb is DB-only (fast), routed here for batching.
-        // FlushTagsToDisk is handled by tag_edit (file I/O).
-        Mutation::SetTrackTagsDb { track_id, tags } => {
-            execute_set_track_tags_db(db, *track_id, tags, witness)
-        }
-
+        // Note: SetTrackTagsDb is now handled by tag_edit.rs (spawns ApplyDbTagsToDisk)
         // Note: VerifyTags is now a Computation, not a Mutation.
-        // Use corpus::computations::execute_single() instead.
 
         _ => Err(anyhow::anyhow!("Not an indexing mutation")),
     };
@@ -855,6 +829,7 @@ pub fn execute_single(
         success,
         error,
         duration_ms: start.elapsed().as_millis() as u64,
+        spawn_mutations: Vec::new(), // Indexing mutations don't spawn
     }
 }
 

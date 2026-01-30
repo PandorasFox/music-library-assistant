@@ -1180,20 +1180,24 @@ impl App {
             return;
         }
 
-        // Use the dedicated batch mutations that properly handle multi-value tags
-        let (label, mutation) = match direction {
+        // Generate individual single-track mutations for each track
+        let (label, mutations): (&str, Vec<Mutation>) = match direction {
             OobSyncDirection::IndexToDisk => (
                 "Sync index tags → disk",
-                Mutation::ApplyDbTagsToDisk { tracks },
+                tracks.into_iter()
+                    .map(|(track_id, path)| Mutation::ApplyDbTagsToDisk { track_id, path })
+                    .collect(),
             ),
             OobSyncDirection::DiskToIndex => (
                 "Sync disk tags → index",
-                Mutation::AssimilateDiskTagsToDb { tracks },
+                tracks.into_iter()
+                    .map(|(track_id, path)| Mutation::AssimilateDiskTagsToDb { track_id, path })
+                    .collect(),
             ),
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, 0, label, vec![mutation]);
+            let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
         }
     }
 
@@ -1292,7 +1296,7 @@ impl App {
 
         let resolver = paths::get_resolver();
 
-        // Convert to (track_id, abs_path) pairs for the batch mutations
+        // Convert to (track_id, abs_path) pairs for individual mutations
         let tracks: Vec<(i64, std::path::PathBuf)> = files_data
             .iter()
             .map(|(track_id, path)| {
@@ -1301,20 +1305,24 @@ impl App {
             })
             .collect();
 
-        // Use the dedicated batch mutations that properly handle multi-value tags
-        let (label, mutation) = match button {
+        // Generate individual single-track mutations (batch scheduling at UI layer)
+        let (label, mutations): (&str, Vec<Mutation>) = match button {
             ResolutionButton::ApplyDb => (
                 "Apply DB tags → files",
-                Mutation::ApplyDbTagsToDisk { tracks },
+                tracks.into_iter()
+                    .map(|(track_id, path)| Mutation::ApplyDbTagsToDisk { track_id, path })
+                    .collect(),
             ),
             ResolutionButton::AssimilateDisk => (
                 "Assimilate file tags → DB",
-                Mutation::AssimilateDiskTagsToDb { tracks },
+                tracks.into_iter()
+                    .map(|(track_id, path)| Mutation::AssimilateDiskTagsToDb { track_id, path })
+                    .collect(),
             ),
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, 0, label, vec![mutation]);
+            let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
         }
 
         // Note: oob_conflict_state is NOT cleared - preserved for Cancel return

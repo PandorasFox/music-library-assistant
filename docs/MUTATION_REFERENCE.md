@@ -17,24 +17,42 @@ Mutations are operator-confirmed changes to the corpus or index. All mutations:
 
 ### Tag Operations
 
-#### DB-First Pattern (Recommended)
+#### DB-First Pattern with Spawn Chaining
 
-| Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
-|----------|---------------------|-----------------|-----------------|-------|
-| SetTrackTagsDb | — | — | — | Step 1: Write complete tag set to DB, set needs_disk_flush=true |
-| FlushTagsToDisk | UpdateCorpusFileSignals | — | (per-file signals wiped), needs_disk_flush | Step 2: Read from DB, write to disk, clear needs_disk_flush |
+| Mutation | Spawns Mutations | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
+|----------|------------------|---------------------|-----------------|-----------------|-------|
+| SetTrackTagsDb | **ApplyDbTagsToDisk** | — | — | — | Write tags to DB, set needs_disk_flush=true, spawn disk sync |
+| ApplyDbTagsToDisk | — | UpdateCorpusFileSignals | — | (per-file signals wiped), needs_disk_flush | Read from DB, write to disk, clear needs_disk_flush |
+| AssimilateDiskTagsToDb | — | UpdateCorpusFileSignals | — | (per-file signals wiped) | Read from disk, write to DB |
 
-The DB-first pattern separates database writes from file I/O:
+The DB-first pattern with spawn chaining:
 
-1. **SetTrackTagsDb**: Fast, DB-only. Replaces all tags for a track in the database and sets `needs_disk_flush=true`.
-2. **FlushTagsToDisk**: Reads tags from DB (source of truth), writes to disk, clears `needs_disk_flush`.
+1. **SetTrackTagsDb**: Write tags to DB (single track), set `needs_disk_flush=true`, **spawn** ApplyDbTagsToDisk.
+2. **ApplyDbTagsToDisk**: Read tags from DB (source of truth), write to disk, clear `needs_disk_flush`.
+
+All tag mutations operate on **single tracks** (not batches). Batch scheduling happens at the UI layer:
+
+```rust
+// Tag editor: 10 edited tracks = 10 SetTrackTagsDb queued
+// Each spawns ApplyDbTagsToDisk → 10 more mutations auto-queued
+for (track_id, tags) in edited_tracks {
+    mutations.push(Mutation::SetTrackTagsDb { track_id, tags });
+}
+
+// OOB sync: 100 tracks = 100 individual mutations queued
+for (track_id, path) in selected_tracks {
+    mutations.push(Mutation::ApplyDbTagsToDisk { track_id, path });
+}
+```
 
 Benefits:
 - DB is always ahead of or in sync with disk
 - If disk write fails/is interrupted, `needs_disk_flush=true` enables recovery via OOB flow
-- Idempotent: FlushTagsToDisk can be safely re-run (reads fresh DB state)
+- Single-track mutations enable parallelism across worker threads
+- Spawn chaining keeps DB write and disk sync atomic from user perspective
+- UI shows granular progress (100 tracks = 100+ mutations visible)
 
-Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, re-queue FlushTagsToDisk for each.
+Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue ApplyDbTagsToDisk for each.
 
 ### Indexing Operations
 
@@ -76,8 +94,8 @@ Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, re-queue
 |----------|---------------------|-----------------|-----------------|-------|
 | AcknowledgeMtimeOnly | UpdateCorpusFileSignals | — | MtimeOnlyMismatch | Update scan_state mtime, acknowledge touch |
 | AcknowledgeInodeChanged | UpdateCorpusFileSignals | — | InodeChanged | Update tracks.inode and scan_state for replaced files |
-| ApplyDbTagsToDisk | UpdateCorpusFileSignals | — | OutOfBandTagSync, OutOfBandTagConflict, tag_mismatches | Write DB tags to file |
-| AssimilateDiskTagsToDb | UpdateCorpusFileSignals | — | OutOfBandTagSync, OutOfBandTagConflict, tag_mismatches | Import disk tags to DB |
+
+Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutations documented in Tag Operations above. They clear OutOfBandTagSync, OutOfBandTagConflict, and tag_mismatch signals.
 
 ### Administrative Operations
 
@@ -88,6 +106,34 @@ Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, re-queue
 ---
 
 ## Key Patterns
+
+### Spawn Chaining
+
+Mutations can spawn follow-up mutations that execute automatically:
+
+```
+SetTrackTagsDb { track_id, tags }
+    │
+    ├── 1. Write tags to DB
+    ├── 2. Set needs_disk_flush = true
+    └── 3. Return spawn instruction: ApplyDbTagsToDisk { track_id, path }
+              │
+              └── Witch queues spawned mutation automatically
+                        │
+                        ├── 1. Read tags from DB
+                        ├── 2. Write to disk
+                        └── 3. Clear needs_disk_flush
+```
+
+The spawn chain is maintained via `SpawnedMutationWitness`:
+- Only creatable from `MutationExecutionWitness::spawn()`
+- Proves spawned mutations originate from authorized mutation execution
+- Zero runtime cost (ZST compiles away)
+
+Spawn chaining ensures:
+- DB writes and disk syncs stay atomic from user perspective
+- Interruption between steps leaves `needs_disk_flush=true` for recovery
+- Single-track mutations enable parallel execution
 
 ### Post-Mutation Signal Flow
 

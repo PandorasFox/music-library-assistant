@@ -305,7 +305,7 @@ enum SignalWriteOp {
 
     /// Set the needs_disk_flush flag for a track.
     /// Used by DB-first tag editing pattern: set TRUE after SetTrackTagsDb,
-    /// set FALSE after FlushTagsToDisk completes successfully.
+    /// set FALSE after ApplyDbTagsToDisk completes successfully.
     SetNeedsDiskFlush {
         path: String,
         value: bool,
@@ -926,7 +926,7 @@ impl SignalWriteSender {
     ///
     /// Used by the DB-first tag editing pattern:
     /// - SetTrackTagsDb sets this to TRUE after writing tags to DB
-    /// - FlushTagsToDisk sets this to FALSE after syncing to disk
+    /// - ApplyDbTagsToDisk sets this to FALSE after syncing to disk
     /// - Tracks with TRUE can be recovered via OOB flow
     pub fn set_needs_disk_flush(
         &self,

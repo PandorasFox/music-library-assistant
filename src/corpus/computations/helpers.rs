@@ -16,8 +16,26 @@ use super::types::ComputationWitness;
 // File Type Detection
 // ============================================================================
 
+/// Check if a filename is a macOS resource fork (AppleDouble) file.
+///
+/// These are metadata files created by macOS on non-HFS+ filesystems (NFS, SMB, etc.)
+/// with names like `._filename.mp3`. They should be skipped during corpus scanning.
+pub(super) fn is_macos_resource_fork(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with("._"))
+        .unwrap_or(false)
+}
+
 /// Check if path has audio file extension.
+///
+/// Also filters out macOS resource fork files (`._*`) which appear on NFS/SMB mounts.
 pub(super) fn is_audio_file(path: &Path) -> bool {
+    // Skip macOS resource fork files (._filename.ext)
+    if is_macos_resource_fork(path) {
+        return false;
+    }
+
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))

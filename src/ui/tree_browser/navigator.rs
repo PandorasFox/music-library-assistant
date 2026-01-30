@@ -377,7 +377,20 @@ impl TreeNavigator {
     }
 
     /// Check if a path is an audio file.
+    ///
+    /// Excludes macOS resource fork files (`._*`) which appear on NFS/SMB mounts.
     fn is_audio_file(&self, path: &Path) -> bool {
+        // Skip macOS resource fork (AppleDouble) files
+        let is_resource_fork = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("._"))
+            .unwrap_or(false);
+
+        if is_resource_fork {
+            return false;
+        }
+
         path.is_file()
             && path
                 .extension()

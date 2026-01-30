@@ -593,22 +593,17 @@ pub fn execute_acknowledge_inode_changed(
 
 /// Execute ApplyDbTagsToDisk mutation.
 ///
-/// For each track: writes DB tags to disk file, updates scan_state mtime,
-/// clears tag_mismatches and OOB signals. Used to reject disk-side changes
-/// and restore DB state to disk.
+/// For each track: writes DB tags to disk file via `write_file_tags()`,
+/// which handles scan_state mtime, tag_mismatches, and OOB signal cleanup.
+/// Used to reject disk-side changes and restore DB state to disk.
 pub fn execute_apply_db_tags_to_disk(
     db: &Database,
     track_ids: &[i64],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
-    use crate::corpus::db::types::CorpusFileSignalType;
     use crate::corpus::tags::{write_file_tags, TagSet};
-    use crate::db_thread;
-    use std::os::unix::fs::MetadataExt;
 
     let resolver = paths::get_resolver();
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let token = super::sealed::MutationToken::new();
     let mut affected_paths = Vec::new();
 
@@ -629,42 +624,9 @@ pub fn execute_apply_db_tags_to_disk(
         );
 
         // Write tags to disk using the consolidated write path
-        write_file_tags(&abs_path, &tag_set, &token)
+        // (also clears OOB signals, tag_mismatches, and updates scan_state mtime)
+        write_file_tags(&abs_path, &tag_set, &token, witness)
             .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
-
-        // Read new disk mtime after write
-        let file_metadata = std::fs::metadata(&abs_path)
-            .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
-        let mtime_secs = file_metadata.mtime();
-        let mtime_nanos = file_metadata.mtime_nsec() as i64;
-
-        // Update scan_state mtime via db_thread
-        sender.update_scan_state_mtime(
-            &track.path,
-            mtime_secs,
-            mtime_nanos,
-            witness,
-        );
-
-        // Clear tag_mismatches for this track via db_thread
-        sender.clear_tag_mismatches_for_track(&track.path, witness);
-
-        // Clear OOB signals via db_thread
-        sender.clear_file_signal(
-            CorpusFileSignalType::OutOfBandTagSync.into(),
-            &track.path,
-            witness,
-        );
-        sender.clear_file_signal(
-            CorpusFileSignalType::OutOfBandTagConflict.into(),
-            &track.path,
-            witness,
-        );
-        sender.clear_file_signal(
-            CorpusFileSignalType::MtimeOnlyMismatch.into(),
-            &track.path,
-            witness,
-        );
 
         affected_paths.push(abs_path);
     }

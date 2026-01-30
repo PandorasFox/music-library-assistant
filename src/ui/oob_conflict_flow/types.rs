@@ -347,7 +347,7 @@ impl OobConflictState {
 /// then returns entries for all fields where the values differ.
 /// Properly handles multi-value tags by comparing value sets per key.
 pub fn compute_tag_diff(
-    db: &crate::corpus::db::Database,
+    read_db: &crate::corpus::db::ReadOnlyDb<'_>,
     track_id: i64,
     abs_path: &std::path::Path,
 ) -> Vec<TagMismatchEntry> {
@@ -355,7 +355,7 @@ pub fn compute_tag_diff(
     use std::collections::HashSet;
 
     // Get DB tags as TagSet
-    let db_tags = match db.get_track_tags(track_id) {
+    let db_tags = match read_db.get_track_tags(track_id) {
         Ok(tags) => tags,
         Err(_) => return Vec::new(),
     };

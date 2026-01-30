@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 
 /// Lossy file types that should be converted to Opus.
 pub const LOSSY_TYPES: &[&str] = &["mp3", "aac", "wma", "m4a"];
@@ -71,8 +71,8 @@ pub struct FormatStdState {
 
 impl FormatStdState {
     /// Create a new state, querying the database for file counts.
-    pub fn new(db: &Database) -> Self {
-        let file_counts = db
+    pub fn new(read_db: &ReadOnlyDb<'_>) -> Self {
+        let file_counts = read_db
             .get_track_counts_by_file_type()
             .unwrap_or_default();
 

@@ -430,15 +430,6 @@ impl<'a> ReadOnlyDb<'a> {
         Self { db }
     }
 
-    /// Get the underlying Database reference.
-    ///
-    /// **For internal crate use only** - use the pass-through methods on
-    /// `ReadOnlyDb` for common queries. This escape hatch is for specialized
-    /// internal queries that aren't exposed directly.
-    pub(crate) fn inner(&self) -> &Database {
-        self.db
-    }
-
     // =========================================================================
     // Track Queries
     // =========================================================================
@@ -471,6 +462,21 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get tags for a track.
     pub fn get_track_tags(&self, track_id: i64) -> Result<Vec<super::types::TrackTag>> {
         self.db.get_track_tags(track_id)
+    }
+
+    /// Get a specific tag value for a track (first value if multi-value).
+    pub fn get_track_tag_value(&self, track_id: i64, tag_name: &str) -> Result<Option<String>> {
+        self.db.get_track_tag_value(track_id, tag_name)
+    }
+
+    /// Get all tracks with their tags (for search functionality).
+    pub fn get_all_tracks_with_tags(&self) -> Result<Vec<(super::types::Track, std::collections::HashMap<String, String>)>> {
+        self.db.get_all_tracks_with_tags()
+    }
+
+    /// Get track counts grouped by file type.
+    pub fn get_track_counts_by_file_type(&self) -> Result<std::collections::HashMap<String, i64>> {
+        self.db.get_track_counts_by_file_type()
     }
 
     // =========================================================================
@@ -514,5 +520,48 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get tag mismatches for a track.
     pub fn get_tag_mismatches_for_track(&self, track_id: i64) -> Result<Vec<(String, Option<String>, Option<String>)>> {
         self.db.get_tag_mismatches_for_track(track_id)
+    }
+
+    // =========================================================================
+    // Deploy Queries
+    // =========================================================================
+
+    /// Get files ready for deployment.
+    pub fn get_deploy_ready_files(&self) -> Result<Vec<super::types::DeploySignalFile>> {
+        self.db.get_deploy_ready_files()
+    }
+
+    /// Get healthy deployed files.
+    pub fn get_deployed_healthy_files(&self) -> Result<Vec<super::types::DeploySignalFile>> {
+        self.db.get_deployed_healthy_files()
+    }
+
+    /// Get stale library files.
+    pub fn get_library_stale_files(&self) -> Result<Vec<super::types::StaleSignalFile>> {
+        self.db.get_library_stale_files()
+    }
+
+    /// Get leftover library files.
+    pub fn get_library_leftover_files(&self) -> Result<Vec<super::types::LeftoverSignalFile>> {
+        self.db.get_library_leftover_files()
+    }
+
+    /// Get deploy conflict groups.
+    pub fn get_deploy_conflict_groups(&self) -> Result<Vec<super::types::ConflictGroup>> {
+        self.db.get_deploy_conflict_groups()
+    }
+
+    /// Get paths of missing files.
+    pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
+        self.db.get_missing_file_paths()
+    }
+
+    // =========================================================================
+    // Library Scan Queries
+    // =========================================================================
+
+    /// Get all library scan entries.
+    pub fn get_library_scan_files_all(&self) -> Result<Vec<library_scan::LibraryScanEntry>> {
+        self.db.get_library_scan_files_all()
     }
 }

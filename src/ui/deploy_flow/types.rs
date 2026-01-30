@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::corpus::db::types::{ConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use anyhow::Result;
 
 /// Directory aggregate for grouped file display.
@@ -47,12 +47,12 @@ impl DeployModalData {
     ///
     /// Called once when the modal opens. All subsequent renders
     /// use this cached data.
-    pub fn load(db: &Database) -> Result<Self> {
-        let healthy = db.get_deployed_healthy_files()?;
-        let new = db.get_deploy_ready_files()?;
-        let conflicts = db.get_deploy_conflict_groups()?;
-        let leftover = db.get_library_leftover_files()?;
-        let stale = db.get_library_stale_files()?;
+    pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
+        let healthy = read_db.get_deployed_healthy_files()?;
+        let new = read_db.get_deploy_ready_files()?;
+        let conflicts = read_db.get_deploy_conflict_groups()?;
+        let leftover = read_db.get_library_leftover_files()?;
+        let stale = read_db.get_library_stale_files()?;
 
         // Aggregate new files by directory (using corpus_path)
         let new_by_dir = Self::aggregate_by_directory(

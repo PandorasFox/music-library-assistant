@@ -19,7 +19,7 @@ use ratatui::Frame;
 use crate::ui::widgets::centered_rect_fixed;
 
 use crate::corpus::db::types::SignalType;
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths;
 use crate::logging::log_general;
@@ -57,9 +57,9 @@ impl IntakeConfirmationState {
     /// to get the list of files that need indexing.
     ///
     /// Returns None if there are no unindexed files.
-    pub fn gather(db: &Database, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
+    pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
         // Get all UnindexedFile signals - these are pre-computed during Awakening
-        let issues = match db.get_signals(Some(SignalType::UnindexedFile)) {
+        let issues = match read_db.get_signals(Some(SignalType::UnindexedFile)) {
             Ok(i) => i,
             Err(e) => {
                 crate::logging::log_error(format!(

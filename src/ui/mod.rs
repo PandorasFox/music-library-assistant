@@ -247,7 +247,7 @@ impl App {
                             if let Some(ref mut browser) = self.tree_browser {
                                 if let Some(ref mut witch) = self.witch {
                                     let read_db = witch.read_db();
-                                    browser.apply_filter(condition, read_db.inner());
+                                    browser.apply_filter(condition, &read_db);
                                 }
                             }
                         }
@@ -525,7 +525,7 @@ impl App {
 
     pub(super) fn start_format_standardization(&mut self) {
         let read_db = self.read_db();
-        self.format_std = Some(format_standardization::FormatStdState::new(read_db.inner()));
+        self.format_std = Some(format_standardization::FormatStdState::new(&read_db));
         self.mode = UiMode::FormatStandardization;
     }
 

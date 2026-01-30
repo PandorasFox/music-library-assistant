@@ -24,9 +24,14 @@
 //! - Duplicate any of this logic
 
 use anyhow::{Context, Result};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+use crate::corpus::db::types::CorpusFileSignalType;
 use crate::corpus::mutations::MutationToken;
+use crate::corpus::paths;
+use crate::db_thread;
+use crate::witch::MutationExecutionWitness;
 
 // =============================================================================
 // TagSet - The canonical representation of tags
@@ -284,6 +289,13 @@ pub enum DiffClassification {
 /// Preserves non-text data (pictures, binary fields).
 /// Removes legacy ID3v1 tags to avoid encoding issues.
 ///
+/// After successful disk write, automatically:
+/// - Updates `scan_state.mtime` to match the new file mtime
+/// - Clears all OOB signals (OutOfBandTagSync, OutOfBandTagConflict, MtimeOnlyMismatch)
+/// - Clears tag_mismatches for this file
+///
+/// Signals and mismatches will be recomputed by VerifyTags in the next computation cycle.
+///
 /// # Multi-value Support
 ///
 /// The TagSet naturally supports multiple values per key (e.g., multiple genres).
@@ -294,8 +306,14 @@ pub enum DiffClassification {
 /// # Authorization
 ///
 /// Requires `MutationToken` proving this is called from mutation context.
+/// Requires `MutationExecutionWitness` to authorize DB updates.
 /// Do not call from UI code or computations.
-pub fn write_file_tags(path: &Path, tags: &TagSet, _token: &MutationToken) -> Result<()> {
+pub fn write_file_tags(
+    path: &Path,
+    tags: &TagSet,
+    _token: &MutationToken,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::{AudioFile, TaggedFileExt};
     use lofty::probe::Probe;
@@ -347,6 +365,43 @@ pub fn write_file_tags(path: &Path, tags: &TagSet, _token: &MutationToken) -> Re
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
 
+    // Update scan_state mtime after successful disk write
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized during tag write"))?;
+    let resolver = paths::get_resolver();
+    let rel_path = resolver
+        .to_relative(path)
+        .ok_or_else(|| anyhow::anyhow!("Path {} not in corpus root", path.display()))?;
+    let rel_path_str = rel_path.to_string_lossy();
+    let file_metadata = std::fs::metadata(path)
+        .with_context(|| format!("Failed to read metadata after write: {}", path.display()))?;
+    sender.update_scan_state_mtime(
+        &rel_path_str,
+        file_metadata.mtime(),
+        file_metadata.mtime_nsec() as i64,
+        witness,
+    );
+
+    // Clear OOB/tag signals after successful write - they'll be recomputed next cycle
+    // This ensures mutations don't leave stale signals behind
+    sender.clear_file_signal(
+        CorpusFileSignalType::OutOfBandTagSync.into(),
+        &rel_path_str,
+        witness,
+    );
+    sender.clear_file_signal(
+        CorpusFileSignalType::OutOfBandTagConflict.into(),
+        &rel_path_str,
+        witness,
+    );
+    sender.clear_file_signal(
+        CorpusFileSignalType::MtimeOnlyMismatch.into(),
+        &rel_path_str,
+        witness,
+    );
+    // Clear tag mismatches - will be recomputed by VerifyTags
+    sender.clear_tag_mismatches_for_track(&rel_path_str, witness);
+
     Ok(())
 }
 
@@ -374,6 +429,7 @@ pub fn apply_edits_to_file(
     path: &Path,
     edits: &[(String, Option<String>, Option<String>)], // (tag_name, old_value, new_value)
     token: &MutationToken,
+    witness: &MutationExecutionWitness,
 ) -> Result<()> {
     // Read current tags
     let current = TagSet::from_file(path)?;
@@ -398,7 +454,7 @@ pub fn apply_edits_to_file(
 
     // Write back
     let new_tags = TagSet::new(tags);
-    write_file_tags(path, &new_tags, token)
+    write_file_tags(path, &new_tags, token, witness)
 }
 
 // =============================================================================

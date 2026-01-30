@@ -60,7 +60,12 @@ fn execute_db_only(
 ///
 /// Reads existing tags, merges new ones in, and writes back.
 /// Uses the consolidated tag writing path in corpus::tags.
-fn execute_disk_only(path: &Path, tags: &[(String, String)], token: &MutationToken) -> Result<()> {
+fn execute_disk_only(
+    path: &Path,
+    tags: &[(String, String)],
+    token: &MutationToken,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
     // Read existing tags
     let existing = TagSet::from_file(path)
         .with_context(|| format!("Failed to read existing tags from {}", path.display()))?;
@@ -77,7 +82,7 @@ fn execute_disk_only(path: &Path, tags: &[(String, String)], token: &MutationTok
     let merged = TagSet::new(final_tags.into_iter().collect::<Vec<_>>());
 
     // Write to disk using the consolidated write path
-    write_file_tags(path, &merged, token)
+    write_file_tags(path, &merged, token, witness)
 }
 
 /// Filter out no-op edits where old_value equals new_value.
@@ -239,7 +244,7 @@ fn execute_combined_single_value(
         .collect();
 
     // Apply edits to file (reads current, applies edits, writes back)
-    apply_edits_to_file(path, &edit_triples, token)
+    apply_edits_to_file(path, &edit_triples, token, witness)
         .with_context(|| format!("Failed to apply tag edits to {}", path.display()))?;
 
     // Update database via signal_sender
@@ -324,7 +329,7 @@ fn execute_combined_multi_value(
 
     // 5. Write to disk using the consolidated write path
     let final_tagset = TagSet::new(new_tags);
-    write_file_tags(path, &final_tagset, token)
+    write_file_tags(path, &final_tagset, token, witness)
         .context("Failed to write multi-value tags to file")?;
 
     // 6. Update database via signal_sender
@@ -389,7 +394,7 @@ pub fn execute_single(
 
         Mutation::TagFlushToDisk { path, tags } => {
             let token = MutationToken::new();
-            execute_disk_only(path, tags, &token)
+            execute_disk_only(path, tags, &token, witness)
         }
 
         Mutation::TagEditAndFlush {

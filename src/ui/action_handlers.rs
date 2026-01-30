@@ -105,7 +105,7 @@ impl App {
                 // Fall back to loading from database
                 self.witch.as_mut().and_then(|w| {
                     let read_db = w.read_db();
-                    deploy_flow::DeployModalData::load(read_db.inner()).ok()
+                    deploy_flow::DeployModalData::load(&read_db).ok()
                 })
             })
             .unwrap_or_default();
@@ -144,7 +144,7 @@ impl App {
                 // Execute search with db access - take ownership temporarily to avoid borrow conflict
                 if let Some(mut search) = self.tag_search.take() {
                     let read_db = self.read_db();
-                    search.execute_search(read_db.inner());
+                    search.execute_search(&read_db);
                     self.tag_search = Some(search);
                 }
             }
@@ -519,7 +519,7 @@ impl App {
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                missing_file_flow::MissingFileModalData::load(read_db.inner()).ok()
+                missing_file_flow::MissingFileModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
@@ -815,7 +815,7 @@ impl App {
                 let read_db = w.read_db();
                 let resolver = paths::get_resolver();
                 let abs_path = resolver.resolve(std::path::Path::new(&path));
-                state.current_diff = oob_conflict_flow::types::compute_tag_diff(read_db.inner(), track_id, &abs_path);
+                state.current_diff = oob_conflict_flow::types::compute_tag_diff(&read_db, track_id, &abs_path);
             }
         }
 
@@ -1063,7 +1063,7 @@ impl App {
 
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(&path));
-        oob_conflict_flow::types::compute_tag_diff(read_db.inner(), track_id, &abs_path)
+        oob_conflict_flow::types::compute_tag_diff(&read_db, track_id, &abs_path)
     }
 
     /// Stage resolution mutations for files in the active bucket.
@@ -1889,20 +1889,23 @@ impl App {
             return;
         };
 
-        // Get track paths from database (resolved to absolute for mutations)
+        // Get track paths and current tag values from database
         let read_db = witch.read_db();
         let resolver = paths::get_resolver();
-        let mut track_paths = std::collections::HashMap::new();
+        let tag_name = &state.data.tag_name;
+        let mut track_info = std::collections::HashMap::new();
         for &track_id in &state.data.track_ids {
             if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
                 // Resolve relative DB path to absolute for filesystem operations
                 let abs_path = resolver.resolve(std::path::Path::new(&track.path));
-                track_paths.insert(track_id, abs_path);
+                // Get current tag value for this track
+                let current_value = read_db.get_track_tag_value(track_id, tag_name).ok().flatten();
+                track_info.insert(track_id, (abs_path, current_value));
             }
         }
 
-        // Generate mutations
-        let mutations = state.mutations_with_paths(&track_paths);
+        // Generate mutations - only for tracks whose current value is a selected variant
+        let mutations = state.mutations_with_paths(&track_info);
         if mutations.is_empty() {
             // No mutations for this cluster - that's OK, skip it
             return;

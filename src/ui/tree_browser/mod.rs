@@ -39,7 +39,7 @@ use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::ui::filter_popup::FilterCondition;
 
 pub use actions::TreeBrowserAction;
@@ -167,14 +167,14 @@ impl TreeBrowserState {
     ///
     /// Queries the database for tracks matching the filter condition, then
     /// computes the set of matching paths plus all ancestor directories.
-    pub fn apply_filter(&mut self, condition: FilterCondition, db: &Database) {
+    pub fn apply_filter(&mut self, condition: FilterCondition, read_db: &ReadOnlyDb<'_>) {
         if !condition.is_active() {
             self.clear_filter();
             return;
         }
 
         // Query all tracks from database
-        let tracks = match db.get_all_tracks(None) {
+        let tracks = match read_db.get_all_tracks(None) {
             Ok(t) => t,
             Err(_) => {
                 self.clear_filter();
@@ -186,7 +186,7 @@ impl TreeBrowserState {
         let mut matching_paths: Vec<PathBuf> = Vec::new();
         for track in tracks {
             // Get tags for this track and convert to HashMap
-            let tags: HashMap<String, String> = db
+            let tags: HashMap<String, String> = read_db
                 .get_track_tags(track.id.unwrap_or(0))
                 .unwrap_or_default()
                 .into_iter()

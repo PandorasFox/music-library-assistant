@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::corpus::db::types::{CorpusSummary, InsightsData};
-use crate::corpus::db::Database;
+use crate::corpus::db::{Database, ReadOnlyDb};
 use crate::ui::deploy_flow::DeployModalData;
 
 // ============================================================================
@@ -417,7 +417,8 @@ impl UiReadCache {
                 // Open fresh read-only connection on worker thread
                 if let Ok(db_path) = config::get_db_path() {
                     if let Ok(db) = Database::open_read_only(&db_path) {
-                        if let Ok(data) = DeployModalData::load(&db) {
+                        let read_db = ReadOnlyDb::new(&db);
+                        if let Ok(data) = DeployModalData::load(&read_db) {
                             writer.complete(data);
                             IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
                             return;

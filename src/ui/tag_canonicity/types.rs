@@ -339,9 +339,13 @@ impl TagCanonicalityState {
 
     /// Generate mutations for the selected variants → canonical value.
     ///
-    /// Requires track_paths: a map from track_id to path for mutation generation.
-    /// If track_paths is empty, returns empty mutations (caller must populate).
-    pub fn mutations_with_paths(&self, track_paths: &std::collections::HashMap<i64, PathBuf>) -> Vec<Mutation> {
+    /// Requires track_info: a map from track_id to (path, current_tag_value).
+    /// Each track's current tag value is checked against selected variants.
+    /// Only tracks whose current value is a selected non-canonical variant get edits.
+    pub fn mutations_with_paths(
+        &self,
+        track_info: &std::collections::HashMap<i64, (PathBuf, Option<String>)>,
+    ) -> Vec<Mutation> {
         let canonical = self.canonical_input.value().trim();
         if canonical.is_empty() {
             return Vec::new();
@@ -354,29 +358,37 @@ impl TagCanonicalityState {
 
         let mut mutations = Vec::new();
 
-        // For each track, create a mutation if its current value is a selected variant
-        // Note: In practice, we'd need to know which variant each track has
-        // For now, we create edits for all selected variants on all tracks
+        // For each track, create a mutation only if its current value is a selected variant
         for &track_id in &self.data.track_ids {
-            if let Some(path) = track_paths.get(&track_id) {
-                // Create tag edits for each selected variant → canonical
-                let edits: Vec<TagEdit> = selected_variants
-                    .iter()
-                    .filter(|&&v| v != canonical)
-                    .map(|&v| TagEdit {
-                        tag_name: self.data.tag_name.clone(),
-                        old_value: Some(v.to_string()),
-                        new_value: Some(canonical.to_string()),
-                    })
-                    .collect();
+            if let Some((path, current_value)) = track_info.get(&track_id) {
+                // Only create an edit if:
+                // 1. Track has a value for this tag
+                // 2. That value is one of the selected variants
+                // 3. That value is not already the canonical value
+                let Some(ref current) = current_value else {
+                    continue; // Track doesn't have this tag - skip
+                };
 
-                if !edits.is_empty() {
-                    mutations.push(Mutation::TagEditAndFlush {
-                        track_id,
-                        path: path.clone(),
-                        edits,
-                    });
+                if current == canonical {
+                    continue; // Already canonical - no edit needed
                 }
+
+                if !selected_variants.contains(current.as_str()) {
+                    continue; // Current value is not a selected variant - skip
+                }
+
+                // Create a single edit for this track's actual current value
+                let edit = TagEdit {
+                    tag_name: self.data.tag_name.clone(),
+                    old_value: Some(current.clone()),
+                    new_value: Some(canonical.to_string()),
+                };
+
+                mutations.push(Mutation::TagEditAndFlush {
+                    track_id,
+                    path: path.clone(),
+                    edits: vec![edit],
+                });
             }
         }
 

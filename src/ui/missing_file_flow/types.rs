@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 
 /// A missing corpus file that can be restored from library.
@@ -55,16 +55,16 @@ impl MissingFileModalData {
     /// Load and categorize missing files from the database.
     ///
     /// A file is restorable if its inode exists in library_scan_state.
-    pub fn load(db: &Database) -> Result<Self> {
+    pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
         // Step 1: Get all MissingFile signals (issue_key = corpus path)
-        let missing_paths = db.get_missing_file_paths()?;
+        let missing_paths = read_db.get_missing_file_paths()?;
 
         if missing_paths.is_empty() {
             return Ok(Self::default());
         }
 
         // Step 2: Build inode -> library_path map from library_scan_state
-        let library_files = db.get_library_scan_files_all()?;
+        let library_files = read_db.get_library_scan_files_all()?;
         let inode_to_library: HashMap<i64, String> = library_files
             .into_iter()
             .map(|e| (e.inode, e.file_path.to_string_lossy().to_string()))
@@ -76,7 +76,7 @@ impl MissingFileModalData {
 
         for corpus_path in missing_paths {
             // Get track info for this path
-            let track = match db.get_track_by_path(&corpus_path)? {
+            let track = match read_db.get_track_by_path(&corpus_path)? {
                 Some(t) => t,
                 None => continue, // Signal refers to non-existent track, skip
             };

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::corpus::db::{Database, Track};
+use crate::corpus::db::{ReadOnlyDb, Track};
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 
@@ -272,9 +272,9 @@ impl TagSearchState {
     }
 
     /// Execute the search query.
-    pub fn execute_search(&mut self, db: &Database) {
+    pub fn execute_search(&mut self, read_db: &ReadOnlyDb<'_>) {
         // Build and execute the query
-        let mut results = self.query_database(db);
+        let mut results = self.query_database(read_db);
 
         // Sort by corpus path (deployment path sorting disabled)
         // TODO: Re-enable deployment path sorting when corpus::deploy is available
@@ -293,9 +293,9 @@ impl TagSearchState {
     }
 
     /// Query the database based on conditions.
-    fn query_database(&self, db: &Database) -> Vec<TrackWithTags> {
+    fn query_database(&self, read_db: &ReadOnlyDb<'_>) -> Vec<TrackWithTags> {
         // Get all tracks with tags
-        let all_tracks = db.get_all_tracks_with_tags().unwrap_or_default();
+        let all_tracks = read_db.get_all_tracks_with_tags().unwrap_or_default();
 
         // Convert to TrackWithTags and filter by conditions
         all_tracks

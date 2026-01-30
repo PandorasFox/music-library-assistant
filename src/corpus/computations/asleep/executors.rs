@@ -358,6 +358,37 @@ pub fn execute_verify_mtime(
     )
 }
 
+/// Check if a file's disk mtime differs from what's stored in scan_state.
+///
+/// Uses the portable API (extract_mtime) for consistency with ScanCorpusDirectory.
+/// Returns true if mtime differs or if we can't determine (fail-safe to emit signal).
+fn check_mtime_differs(read_only_db: &Database, track_id: i64, path: &Path) -> bool {
+    // Get track to find source and inode
+    let track = match read_only_db.get_track_by_id(track_id) {
+        Ok(Some(t)) => t,
+        _ => return true, // Can't verify, assume differs (fail-safe)
+    };
+
+    // Get scan_state entry for this track
+    let scan_state = match read_only_db.get_scan_state_batch(&track.source, &[track.inode]) {
+        Ok(map) => match map.get(&track.inode) {
+            Some(entry) => entry.clone(),
+            None => return true, // Not in scan_state, assume differs
+        },
+        Err(_) => return true, // Query failed, assume differs
+    };
+
+    // Get current disk mtime using portable API (same as ScanCorpusDirectory)
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return true, // Can't read file, assume differs
+    };
+    let (disk_secs, disk_nanos) = extract_mtime(&metadata);
+
+    // Compare
+    scan_state.mtime_secs != disk_secs || scan_state.mtime_nanos != disk_nanos
+}
+
 // ============================================================================
 // Verify Tags
 // ============================================================================
@@ -414,34 +445,66 @@ pub fn execute_verify_tags(
         Ok(verify_result) => {
             // Full classification based on TagVerifyResult
             if verify_result.is_clean() {
-                // Tags match exactly - this is a mtime-only change
-                // Requires operator acknowledgement before marking healthy
-                log_general(format!(
-                    "[COMPUTE] VerifyTags: mtime-only change for track {} ({})",
-                    track_id, path.display()
-                ));
-                ensure_file_signal_if_missing(
-                    read_only_db,
-                    &sender,
-                    CorpusFileSignalType::MtimeOnlyMismatch.into(),
-                    &rel_str,
-                    witness,
-                );
-                // Clear mutually exclusive signals
-                drop_stale_file_signal(
-                    read_only_db,
-                    &sender,
-                    CorpusFileSignalType::OutOfBandTagConflict.into(),
-                    &rel_str,
-                    witness,
-                );
-                drop_stale_file_signal(
-                    read_only_db,
-                    &sender,
-                    CorpusFileSignalType::OutOfBandTagSync.into(),
-                    &rel_str,
-                    witness,
-                );
+                // Tags match exactly - but we need to check if mtime actually differs
+                // (in force_check mode, VerifyTags runs even when mtime matches)
+                let mtime_actually_differs = check_mtime_differs(read_only_db, track_id, path);
+
+                if mtime_actually_differs {
+                    // Mtime changed but tags are identical - requires operator acknowledgement
+                    log_general(format!(
+                        "[COMPUTE] VerifyTags: mtime-only change for track {} ({})",
+                        track_id, path.display()
+                    ));
+                    ensure_file_signal_if_missing(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::MtimeOnlyMismatch.into(),
+                        &rel_str,
+                        witness,
+                    );
+                    // Clear mutually exclusive signals
+                    drop_stale_file_signal(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::OutOfBandTagConflict.into(),
+                        &rel_str,
+                        witness,
+                    );
+                    drop_stale_file_signal(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::OutOfBandTagSync.into(),
+                        &rel_str,
+                        witness,
+                    );
+                } else {
+                    // Tags match AND mtime matches - file is healthy, clear all OOB signals
+                    log_general(format!(
+                        "[COMPUTE] VerifyTags: file healthy for track {} ({})",
+                        track_id, path.display()
+                    ));
+                    drop_stale_file_signal(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::MtimeOnlyMismatch.into(),
+                        &rel_str,
+                        witness,
+                    );
+                    drop_stale_file_signal(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::OutOfBandTagConflict.into(),
+                        &rel_str,
+                        witness,
+                    );
+                    drop_stale_file_signal(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::OutOfBandTagSync.into(),
+                        &rel_str,
+                        witness,
+                    );
+                }
             } else if verify_result.is_conflict() {
                 // Value conflicts or mixed-direction extras - requires operator decision
                 log_general(format!(

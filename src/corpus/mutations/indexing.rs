@@ -28,7 +28,7 @@ pub fn execute_index_track(
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db_thread::{self, TrackData, ScanStateData};
-    use std::os::unix::fs::MetadataExt;
+    use std::time::UNIX_EPOCH;
 
     let resolver = paths::get_resolver();
     let sender = db_thread::signal_sender()
@@ -56,13 +56,19 @@ pub fn execute_index_track(
         fingerprint: metadata.fingerprint.clone(),
     };
 
-    // Get file metadata for scan_state
+    // Get file metadata for scan_state using portable API (consistent with comparison code)
     let file_metadata = std::fs::metadata(path)
         .with_context(|| format!("Failed to read file metadata: {}", path.display()))?;
+    let (mtime_secs, mtime_nanos) = file_metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+        .unwrap_or((0, 0));
     let scan_state = ScanStateData {
         inode: metadata.inode,
-        mtime_secs: file_metadata.mtime(),
-        mtime_nanos: file_metadata.mtime_nsec() as i64,
+        mtime_secs,
+        mtime_nanos,
         file_size: metadata.file_size,
     };
 
@@ -493,7 +499,7 @@ pub fn execute_acknowledge_mtime_only(
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
     use crate::db_thread;
-    use std::os::unix::fs::MetadataExt;
+    use std::time::UNIX_EPOCH;
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
@@ -506,11 +512,15 @@ pub fn execute_acknowledge_mtime_only(
             None => continue, // Skip missing tracks
         };
 
-        // Read current disk mtime
+        // Read current disk mtime using portable API (consistent with comparison code)
         let metadata = std::fs::metadata(abs_path)
             .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
-        let mtime_secs = metadata.mtime();
-        let mtime_nanos = metadata.mtime_nsec() as i64;
+        let (mtime_secs, mtime_nanos) = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+            .unwrap_or((0, 0));
 
         // Update scan_state mtime via db_thread using (source, inode) key
         sender.update_scan_state_mtime(
@@ -645,7 +655,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     use crate::corpus::db::types::CorpusFileSignalType;
     use crate::corpus::tags::TagSet;
     use crate::db_thread;
-    use std::os::unix::fs::MetadataExt;
+    use std::time::UNIX_EPOCH;
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
@@ -665,11 +675,15 @@ pub fn execute_assimilate_disk_tags_to_db(
         // Update DB with disk tags via db_thread
         sender.set_track_tags(&track.path, disk_tagset.into_vec(), witness);
 
-        // Read disk mtime
+        // Read disk mtime using portable API (consistent with comparison code)
         let file_metadata = std::fs::metadata(abs_path)
             .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
-        let mtime_secs = file_metadata.mtime();
-        let mtime_nanos = file_metadata.mtime_nsec() as i64;
+        let (mtime_secs, mtime_nanos) = file_metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+            .unwrap_or((0, 0));
 
         // Update scan_state mtime via db_thread using (source, inode) key
         sender.update_scan_state_mtime(
@@ -704,6 +718,36 @@ pub fn execute_assimilate_disk_tags_to_db(
     }
 
     Ok(affected_paths)
+}
+
+/// Execute SetTrackTagsDb: set track tags in database only (DB-first pattern, step 1).
+///
+/// - Writes complete tag set to DB via set_track_tags()
+/// - Sets needs_disk_flush = TRUE
+///
+/// Should be followed by FlushTagsToDisk (in tag_edit) to sync to disk.
+fn execute_set_track_tags_db(
+    db: &Database,
+    track_id: i64,
+    tags: &[(String, String)],
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::db_thread;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Get track path from DB (read-only)
+    let track = db.get_track_by_id(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+
+    // Write tags to DB (full replacement)
+    sender.set_track_tags(&track.path, tags.to_vec(), witness);
+
+    // Mark as needing disk flush
+    sender.set_needs_disk_flush(&track.path, true, witness);
+
+    Ok(())
 }
 
 // ============================================================================
@@ -787,6 +831,12 @@ pub fn execute_single(
 
         Mutation::AssimilateDiskTagsToDb { tracks } => {
             execute_assimilate_disk_tags_to_db(db, tracks, witness).map(|_| ())
+        }
+
+        // DB-first tag pattern: SetTrackTagsDb is DB-only (fast), routed here for batching.
+        // FlushTagsToDisk is handled by tag_edit (file I/O).
+        Mutation::SetTrackTagsDb { track_id, tags } => {
+            execute_set_track_tags_db(db, *track_id, tags, witness)
         }
 
         // Note: VerifyTags is now a Computation, not a Mutation.

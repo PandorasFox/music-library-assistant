@@ -382,13 +382,23 @@ pub fn write_file_tags(
         .next()
         .and_then(|c| c.as_os_str().to_str())
         .unwrap_or("corpus");
+
+    // Use portable mtime API (consistent with comparison code)
+    use std::os::unix::fs::MetadataExt;
+    use std::time::UNIX_EPOCH;
     let inode = file_metadata.ino() as i64;
+    let (mtime_secs, mtime_nanos) = file_metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+        .unwrap_or((0, 0));
 
     sender.update_scan_state_mtime(
         source,
         inode,
-        file_metadata.mtime(),
-        file_metadata.mtime_nsec() as i64,
+        mtime_secs,
+        mtime_nanos,
         witness,
     );
 
@@ -413,58 +423,6 @@ pub fn write_file_tags(
     sender.clear_tag_mismatches_for_track(&rel_path_str, witness);
 
     Ok(())
-}
-
-// =============================================================================
-// Surgical Edit Functions - For apply-edits-to-current-state operations
-// =============================================================================
-
-/// Apply surgical tag edits to a file.
-///
-/// This reads the current tags, applies the edits, and writes back.
-/// Used by TagEditAndFlush mutation for edit-in-place operations.
-///
-/// # Edits
-///
-/// Each edit is a (tag_name, old_value, new_value) triple:
-/// - If old_value is Some, removes that specific (key, old_value) pair
-/// - If new_value is Some, adds the (key, new_value) pair
-///
-/// This supports:
-/// - Simple replacement: old=Some("A"), new=Some("B")
-/// - Deletion: old=Some("A"), new=None
-/// - Addition: old=None, new=Some("B")
-/// - Multi-value operations: multiple edits for same key
-pub fn apply_edits_to_file(
-    path: &Path,
-    edits: &[(String, Option<String>, Option<String>)], // (tag_name, old_value, new_value)
-    token: &MutationToken,
-    witness: &MutationExecutionWitness,
-) -> Result<()> {
-    // Read current tags
-    let current = TagSet::from_file(path)?;
-    let mut tags: Vec<(String, String)> = current.into_vec();
-
-    // Apply each edit
-    for (tag_name, old_value, new_value) in edits {
-        let tag_name_lower = tag_name.to_lowercase();
-
-        // Remove old value if specified
-        if let Some(old) = old_value {
-            tags.retain(|(k, v)| !(k == &tag_name_lower && v == old));
-        }
-
-        // Add new value if specified
-        if let Some(new) = new_value {
-            if !new.is_empty() {
-                tags.push((tag_name_lower.clone(), new.clone()));
-            }
-        }
-    }
-
-    // Write back
-    let new_tags = TagSet::new(tags);
-    write_file_tags(path, &new_tags, token, witness)
 }
 
 // =============================================================================

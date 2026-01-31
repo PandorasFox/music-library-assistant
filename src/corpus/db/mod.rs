@@ -20,5 +20,3 @@ pub mod types;
 // Re-export core types
 pub use queries::{Database, ReadOnlyDb};
 pub use types::Track;
-// Signal types
-pub use types::Signal;

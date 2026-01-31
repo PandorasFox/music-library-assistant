@@ -1,14 +1,12 @@
 # Dead Code Cleanup Backlog
 
-Fresh audit 2026-01-30. **74 warnings remaining** (started at 115).
+Fresh audit 2026-01-30. **50 warnings remaining** (started at 115).
 
 ---
 
-## Quick Fixes (1 warning)
+## Quick Fixes - RESOLVED
 
-| Location | Item | Fix |
-|----------|------|-----|
-| `corpus/db/mod.rs:24` | `unused import: types::Signal` | Remove import |
+- `corpus/db/mod.rs:24` - removed unused `types::Signal` re-export
 
 ---
 
@@ -56,7 +54,7 @@ Fresh audit 2026-01-30. **74 warnings remaining** (started at 115).
 
 | Location | Type | Unused Fields |
 |----------|------|---------------|
-| `db/types.rs:27` | `Track` | `needs_disk_flush` |
+| `db/types.rs:27` | `Track` | `needs_disk_flush` - NOTE: should be preserved; should be integrated across all db->file tag writes |
 | `db/types.rs:43` | `ScanStateEntry` | `source`, `path`, `file_size` |
 | `db/types.rs:316` | `CorpusFileSignalType` | Variants: `CorpusFileModifiedOutOfBand`, `MovedFile`, `TagParseError`, `WaveformReadError` |
 | `db/types.rs:360,435,481` | Signal types | 3× `from_str` methods never used |
@@ -188,52 +186,23 @@ Marked `#[cfg(test)]`: `current_selection()`
 
 ---
 
-## Category 17: Widget Library (24 warnings)
+## Category 17: Widget Library - MOSTLY RESOLVED
 
-### Controls Widget (4 warnings)
+### Previously at 24 warnings, now 2 warnings
 
-| Location | Item |
-|----------|------|
-| `widgets/controls.rs:57` | `ControlsStyle::compact()`, `prominent()` |
-| `widgets/controls.rs:92` | `ControlsHint.title` field |
-| `widgets/controls.rs:117` | `bindings()`, `style()`, `title()`, `render_string()`, `render_paragraph()`, `render_lines()` |
-| `widgets/controls.rs:213` | `dir_browser()` |
+### Resolved
 
-### Layout Widgets (8 warnings)
+- **Controls Widget**: Removed `compact()`, `prominent()`, `title` field, unused methods (`bindings()`, `style()`, `title()`, `render_string()`, `render_paragraph()`, `render_lines()`), `dir_browser()` preset
+- **Layout Widget**: Removed entire `TwoPaneLayout`/`TwoPaneLayoutBuilder`, `PaneConfig::focused()`, `FocusablePane.block`/`focused` fields, `FocusablePane::inner()`, `ThreePaneLayoutBuilder::style()`, `ThreePaneLayout::vertical()`. Kept `ThreePaneLayout::horizontal()` (used by tag editor)
+- **Modal Widget**: Removed `ConfirmationModal`, `ScrollableModal`, `ModalStyle::error()`, `ModalStyle::success()`, `ModalButton::style_when_selected()`, `ModalButton::style_when_unselected()`
+- **Text Input Widget**: Removed `TextInput` struct, `TextInputStyle` struct, `TextInputState::with_value()`, `TextInputState::focused()`. Kept `TextInputState` (used)
 
-| Location | Item |
-|----------|------|
-| `widgets/layout.rs:31` | `PaneConfig::focused()` |
-| `widgets/layout.rs:42` | `FocusablePane.block`, `focused` fields |
-| `widgets/layout.rs:49` | `FocusablePane::inner()` |
-| `widgets/layout.rs:88-181` | `TwoPaneLayout`, `TwoPaneLayoutBuilder` - entire structs + all methods |
-| `widgets/layout.rs:241` | `ThreePaneLayoutBuilder::style()` |
-| `widgets/layout.rs:279` | `ThreePaneLayout::vertical()` |
-
-### Modal Widgets (6 warnings)
-
-| Location | Item |
-|----------|------|
-| `widgets/modal.rs:80` | `ModalStyle::error()`, `success()` |
-| `widgets/modal.rs:171` | `Modal::size()`, `compute_area()` |
-| `widgets/modal.rs:258` | `ModalButton::style_when_selected()`, `style_when_unselected()` |
-| `widgets/modal.rs:326-379` | `ConfirmationModal` - entire struct + all methods |
-| `widgets/modal.rs:441-510` | `ScrollableModal` - entire struct + all methods |
-
-### Resolution Layout (2 warnings)
+### Remaining (2 warnings)
 
 | Location | Item |
 |----------|------|
 | `widgets/resolution_layout.rs:107` | `with_list_percent()` |
 | `widgets/resolution_layout.rs:168` | `ButtonRects::get()` |
-
-### Text Input Widget (4 warnings)
-
-| Location | Item |
-|----------|------|
-| `widgets/text_input.rs:39` | `TextInputState::with_value()`, `focused()` |
-| `widgets/text_input.rs:194-224` | `TextInputStyle` struct + `search()` |
-| `widgets/text_input.rs:233-323` | `TextInput` - entire struct + all methods |
 
 ---
 
@@ -245,11 +214,11 @@ Marked `#[cfg(test)]`: `current_selection()`
 
 ### Medium Priority (Incomplete Features)
 - **Tree Browser** (Category 10): 3 warnings
-- **Tag Editor** (Category 7): 2 warnings (reduced from many)
+- **Tag Editor** (Category 7): 2 warnings
 - **Tag Search** (Category 9): 2 warnings
 
 ### Low Priority (Vestigial/Forward-Looking)
-- **Widget Library** (Category 17): 24 warnings - builder patterns and widgets built but not yet used
+- ~~**Widget Library** (Category 17)~~ **MOSTLY RESOLVED** - 2 warnings remain
 - **Health Analysis** (Category 2): 3 warnings
 - **DB Type Fields** (Category 3): 14 warnings - struct fields populated but never read
 
@@ -263,3 +232,4 @@ Marked `#[cfg(test)]`: `current_selection()`
 | 2026-01-30 (witch cleanup) | 112 | -3 | Removed 16 dead Witch API methods |
 | 2026-01-30 (tracks.rs cleanup) | 109 | -3 | Removed 28 vestigial methods, kept 20 active queries |
 | 2026-01-30 (low-priority sweep) | 74 | -35 | Removed stats methods, deploy helper, DB queries, type aliases, eye animation, bulk selection; marked test-only code |
+| 2026-01-30 (widget cleanup) | 50 | -24 | Removed TwoPaneLayout, ConfirmationModal, ScrollableModal, TextInput widget, unused control/modal methods |

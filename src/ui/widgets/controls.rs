@@ -5,7 +5,6 @@
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
 };
 
 /// A single key binding hint
@@ -52,30 +51,6 @@ impl Default for ControlsStyle {
     }
 }
 
-impl ControlsStyle {
-    /// Compact style with minimal separators
-    pub fn compact() -> Self {
-        Self {
-            key_style: Style::default().fg(Color::Cyan),
-            action_style: Style::default().fg(Color::DarkGray),
-            separator: ":",
-            binding_separator: "  ",
-        }
-    }
-
-    /// Prominent style for important controls
-    pub fn prominent() -> Self {
-        Self {
-            key_style: Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-            action_style: Style::default().fg(Color::White),
-            separator: " = ",
-            binding_separator: " | ",
-        }
-    }
-}
-
 /// A widget for displaying keyboard controls hints.
 ///
 /// # Example
@@ -89,7 +64,6 @@ impl ControlsStyle {
 pub struct ControlsHint {
     bindings: Vec<KeyBinding>,
     style: ControlsStyle,
-    title: Option<String>,
 }
 
 impl Default for ControlsHint {
@@ -103,31 +77,12 @@ impl ControlsHint {
         Self {
             bindings: Vec::new(),
             style: ControlsStyle::default(),
-            title: None,
         }
     }
 
     /// Add a key binding
     pub fn binding(mut self, binding: KeyBinding) -> Self {
         self.bindings.push(binding);
-        self
-    }
-
-    /// Add multiple bindings at once
-    pub fn bindings(mut self, bindings: impl IntoIterator<Item = KeyBinding>) -> Self {
-        self.bindings.extend(bindings);
-        self
-    }
-
-    /// Set the display style
-    pub fn style(mut self, style: ControlsStyle) -> Self {
-        self.style = style;
-        self
-    }
-
-    /// Set an optional title for block rendering
-    pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.title = Some(title.into());
         self
     }
 
@@ -155,45 +110,6 @@ impl ControlsHint {
 
         Line::from(spans)
     }
-
-    /// Render as a string (for embedding in other content)
-    pub fn render_string(&self) -> String {
-        self.bindings
-            .iter()
-            .map(|b| format!("{}{}{}", b.key, self.style.separator, b.action))
-            .collect::<Vec<_>>()
-            .join(self.style.binding_separator)
-    }
-
-    /// Render as a Paragraph widget with optional block
-    pub fn render_paragraph(&self) -> Paragraph<'static> {
-        let line = self.render_line();
-        let para = Paragraph::new(vec![line]);
-
-        if let Some(ref title) = self.title {
-            para.block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title.clone()),
-            )
-        } else {
-            para
-        }
-    }
-
-    /// Render as multiple lines (for vertical layout)
-    pub fn render_lines(&self) -> Vec<Line<'static>> {
-        self.bindings
-            .iter()
-            .map(|binding| {
-                Line::from(vec![
-                    Span::styled(binding.key.clone(), self.style.key_style),
-                    Span::styled(self.style.separator, self.style.action_style),
-                    Span::styled(binding.action.clone(), self.style.action_style),
-                ])
-            })
-            .collect()
-    }
 }
 
 /// Helper to quickly build common control sets
@@ -207,16 +123,6 @@ pub mod presets {
             .binding(KeyBinding::new("↑↓", "Fields"))
             .binding(KeyBinding::new("Enter", "Edit"))
             .binding(KeyBinding::new("Esc", "Exit"))
-    }
-
-    /// Directory browser controls
-    pub fn dir_browser() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("↑↓", "Navigate"))
-            .binding(KeyBinding::new("←→", "Expand"))
-            .binding(KeyBinding::new("Space", "Toggle"))
-            .binding(KeyBinding::new("Enter", "Proceed"))
-            .binding(KeyBinding::new("Esc", "Cancel"))
     }
 
     /// Deployment preview controls
@@ -287,16 +193,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_controls_hint_string() {
+    fn test_controls_hint_line() {
         let hint = ControlsHint::new()
             .binding(KeyBinding::new("A", "Action"))
             .binding(KeyBinding::new("B", "Other"));
 
-        let s = hint.render_string();
-        assert!(s.contains("A"));
-        assert!(s.contains("Action"));
-        assert!(s.contains("B"));
-        assert!(s.contains("Other"));
+        let line = hint.render_line();
+        // Just verify it produces spans without panicking
+        assert!(!line.spans.is_empty());
     }
-
 }

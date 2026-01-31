@@ -145,12 +145,12 @@ impl Database {
             .flatten();
 
         Ok(CorpusSummary {
-            track_count,
+            _track_count: track_count,
             deploy_conflicts,
             signal_summary,
-            deployment_stats,
-            pending_changes,
-            last_scan,
+            _deployment_stats: deployment_stats,
+            _pending_changes: pending_changes,
+            _last_scan: last_scan,
             files_in_corpus,
             healthy_files,
             unindexed_files,
@@ -711,7 +711,14 @@ impl Database {
 
         // Subpar duplicates (lower quality versions identified by fingerprint analysis)
         // Note: stored as "inferior_duplicate" in database for backwards compatibility
-        let subpar_duplicate_count = self.count_signal_type("inferior_duplicate")?;
+        // Skip InferiorSampleRate for now - detection seems suspicious
+        let subpar_duplicate_count: usize = self.conn.query_row(
+            r#"SELECT COUNT(*) FROM signals
+               WHERE issue_type = 'inferior_duplicate'
+               AND json_extract(metadata_json, '$.reason') != 'InferiorSampleRate'"#,
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
 
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;

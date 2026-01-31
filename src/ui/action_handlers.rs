@@ -92,8 +92,8 @@ impl App {
                     Some(insights_view::InsightAction::LaunchIntakeConfirmation) => {
                         self.start_intake_confirmation_from_insights();
                     }
-                    Some(insights_view::InsightAction::LaunchFingerprintDuplicateResolution) => {
-                        self.status_message = Some("Fingerprint duplicate flow not yet implemented".to_string());
+                    Some(insights_view::InsightAction::LaunchDirectoryOverlapResolution) => {
+                        self.start_directory_overlap_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchSubparDuplicateResolution) => {
                         self.start_subpar_duplicate_resolution();
@@ -810,6 +810,109 @@ impl App {
 
         // Start transaction and stage the decision
         let _ = witch.start_transaction(label);
+        let _ = super::operator_decisions::stage_decision(
+            witch,
+            0,
+            label,
+            mutations,
+        );
+    }
+
+    // ========================================================================
+    // Directory Overlap Cluster Resolution
+    // ========================================================================
+
+    /// Start directory overlap cluster resolution modal from Insights view.
+    fn start_directory_overlap_resolution(&mut self) {
+        use super::directory_cluster_flow;
+
+        // Load directory overlap cluster data
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                directory_cluster_flow::DirectoryClusterModalData::load(&read_db).ok()
+            })
+            .unwrap_or_default();
+
+        if !data.has_clusters() {
+            self.status_message = Some("No directory overlap clusters to resolve".to_string());
+            return;
+        }
+
+        // Create preview state with cached data
+        let preview = directory_cluster_flow::DirectoryClusterPreviewState::new(data);
+        self.directory_cluster_preview = Some(preview);
+        self.mode = UiMode::DirectoryClusterResolution;
+    }
+
+    /// Handle directory cluster preview actions.
+    pub(super) fn handle_directory_cluster_preview_action(
+        &mut self,
+        action: super::directory_cluster_flow::DirectoryClusterPreviewAction,
+    ) {
+        use super::directory_cluster_flow::DirectoryClusterPreviewAction;
+
+        match action {
+            DirectoryClusterPreviewAction::None => {}
+            DirectoryClusterPreviewAction::ConfirmCurrent => {
+                // Stage mutations for current cluster's selected option and advance
+                if let Some(ref preview) = self.directory_cluster_preview {
+                    if let Some(option) = preview.selected_option() {
+                        let mutations = preview.cached_data.mutations_for_resolution(
+                            preview.current_cluster_index,
+                            option,
+                        );
+                        if !mutations.is_empty() {
+                            self.stage_directory_cluster_mutations(mutations, "Resolve directory overlap");
+                        }
+                    }
+                }
+                // Navigate to next cluster
+                if let Some(ref mut preview) = self.directory_cluster_preview {
+                    if !preview.navigate_next() {
+                        // Last cluster - go to review
+                        self.start_transaction_review(transaction_review::TransactionReviewSource::DirectoryClusterResolution);
+                    }
+                }
+            }
+            DirectoryClusterPreviewAction::NavigateNext => {
+                if let Some(ref mut preview) = self.directory_cluster_preview {
+                    preview.navigate_next();
+                }
+            }
+            DirectoryClusterPreviewAction::NavigatePrev => {
+                if let Some(ref mut preview) = self.directory_cluster_preview {
+                    preview.navigate_prev();
+                }
+            }
+            DirectoryClusterPreviewAction::ShowReview => {
+                // Jump directly to transaction review
+                self.start_transaction_review(transaction_review::TransactionReviewSource::DirectoryClusterResolution);
+            }
+            DirectoryClusterPreviewAction::Cancel => {
+                crate::logging::log_general("Directory overlap cluster resolution cancelled");
+                // Discard any active transaction from review flow
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.directory_cluster_preview = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Stage directory cluster mutations for transaction review.
+    fn stage_directory_cluster_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+        let Some(ref mut witch) = self.witch else {
+            return;
+        };
+
+        // Start transaction if not already started
+        if !witch.has_transaction() {
+            let _ = witch.start_transaction("Directory overlap resolution");
+        }
         let _ = super::operator_decisions::stage_decision(
             witch,
             0,
@@ -1928,6 +2031,10 @@ impl App {
                         // subpar_duplicate_preview state was preserved
                         self.mode = UiMode::SubparDuplicateResolution;
                     }
+                    Some(TransactionReviewSource::DirectoryClusterResolution) => {
+                        // directory_cluster_preview state was preserved
+                        self.mode = UiMode::DirectoryClusterResolution;
+                    }
                     None => self.start_insights_view(),
                 }
             }
@@ -2003,6 +2110,7 @@ impl App {
         self.corrupt_file_preview = None;
         self.shit_format_preview = None;
         self.subpar_duplicate_preview = None;
+        self.directory_cluster_preview = None;
     }
 
     /// Transition to the standardized transaction review modal.
@@ -2238,6 +2346,57 @@ impl App {
         self.status_message = Some(format!("Staged {} transcode operations", count));
         // Note: format_std state is NOT cleared - preserved for Cancel return
         self.start_transaction_review(transaction_review::TransactionReviewSource::FormatStandardization);
+    }
+
+    // =========================================================================
+    // Debug View
+    // =========================================================================
+
+    pub(super) fn handle_debug_action(&mut self, action: super::debug_view::DebugAction) {
+        use super::debug_view::DebugAction;
+        use crate::corpus::mutations::Mutation;
+
+        match action {
+            DebugAction::None => {}
+            DebugAction::RequestQuit => {
+                if self.has_pending_operations() {
+                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                } else {
+                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
+                    self.mode = UiMode::ExitConfirmModal;
+                }
+            }
+            DebugAction::CycleNext => {
+                self.debug_view = None;
+                self.start_lateral_view(widgets::LateralView::Debug.next());
+            }
+            DebugAction::CyclePrev => {
+                self.debug_view = None;
+                self.start_lateral_view(widgets::LateralView::Debug.prev());
+            }
+            DebugAction::RebuildFingerprints => {
+                // This is an operator decision - execute the mutation directly
+                // (no transaction review needed for maintenance operations)
+                //
+                // Chain: ClearAllFingerprints → ScheduleFingerprintRefill → N × RefillSingleFingerprint
+                if let Some(ref mut witch) = self.witch {
+                    let mutation = Mutation::ClearAllFingerprints;
+                    let _ = witch.start_transaction("Rebuild fingerprints");
+                    let _ = super::operator_decisions::stage_decision(
+                        witch,
+                        0,
+                        "Clear and rebuild all fingerprints from full audio",
+                        vec![mutation],
+                    );
+                    let _ = super::operator_decisions::commit_transaction(witch);
+                    self.status_message = Some("Fingerprint rebuild started".to_string());
+                    // Mark witch as busy for UI feedback
+                    if let Some(ref mut state) = self.debug_view {
+                        state.witch_busy = true;
+                    }
+                }
+            }
+        }
     }
 
     // =========================================================================

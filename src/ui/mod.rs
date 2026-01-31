@@ -31,7 +31,9 @@ pub mod app;
 pub mod bulk_selection;
 pub mod compound_split;
 pub mod corrupt_file_flow;
+pub mod debug_view;
 pub mod deploy_flow;
+pub mod directory_cluster_flow;
 pub mod eye;
 pub mod filter_popup;
 pub mod format_standardization;
@@ -178,12 +180,16 @@ pub(crate) struct App {
     pub(super) intake_confirmation: Option<startup::IntakeConfirmationState>,
     // Format standardization view (lateral view ring)
     pub(super) format_std: Option<format_standardization::FormatStdState>,
+    // Debug view (lateral view ring)
+    pub(super) debug_view: Option<debug_view::DebugViewState>,
     // Corrupt file resolution modal
     pub(super) corrupt_file_preview: Option<corrupt_file_flow::CorruptFilePreviewState>,
     // Shit format transcode resolution modal
     pub(super) shit_format_preview: Option<shit_format_flow::ShitFormatPreviewState>,
     // Subpar duplicate resolution modal
     pub(super) subpar_duplicate_preview: Option<subpar_duplicate_flow::SubparDuplicatePreviewState>,
+    // Directory overlap cluster resolution modal
+    pub(super) directory_cluster_preview: Option<directory_cluster_flow::DirectoryClusterPreviewState>,
 
     // The Witch - enforcer of orderliness, handles all mutations and background work
     pub(super) witch: Option<crate::witch::Witch>,
@@ -232,9 +238,11 @@ impl App {
             tag_search: None,
             intake_confirmation: None,
             format_std: None,
+            debug_view: None,
             corrupt_file_preview: None,
             shit_format_preview: None,
             subpar_duplicate_preview: None,
+            directory_cluster_preview: None,
             witch: Some(witch),
             log_rx: None,  // Already consumed by Witch
             _throughput_samples: VecDeque::with_capacity(100),
@@ -455,6 +463,12 @@ impl App {
                     self.handle_format_std_action(action);
                 }
             }
+            UiMode::Debug => {
+                if let Some(ref mut state) = self.debug_view {
+                    let action = state.handle_key(key);
+                    self.handle_debug_action(action);
+                }
+            }
             UiMode::CorruptFileResolution => {
                 if let Some(ref mut preview) = self.corrupt_file_preview {
                     let action = preview.handle_key(key);
@@ -471,6 +485,12 @@ impl App {
                 if let Some(ref mut preview) = self.subpar_duplicate_preview {
                     let action = preview.handle_key(key);
                     self.handle_subpar_duplicate_preview_action(action);
+                }
+            }
+            UiMode::DirectoryClusterResolution => {
+                if let Some(ref mut preview) = self.directory_cluster_preview {
+                    let action = preview.handle_key(key);
+                    self.handle_directory_cluster_preview_action(action);
                 }
             }
         }
@@ -541,6 +561,15 @@ impl App {
         self.mode = UiMode::FormatStandardization;
     }
 
+    pub(super) fn start_debug_view(&mut self) {
+        let read_db = self.read_db();
+        // Query track counts for stats display
+        let track_count = read_db.get_track_count(None).unwrap_or(0) as i64;
+        let fingerprinted_count = read_db.get_fingerprinted_track_count().unwrap_or(0);
+        self.debug_view = Some(debug_view::DebugViewState::new(track_count, fingerprinted_count));
+        self.mode = UiMode::Debug;
+    }
+
     /// Start the lateral view identified by the given variant.
     /// Used by CycleNext/CyclePrev handlers to dispatch via LateralView::next()/prev().
     pub(super) fn start_lateral_view(&mut self, view: widgets::LateralView) {
@@ -549,6 +578,7 @@ impl App {
             widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
             widgets::LateralView::Insights => self.start_insights_view(),
             widgets::LateralView::FormatStandardization => self.start_format_standardization(),
+            widgets::LateralView::Debug => self.start_debug_view(),
         }
     }
 
@@ -655,9 +685,11 @@ fn render(f: &mut Frame, app: &mut App) {
         tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
         format_std: app.format_std.as_ref(),
+        debug_view: app.debug_view.as_ref(),
         corrupt_file_preview: app.corrupt_file_preview.as_ref(),
         shit_format_preview: app.shit_format_preview.as_ref(),
         subpar_duplicate_preview: app.subpar_duplicate_preview.as_ref(),
+        directory_cluster_preview: app.directory_cluster_preview.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         witch_status,

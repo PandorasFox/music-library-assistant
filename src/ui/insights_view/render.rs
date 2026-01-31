@@ -440,23 +440,23 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         }
 
         // Tag resolution bucket entries (duplicates at top)
-        InsightType::FingerprintDuplicates => {
+        InsightType::DirectoryOverlapClusters => {
             lines.push(Line::from(Span::styled(
-                "Fingerprint Duplicates",
+                "Directory Overlaps",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Files with identical audio content",
+                "Directories with overlapping content",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "(same acoustic fingerprint).",
+                "(same tracks in different locations).",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Press Enter to review and resolve.",
+                "Press Enter to resolve by directory.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
             )));
         }

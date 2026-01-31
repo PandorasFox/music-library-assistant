@@ -233,8 +233,8 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awake::Computation::ScheduleContentAnalysis => {
                         awake::execute_schedule_content_analysis(read_only_db, start)
                     }
-                    awake::Computation::DetectFingerprintDuplicates => {
-                        awake::execute_detect_fingerprint_duplicates(read_only_db, &witness, start)
+                    awake::Computation::DetectFingerprintOverlaps => {
+                        awake::execute_detect_fingerprint_overlaps(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectDuplicateInodes => {
                         awake::execute_detect_duplicate_inodes(read_only_db, &witness, start)
@@ -257,8 +257,11 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awake::Computation::DetectShitFormats => {
                         awake::execute_detect_shit_formats(read_only_db, &witness, start)
                     }
-                    awake::Computation::AnalyzeFingerprintDuplicates => {
-                        awake::execute_analyze_fingerprint_duplicates(read_only_db, &witness, start)
+                    awake::Computation::AnalyzeFingerprintOverlaps => {
+                        awake::execute_analyze_fingerprint_overlaps(read_only_db, &witness, start)
+                    }
+                    awake::Computation::ClusterDirectoryOverlaps => {
+                        awake::execute_cluster_directory_overlaps(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectDeployConflicts => {
                         awake::execute_detect_deploy_conflicts(read_only_db, &witness, start)

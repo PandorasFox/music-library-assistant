@@ -16,7 +16,7 @@ use ratatui::{
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split, corrupt_file_flow, deploy_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
+use super::{compound_split, corrupt_file_flow, debug_view, deploy_flow, directory_cluster_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -39,10 +39,12 @@ pub struct RenderContext<'a> {
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
     pub tag_search: Option<&'a tag_search::TagSearchState>,
     pub format_std: Option<&'a format_standardization::FormatStdState>,
+    pub debug_view: Option<&'a debug_view::DebugViewState>,
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub corrupt_file_preview: Option<&'a corrupt_file_flow::CorruptFilePreviewState>,
     pub shit_format_preview: Option<&'a shit_format_flow::ShitFormatPreviewState>,
     pub subpar_duplicate_preview: Option<&'a subpar_duplicate_flow::SubparDuplicatePreviewState>,
+    pub directory_cluster_preview: Option<&'a directory_cluster_flow::DirectoryClusterPreviewState>,
     pub eye: &'a EyeAnimation,
     pub witch_status: Option<crate::witch::DaemonStatus>,
     pub corpus_summary: Option<crate::corpus::db::types::CorpusSummary>,
@@ -88,6 +90,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
             | super::UiMode::CorpusBrowser
             | super::UiMode::Insights
             | super::UiMode::FormatStandardization
+            | super::UiMode::Debug
     );
 
     if uses_unified_titlebar {
@@ -170,9 +173,11 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::InodeChangedAcknowledge => Some("Inode Changed"),
         super::UiMode::TransactionReview => Some("Transaction Review"),
         super::UiMode::FormatStandardization => Some("Format Standardization"),
+        super::UiMode::Debug => Some("Debug"),
         super::UiMode::CorruptFileResolution => Some("Corrupt File Resolution"),
         super::UiMode::ShitFormatResolution => Some("Shit Format Resolution"),
         super::UiMode::SubparDuplicateResolution => Some("Subpar Duplicate Resolution"),
+        super::UiMode::DirectoryClusterResolution => Some("Directory Overlap Resolution"),
     };
 
     let title = match suffix {
@@ -288,6 +293,12 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
                 format_standardization::render::render(f, area, state);
             }
         }
+        super::UiMode::Debug => {
+            view_name = "debug";
+            if let Some(ref state) = ctx.debug_view {
+                debug_view::render_debug_view(f, area, state);
+            }
+        }
         super::UiMode::CorruptFileResolution => {
             view_name = "corrupt_file_resolution";
             if let Some(ref preview) = ctx.corrupt_file_preview {
@@ -303,6 +314,12 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::SubparDuplicateResolution => {
             view_name = "subpar_duplicate_resolution";
             if let Some(ref preview) = ctx.subpar_duplicate_preview {
+                preview.render(f, area);
+            }
+        }
+        super::UiMode::DirectoryClusterResolution => {
+            view_name = "directory_cluster_resolution";
+            if let Some(ref preview) = ctx.directory_cluster_preview {
                 preview.render(f, area);
             }
         }
@@ -561,8 +578,7 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
 
         // Signal breakdown (all remaining signals)
         let hs = &summary.signal_summary;
-        let total_signals = hs.fingerprint_duplicates
-            + hs.metadata_duplicates
+        let total_signals = hs.metadata_duplicates
             + hs.canonicalization_issues
             + hs.missing_tag_issues
             + summary.deploy_conflicts
@@ -598,7 +614,6 @@ fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &Render
             add_signal!(hs.missing_tag_issues, "missing-tags", Color::Yellow);
             add_signal!(summary.deploy_conflicts, "conflicts", Color::Red);
             add_signal!(hs.metadata_duplicates, "meta-dups", Color::Yellow);
-            add_signal!(hs.fingerprint_duplicates, "fp-dups", Color::Yellow);
             add_signal!(hs.canonicalization_issues, "canon", Color::Yellow);
             add_signal!(summary.oob_tag_sync, "tags-sync", Color::Yellow);
             add_signal!(summary.oob_tag_conflict, "tags-conflict", Color::Red);
@@ -779,9 +794,11 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::InodeChangedAcknowledge => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TransactionReview => control_presets::empty(), // Modal handles its own hints
         super::UiMode::FormatStandardization => control_presets::format_standardization(),
+        super::UiMode::Debug => control_presets::debug_view(),
         super::UiMode::CorruptFileResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::ShitFormatResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::SubparDuplicateResolution => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::DirectoryClusterResolution => control_presets::empty(), // Modal handles its own hints
     };
     lines.push(controls.render_line());
 

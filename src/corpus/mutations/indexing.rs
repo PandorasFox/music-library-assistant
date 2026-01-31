@@ -760,6 +760,133 @@ pub fn execute_assimilate_disk_tags_to_db(
 }
 
 // ============================================================================
+// Fingerprint Rebuild Chain
+// ============================================================================
+//
+// Three-mutation chain for fingerprint regeneration:
+// 1. ClearAllFingerprints → spawns ScheduleFingerprintRefill
+// 2. ScheduleFingerprintRefill → spawns N RefillSingleFingerprint mutations
+// 3. RefillSingleFingerprint → fingerprints one track
+
+/// Execute ClearAllFingerprints mutation.
+///
+/// Clears all fingerprints from the database in one SQL UPDATE.
+/// Returns a spawned ScheduleFingerprintRefill mutation to queue the re-fingerprinting.
+pub fn execute_clear_all_fingerprints(
+    db: &Database,
+    witness: &MutationExecutionWitness,
+) -> Result<Vec<crate::witch::SpawnedMutation>> {
+    use crate::logging::log_general;
+
+    // Clear all fingerprints in one statement
+    db.conn().execute("UPDATE tracks SET fingerprint = NULL", [])?;
+
+    let count = db.conn().changes();
+    log_general(format!(
+        "[MUTATION] ClearAllFingerprints: cleared {} track fingerprints",
+        count
+    ));
+
+    // Spawn the scheduling mutation
+    Ok(vec![witness.spawn_mutation(super::types::Mutation::ScheduleFingerprintRefill)])
+}
+
+/// Execute ScheduleFingerprintRefill mutation.
+///
+/// Queries all tracks and spawns a RefillSingleFingerprint mutation for each.
+pub fn execute_schedule_fingerprint_refill(
+    db: &Database,
+    witness: &MutationExecutionWitness,
+) -> Result<Vec<crate::witch::SpawnedMutation>> {
+    use crate::logging::log_general;
+
+    let tracks = db.get_all_tracks(None)?;
+    let count = tracks.len();
+
+    log_general(format!(
+        "[MUTATION] ScheduleFingerprintRefill: spawning {} individual fingerprint mutations",
+        count
+    ));
+
+    let spawned: Vec<_> = tracks
+        .into_iter()
+        .filter_map(|track| {
+            // track.id is Option<i64> - skip tracks without IDs (shouldn't happen)
+            track.id.map(|id| {
+                witness.spawn_mutation(super::types::Mutation::RefillSingleFingerprint {
+                    track_id: id,
+                    path: track.path,
+                })
+            })
+        })
+        .collect();
+
+    Ok(spawned)
+}
+
+/// Execute RefillSingleFingerprint mutation.
+///
+/// Fingerprints one track from full audio. Emits CorruptFile signal on failure,
+/// clears CorruptFile signal on success.
+pub fn execute_refill_single_fingerprint(
+    db: &Database,
+    track_id: i64,
+    path: &str,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::corpus::metadata::generate_fingerprint;
+    use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::db_thread;
+    use crate::logging::log_general;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let resolver = paths::get_resolver();
+    let abs_path = resolver.resolve(std::path::Path::new(path));
+
+    match generate_fingerprint(&abs_path) {
+        Ok(fingerprint) => {
+            // Convert Vec<u32> fingerprint to BLOB (Vec<u8>) for storage
+            let blob: Vec<u8> = fingerprint
+                .iter()
+                .flat_map(|n| n.to_le_bytes())
+                .collect();
+
+            // Update track with new fingerprint
+            db.conn().execute(
+                "UPDATE tracks SET fingerprint = ? WHERE id = ?",
+                rusqlite::params![blob, track_id],
+            )?;
+
+            // Clear any CorruptFile signal for this track (it's now valid)
+            sender.clear_file_signal(
+                CorpusFileSignalType::CorruptFile.into(),
+                path,
+                witness,
+            );
+
+            Ok(())
+        }
+        Err(e) => {
+            // Fingerprinting failed - emit CorruptFile signal
+            log_general(format!(
+                "[MUTATION] RefillSingleFingerprint: failed on {}: {}",
+                path, e
+            ));
+            sender.ensure_file_signal(
+                CorpusFileSignalType::CorruptFile.into(),
+                path,
+                witness,
+            );
+
+            // Return Ok - the track is corrupt but the mutation "succeeded"
+            // (we processed it, just with a corrupt result)
+            Ok(())
+        }
+    }
+}
+
+// ============================================================================
 // Single Mutation Dispatch
 // ============================================================================
 
@@ -843,6 +970,49 @@ pub fn execute_single(
             execute_assimilate_disk_tags_to_db(db, *track_id, path, witness)
         }
 
+        // Fingerprint rebuild chain (these spawn follow-up mutations)
+        Mutation::ClearAllFingerprints => {
+            return match execute_clear_all_fingerprints(db, witness) {
+                Ok(spawned) => MutationResult {
+                    _mutation: mutation.clone(),
+                    success: true,
+                    error: None,
+                    _duration_ms: start.elapsed().as_millis() as u64,
+                    spawn_mutations: spawned,
+                },
+                Err(e) => MutationResult {
+                    _mutation: mutation.clone(),
+                    success: false,
+                    error: Some(format!("{:#}", e)),
+                    _duration_ms: start.elapsed().as_millis() as u64,
+                    spawn_mutations: Vec::new(),
+                },
+            };
+        }
+
+        Mutation::ScheduleFingerprintRefill => {
+            return match execute_schedule_fingerprint_refill(db, witness) {
+                Ok(spawned) => MutationResult {
+                    _mutation: mutation.clone(),
+                    success: true,
+                    error: None,
+                    _duration_ms: start.elapsed().as_millis() as u64,
+                    spawn_mutations: spawned,
+                },
+                Err(e) => MutationResult {
+                    _mutation: mutation.clone(),
+                    success: false,
+                    error: Some(format!("{:#}", e)),
+                    _duration_ms: start.elapsed().as_millis() as u64,
+                    spawn_mutations: Vec::new(),
+                },
+            };
+        }
+
+        Mutation::RefillSingleFingerprint { track_id, path } => {
+            execute_refill_single_fingerprint(db, *track_id, path, witness).map(|_| ())
+        }
+
         // Note: SetTrackTagsDb is now handled by tag_edit.rs (spawns ApplyDbTagsToDisk)
         // Note: VerifyTags is now a Computation, not a Mutation.
 
@@ -859,7 +1029,7 @@ pub fn execute_single(
         success,
         error,
         _duration_ms: start.elapsed().as_millis() as u64,
-        spawn_mutations: Vec::new(), // Indexing mutations don't spawn
+        spawn_mutations: Vec::new(), // Non-spawning indexing mutations
     }
 }
 

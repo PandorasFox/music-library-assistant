@@ -113,8 +113,8 @@ pub enum SignalType {
     // =========================================================================
     // Content-level signals (tag and fingerprint analysis)
     // =========================================================================
-    /// Same fingerprint across multiple files
-    FingerprintDuplicate,
+    /// Same fingerprint across multiple files (internal overlap detection)
+    FingerprintOverlap,
     /// Same metadata (artist/album/title) across multiple files
     MetadataDuplicate,
     /// Missing required tags (e.g., album_artist)
@@ -176,7 +176,7 @@ impl SignalType {
             Self::LibraryLeftover => "library_leftover",
 
             // Content-level signals
-            Self::FingerprintDuplicate => "fingerprint_dup",
+            Self::FingerprintOverlap => "fingerprint_dup",
             Self::MetadataDuplicate => "metadata_dup",
             Self::MissingTag => "missing_tag",
             Self::OutOfBandTagSync => "oob_tag_sync",
@@ -217,7 +217,7 @@ impl SignalType {
             "library_leftover" => Some(Self::LibraryLeftover),
 
             // Content-level signals
-            "fingerprint_dup" => Some(Self::FingerprintDuplicate),
+            "fingerprint_dup" => Some(Self::FingerprintOverlap),
             "metadata_dup" => Some(Self::MetadataDuplicate),
             "missing_tag" => Some(Self::MissingTag),
             "oob_tag_sync" => Some(Self::OutOfBandTagSync),
@@ -516,8 +516,8 @@ impl AggregateSignal {
 /// Types of aggregate signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AggregateSignalType {
-    /// Multiple files with same fingerprint
-    FingerprintDuplicate,
+    /// Multiple files with same fingerprint (internal overlap detection, not surfaced directly)
+    FingerprintOverlap,
     /// Multiple files with same artist/album/title
     MetadataDuplicate,
     /// Multiple index entries with same inode
@@ -538,12 +538,16 @@ pub enum AggregateSignalType {
     /// Key: "{tag_name}:{compound_value_hash}" (e.g., "genre:abc123")
     /// Metadata: { "tag_name", "compound_value", "split_parts": [...], "separator", "track_ids": [...] }
     CompoundTagValue,
+    /// Directory-level overlap cluster (derived from FingerprintOverlap signals)
+    /// Key: sorted|path|suffixes (e.g., "bandcamp|indie/msx")
+    /// Metadata: { "cluster_key", "directories": [...], "fingerprint_overlap_keys": [...] }
+    DirectoryOverlapCluster,
 }
 
 impl AggregateSignalType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::FingerprintDuplicate => "fingerprint_dup",
+            Self::FingerprintOverlap => "fingerprint_dup",
             Self::MetadataDuplicate => "metadata_dup",
             Self::DuplicateInode => "duplicate_inode",
             Self::MissingTag => "missing_tag",
@@ -551,12 +555,13 @@ impl AggregateSignalType {
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
+            Self::DirectoryOverlapCluster => "directory_overlap_cluster",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "fingerprint_dup" => Some(Self::FingerprintDuplicate),
+            "fingerprint_dup" => Some(Self::FingerprintOverlap),
             "metadata_dup" => Some(Self::MetadataDuplicate),
             "duplicate_inode" => Some(Self::DuplicateInode),
             "missing_tag" => Some(Self::MissingTag),
@@ -564,6 +569,7 @@ impl AggregateSignalType {
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
+            "directory_overlap_cluster" => Some(Self::DirectoryOverlapCluster),
             _ => None,
         }
     }
@@ -604,7 +610,7 @@ impl From<AggregateSignal> for Signal {
         Self {
             id: sig.id,
             issue_type: SignalType::from_str(sig.signal_type.as_str())
-                .unwrap_or(SignalType::FingerprintDuplicate),
+                .unwrap_or(SignalType::FingerprintOverlap),
             issue_key: sig.key,
             discovered_at: sig.discovered_at,
             metadata_json: sig.metadata_json,
@@ -618,7 +624,6 @@ pub struct SignalSummary {
     /// Total health issues (excluding deploy_conflicts)
     pub total_issues: usize,
     // Content-level breakdowns (may not sum to total_issues due to other issue types)
-    pub fingerprint_duplicates: usize,
     pub metadata_duplicates: usize,
     pub canonicalization_issues: usize,
     pub missing_tag_issues: usize,
@@ -706,8 +711,8 @@ pub struct CorpusFilesBucket {
 /// Bucket 2: Tag Squash - duplicates, tag canonicity, album_artist, and compound tag issues
 #[derive(Debug, Clone, Default)]
 pub struct TagSquashBucket {
-    /// Fingerprint duplicate groups (easy resolutions at top)
-    pub fingerprint_duplicate_count: usize,
+    /// Directory overlap clusters (grouped fingerprint overlaps for bulk resolution)
+    pub directory_overlap_cluster_count: usize,
     /// Subpar duplicates (lower quality versions, easy stash candidates)
     pub subpar_duplicate_count: usize,
     /// Tag canonicity issues grouped by tag name (e.g., "artist": 50 clusters)

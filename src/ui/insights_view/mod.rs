@@ -136,7 +136,7 @@ pub enum InsightType {
     CorpusCorruptFiles,
     CorpusShitFormatFiles,
     // Tag resolution bucket entries (duplicates at top for easy resolution)
-    FingerprintDuplicates,
+    DirectoryOverlapClusters,
     SubparDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
@@ -174,7 +174,7 @@ pub enum InsightAction {
     /// Launch intake confirmation flow for unindexed files
     LaunchIntakeConfirmation,
     /// Launch fingerprint duplicate resolution flow
-    LaunchFingerprintDuplicateResolution,
+    LaunchDirectoryOverlapResolution,
     /// Launch subpar duplicate stash flow
     LaunchSubparDuplicateResolution,
     /// Flow not yet implemented
@@ -233,15 +233,15 @@ impl BucketEntry {
         }
     }
 
-    /// Create fingerprint duplicates entry
-    fn fingerprint_duplicates(count: usize) -> Self {
+    /// Create directory overlap clusters entry
+    fn directory_overlap_clusters(count: usize) -> Self {
         Self {
-            insight_type: InsightType::FingerprintDuplicates,
-            label: "Fingerprint duplicates".to_string(),
+            insight_type: InsightType::DirectoryOverlapClusters,
+            label: "Directory overlaps".to_string(),
             count: Some(count),
             color: if count > 0 { Color::Cyan } else { Color::Green },
             rank: 0,
-            action: InsightAction::LaunchFingerprintDuplicateResolution,
+            action: InsightAction::LaunchDirectoryOverlapResolution,
         }
     }
 
@@ -468,8 +468,8 @@ impl CachedBucketEntries {
         let mut entries = Vec::new();
 
         // Fingerprint duplicates at top - easy resolutions
-        if bucket.fingerprint_duplicate_count > 0 {
-            entries.push(BucketEntry::fingerprint_duplicates(bucket.fingerprint_duplicate_count));
+        if bucket.directory_overlap_cluster_count > 0 {
+            entries.push(BucketEntry::directory_overlap_clusters(bucket.directory_overlap_cluster_count));
         }
 
         // Subpar duplicates - identified low-quality copies ready to stash
@@ -743,7 +743,7 @@ mod tests {
                 _directory_breakdown: Default::default(),
             },
             bucket_placeholder: TagSquashBucket {
-                fingerprint_duplicate_count: 0,
+                directory_overlap_cluster_count: 0,
                 subpar_duplicate_count: 0,
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,

@@ -22,7 +22,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | HealthyFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In corpus, indexed, mtime matches, no OOB signals |
 | CorruptFile | VerifyTags, VerifyAudio, IndexFileFromPath, Transcode | VerifyAudio (if valid), MoveToStash, DropFromIndex | Tag read or audio decode failed |
 | ShitFormat | IndexFileFromPath, DetectShitFormats | Transcode (to Opus/FLAC), DetectShitFormats | Non-Vorbis container (MP3, M4A, WAV, etc.) |
-| SubparDuplicate | AnalyzeFingerprintDuplicates | AnalyzeFingerprintDuplicates, MoveToStash | Track is subpar quality duplicate |
+| SubparDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps, MoveToStash | Track is subpar quality duplicate |
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
@@ -67,7 +67,8 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
-| FingerprintDuplicate | DetectFingerprintDuplicates | DetectFingerprintDuplicates | Tracks with identical fingerprints |
+| FingerprintOverlap | DetectFingerprintOverlaps | DetectFingerprintOverlaps | Tracks with identical fingerprints (internal signal) |
+| DirectoryOverlapCluster | ClusterDirectoryOverlaps | ClusterDirectoryOverlaps | Directory-level overlap cluster for resolution UI |
 | DuplicateInode | DetectDuplicateInodes | DetectDuplicateInodes | Tracks sharing same inode |
 | MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags |
 | MetadataDuplicate | DetectMetadataDuplicates | DetectMetadataDuplicates | Tracks with identical tag sets |
@@ -117,7 +118,8 @@ From `CLAUDE.md`:
 
 ### Good Signals
 - `UnindexedFile` for path X (one file)
-- `FingerprintDuplicate` for fingerprint Z (one group of tracks)
+- `FingerprintOverlap` for fingerprint Z (one group of tracks)
+- `DirectoryOverlapCluster` for directory overlap (groups tracks by directory)
 
 ### Bad Signals (DO NOT CREATE)
 - `LibraryHealthSummary` (aggregate counts)

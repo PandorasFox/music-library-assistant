@@ -194,7 +194,9 @@ fn extract_audio_metadata(path: &Path) -> Result<AudioMetadata> {
 
 /// Generate chromaprint fingerprint for audio file.
 /// Returns the raw u32 fingerprint values (stored as BLOB in DB).
-fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
+///
+/// Fingerprints the entire audio file (no duration limit).
+pub fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
     use rusty_chromaprint::{Configuration, Fingerprinter};
 
     // Open audio file with symphonia
@@ -243,18 +245,8 @@ fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
         .start(sample_rate, channels as u32)
         .context("Failed to start fingerprinter")?;
 
-    // Decode and feed audio to fingerprinter
-    // Limit to first 120 seconds for performance
-    const MAX_DURATION_SECS: u64 = 120;
-    let max_packets = (MAX_DURATION_SECS * sample_rate as u64) / 1024; // rough estimate
-    let mut packet_count = 0;
-
+    // Decode and feed entire audio to fingerprinter (no duration limit)
     while let Ok(packet) = format.next_packet() {
-        if packet_count >= max_packets {
-            break;
-        }
-        packet_count += 1;
-
         match decoder.decode(&packet) {
             Ok(decoded) => {
                 // Convert audio buffer to i16 samples

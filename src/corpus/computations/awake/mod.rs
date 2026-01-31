@@ -14,7 +14,8 @@
 //!
 //! Content Analysis:
 //! - `ScheduleContentAnalysis` - Orchestrator: spawns all detection computations
-//! - `DetectFingerprintDuplicates` - Find tracks with identical fingerprints
+//! - `DetectFingerprintOverlaps` - Find tracks with identical fingerprints (internal)
+//! - `ClusterDirectoryOverlaps` - Cluster fingerprint overlaps by directory (UI-facing)
 //! - `DetectDuplicateInodes` - Find tracks sharing the same inode
 //! - `DetectMissingTags` - Find tracks missing required tags
 //! - `DetectMetadataDuplicates` - Find tracks with identical tag sets
@@ -50,10 +51,11 @@ pub enum Computation {
     /// Orchestrator that spawns all detection computations in parallel.
     ScheduleContentAnalysis,
 
-    /// Detect fingerprint duplicates across all tracks.
+    /// Detect fingerprint overlaps across all tracks.
     ///
     /// Bulk SQL query: GROUP BY fingerprint HAVING COUNT > 1
-    DetectFingerprintDuplicates,
+    /// Emits FingerprintOverlap signals (internal, not surfaced to UI).
+    DetectFingerprintOverlaps,
 
     /// Detect duplicate inodes across all tracks.
     ///
@@ -91,12 +93,19 @@ pub enum Computation {
     /// should be transcoded to Opus (lossy) or FLAC (lossless).
     DetectShitFormats,
 
-    /// Analyze fingerprint duplicates for similarity, variants, and quality.
+    /// Analyze fingerprint overlaps for similarity, variants, and quality.
     ///
-    /// Reads FingerprintDuplicate signals, clusters by duration, computes
+    /// Reads FingerprintOverlap signals, clusters by duration, computes
     /// fingerprint similarity, detects variants via release metadata, ranks
     /// by quality, and emits SubparDuplicate signals for non-best tracks.
-    AnalyzeFingerprintDuplicates,
+    AnalyzeFingerprintOverlaps,
+
+    /// Cluster fingerprint overlaps by directory for bulk resolution.
+    ///
+    /// Reads FingerprintOverlap signals, filters tracks with distinguishing
+    /// metadata (ISRC, catalog#, variant keywords), finds directory divergence
+    /// points, and emits DirectoryOverlapCluster signals.
+    ClusterDirectoryOverlaps,
 
     /// Detect deployment conflicts (bulk).
     ///
@@ -125,7 +134,7 @@ impl Computation {
     pub fn label(&self) -> &'static str {
         match self {
             Computation::ScheduleContentAnalysis => "Scheduling content analysis",
-            Computation::DetectFingerprintDuplicates => "Detecting fingerprint duplicates",
+            Computation::DetectFingerprintOverlaps => "Detecting fingerprint overlaps",
             Computation::DetectDuplicateInodes => "Detecting duplicate inodes",
             Computation::DetectMissingTags => "Detecting missing tags",
             Computation::DetectMetadataDuplicates => "Detecting metadata duplicates",
@@ -133,7 +142,8 @@ impl Computation {
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::DetectCompoundTagValues => "Detecting compound tag values",
             Computation::DetectShitFormats => "Detecting shit format files",
-            Computation::AnalyzeFingerprintDuplicates => "Analyzing fingerprint duplicates",
+            Computation::AnalyzeFingerprintOverlaps => "Analyzing fingerprint overlaps",
+            Computation::ClusterDirectoryOverlaps => "Clustering directory overlaps",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",

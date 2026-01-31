@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::corpus::computations::{Computation, awakening};
+use crate::corpus::computations::{Computation, awakening, awake};
 use crate::corpus::db::types::{FileSignalType, LibraryFileSignalType};
 use crate::corpus::transcode::TranscodeTarget;
 
@@ -277,6 +277,39 @@ pub enum Mutation {
         track_id: i64,
         path: PathBuf,
     },
+
+    // ========================================================================
+    // Maintenance Operations (Fingerprint Rebuild Chain)
+    // ========================================================================
+    //
+    // Fingerprint rebuild is a three-mutation chain:
+    // 1. ClearAllFingerprints: Wipes fingerprint column, spawns ScheduleFingerprintRefill
+    // 2. ScheduleFingerprintRefill: Queries tracks, spawns N individual RefillSingleFingerprint
+    // 3. RefillSingleFingerprint: Fingerprints one track, emits CorruptFile on failure
+    //
+    // This ensures individual mutations (parallelizable, interruptible, progress visible).
+
+    /// Clear all fingerprints from the database.
+    ///
+    /// First step of fingerprint rebuild. Executes `UPDATE tracks SET fingerprint = NULL`,
+    /// then spawns ScheduleFingerprintRefill to queue individual re-fingerprinting.
+    ClearAllFingerprints,
+
+    /// Schedule fingerprint regeneration for all tracks.
+    ///
+    /// Queries all tracks and spawns a RefillSingleFingerprint mutation for each.
+    /// Also spawns ScheduleContentAnalysis computation to update duplicate detection
+    /// after fingerprinting completes.
+    ScheduleFingerprintRefill,
+
+    /// Regenerate fingerprint for a single track.
+    ///
+    /// Fingerprints the entire audio file (no duration limit) and updates the track.
+    /// Emits CorruptFile signal if decoding fails.
+    RefillSingleFingerprint {
+        track_id: i64,
+        path: String,
+    },
     // Note: VerifyTags has been moved to corpus::computations::Computation.
     // Computations don't alter state - they only emit signals.
 }
@@ -301,6 +334,9 @@ impl Mutation {
             Mutation::LibraryMove { .. } => "Library move",
             Mutation::DbMigration { .. } => "Migration",
             Mutation::Transcode { .. } => "Transcode",
+            Mutation::ClearAllFingerprints => "Clear fingerprints",
+            Mutation::ScheduleFingerprintRefill => "Schedule fingerprinting",
+            Mutation::RefillSingleFingerprint { .. } => "Fingerprint track",
         }
     }
 
@@ -355,7 +391,10 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. } => None,
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => None,
         }
     }
 
@@ -457,6 +496,11 @@ impl Mutation {
             // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
             Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. } => {}
+
+            // Fingerprint rebuild: ClearAll/Schedule are DB-only, Single handles own signals
+            Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => {}
         }
 
         // Deduplicate directories
@@ -522,7 +566,10 @@ impl Mutation {
             Mutation::SetTrackTagsDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
         }
     }
 
@@ -564,7 +611,10 @@ impl Mutation {
             Mutation::SetTrackTagsDb { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. } => SignalClearScope::None,
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => SignalClearScope::None,
         }
     }
 
@@ -609,7 +659,10 @@ impl Mutation {
             Mutation::SetTrackTagsDb { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
         }
     }
 
@@ -645,7 +698,10 @@ impl Mutation {
             | Mutation::UpdateScanState { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. } => Some(false),
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => Some(false),
         }
     }
 
@@ -680,7 +736,10 @@ impl Mutation {
             | Mutation::UpdateScanState { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. } => Some(""),
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => Some(""),
         }
     }
 
@@ -694,6 +753,12 @@ impl Mutation {
                     corpus_path: source.clone(),
                     library_path: destination.clone(),
                 })
+            ],
+
+            // ScheduleFingerprintRefill: spawn content analysis to update duplicate detection
+            // (runs after all individual fingerprint mutations complete)
+            Mutation::ScheduleFingerprintRefill => vec![
+                Computation::Awake(awake::Computation::ScheduleContentAnalysis)
             ],
 
             // Explicit: all other variants spawn no additional computations
@@ -715,7 +780,9 @@ impl Mutation {
             | Mutation::UpdateScanState { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
         }
     }
 
@@ -755,7 +822,10 @@ impl Mutation {
             | Mutation::UpdateScanState { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill
+            | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
         }
     }
 }

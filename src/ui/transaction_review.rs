@@ -40,6 +40,7 @@ pub enum TransactionReviewSource {
     CorruptFileResolution,
     ShitFormatResolution,
     SubparDuplicateResolution,
+    DirectoryClusterResolution,
 }
 
 /// Summary of a single decision for display.
@@ -205,6 +206,11 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
                 track_ids.extend(tracks.iter().map(|(id, _)| *id));
             }
 
+            // Single-track fingerprint mutation
+            Mutation::RefillSingleFingerprint { track_id, .. } => {
+                track_ids.insert(*track_id);
+            }
+
             // Mutations without track IDs
             Mutation::MoveToStash { .. }
             | Mutation::Move { .. }
@@ -216,7 +222,9 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. } => {}
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::ClearAllFingerprints
+            | Mutation::ScheduleFingerprintRefill => {}
         }
     }
 

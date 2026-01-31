@@ -131,6 +131,16 @@ impl Database {
         Ok(count as usize)
     }
 
+    /// Get count of tracks that have fingerprints.
+    pub fn get_fingerprinted_track_count(&self) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tracks WHERE fingerprint IS NOT NULL",
+            params![],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
     /// Get multiple tracks by their IDs.
     pub fn get_tracks_by_ids(&self, ids: &[i64]) -> Result<Vec<Track>> {
         if ids.is_empty() {

@@ -33,7 +33,7 @@ pub fn execute_schedule_content_analysis(
 
     // Note: OOB tag change classification is now handled in Asleep phase by VerifyTags
     let mut spawn = vec![
-        Computation::DetectFingerprintDuplicates,
+        Computation::DetectFingerprintOverlaps,
         Computation::DetectDuplicateInodes,
         Computation::DetectMissingTags,
         Computation::DetectMetadataDuplicates,
@@ -41,7 +41,8 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectInconsistentAlbumArtist,
         Computation::DetectCompoundTagValues,
         Computation::DetectShitFormats,
-        Computation::AnalyzeFingerprintDuplicates,
+        Computation::AnalyzeFingerprintOverlaps,
+        Computation::ClusterDirectoryOverlaps,
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
     ];
@@ -75,15 +76,15 @@ pub fn execute_schedule_content_analysis(
 // Fingerprint Duplicate Detection
 // ============================================================================
 
-/// Execute DetectFingerprintDuplicates - bulk detection of fingerprint duplicates.
-pub fn execute_detect_fingerprint_duplicates(
+/// Execute DetectFingerprintOverlaps - bulk detection of fingerprint overlaps.
+pub fn execute_detect_fingerprint_overlaps(
     read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     use crate::corpus::db::queries::tracks::fingerprint_to_text;
 
-    let computation = Computation::DetectFingerprintDuplicates;
+    let computation = Computation::DetectFingerprintOverlaps;
 
     let sender = match db_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -140,14 +141,14 @@ pub fn execute_detect_fingerprint_duplicates(
     let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals(
         read_only_db,
         &sender,
-        AggregateSignalType::FingerprintDuplicate,
+        AggregateSignalType::FingerprintOverlap,
         computed,
         witness,
     );
 
     let total_groups = new_count + updated + unchanged;
     log_general(format!(
-        "[COMPUTE] DetectFingerprintDuplicates: {} groups ({} tracks), cleared={}, new={}, updated={}, unchanged={}",
+        "[COMPUTE] DetectFingerprintOverlaps: {} groups ({} tracks), cleared={}, new={}, updated={}, unchanged={}",
         total_groups, total_tracks, cleared, new_count, updated, unchanged
     ));
 
@@ -1460,15 +1461,15 @@ impl SubparReason {
     }
 }
 
-/// Execute AnalyzeFingerprintDuplicates - deep analysis of fingerprint duplicate groups.
-pub fn execute_analyze_fingerprint_duplicates(
+/// Execute AnalyzeFingerprintOverlaps - deep analysis of fingerprint overlap groups.
+pub fn execute_analyze_fingerprint_overlaps(
     read_only_db: &Database,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     use crate::corpus::db::types::CorpusFileSignalType;
 
-    let computation = Computation::AnalyzeFingerprintDuplicates;
+    let computation = Computation::AnalyzeFingerprintOverlaps;
 
     let sender = match db_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -1499,13 +1500,13 @@ pub fn execute_analyze_fingerprint_duplicates(
     // Clear all existing SubparDuplicate signals
     sender.clear_signals_by_type(SignalType::from(CorpusFileSignalType::SubparDuplicate), witness);
 
-    // Get all FingerprintDuplicate signals
+    // Get all FingerprintOverlap signals
     let fp_dup_signals = read_only_db
-        .get_aggregate_signals(Some(AggregateSignalType::FingerprintDuplicate))
+        .get_aggregate_signals(Some(AggregateSignalType::FingerprintOverlap))
         .unwrap_or_default();
 
     if fp_dup_signals.is_empty() {
-        log_general("[COMPUTE] AnalyzeFingerprintDuplicates: no fingerprint duplicate signals to analyze");
+        log_general("[COMPUTE] AnalyzeFingerprintOverlaps: no fingerprint overlap signals to analyze");
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
@@ -1662,7 +1663,7 @@ pub fn execute_analyze_fingerprint_duplicates(
     }
 
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintDuplicates: analyzed {} groups, emitted {} SubparDuplicate signals, skipped {} variants",
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, emitted {} SubparDuplicate signals, skipped {} variants",
         total_groups, subpar_count, variant_skipped
     ));
 
@@ -1708,4 +1709,253 @@ fn cluster_by_duration<'a>(
     }
 
     clusters
+}
+
+// ============================================================================
+// Directory Overlap Clustering
+// ============================================================================
+
+/// Execute ClusterDirectoryOverlaps - cluster fingerprint overlaps by directory.
+///
+/// Reads FingerprintOverlap signals, filters out tracks with distinguishing metadata
+/// (different ISRC, catalog#, variant keywords), finds directory divergence points,
+/// and emits DirectoryOverlapCluster signals for UI-based resolution.
+pub fn execute_cluster_directory_overlaps(
+    read_only_db: &Database,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = Computation::ClusterDirectoryOverlaps;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Clear all existing DirectoryOverlapCluster signals
+    sender.clear_signals_by_type(SignalType::from_str("directory_overlap_cluster").unwrap_or(SignalType::FingerprintOverlap), witness);
+
+    // Get all FingerprintOverlap signals
+    let fp_overlap_signals = read_only_db
+        .get_aggregate_signals(Some(AggregateSignalType::FingerprintOverlap))
+        .unwrap_or_default();
+
+    if fp_overlap_signals.is_empty() {
+        log_general("[COMPUTE] ClusterDirectoryOverlaps: no fingerprint overlap signals to cluster");
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+    }
+
+    // Build map of cluster_key -> (directories, fingerprint_keys)
+    // cluster_key is sorted path suffixes joined by |
+    let mut cluster_map: HashMap<String, DirectoryClusterBuilder> = HashMap::new();
+
+    for signal in &fp_overlap_signals {
+        let track_ids = signal.track_ids();
+        if track_ids.len() < 2 {
+            continue;
+        }
+
+        // Get tracks for this overlap group
+        let tracks = match read_only_db.get_tracks_by_ids(&track_ids) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        if tracks.len() < 2 {
+            continue;
+        }
+
+        // Get release identity info for filtering
+        let mut identities: Vec<TrackReleaseIdentity> = Vec::new();
+        for track in &tracks {
+            let track_id = track.id.unwrap_or(0);
+            let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
+            let tag_map: HashMap<String, String> = tags
+                .into_iter()
+                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                .collect();
+
+            identities.push(TrackReleaseIdentity {
+                track_id,
+                path: track.path.clone(),
+                album: tag_map.get("album").cloned().unwrap_or_default(),
+                title: tag_map.get("title").cloned().unwrap_or_default(),
+                isrc: tag_map.get("isrc").cloned().unwrap_or_default(),
+                catalog_number: tag_map.get("catalognumber").cloned().unwrap_or_default(),
+            });
+        }
+
+        // Filter to tracks that look like the same release (not variants)
+        // Use the first track as reference and keep tracks that match
+        let filtered_indices: Vec<usize> = if identities.is_empty() {
+            Vec::new()
+        } else {
+            let mut indices = vec![0usize]; // Always include first
+            for i in 1..identities.len() {
+                if is_same_release(&identities[0], &identities[i]) {
+                    indices.push(i);
+                }
+            }
+            indices
+        };
+
+        // Need at least 2 tracks after filtering
+        if filtered_indices.len() < 2 {
+            continue;
+        }
+
+        // Find directory divergence point
+        // Build (path, track_id) pairs for the filtered tracks
+        let path_track_pairs: Vec<(&str, i64)> = filtered_indices.iter()
+            .map(|&i| (identities[i].path.as_str(), identities[i].track_id))
+            .collect();
+
+        let divergence = find_directory_divergence_with_tracks(&path_track_pairs);
+        if divergence.is_empty() || divergence.len() < 2 {
+            // All in same directory or couldn't find divergence
+            continue;
+        }
+
+        // Build cluster key from sorted path suffixes
+        let mut sorted_suffixes: Vec<&str> = divergence.iter().map(|(s, _)| s.as_str()).collect();
+        sorted_suffixes.sort();
+        let cluster_key = sorted_suffixes.join("|");
+
+        // Add to cluster map
+        let builder = cluster_map.entry(cluster_key.clone()).or_insert_with(|| {
+            DirectoryClusterBuilder {
+                directories: HashMap::new(),
+                fingerprint_keys: Vec::new(),
+            }
+        });
+
+        // Add fingerprint key
+        builder.fingerprint_keys.push(signal.key.clone());
+
+        // Add track IDs to their respective directories
+        for (suffix, track_ids_for_suffix) in divergence {
+            let dir_entry = builder.directories.entry(suffix).or_insert_with(Vec::new);
+            for tid in track_ids_for_suffix {
+                if !dir_entry.contains(&tid) {
+                    dir_entry.push(tid);
+                }
+            }
+        }
+    }
+
+    // Emit DirectoryOverlapCluster signals
+    let mut cluster_count = 0;
+
+    for (cluster_key, builder) in cluster_map {
+        // Skip if only one directory (shouldn't happen but safety check)
+        if builder.directories.len() < 2 {
+            continue;
+        }
+
+        // Build directory entries for metadata
+        let directories: Vec<serde_json::Value> = builder.directories
+            .iter()
+            .map(|(suffix, track_ids)| {
+                serde_json::json!({
+                    "path_suffix": suffix,
+                    "track_ids": track_ids,
+                })
+            })
+            .collect();
+
+        let metadata = serde_json::json!({
+            "cluster_key": cluster_key,
+            "directories": directories,
+            "fingerprint_overlap_keys": builder.fingerprint_keys,
+        });
+
+        sender.ensure_aggregate_signal(
+            AggregateSignalType::DirectoryOverlapCluster,
+            &cluster_key,
+            Some(&metadata.to_string()),
+            witness,
+        );
+
+        cluster_count += 1;
+    }
+
+    log_general(format!(
+        "[COMPUTE] ClusterDirectoryOverlaps: emitted {} DirectoryOverlapCluster signals from {} fingerprint overlaps",
+        cluster_count, fp_overlap_signals.len()
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Builder for accumulating directory cluster data.
+struct DirectoryClusterBuilder {
+    /// Map of path_suffix -> track_ids
+    directories: HashMap<String, Vec<i64>>,
+    /// Source fingerprint overlap keys
+    fingerprint_keys: Vec<String>,
+}
+
+/// Find directory divergence point for a set of (path, track_id) pairs.
+///
+/// Returns a map of divergent_suffix -> track_ids for that suffix.
+/// Empty if paths don't diverge or are invalid.
+fn find_directory_divergence_with_tracks(path_track_pairs: &[(&str, i64)]) -> Vec<(String, Vec<i64>)> {
+    if path_track_pairs.len() < 2 {
+        return Vec::new();
+    }
+
+    // Split paths into components
+    let components: Vec<Vec<&str>> = path_track_pairs
+        .iter()
+        .map(|(p, _)| p.split('/').collect())
+        .collect();
+
+    // Find common prefix length
+    let min_len = components.iter().map(|c| c.len()).min().unwrap_or(0);
+    let mut common_prefix_len = 0;
+
+    for i in 0..min_len {
+        let first = components[0].get(i);
+        if components.iter().all(|c| c.get(i) == first) {
+            common_prefix_len = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    // If no divergence found (all identical paths), return empty
+    if common_prefix_len >= min_len {
+        return Vec::new();
+    }
+
+    // Group paths by their divergent suffix (from divergence point to one level up from file)
+    let mut suffix_map: HashMap<String, Vec<i64>> = HashMap::new();
+
+    for (idx, comps) in components.iter().enumerate() {
+        // Divergent suffix: from common_prefix_len to (len - 1) to exclude filename
+        let suffix_end = comps.len().saturating_sub(1);
+        if common_prefix_len >= suffix_end {
+            // Path is too short to have meaningful divergence
+            continue;
+        }
+
+        let suffix_parts: Vec<&str> = comps[common_prefix_len..suffix_end].to_vec();
+        let suffix = suffix_parts.join("/");
+
+        // Use actual track_id from the pair
+        let track_id = path_track_pairs[idx].1;
+        suffix_map
+            .entry(suffix)
+            .or_insert_with(Vec::new)
+            .push(track_id);
+    }
+
+    // Convert to vec and return
+    suffix_map.into_iter().collect()
 }

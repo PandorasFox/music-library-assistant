@@ -456,7 +456,7 @@ impl Database {
             let metadata_json: Option<String> = row.get(4)?;
 
             let signal_type = AggregateSignalType::from_str(&type_str)
-                .unwrap_or(AggregateSignalType::FingerprintDuplicate);
+                .unwrap_or(AggregateSignalType::FingerprintOverlap);
 
             Ok(AggregateSignal {
                 id: Some(id),
@@ -589,7 +589,6 @@ impl Database {
             let (issue_type, count) = row?;
 
             match issue_type.as_str() {
-                "fingerprint_dup" => summary.fingerprint_duplicates += count,
                 "metadata_dup" => summary.metadata_duplicates += count,
                 // Legacy and unified type both map to canonicalization_issues
                 "canon" | "tag_canon" | "genre_canon" => summary.canonicalization_issues += count,
@@ -699,15 +698,9 @@ impl Database {
     fn compute_tag_resolution_bucket(&self) -> Result<crate::corpus::db::types::TagSquashBucket> {
         use crate::corpus::db::types::*;
 
-        // Fingerprint duplicates (easy resolutions - at top of bucket)
-        // Subtract known variants since those are intentional duplicates
-        let known_variants: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM known_variants",
-            params![],
-            |row| row.get(0),
-        ).unwrap_or(0);
-        let fingerprint_duplicate_count = self.count_signal_type("fingerprint_dup")?
-            .saturating_sub(known_variants);
+        // Directory overlap clusters (easy resolutions - at top of bucket)
+        // These are derived from fingerprint overlaps, clustered by directory
+        let directory_overlap_cluster_count = self.count_signal_type("directory_overlap_cluster")?;
 
         // Subpar duplicates (lower quality versions identified by fingerprint analysis)
         // Note: stored as "subpar_duplicate" in database for backwards compatibility
@@ -745,7 +738,7 @@ impl Database {
             .collect();
 
         Ok(TagSquashBucket {
-            fingerprint_duplicate_count,
+            directory_overlap_cluster_count,
             subpar_duplicate_count,
             tag_canonicity,
             inconsistent_album_artist_count,
@@ -869,7 +862,7 @@ impl Database {
         Ok(Signal {
             id: Some(row.get(0)?),
             issue_type: SignalType::from_str(&issue_type_str)
-                .unwrap_or(SignalType::FingerprintDuplicate),
+                .unwrap_or(SignalType::FingerprintOverlap),
             issue_key: row.get(2)?,
             discovered_at: row.get(3)?,
             metadata_json: row.get(4)?,

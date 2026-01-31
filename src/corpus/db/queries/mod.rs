@@ -439,6 +439,16 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_tracks(source)
     }
 
+    /// Get track count, optionally filtered by source.
+    pub fn get_track_count(&self, source: Option<&str>) -> Result<usize> {
+        self.db.get_track_count(source)
+    }
+
+    /// Get count of tracks that have fingerprints.
+    pub fn get_fingerprinted_track_count(&self) -> Result<i64> {
+        self.db.get_fingerprinted_track_count()
+    }
+
     /// Get a track by its ID.
     pub fn get_track_by_id(&self, track_id: i64) -> Result<Option<super::types::Track>> {
         self.db.get_track_by_id(track_id)

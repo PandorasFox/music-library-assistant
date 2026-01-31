@@ -46,7 +46,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | Computation | Description |
 |-------------|-------------|
 | ScheduleContentAnalysis | Orchestrator: spawns all detection computations |
-| DetectFingerprintDuplicates | Find tracks with identical fingerprints |
+| DetectFingerprintOverlaps | Find tracks with identical fingerprints |
 | DetectDuplicateInodes | Find tracks sharing same inode |
 | DetectMissingTags | Find tracks missing required tags |
 | DetectMetadataDuplicates | Find tracks with identical tag sets |
@@ -54,7 +54,8 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums |
 | DetectCompoundTagValues | Find separators needing splits |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
-| AnalyzeFingerprintDuplicates | Analyze fingerprint duplicates for similarity, variants, quality |
+| AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality |
+| ClusterDirectoryOverlaps | Cluster FingerprintOverlap signals by directory for UI resolution |
 | DetectDeployConflicts | Detect path collisions in deployment |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
 | DeriveCorpusDeployStatus | Derive corpus deploy status |
@@ -91,7 +92,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
 | ScheduleContentAnalysis | All detection computations | — | — |
-| DetectFingerprintDuplicates | — | FingerprintDuplicate | FingerprintDuplicate (stale) |
+| DetectFingerprintOverlaps | — | FingerprintOverlap | FingerprintOverlap (stale) |
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
 | DetectMissingTags | — | MissingTag | MissingTag (all, then recreate) |
 | DetectMetadataDuplicates | — | MetadataDuplicate | MetadataDuplicate (all, then recreate) |
@@ -99,7 +100,8 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagValues | — | CompoundTagValue | CompoundTagValue (all, then recreate) |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
-| AnalyzeFingerprintDuplicates | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
+| AnalyzeFingerprintOverlaps | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
+| ClusterDirectoryOverlaps | — | DirectoryOverlapCluster | DirectoryOverlapCluster (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |

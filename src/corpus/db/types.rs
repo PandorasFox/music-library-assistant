@@ -476,6 +476,17 @@ impl FileSignalType {
         }
         None
     }
+
+    /// Convert to SignalType for DB queries.
+    ///
+    /// Panics for library types that don't have SignalType equivalents
+    /// (DeployReady, DeployedHealthy).
+    pub fn to_signal_type(&self) -> SignalType {
+        match self {
+            Self::Corpus(t) => t.to_signal_type(),
+            Self::Library(t) => t.to_signal_type(),
+        }
+    }
 }
 
 impl std::fmt::Display for FileSignalType {

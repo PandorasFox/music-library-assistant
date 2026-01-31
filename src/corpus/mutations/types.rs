@@ -10,7 +10,40 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::corpus::computations::{Computation, awakening};
+use crate::corpus::db::types::{FileSignalType, LibraryFileSignalType};
 use crate::corpus::transcode::TranscodeTarget;
+
+// ============================================================================
+// Post-Execution Behavior Types
+// ============================================================================
+
+/// Signal clearing scope after successful mutation.
+///
+/// Determines which signals are cleared for affected paths after a mutation executes.
+/// This is enforced via exhaustive match in `Mutation::signal_clear_scope()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalClearScope {
+    /// Clear only mutable signals (preserve CorruptFile, ShitFormat).
+    /// Used for mutations that modify files but don't remove them.
+    MutableOnly,
+    /// Clear ALL signals including file-inherent ones.
+    /// Used when the file is gone (stashed, dropped) or replaced entirely (transcode).
+    All,
+    /// No signal clearing needed.
+    /// Used for DB-only operations with no file impact.
+    None,
+}
+
+/// Specific signal to clear by type and key pattern (beyond path-based clearing).
+///
+/// Used for targeted signal clearing like LibraryStale, aggregate tag signals, etc.
+/// where the signal key doesn't match the mutation's affected paths.
+#[derive(Debug, Clone)]
+pub struct SignalToClear {
+    pub signal_type: FileSignalType,
+    pub key_pattern: String,
+}
 
 /// Extracted metadata from an audio file, ready for indexing.
 /// This is a Clone + Serialize version of the data from metadata::extract_metadata().
@@ -505,6 +538,239 @@ impl Mutation {
             Mutation::SetTrackTagsDb { .. }
             | Mutation::CleanupStaleScanState { .. }
             | Mutation::DbMigration { .. }
+            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+        }
+    }
+
+    // ========================================================================
+    // Post-Execution Behavior Methods (Exhaustive Matches)
+    // ========================================================================
+    //
+    // These methods define post-execution behavior for each mutation variant.
+    // **Compile-time guarantee**: Adding a new variant forces you to specify
+    // its behavior in each function (exhaustive match, no `_ =>` fallthrough).
+
+    /// Signal clearing scope. Exhaustive: adding a variant requires specifying its scope.
+    ///
+    /// Determines whether to clear all signals (file is gone/replaced), only mutable
+    /// signals (file modified but exists), or no signals (DB-only operation).
+    pub fn signal_clear_scope(&self) -> SignalClearScope {
+        match self {
+            // Clear ALL signals (file is gone or replaced entirely)
+            Mutation::MoveToStash { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::Transcode { .. } => SignalClearScope::All,
+
+            // Clear mutable signals only (preserve CorruptFile, ShitFormat)
+            Mutation::IndexTrack { .. }
+            | Mutation::IndexFileFromPath { .. }
+            | Mutation::Move { .. }
+            | Mutation::Copy { .. }
+            | Mutation::HardLink { .. }
+            | Mutation::LibraryMove { .. }
+            | Mutation::UpdateTrack { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::UpdateScanState { .. } => SignalClearScope::MutableOnly,
+
+            // No signal clearing (DB-only or no file impact)
+            Mutation::SetTrackTagsDb { .. }
+            | Mutation::DbMigration { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateScanStatePath { .. } => SignalClearScope::None,
+        }
+    }
+
+    /// Paths to spawn signal update computations for.
+    ///
+    /// May differ from `affected_paths()` (e.g., Transcode only spawns for new path
+    /// because source is stashed and would race with MissingFile emission).
+    pub fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        match self {
+            // Transcode: only spawn for NEW path (source is stashed, would race)
+            Mutation::Transcode { source_path, target_format, .. } => {
+                vec![source_path.with_extension(target_format.extension())]
+            }
+
+            // Most mutations: use affected_paths equivalent
+            Mutation::IndexTrack { path, .. }
+            | Mutation::IndexFileFromPath { path, .. }
+            | Mutation::UpdateScanState { path, .. }
+            | Mutation::MoveToStash { path, .. }
+            | Mutation::DropFromIndex { path, .. }
+            | Mutation::UpdateTrack { path, .. }
+            | Mutation::ApplyDbTagsToDisk { path, .. }
+            | Mutation::AssimilateDiskTagsToDb { path, .. } => vec![path.clone()],
+
+            Mutation::Move { source, destination, .. }
+            | Mutation::Copy { source, destination }
+            | Mutation::HardLink { source, destination }
+            | Mutation::LibraryMove { source, destination } => {
+                vec![source.clone(), destination.clone()]
+            }
+
+            Mutation::UpdateTrackPath { old_path, new_path, .. } => {
+                vec![old_path.clone(), new_path.clone()]
+            }
+
+            Mutation::AcknowledgeMtimeOnly { tracks }
+            | Mutation::AcknowledgeInodeChanged { tracks } => {
+                tracks.iter().map(|(_, path)| path.clone()).collect()
+            }
+
+            // No signal updates needed
+            Mutation::SetTrackTagsDb { .. }
+            | Mutation::DbMigration { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+        }
+    }
+
+    /// Whether this mutation should check for CorruptFile signal emission.
+    ///
+    /// Returns:
+    /// - `Some(true)`: Check for corrupt file (fingerprint is already known to be missing)
+    /// - `Some(false)`: No CorruptFile emission needed
+    /// - `None`: Deferred check (needs DB lookup after execution, e.g., IndexFileFromPath)
+    pub fn checks_corrupt_file(&self) -> Option<bool> {
+        match self {
+            // IndexTrack: check inline metadata
+            Mutation::IndexTrack { metadata, .. } => Some(metadata.fingerprint.is_none()),
+
+            // IndexFileFromPath: deferred check (needs DB lookup after execution)
+            Mutation::IndexFileFromPath { .. } => None,
+
+            // All others: no CorruptFile emission
+            Mutation::MoveToStash { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::Transcode { .. }
+            | Mutation::Move { .. }
+            | Mutation::Copy { .. }
+            | Mutation::HardLink { .. }
+            | Mutation::LibraryMove { .. }
+            | Mutation::UpdateTrack { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::UpdateScanState { .. }
+            | Mutation::DbMigration { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateScanStatePath { .. } => Some(false),
+        }
+    }
+
+    /// Whether this mutation should check for ShitFormat signal emission.
+    ///
+    /// Returns:
+    /// - `Some(file_type)`: Check this file type (non-empty = check, empty = no check)
+    /// - `None`: Deferred check (needs DB lookup after execution)
+    pub fn checks_shit_format(&self) -> Option<&str> {
+        match self {
+            // IndexTrack: check inline metadata
+            Mutation::IndexTrack { metadata, .. } => Some(&metadata.file_type),
+
+            // IndexFileFromPath: deferred check
+            Mutation::IndexFileFromPath { .. } => None,
+
+            // All others: no ShitFormat emission (explicit listing)
+            Mutation::MoveToStash { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::Transcode { .. }
+            | Mutation::Move { .. }
+            | Mutation::Copy { .. }
+            | Mutation::HardLink { .. }
+            | Mutation::LibraryMove { .. }
+            | Mutation::UpdateTrack { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::UpdateScanState { .. }
+            | Mutation::DbMigration { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateScanStatePath { .. } => Some(""),
+        }
+    }
+
+    /// Additional computations to spawn (beyond path-based signal updates).
+    ///
+    /// Exhaustive match - every variant must be handled.
+    pub fn additional_computations(&self) -> Vec<Computation> {
+        match self {
+            Mutation::HardLink { source, destination } => vec![
+                Computation::Awakening(awakening::Computation::UpdateDeploySignals {
+                    corpus_path: source.clone(),
+                    library_path: destination.clone(),
+                })
+            ],
+
+            // Explicit: all other variants spawn no additional computations
+            Mutation::IndexTrack { .. }
+            | Mutation::IndexFileFromPath { .. }
+            | Mutation::MoveToStash { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::Transcode { .. }
+            | Mutation::Move { .. }
+            | Mutation::Copy { .. }
+            | Mutation::LibraryMove { .. }
+            | Mutation::UpdateTrack { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::UpdateScanState { .. }
+            | Mutation::DbMigration { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateScanStatePath { .. } => Vec::new(),
+        }
+    }
+
+    /// Specific signals to clear by type+key (beyond path-based clearing).
+    ///
+    /// Exhaustive match - every variant must be handled.
+    /// Used for targeted clearing like LibraryStale after moves, aggregate tag
+    /// signals after tag edits, etc.
+    pub fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
+        match self {
+            Mutation::LibraryMove { source, .. } => vec![
+                SignalToClear {
+                    signal_type: LibraryFileSignalType::LibraryStale.into(),
+                    key_pattern: source.to_string_lossy().to_string(),
+                }
+            ],
+
+            // TODO: Tag mutations may need to clear aggregate tag signals here
+            // e.g., SetTrackTagsDb could clear MissingTag signals for affected tag types
+
+            // Explicit: all other variants clear no specific signals
+            Mutation::IndexTrack { .. }
+            | Mutation::IndexFileFromPath { .. }
+            | Mutation::MoveToStash { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::Transcode { .. }
+            | Mutation::Move { .. }
+            | Mutation::Copy { .. }
+            | Mutation::HardLink { .. }
+            | Mutation::UpdateTrack { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::UpdateScanState { .. }
+            | Mutation::DbMigration { .. }
+            | Mutation::CleanupStaleScanState { .. }
             | Mutation::UpdateScanStatePath { .. } => Vec::new(),
         }
     }

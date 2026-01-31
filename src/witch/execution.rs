@@ -8,17 +8,34 @@
 //!   All writes go through `db_thread::signal_sender()`.
 //! - **Computations**: Use thread-local read-only connection (same pattern).
 //! - **Migrations**: Open write connection via `Database::open()` (requires schema changes).
+//!
+//! ## Post-Execution Pipeline
+//!
+//! After a mutation executes successfully, `apply_post_execution()` runs a 5-phase
+//! pipeline defined by exhaustive match methods on `Mutation`:
+//!
+//! 1. **Signal clearing** - Clear signals for affected paths (scope from `signal_clear_scope()`)
+//! 2. **File-inherent signals** - Emit CorruptFile/ShitFormat (from `checks_*` methods)
+//! 3. **Signal update spawning** - Spawn UpdateFileSignals (from `paths_for_signal_updates()`)
+//! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
+//! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
 
+use std::path::Path;
 use std::time::Instant;
 
 use crate::config;
 use crate::corpus::computations::{Computation, awakening, with_read_only_db};
 use crate::corpus::db::types::CorpusFileSignalType;
 use crate::corpus::db::Database;
-use crate::corpus::mutations::Mutation;
+use crate::corpus::mutations::{Mutation, SignalClearScope, SignalToClear};
+use crate::corpus::paths;
 use crate::db_thread;
 
 use super::types::{Migration, MigrationWitness, MutationExecutionWitness, SpawnedMutation, Task, TaskResult};
+
+/// File types that should trigger ShitFormat signal (non-Vorbis containers).
+/// Includes lossy formats with poor metadata and lossless needing remux.
+const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
 
 // ============================================================================
 // Database Opening Helper (Migrations Only)
@@ -180,195 +197,8 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         }
     }
 
-    // TODO: The post-execution hooks below (signal emission, signal clearing, path wiping,
-    // spawn collection) have grown ad-hoc. Refactor into a structured post-execution
-    // pipeline, e.g. a `PostExecutionContext` that collects side-effects from both
-    // success and failure paths, rather than interleaving conditionals.
-
-    // Wipe per-file signals for affected paths FIRST, before emitting new signals.
-    // This prevents stale signals from persisting when mutations change corpus truth
-    // (e.g. MissingFile signals surviving after a DropFromIndex removes the track).
-    // The spawned signal update computations will re-derive any still-valid signals.
-    // Uses signal_sender for the writes (fire-and-forget).
-    //
-    // IMPORTANT: This must happen BEFORE CorruptFile/ShitFormat emission below,
-    // otherwise those signals get immediately wiped.
-    //
-    // TODO: Refactor signal clearing to use type-level signal categories instead of
-    // mutation-type matching. See SignalWriteOp TODO for the broader refactoring plan.
-    if success {
-        if let Some(sender) = db_thread::signal_sender() {
-            let resolver = crate::corpus::paths::get_resolver();
-
-            // Determine if this mutation should clear ALL signals (including file-inherent)
-            // or only mutable signals (preserving CorruptFile, ShitFormat).
-            let clear_all = matches!(
-                &mutation,
-                Mutation::MoveToStash { .. }
-                | Mutation::DropFromIndex { .. }
-                | Mutation::Transcode { .. }
-            );
-
-            for path in mutation.affected_paths() {
-                let signal_key = if path.is_absolute() {
-                    resolver.to_relative(&path)
-                } else {
-                    Some(path)  // already root-relative
-                };
-                if let Some(key) = signal_key {
-                    if clear_all {
-                        sender.clear_signals_for_path(&key.to_string_lossy(), &witness);
-                    } else {
-                        sender.clear_mutable_signals_for_path(&key.to_string_lossy(), &witness);
-                    }
-                }
-            }
-        }
-    }
-
-    // Emit CorruptFile for indexing mutations where fingerprint extraction failed
-    // (waveform decode failure indicates corrupt audio data)
-    // Also emit ShitFormat for non-Vorbis container formats (MP3, M4A, AAC, WMA, etc.)
-    if success {
-        /// File types that should trigger ShitFormat signal (non-Vorbis containers)
-        /// Includes lossy formats with poor metadata and lossless needing remux
-        const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
-
-        let resolver = crate::corpus::paths::get_resolver();
-        match &mutation {
-            Mutation::IndexTrack { path, metadata, .. } => {
-                if let Some(rel) = resolver.to_relative(path) {
-                    if let Some(sender) = db_thread::signal_sender() {
-                        let rel_str = rel.to_string_lossy();
-
-                        // CorruptFile if fingerprint extraction failed
-                        if metadata.fingerprint.is_none() {
-                            sender.ensure_file_signal(
-                                CorpusFileSignalType::CorruptFile.into(),
-                                &rel_str,
-                                &witness,
-                            );
-                        }
-
-                        // ShitFormat if non-Vorbis container
-                        let file_type_lower = metadata.file_type.to_lowercase();
-                        if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
-                            let metadata_json = serde_json::json!({
-                                "file_type": metadata.file_type
-                            }).to_string();
-                            sender.ensure_file_signal_with_metadata(
-                                CorpusFileSignalType::ShitFormat.into(),
-                                &rel_str,
-                                Some(&metadata_json),
-                                &witness,
-                            );
-                        }
-                    }
-                }
-            }
-            Mutation::IndexFileFromPath { path, .. } => {
-                if let Some(rel) = resolver.to_relative(path) {
-                    let rel_str = rel.to_string_lossy();
-                    // Check fingerprint and file_type via read-only DB
-                    let _ = with_read_only_db(|read_db| {
-                        if let Ok(Some(track)) = read_db.get_track_by_path(&rel_str) {
-                            if let Some(sender) = db_thread::signal_sender() {
-                                // CorruptFile if fingerprint extraction failed
-                                if track.fingerprint.is_none() {
-                                    sender.ensure_file_signal(
-                                        CorpusFileSignalType::CorruptFile.into(),
-                                        &rel_str,
-                                        &witness,
-                                    );
-                                }
-
-                                // ShitFormat if non-Vorbis container
-                                let file_type_lower = track.file_type.to_lowercase();
-                                if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
-                                    let metadata_json = serde_json::json!({
-                                        "file_type": track.file_type
-                                    }).to_string();
-                                    sender.ensure_file_signal_with_metadata(
-                                        CorpusFileSignalType::ShitFormat.into(),
-                                        &rel_str,
-                                        Some(&metadata_json),
-                                        &witness,
-                                    );
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Queue per-file signal updates for affected paths
-    // This ensures signals like UnindexedFile → HealthyFile are updated
-    // Mutations can ONLY spawn awakening-phase computations (phase boundary enforcement)
-    //
-    // Path-aware spawning: corpus paths → UpdateCorpusFileSignals,
-    // library paths → UpdateLibraryFileSignals, others → skip
-    //
-    // For Transcode: only spawn for the NEW path, not the source path.
-    // The source path no longer exists (it's stashed), and spawning signal updates
-    // for it causes a race where MissingFile is emitted before db_thread processes
-    // the track path update.
-    let mut spawn: Vec<Computation> = if success {
-        let resolver = crate::corpus::paths::get_resolver();
-
-        // Get paths to spawn signal updates for
-        let paths_to_update: Vec<std::path::PathBuf> = match &mutation {
-            Mutation::Transcode { source_path, target_format, .. } => {
-                // Only spawn for the new path (target), not the source (which is stashed)
-                let new_path = source_path.with_extension(target_format.extension());
-                vec![new_path]
-            }
-            _ => mutation.affected_paths(),
-        };
-
-        paths_to_update
-            .into_iter()
-            .filter_map(|path| {
-                let rel = if path.is_absolute() {
-                    resolver.to_relative(&path)?
-                } else {
-                    path
-                };
-                let abs = resolver.resolve(&rel);
-                if crate::corpus::paths::is_corpus_path(&rel) {
-                    Some(Computation::Awakening(awakening::Computation::UpdateCorpusFileSignals { path: abs }))
-                } else if crate::corpus::paths::is_library_path(&rel) {
-                    Some(Computation::Awakening(awakening::Computation::UpdateLibraryFileSignals { path: abs }))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // For deploy mutations, also spawn deploy signal updates
-    if success {
-        match &mutation {
-            Mutation::HardLink { source, destination } => {
-                spawn.push(Computation::Awakening(awakening::Computation::UpdateDeploySignals {
-                    corpus_path: source.clone(),
-                    library_path: destination.clone(),
-                }));
-            }
-            Mutation::LibraryMove { source, .. } => {
-                // Clear LibraryStale signals for the old (source) path
-                // Uses with_read_only_db for reads, signal_sender for writes
-                let _ = with_read_only_db(|read_db| {
-                    clear_library_stale_signals(read_db, source, &witness);
-                });
-            }
-            _ => {}
-        }
-    }
+    // Apply structured post-execution pipeline
+    let spawn = apply_post_execution(&mutation, success, &witness);
 
     TaskResult {
         success,
@@ -442,37 +272,238 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
     }
 }
 
-/// Clear LibraryStale signals for a library path after a LibraryMove.
+// ============================================================================
+// Post-Execution Pipeline
+// ============================================================================
+
+/// Apply post-execution hooks for a mutation.
 ///
-/// LibraryStale signals use compound keys like "library_stale:{name}:{path}",
-/// so we query existing signals and clear matching ones.
-fn clear_library_stale_signals(
-    db: &Database,
-    library_path: &std::path::Path,
+/// This is a structured 5-phase pipeline that replaces the ad-hoc conditionals
+/// that previously handled signal clearing, emission, and computation spawning.
+///
+/// Each phase uses exhaustive match methods on `Mutation` to ensure compile-time
+/// enforcement when new variants are added.
+///
+/// ## Phases
+///
+/// 1. **Signal clearing** - Clear signals for affected paths based on `signal_clear_scope()`
+/// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via `checks_corrupt_file()`/`checks_shit_format()`
+/// 3. **Signal update spawning** - Spawn UpdateFileSignals for `paths_for_signal_updates()`
+/// 4. **Additional computations** - Spawn extra computations from `additional_computations()`
+/// 5. **Specific signal clearing** - Clear signals by type+key from `specific_signals_to_clear()`
+fn apply_post_execution(
+    mutation: &Mutation,
+    success: bool,
     witness: &MutationExecutionWitness,
-) {
-    use crate::corpus::db::types::LibraryFileSignalType;
-    use crate::db_thread;
+) -> Vec<Computation> {
+    if !success {
+        return Vec::new();
+    }
 
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => return,
-    };
+    let resolver = paths::get_resolver();
+    let mut spawned = Vec::new();
 
-    let library_path_str = library_path.to_string_lossy();
-
-    // Query LibraryStale signals and clear those matching this path
-    if let Ok(signals) = db.get_signals(Some(LibraryFileSignalType::LibraryStale.into())) {
-        for signal in signals {
-            // Key format: "library_stale:{name}:{path}"
-            if signal.issue_key.ends_with(&format!(":{}", library_path_str)) {
-                sender.clear_file_signal(
-                    LibraryFileSignalType::LibraryStale.into(),
-                    &signal.issue_key,
-                    witness,
-                );
+    // Phase 1: Signal clearing (MUST happen before emission)
+    // Clears stale signals for affected paths; scope determined by mutation type.
+    let clear_scope = mutation.signal_clear_scope();
+    if clear_scope != SignalClearScope::None {
+        if let Some(sender) = db_thread::signal_sender() {
+            for path in mutation.affected_paths() {
+                let signal_key = if path.is_absolute() {
+                    resolver.to_relative(&path)
+                } else {
+                    Some(path)
+                };
+                if let Some(key) = signal_key {
+                    let key_str = key.to_string_lossy();
+                    match clear_scope {
+                        SignalClearScope::All => sender.clear_signals_for_path(&key_str, witness),
+                        SignalClearScope::MutableOnly => sender.clear_mutable_signals_for_path(&key_str, witness),
+                        SignalClearScope::None => {} // Already handled above
+                    }
+                }
             }
         }
     }
+
+    // Phase 2: File-inherent signal emission (CorruptFile, ShitFormat)
+    // These are emitted for indexing mutations where the file has quality issues.
+    emit_file_inherent_signals(mutation, witness);
+
+    // Phase 3: Spawn signal update computations
+    // Path-aware: corpus paths → UpdateCorpusFileSignals, library paths → UpdateLibraryFileSignals
+    for path in mutation.paths_for_signal_updates() {
+        let rel = if path.is_absolute() {
+            match resolver.to_relative(&path) {
+                Some(r) => r,
+                None => continue,
+            }
+        } else {
+            path
+        };
+        let abs = resolver.resolve(&rel);
+        if paths::is_corpus_path(&rel) {
+            spawned.push(Computation::Awakening(
+                awakening::Computation::UpdateCorpusFileSignals { path: abs }
+            ));
+        } else if paths::is_library_path(&rel) {
+            spawned.push(Computation::Awakening(
+                awakening::Computation::UpdateLibraryFileSignals { path: abs }
+            ));
+        }
+    }
+
+    // Phase 4: Additional computations (beyond path-based signal updates)
+    // e.g., HardLink spawns UpdateDeploySignals
+    spawned.extend(mutation.additional_computations());
+
+    // Phase 5: Specific signal clearing (by type+key pattern)
+    // e.g., LibraryMove clears LibraryStale for the old path
+    let signals_to_clear = mutation.specific_signals_to_clear();
+    if !signals_to_clear.is_empty() {
+        let _ = with_read_only_db(|read_db| {
+            if let Some(sender) = db_thread::signal_sender() {
+                for spec in &signals_to_clear {
+                    clear_signals_by_pattern(read_db, &sender, spec, witness);
+                }
+            }
+        });
+    }
+
+    spawned
+}
+
+/// Clear signals matching a type+key pattern.
+///
+/// Used for targeted clearing like LibraryStale signals, where the key format
+/// is compound (e.g., "library_stale:{name}:{path}") and doesn't match simple
+/// path-based clearing.
+fn clear_signals_by_pattern(
+    db: &Database,
+    sender: &db_thread::SignalWriteSender,
+    spec: &SignalToClear,
+    witness: &MutationExecutionWitness,
+) {
+    // Query existing signals of this type (convert FileSignalType → SignalType for query)
+    // and clear those matching the pattern
+    if let Ok(signals) = db.get_signals(Some(spec.signal_type.to_signal_type())) {
+        for signal in signals {
+            // Match if key ends with the pattern (compound key format)
+            // or if key equals the pattern exactly
+            if signal.issue_key.ends_with(&format!(":{}", spec.key_pattern))
+               || signal.issue_key == spec.key_pattern
+            {
+                sender.clear_file_signal(spec.signal_type, &signal.issue_key, witness);
+            }
+        }
+    }
+}
+
+/// Emit CorruptFile/ShitFormat signals based on mutation type.
+///
+/// Uses the mutation's `checks_corrupt_file()` and `checks_shit_format()` methods
+/// to determine whether and how to emit these file-inherent signals.
+fn emit_file_inherent_signals(mutation: &Mutation, witness: &MutationExecutionWitness) {
+    let resolver = paths::get_resolver();
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s,
+        None => return,
+    };
+
+    // Check for deferred lookup case (IndexFileFromPath)
+    match mutation {
+        Mutation::IndexFileFromPath { path, .. } => {
+            // Deferred: lookup from DB after execution
+            if let Some(rel) = resolver.to_relative(path) {
+                let rel_str = rel.to_string_lossy();
+                let _ = with_read_only_db(|read_db| {
+                    if let Ok(Some(track)) = read_db.get_track_by_path(&rel_str) {
+                        emit_signals_for_track(path, &track.fingerprint, &track.file_type, &sender, witness);
+                    }
+                });
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    // Non-deferred case: check inline metadata
+    let should_check_corrupt = mutation.checks_corrupt_file();
+    let file_type_check = mutation.checks_shit_format();
+
+    // Both return Some for non-deferred, Some(false)/Some("") for skip
+    let (Some(is_corrupt), Some(file_type)) = (should_check_corrupt, file_type_check) else {
+        return;
+    };
+
+    // Get path for the signal key
+    let path = match mutation {
+        Mutation::IndexTrack { path, .. } => path,
+        _ => return,
+    };
+
+    if let Some(rel) = resolver.to_relative(path) {
+        let rel_str = rel.to_string_lossy();
+
+        // CorruptFile if fingerprint extraction failed
+        if is_corrupt {
+            sender.ensure_file_signal(
+                CorpusFileSignalType::CorruptFile.into(),
+                &rel_str,
+                witness,
+            );
+        }
+
+        // ShitFormat if non-Vorbis container
+        if !file_type.is_empty() && is_shit_format(file_type) {
+            let metadata_json = serde_json::json!({ "file_type": file_type }).to_string();
+            sender.ensure_file_signal_with_metadata(
+                CorpusFileSignalType::ShitFormat.into(),
+                &rel_str,
+                Some(&metadata_json),
+                witness,
+            );
+        }
+    }
+}
+
+/// Emit signals for a track looked up from DB (deferred case).
+fn emit_signals_for_track(
+    path: &Path,
+    fingerprint: &Option<Vec<u32>>,
+    file_type: &str,
+    sender: &db_thread::SignalWriteSender,
+    witness: &MutationExecutionWitness,
+) {
+    let resolver = paths::get_resolver();
+    if let Some(rel) = resolver.to_relative(path) {
+        let rel_str = rel.to_string_lossy();
+
+        // CorruptFile if fingerprint extraction failed
+        if fingerprint.is_none() {
+            sender.ensure_file_signal(
+                CorpusFileSignalType::CorruptFile.into(),
+                &rel_str,
+                witness,
+            );
+        }
+
+        // ShitFormat if non-Vorbis container
+        if is_shit_format(file_type) {
+            let metadata_json = serde_json::json!({ "file_type": file_type }).to_string();
+            sender.ensure_file_signal_with_metadata(
+                CorpusFileSignalType::ShitFormat.into(),
+                &rel_str,
+                Some(&metadata_json),
+                witness,
+            );
+        }
+    }
+}
+
+/// Check if a file type is a "shit format" (non-Vorbis container).
+fn is_shit_format(file_type: &str) -> bool {
+    let file_type_lower = file_type.to_lowercase();
+    SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str())
 }
 

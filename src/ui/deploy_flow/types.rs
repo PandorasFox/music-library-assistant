@@ -108,17 +108,6 @@ impl DeployModalData {
         ]
     }
 
-    /// Get total file counts (for summary dialog).
-    pub fn file_counts(&self) -> (usize, usize, usize, usize, usize) {
-        (
-            self.healthy.len(),
-            self.new.len(),
-            self.conflicts.len(),
-            self.leftover.len(),
-            self.stale.len(),
-        )
-    }
-
     /// Get summary for confirmation dialog.
     pub fn summary(&self) -> DeploySummary {
         DeploySummary {

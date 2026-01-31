@@ -49,16 +49,6 @@ impl ConditionType {
         }
     }
 
-    /// Cycle to the previous condition type.
-    pub fn prev(&self) -> Self {
-        match self {
-            ConditionType::Tag => ConditionType::Duration,
-            ConditionType::FileType => ConditionType::Tag,
-            ConditionType::SampleRate => ConditionType::FileType,
-            ConditionType::Bitrate => ConditionType::SampleRate,
-            ConditionType::Duration => ConditionType::Bitrate,
-        }
-    }
 }
 
 // ============================================================================
@@ -231,14 +221,6 @@ impl LogicalOperator {
         }
     }
 
-    /// Cycle to the previous operator.
-    pub fn prev(&self) -> Self {
-        match self {
-            LogicalOperator::And => LogicalOperator::Xor,
-            LogicalOperator::Or => LogicalOperator::And,
-            LogicalOperator::Xor => LogicalOperator::Or,
-        }
-    }
 }
 
 /// Comparison operators for tag value matching.

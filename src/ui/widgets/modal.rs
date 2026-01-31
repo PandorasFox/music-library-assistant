@@ -151,12 +151,6 @@ impl<'a> Modal<'a> {
         self
     }
 
-    /// Set size as percentage of parent area (dynamic sizing).
-    pub fn size(mut self, width_percent: u16, height_percent: u16) -> Self {
-        self.sizing = ModalSizing::Percent { width: width_percent, height: height_percent };
-        self
-    }
-
     /// Set size as fixed character dimensions (static sizing).
     /// Use this for modals with static content that shouldn't shrink.
     pub fn fixed_size(mut self, width: u16, height: u16) -> Self {

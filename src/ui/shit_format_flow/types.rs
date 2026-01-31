@@ -134,11 +134,6 @@ impl ShitFormatModalData {
         self.lossless_files.len() + self.lossy_files.len()
     }
 
-    /// Check if there are any shit format files.
-    pub fn has_files(&self) -> bool {
-        !self.lossless_files.is_empty() || !self.lossy_files.is_empty()
-    }
-
     /// Check if there are lossless files.
     pub fn has_lossless(&self) -> bool {
         !self.lossless_files.is_empty()

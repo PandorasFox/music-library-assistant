@@ -58,22 +58,6 @@ impl WaitState {
         self.seen_working = false;
     }
 
-    /// Reset to not-waiting state.
-    pub fn reset(&mut self) {
-        self.waiting = false;
-        self.seen_working = false;
-    }
-
-    /// Check if we're currently waiting.
-    pub fn is_waiting(&self) -> bool {
-        self.waiting
-    }
-
-    /// Check if we've seen the Witch working.
-    pub fn has_seen_working(&self) -> bool {
-        self.seen_working
-    }
-
     /// Tick the wait state, checking for completion.
     ///
     /// Returns `true` when waiting is complete (Witch was working and is now idle/completed).
@@ -95,43 +79,6 @@ impl WaitState {
         // - No pending tasks
         // - The Witch is now Idle or Completed
         if self.seen_working && status.pending == 0 {
-            match status.state {
-                TaskExecutionStateSnapshot::Idle | TaskExecutionStateSnapshot::Completed => {
-                    self.waiting = false;
-                    return true; // Complete!
-                }
-                TaskExecutionStateSnapshot::Working => {
-                    // Still working, not complete
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Tick with additional check for pending DB writes.
-    ///
-    /// Like `tick()`, but also waits for the DB write queue to drain.
-    /// Use this when you need to ensure all side effects are persisted.
-    pub fn tick_with_db_drain(&mut self, witch: &Witch) -> bool {
-        if !self.waiting {
-            return false;
-        }
-
-        let status = witch.status();
-        let db_queue_empty = witch.db_queue_depth() == 0;
-
-        // Track when the Witch starts working
-        if status.state == TaskExecutionStateSnapshot::Working {
-            self.seen_working = true;
-        }
-
-        // Check for completion:
-        // - Must have seen working state
-        // - No pending tasks
-        // - DB queue is empty
-        // - The Witch is now Idle or Completed
-        if self.seen_working && status.pending == 0 && db_queue_empty {
             match status.state {
                 TaskExecutionStateSnapshot::Idle | TaskExecutionStateSnapshot::Completed => {
                     self.waiting = false;

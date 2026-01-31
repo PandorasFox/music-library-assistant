@@ -14,8 +14,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::corpus::db::types::AggregateSignal;
-use crate::corpus::health::album_artist_detection::AlbumArtistIssue;
-use crate::corpus::health::collision::TagCollision;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::tags::TagSet;
 use crate::ui::widgets::TextInputState;
@@ -45,61 +43,6 @@ pub struct TagCanonicalityModalData {
 }
 
 impl TagCanonicalityModalData {
-    /// Create from a TagCollision (artist, genre canonicity).
-    ///
-    /// Note: track_ids are not directly available from TagCollision.
-    /// They must be populated separately via a database query if needed for mutations.
-    pub fn from_collision(collision: &TagCollision) -> Self {
-        // Build variants from the collision's variant_counts
-        let mut variants: Vec<TagVariantEntry> = collision
-            .variant_counts
-            .iter()
-            .map(|(value, count)| TagVariantEntry {
-                value: value.clone(),
-                count: *count,
-            })
-            .collect();
-
-        // Sort: count DESC, then alphabetically for ties
-        variants.sort_by(|a, b| {
-            b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
-        });
-
-        Self {
-            tag_name: collision.tag_name.clone(),
-            context_label: None,
-            variants,
-            // Track IDs need to be populated separately via DB query
-            track_ids: Vec::new(),
-        }
-    }
-
-    /// Create from an AlbumArtistIssue (album_artist resolution).
-    pub fn from_album_artist_issue(issue: &AlbumArtistIssue) -> Self {
-        // For album_artist, we show the artist variants as the list
-        // The user will input the album_artist value
-        let mut variants: Vec<TagVariantEntry> = issue
-            .artist_variants
-            .iter()
-            .map(|(value, count)| TagVariantEntry {
-                value: value.clone(),
-                count: *count,
-            })
-            .collect();
-
-        // Sort: count DESC, then alphabetically for ties
-        variants.sort_by(|a, b| {
-            b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
-        });
-
-        Self {
-            tag_name: "album_artist".to_string(),
-            context_label: Some(format!("Album: {}", issue.album)),
-            variants,
-            track_ids: issue.track_ids.clone(),
-        }
-    }
-
     /// Create from an AggregateSignal (loaded from database).
     ///
     /// Handles two signal formats:
@@ -292,21 +235,6 @@ impl TagCanonicalityState {
         }
     }
 
-    /// Check if cursor is on text field.
-    pub fn is_on_text_field(&self) -> bool {
-        self.cursor == -1
-    }
-
-    /// Check if cursor is on first list item.
-    pub fn is_on_first_item(&self) -> bool {
-        self.cursor == 0
-    }
-
-    /// Check if cursor is on last list item.
-    pub fn is_on_last_item(&self) -> bool {
-        self.cursor == self.data.variants.len() as i32 - 1
-    }
-
     /// Check if we can submit (canonical value is non-empty and variants selected, no modal open).
     pub fn can_submit(&self) -> bool {
         self.modal == TagCanonicalityModal::None
@@ -322,11 +250,6 @@ impl TagCanonicalityState {
     /// Check if a modal is open.
     pub fn has_modal(&self) -> bool {
         self.modal != TagCanonicalityModal::None
-    }
-
-    /// Get the canonical value to apply.
-    pub fn canonical_value(&self) -> &str {
-        self.canonical_input.value().trim()
     }
 
     /// Get the selected variant values that should be replaced.

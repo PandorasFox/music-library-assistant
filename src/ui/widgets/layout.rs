@@ -11,7 +11,7 @@ use ratatui::{
 #[derive(Clone)]
 pub struct PaneConfig {
     /// Title displayed in the pane's border
-    pub title: String,
+    pub _title: String,
     /// Percentage width (for horizontal) or height (for vertical) of this pane
     pub size_percent: u16,
 }
@@ -19,7 +19,7 @@ pub struct PaneConfig {
 impl PaneConfig {
     pub fn new(title: impl Into<String>, size_percent: u16) -> Self {
         Self {
-            title: title.into(),
+            _title: title.into(),
             size_percent,
         }
     }
@@ -35,19 +35,19 @@ pub struct FocusablePane {
 #[derive(Clone, Copy)]
 pub struct PaneStyle {
     /// Border color when focused
-    pub focused_border: Color,
+    pub _focused_border: Color,
     /// Border color when not focused
-    pub unfocused_border: Color,
+    pub _unfocused_border: Color,
     /// Background color (optional)
-    pub background: Option<Color>,
+    pub _background: Option<Color>,
 }
 
 impl Default for PaneStyle {
     fn default() -> Self {
         Self {
-            focused_border: Color::Yellow,
-            unfocused_border: Color::White,
-            background: None,
+            _focused_border: Color::Yellow,
+            _unfocused_border: Color::White,
+            _background: None,
         }
     }
 }

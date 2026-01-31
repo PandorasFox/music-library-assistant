@@ -195,16 +195,6 @@ impl ProgressScreen {
         self.complete
     }
 
-    /// Get current progress (0.0 to 1.0).
-    pub fn progress(&self) -> Option<f32> {
-        self.progress
-    }
-
-    /// Get progress detail string.
-    pub fn progress_detail(&self) -> Option<&str> {
-        self.progress_detail.as_deref()
-    }
-
     /// Get the status message.
     pub fn status_message(&self) -> &'static str {
         self.phase.status_message(self.eye_state, self.complete)
@@ -227,11 +217,6 @@ impl ProgressScreen {
     /// Update pending DB write queue depth.
     pub fn set_db_queue_depth(&mut self, depth: u64) {
         self.db_queue_depth = depth;
-    }
-
-    /// Get the current tick count for animations.
-    pub fn tick_count(&self) -> u32 {
-        self.tick_count
     }
 
     /// Get the current bouncing dot spinner character for left column only.

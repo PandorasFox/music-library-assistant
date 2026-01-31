@@ -103,11 +103,6 @@ impl ResolutionLayout {
         Self::new(area, 3, 2, 33)
     }
 
-    /// Create layout with custom list percentage.
-    pub fn with_list_percent(area: Rect, list_percent: u16) -> Self {
-        Self::new(area, 3, 2, list_percent)
-    }
-
     /// Apply 1-cell padding to an area (for full-area modals).
     pub fn padded(area: Rect) -> Rect {
         Rect {
@@ -164,13 +159,6 @@ impl ButtonRects {
         None
     }
 
-    /// Get a button's rect by name.
-    pub fn get(&self, name: &str) -> Option<Rect> {
-        self.rects
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, rect)| *rect)
-    }
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::actions::TreeBrowserAction;
-use super::navigator::{EntryFilter, TreeNavigator};
+use super::navigator::TreeNavigator;
 
 /// Browser variants - each is a distinct, purpose-tuned mode.
 #[derive(Debug)]
@@ -22,13 +22,6 @@ pub enum BrowserVariant {
 }
 
 impl BrowserVariant {
-    /// Get the entry filter for this variant.
-    pub fn entry_filter(&self) -> EntryFilter {
-        match self {
-            BrowserVariant::CorpusBrowser(v) => v.entry_filter(),
-        }
-    }
-
     /// Called when cursor moves - allows variants to update state.
     pub fn on_cursor_move(&mut self, nav: &TreeNavigator) {
         match self {

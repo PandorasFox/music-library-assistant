@@ -21,7 +21,7 @@ pub struct CompoundSplitData {
     /// Original compound value (e.g., "Rock; Metal")
     pub compound_value: String,
     /// Detected separator (e.g., "; ")
-    pub separator: String,
+    pub _separator: String,
     /// Split parts (e.g., ["Rock", "Metal"])
     pub split_parts: Vec<String>,
     /// Track IDs affected by this compound value
@@ -55,7 +55,7 @@ impl CompoundSplitData {
         Some(Self {
             tag_name,
             compound_value,
-            separator,
+            _separator: separator,
             split_parts,
             track_ids,
         })
@@ -230,10 +230,4 @@ impl CompoundSplitClusters {
         }
     }
 
-    /// Jump to a specific index.
-    pub fn jump_to(&mut self, index: usize) {
-        if index < self.signal_ids.len() {
-            self.current = index;
-        }
-    }
 }

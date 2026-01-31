@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
@@ -17,7 +17,7 @@ use crate::ui::widgets::TextInputState;
 
 use crate::ui::tree_browser::actions::TreeBrowserAction;
 use crate::ui::tree_browser::config::CorpusBrowserConfig;
-use crate::ui::tree_browser::navigator::{EntryFilter, TreeNavigator};
+use crate::ui::tree_browser::navigator::TreeNavigator;
 
 /// Focus state for corpus browser
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -76,15 +76,6 @@ impl CorpusBrowserVariant {
             search: SearchState::default(),
             match_selection_mode: false,
             match_selection_idx: 0,
-        }
-    }
-
-    /// Get the entry filter for corpus browser (includes files).
-    pub fn entry_filter(&self) -> EntryFilter {
-        if self.config.show_files {
-            EntryFilter::with_files()
-        } else {
-            EntryFilter::directories_only()
         }
     }
 
@@ -341,12 +332,6 @@ impl CorpusBrowserVariant {
     // =========================================================================
 
     /// Start search from navigator root.
-    fn start_search(&mut self, nav: &TreeNavigator) {
-        self.search.search_root = Some(nav.root_path().clone());
-        self.search.matches.clear();
-        self.search.first_match_idx = None;
-    }
-
     /// Update search matches based on current input.
     fn update_search_matches(&mut self, nav: &TreeNavigator) {
         let query = self.search_input.value().to_lowercase();
@@ -447,150 +432,6 @@ impl CorpusBrowserVariant {
     }
 
     // =========================================================================
-    // Accessors
-    // =========================================================================
-
-    /// Get current focus.
-    pub fn focus(&self) -> CorpusBrowserFocus {
-        self.focus
-    }
-
-    /// Get search input state.
-    pub fn search_input(&self) -> &TextInputState {
-        &self.search_input
-    }
-
-    /// Get search results.
-    pub fn search(&self) -> &SearchState {
-        &self.search
-    }
-
-    /// Check if in match selection mode.
-    pub fn is_match_selection_mode(&self) -> bool {
-        self.match_selection_mode
-    }
-
-    /// Get match selection index.
-    pub fn match_selection_idx(&self) -> usize {
-        self.match_selection_idx
-    }
-
-    // =========================================================================
-    // Rendering
-    // =========================================================================
-
-    /// Render the search bar.
-    pub fn render_search_bar(&self, f: &mut Frame, area: Rect) {
-        let is_focused = self.focus == CorpusBrowserFocus::SearchBar;
-
-        let placeholder = "type to start searching files and directories";
-
-        // Build search bar content
-        let (_content, _style) = if self.search_input.is_empty() && !is_focused {
-            (placeholder.to_string(), Style::default().fg(Color::DarkGray))
-        } else if self.search_input.is_empty() && is_focused {
-            // Focused but empty - show cursor
-            let mut state = self.search_input.clone();
-            state.focused = true;
-            // Render via widget in the else block instead
-            (String::new(), Style::default())
-        } else {
-            // Show search value with match count
-            let match_count = self.search.matches.len();
-            let count_suffix = if match_count > 0 {
-                format!("  ({} matches)", match_count)
-            } else if !self.search_input.is_empty() {
-                "  (no matches)".to_string()
-            } else {
-                String::new()
-            };
-
-            // Build with cursor if focused
-            if is_focused {
-                // Will render with TextInput widget
-                (String::new(), Style::default())
-            } else {
-                (format!("{}{}", self.search_input.value(), count_suffix), Style::default().fg(Color::White))
-            }
-        };
-
-        let border_color = if is_focused { Color::Cyan } else { Color::DarkGray };
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
-            .title("Search");
-
-        if is_focused || !self.search_input.is_empty() {
-            // Use custom rendering for cursor support
-            let mut state = self.search_input.clone();
-            state.focused = is_focused;
-
-            let match_count = self.search.matches.len();
-            let count_suffix = if match_count > 0 {
-                format!("  ({} matches)", match_count)
-            } else if !self.search_input.is_empty() {
-                "  (no matches)".to_string()
-            } else {
-                String::new()
-            };
-
-            let count_style = if match_count > 0 {
-                Style::default().fg(Color::Green)
-            } else if !self.search_input.is_empty() {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            // Build line with cursor
-            let line = if state.value.is_empty() && is_focused {
-                Line::from(vec![
-                    Span::styled(" ", Style::default().bg(Color::White).fg(Color::Black)),
-                    Span::styled(&count_suffix, count_style),
-                ])
-            } else if is_focused {
-                let chars: Vec<char> = state.value.chars().collect();
-                let mut spans = Vec::new();
-
-                // Text before cursor
-                if state.cursor > 0 {
-                    let before: String = chars[..state.cursor].iter().collect();
-                    spans.push(Span::styled(before, Style::default().fg(Color::White)));
-                }
-
-                // Cursor character (or space if at end)
-                if state.cursor < chars.len() {
-                    let cursor_char = chars[state.cursor].to_string();
-                    spans.push(Span::styled(cursor_char, Style::default().bg(Color::White).fg(Color::Black)));
-
-                    // Text after cursor
-                    if state.cursor + 1 < chars.len() {
-                        let after: String = chars[state.cursor + 1..].iter().collect();
-                        spans.push(Span::styled(after, Style::default().fg(Color::White)));
-                    }
-                } else {
-                    spans.push(Span::styled(" ", Style::default().bg(Color::White).fg(Color::Black)));
-                }
-
-                spans.push(Span::styled(count_suffix, count_style));
-                Line::from(spans)
-            } else {
-                Line::from(vec![
-                    Span::styled(state.value.as_str(), Style::default().fg(Color::White)),
-                    Span::styled(&count_suffix, count_style),
-                ])
-            };
-
-            let paragraph = Paragraph::new(line).block(block);
-            f.render_widget(paragraph, area);
-        } else {
-            // Show placeholder
-            let paragraph = Paragraph::new(Span::styled(placeholder, Style::default().fg(Color::DarkGray)))
-                .block(block);
-            f.render_widget(paragraph, area);
-        }
-    }
-
     /// Render variant-specific overlays.
     pub fn render_overlays(&self, f: &mut Frame, area: Rect) {
         if self.match_selection_mode {

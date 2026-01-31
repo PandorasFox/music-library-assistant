@@ -46,7 +46,7 @@ pub struct IntakeConfirmationState {
     /// Source identifier ("corpus" or "legacy")
     pub source: String,
     /// Number of directories containing unindexed files
-    pub directory_count: usize,
+    pub _directory_count: usize,
     /// Files grouped by directory for display
     pub grouped_files: Vec<DirectoryGroup>,
     /// Scroll offset for file list
@@ -157,7 +157,7 @@ impl IntakeConfirmationState {
             total_bytes,
             paths: all_paths,
             source: source.to_string(),
-            directory_count: directories.len(),
+            _directory_count: directories.len(),
             grouped_files,
             scroll_offset: 0,
         })

@@ -435,11 +435,6 @@ impl TreeNavigator {
         self.entries.get(self.cursor_idx)
     }
 
-    /// Get path of entry under cursor.
-    pub fn current_path(&self) -> Option<&PathBuf> {
-        self.current_entry().map(|e| &e.path)
-    }
-
     /// Get scroll offset.
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
@@ -455,8 +450,4 @@ impl TreeNavigator {
         &self.root_path
     }
 
-    /// Get entry filter.
-    pub fn filter(&self) -> &EntryFilter {
-        &self.filter
-    }
 }

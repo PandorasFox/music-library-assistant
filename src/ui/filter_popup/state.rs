@@ -37,18 +37,6 @@ pub enum FilterConditionType {
 }
 
 impl FilterConditionType {
-    /// Display label for the condition type.
-    pub fn label(&self) -> &'static str {
-        match self {
-            FilterConditionType::Path => "PATH",
-            FilterConditionType::FileType => "TYPE",
-            FilterConditionType::SampleRate => "RATE",
-            FilterConditionType::Bitrate => "KBPS",
-            FilterConditionType::Duration => "TIME",
-            FilterConditionType::Tag => "TAG",
-        }
-    }
-
     /// Cycle to the next condition type.
     pub fn next(&self) -> Self {
         match self {
@@ -164,39 +152,6 @@ impl FilterCondition {
                 !self.range_min.is_empty() || !self.range_max.is_empty()
             }
             FilterConditionType::Tag => !self.tag_value.is_empty(),
-        }
-    }
-
-    /// Human-readable description of this filter.
-    pub fn describe(&self) -> String {
-        match self.condition_type {
-            FilterConditionType::Path => {
-                format!("path contains '{}'", self.path_substring)
-            }
-            FilterConditionType::FileType => {
-                format!("file type {}", self.file_type_category.label())
-            }
-            FilterConditionType::SampleRate => {
-                Self::describe_range("sample rate", &self.range_min, &self.range_max, "Hz")
-            }
-            FilterConditionType::Bitrate => {
-                Self::describe_range("bitrate", &self.range_min, &self.range_max, "kbps")
-            }
-            FilterConditionType::Duration => {
-                Self::describe_range("duration", &self.range_min, &self.range_max, "s")
-            }
-            FilterConditionType::Tag => {
-                format!("{} {} '{}'", self.tag_name, self.tag_comparison.label().to_lowercase(), self.tag_value)
-            }
-        }
-    }
-
-    fn describe_range(name: &str, min: &str, max: &str, unit: &str) -> String {
-        match (min.is_empty(), max.is_empty()) {
-            (true, true) => format!("{} any", name),
-            (false, true) => format!("{} >= {}{}", name, min, unit),
-            (true, false) => format!("{} <= {}{}", name, max, unit),
-            (false, false) => format!("{} {}-{}{}", name, min, max, unit),
         }
     }
 
@@ -345,14 +300,6 @@ impl FilterPopupState {
     pub fn new() -> Self {
         Self {
             condition: FilterCondition::new(),
-            focus: FilterFieldFocus::ConditionType,
-        }
-    }
-
-    /// Create with an existing filter condition.
-    pub fn with_condition(condition: FilterCondition) -> Self {
-        Self {
-            condition,
             focus: FilterFieldFocus::ConditionType,
         }
     }
@@ -540,11 +487,4 @@ impl FilterPopupState {
     }
 
     // =========================================================================
-    // Accessors
-    // =========================================================================
-
-    /// Get the current condition type.
-    pub fn condition_type(&self) -> FilterConditionType {
-        self.condition.condition_type
-    }
 }

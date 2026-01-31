@@ -20,9 +20,9 @@ pub struct RestorableMissingFile {
     /// Corpus path where file should exist
     pub corpus_path: String,
     /// Track ID from tracks table
-    pub track_id: i64,
+    pub _track_id: i64,
     /// Inode of the missing file
-    pub inode: i64,
+    pub _inode: i64,
     /// Library path where the same inode exists (restore source)
     pub library_path: String,
 }
@@ -87,8 +87,8 @@ impl MissingFileModalData {
             if let Some(library_path) = inode_to_library.get(&inode) {
                 restorable.push(RestorableMissingFile {
                     corpus_path,
-                    track_id,
-                    inode,
+                    _track_id: track_id,
+                    _inode: inode,
                     library_path: library_path.clone(),
                 });
             } else {

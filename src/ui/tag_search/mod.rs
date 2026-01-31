@@ -61,8 +61,21 @@ impl TagSearchState {
 
     fn handle_query_builder_key(&mut self, key: KeyEvent) -> TagSearchAction {
         match key.code {
-            // Tab/Shift-Tab for lateral view cycling (no tab-completion to avoid conflict)
-            KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => TagSearchAction::CycleNext,
+            // Tab: if on TagName field with partial text, apply tab-completion; otherwise cycle views
+            KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                if self.field_focus == QueryFieldFocus::TagName
+                    && !self
+                        .conditions
+                        .get(self.focused_condition)
+                        .map(|c| c.tag_name.is_empty())
+                        .unwrap_or(true)
+                {
+                    self.apply_tag_name_suggestion();
+                    TagSearchAction::None
+                } else {
+                    TagSearchAction::CycleNext
+                }
+            }
             KeyCode::Tab | KeyCode::BackTab => TagSearchAction::CyclePrev,
 
             // Escape

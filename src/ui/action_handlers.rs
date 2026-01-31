@@ -255,15 +255,6 @@ impl App {
                 self.tree_browser = None;
                 self.start_lateral_view(widgets::LateralView::CorpusBrowser.prev());
             }
-            tree_browser::TreeBrowserAction::SelectPaths(paths) => {
-                // Directory selector completed - currently unused, placeholder for dedup flows
-                crate::logging::log_general(format!(
-                    "Directory selector returned {} paths (flow not yet wired)",
-                    paths.len()
-                ));
-                self.tree_browser = None;
-                self.start_insights_view();
-            }
             tree_browser::TreeBrowserAction::OpenFilter => {
                 // Open filter popup for corpus browser
                 self.filter_popup_state = Some(filter_popup::FilterPopupState::new());

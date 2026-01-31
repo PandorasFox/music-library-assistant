@@ -319,24 +319,6 @@ impl SearchCondition {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Check if this is a tag-based condition.
-    pub fn is_tag_condition(&self) -> bool {
-        self.condition_type == ConditionType::Tag
-    }
-
-    /// Check if this is a file type condition.
-    pub fn is_file_type_condition(&self) -> bool {
-        self.condition_type == ConditionType::FileType
-    }
-
-    /// Check if this is a range condition (SampleRate, Bitrate, Duration).
-    pub fn is_range_condition(&self) -> bool {
-        matches!(
-            self.condition_type,
-            ConditionType::SampleRate | ConditionType::Bitrate | ConditionType::Duration
-        )
-    }
 }
 
 /// Current mode of the tag search view.

@@ -78,11 +78,6 @@ impl TagSearchState {
         }
     }
 
-    /// Get the currently active field focus.
-    pub fn active_field_focus(&self) -> QueryFieldFocus {
-        self.field_focus
-    }
-
     /// Check if focus is on the search button.
     pub fn is_on_search_button(&self) -> bool {
         self.field_focus == QueryFieldFocus::SearchButton

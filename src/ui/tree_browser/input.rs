@@ -6,7 +6,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::actions::TreeBrowserAction;
-use super::config::TreeBrowserConfig;
 use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
 
@@ -16,7 +15,6 @@ use super::variants::BrowserVariant;
 /// variant-specific behavior delegates to the variant.
 pub fn handle_key(
     key: KeyEvent,
-    config: &TreeBrowserConfig,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
 ) -> TreeBrowserAction {
@@ -31,21 +29,17 @@ pub fn handle_key(
         return TreeBrowserAction::Cancel;
     }
 
-    // Tab for lateral ring cycling (always available)
+    // Tab for lateral ring cycling (CorpusBrowser is always in the lateral ring)
     match key.code {
         KeyCode::Tab => {
-            if config.in_lateral_ring {
-                return if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    TreeBrowserAction::CyclePrev
-                } else {
-                    TreeBrowserAction::CycleNext
-                };
-            }
+            return if key.modifiers.contains(KeyModifiers::SHIFT) {
+                TreeBrowserAction::CyclePrev
+            } else {
+                TreeBrowserAction::CycleNext
+            };
         }
         KeyCode::BackTab => {
-            if config.in_lateral_ring {
-                return TreeBrowserAction::CyclePrev;
-            }
+            return TreeBrowserAction::CyclePrev;
         }
         _ => {}
     }

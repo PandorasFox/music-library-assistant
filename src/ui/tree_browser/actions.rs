@@ -20,7 +20,6 @@ pub enum TreeBrowserAction {
     /// Cycle to previous view in lateral ring (Shift-Tab)
     CyclePrev,
 
-    // === Corpus Browser Actions ===
     /// Edit all tracks in directory subtree (Enter on directory)
     EditDirectory(PathBuf),
 
@@ -29,8 +28,4 @@ pub enum TreeBrowserAction {
 
     /// Open filter popup (Ctrl+F)
     OpenFilter,
-
-    // === Directory Selector Actions ===
-    /// Return selected paths (Enter on selector)
-    SelectPaths(Vec<PathBuf>),
 }

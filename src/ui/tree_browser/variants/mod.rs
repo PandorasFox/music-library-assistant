@@ -1,13 +1,11 @@
 //! Browser Variants
 //!
 //! Each variant provides a distinct, purpose-tuned mode for the tree browser.
-//! No unvarianted generic mode exists - only explicit instantiations.
+//! Currently only CorpusBrowser exists - DirectorySelector was removed as vestigial.
 
 mod corpus;
-mod selector;
 
 pub use corpus::CorpusBrowserVariant;
-pub use selector::DirectorySelectorVariant;
 
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
@@ -21,8 +19,6 @@ use super::navigator::{EntryFilter, TreeNavigator};
 pub enum BrowserVariant {
     /// Browse files+directories with metadata preview, launch tag editor
     CorpusBrowser(CorpusBrowserVariant),
-    /// Browse directories only with multi-select, return paths
-    DirectorySelector(DirectorySelectorVariant),
 }
 
 impl BrowserVariant {
@@ -30,7 +26,6 @@ impl BrowserVariant {
     pub fn entry_filter(&self) -> EntryFilter {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.entry_filter(),
-            BrowserVariant::DirectorySelector(v) => v.entry_filter(),
         }
     }
 
@@ -38,7 +33,6 @@ impl BrowserVariant {
     pub fn on_cursor_move(&mut self, nav: &TreeNavigator) {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.on_cursor_move(nav),
-            BrowserVariant::DirectorySelector(_) => {}
         }
     }
 
@@ -46,7 +40,6 @@ impl BrowserVariant {
     pub fn handle_escape(&mut self, nav: &mut TreeNavigator) -> bool {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.handle_escape(nav),
-            BrowserVariant::DirectorySelector(_) => false,
         }
     }
 
@@ -55,7 +48,6 @@ impl BrowserVariant {
     pub fn wants_navigation_keys(&self) -> bool {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.wants_navigation_keys(),
-            BrowserVariant::DirectorySelector(_) => false,
         }
     }
 
@@ -63,7 +55,6 @@ impl BrowserVariant {
     pub fn handle_key(&mut self, key: KeyEvent, nav: &mut TreeNavigator) -> TreeBrowserAction {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.handle_key(key, nav),
-            BrowserVariant::DirectorySelector(v) => v.handle_key(key, nav),
         }
     }
 
@@ -71,7 +62,6 @@ impl BrowserVariant {
     pub fn render_overlays(&self, f: &mut Frame, area: Rect) {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.render_overlays(f, area),
-            BrowserVariant::DirectorySelector(_) => {}
         }
     }
 }

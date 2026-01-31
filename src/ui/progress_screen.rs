@@ -32,6 +32,7 @@ use ratatui::{
     Frame,
 };
 
+use std::collections::HashMap;
 use crate::witch::{TaskExecutionStateSnapshot, DaemonStatus, EyeState, Witch, WorkerStats};
 use crate::db_thread::DbThreadStats;
 use super::app::{EYE_CLOSED, EYE_CLOSING};
@@ -113,6 +114,8 @@ pub struct ProgressScreen {
     tick_count: u32,
     /// Last time the animation ticked (for frame-rate independent animation).
     last_animation_tick: Instant,
+    /// Breakdown of completed tasks by type label (e.g., "Indexing": 42).
+    task_counts: HashMap<String, usize>,
 }
 
 impl ProgressScreen {
@@ -133,6 +136,7 @@ impl ProgressScreen {
             consecutive_idle_ticks: 0,
             tick_count: 0,
             last_animation_tick: Instant::now(),
+            task_counts: HashMap::new(),
         }
     }
 
@@ -153,6 +157,7 @@ impl ProgressScreen {
             consecutive_idle_ticks: 0,
             tick_count: 0,
             last_animation_tick: Instant::now(),
+            task_counts: HashMap::new(),
         };
         screen.wait_state.start();
         screen
@@ -175,6 +180,7 @@ impl ProgressScreen {
             consecutive_idle_ticks: 0,
             tick_count: 0,
             last_animation_tick: Instant::now(),
+            task_counts: HashMap::new(),
         };
         screen.wait_state.start();
         screen
@@ -314,6 +320,49 @@ impl ProgressScreen {
             self.progress = Some(completed as f32 / total as f32);
             self.progress_detail = Some(format!("{} / {}", completed, total));
         }
+        // Store task breakdown for display
+        self.task_counts = status.task_counts.clone();
+    }
+
+    /// Format task counts as a compact summary string.
+    ///
+    /// Returns something like "Indexing: 42 | Tag sync: 12 | File move: 3"
+    /// Sorted by count (descending), limited to fit reasonable width.
+    fn format_task_summary(&self) -> Option<String> {
+        if self.task_counts.is_empty() {
+            return None;
+        }
+
+        // Sort by count descending, then alphabetically for ties
+        let mut entries: Vec<_> = self.task_counts.iter().collect();
+        entries.sort_by(|a, b| {
+            b.1.cmp(a.1).then_with(|| a.0.cmp(b.0))
+        });
+
+        // Build summary, limiting to ~60 chars for display
+        let mut parts = Vec::new();
+        let mut total_len = 0;
+        const MAX_LEN: usize = 60;
+
+        for (label, count) in entries {
+            let part = format!("{}: {}", label, count);
+            let part_len = part.len() + 3; // " | " separator
+
+            if total_len + part_len > MAX_LEN && !parts.is_empty() {
+                // Would exceed limit, add "..." and stop
+                parts.push("…".to_string());
+                break;
+            }
+
+            total_len += part_len;
+            parts.push(part);
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" │ "))
+        }
     }
 
     /// Get the eye art for this phase.
@@ -393,6 +442,10 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let progress_height = if screen.progress.is_some() { 3 } else { 0 };
     let eye_progress_spacing = if screen.progress.is_some() { 1 } else { 0 }; // Blank line above progress
 
+    // Task summary (shows breakdown by type)
+    let task_summary = screen.format_task_summary();
+    let task_summary_height = if task_summary.is_some() { 1 } else { 0 };
+
     // Always reserve space for queue depth line to prevent layout jumping
     let show_queue_depth = screen.db_queue_depth > 0;
     let queue_depth_height = 1; // Always 1 to stabilize layout
@@ -403,7 +456,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let show_worker_stats = show_stats && screen.worker_stats.is_some();
     let db_stats_height = if show_db_stats { 1 } else { 0 };
     let worker_stats_height = if show_worker_stats { 2 } else { 0 };
-    let total_height = 2 + eye_height + eye_progress_spacing + progress_height + queue_depth_height + db_stats_height + worker_stats_height;
+    let total_height = 2 + eye_height + eye_progress_spacing + progress_height + task_summary_height + queue_depth_height + db_stats_height + worker_stats_height;
 
     // Calculate vertical centering
     let v_margin = area.height.saturating_sub(total_height as u16) / 2;
@@ -422,10 +475,11 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
             Constraint::Length(eye_height as u16),               // 3: Eye
             Constraint::Length(eye_progress_spacing as u16),     // 4: Blank line above progress
             Constraint::Length(progress_height as u16),          // 5: Progress bar
-            Constraint::Length(queue_depth_height as u16),       // 6: Queue depth
-            Constraint::Length(db_stats_height as u16),          // 7: DB stats
-            Constraint::Length(worker_stats_height as u16),      // 8: Worker stats
-            Constraint::Min(0),                                  // 9: Bottom margin
+            Constraint::Length(task_summary_height as u16),      // 6: Task summary
+            Constraint::Length(queue_depth_height as u16),       // 7: Queue depth
+            Constraint::Length(db_stats_height as u16),          // 8: DB stats
+            Constraint::Length(worker_stats_height as u16),      // 9: Worker stats
+            Constraint::Min(0),                                  // 10: Bottom margin
         ])
         .split(area);
 
@@ -508,9 +562,32 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
         f.render_widget(progress_widget, centered_progress);
     }
 
+    // Render task summary (breakdown by type) - centered same as progress bar
+    if let Some(summary) = task_summary {
+        let summary_area = chunks[6];
+        // Use same centering as progress bar for visual alignment
+        let bar_inner_width = 40u16.min(summary_area.width.saturating_sub(4));
+        let bar_x = (summary_area.width.saturating_sub(bar_inner_width + 2)) / 2 + summary_area.x;
+
+        let summary_line = Line::from(Span::styled(
+            summary,
+            Style::default().fg(Color::DarkGray),
+        ));
+        let summary_widget = Paragraph::new(summary_line)
+            .alignment(Alignment::Center);
+
+        let centered_summary = Rect {
+            x: bar_x,
+            y: summary_area.y,
+            width: bar_inner_width + 4,
+            height: summary_area.height,
+        };
+        f.render_widget(summary_widget, centered_summary);
+    }
+
     // Render pending DB writes
     if show_queue_depth {
-        let queue_area = chunks[6]; // Index shifted due to spacing row
+        let queue_area = chunks[7]; // Index shifted due to task summary row
         let label_color = Color::Rgb(245, 28, 153); // Magenta
 
         let queue_line = Line::from(vec![
@@ -528,7 +605,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     // Render DB stats if timing enabled
     if show_db_stats {
         if let Some(stats) = &screen.db_stats {
-            let stats_area = chunks[7]; // Index shifted due to spacing row
+            let stats_area = chunks[8]; // Index shifted due to task summary row
 
             let queue_color = if stats.queue_depth > 100 {
                 Color::Red
@@ -556,7 +633,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     // Render worker stats if timing enabled
     if show_worker_stats {
         if let Some(stats) = &screen.worker_stats {
-            let stats_area = chunks[8]; // Index shifted due to spacing row
+            let stats_area = chunks[9]; // Index shifted due to task summary row
             let label_color = Color::Rgb(245, 28, 153); // Magenta
 
             let avg_task_color = if stats.avg_task_ms < 100 {

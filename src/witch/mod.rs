@@ -261,20 +261,6 @@ impl Witch {
         self.db_thread_handle = Some(db_thread::spawn());
     }
 
-    /// Check if db_thread is ready for normal operation.
-    pub fn is_db_thread_ready(&self) -> bool {
-        self.db_thread_handle.is_some()
-    }
-
-    // -------------------------------------------------------------------------
-    // State Machine API
-    // -------------------------------------------------------------------------
-
-    /// O(1) state check - returns current Witch state.
-    pub fn state(&self) -> TaskExecutionState {
-        self.state
-    }
-
     // -------------------------------------------------------------------------
     // Eye and Observation State
     // -------------------------------------------------------------------------
@@ -282,24 +268,6 @@ impl Witch {
     /// Get current eye state for UI rendering decisions.
     pub fn eye_state(&self) -> EyeState {
         self.eye_state
-    }
-
-    /// Get current corpus observation state.
-    pub fn observation_state(&self) -> CorpusObservationState {
-        self.observation_state
-    }
-
-    /// Check if the Witch is accepting mutations.
-    ///
-    /// Only becomes true after first observing completes, and only if
-    /// read_only_mode is false. Never reverts to false.
-    pub fn is_accepting_mutations(&self) -> bool {
-        self.accepting_mutations
-    }
-
-    /// Check if read-only mode is enabled.
-    pub fn is_read_only(&self) -> bool {
-        self.read_only_mode
     }
 
     /// Check if observing is currently in progress.
@@ -433,7 +401,7 @@ impl Witch {
         // IMPORTANT: This happens BEFORE we check in_flight for state transitions,
         // ensuring spawned tasks are counted before we decide to transition.
         for comp in spawned_computations {
-            self.queue_computation_internal(comp, None);
+            self.queue_computation_with_label(comp, None);
         }
 
         // Queue spawned follow-up mutations (chaining from mutations like SetTrackTagsDb)
@@ -738,18 +706,6 @@ impl Witch {
     // This ensures proper decision witness semantics where each user action is
     // explicitly witnessed, and batch review/commit is possible.
 
-    pub(crate) fn queue_mutation_internal(&mut self, mutation: Mutation, label: Option<String>) {
-        self.transition_to_working();
-        self.mutations_ran_this_session = true;
-
-        let task = Task::Mutation(mutation);
-        let task_label = self.resolve_label(label, &task);
-
-        self.session_queued += 1;
-        self.in_flight += 1;
-        self.spawn_task(task, task_label, Instant::now());
-    }
-
     pub(crate) fn queue_mutations_internal(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>) {
         self.transition_to_working();
         self.mutations_ran_this_session = true;
@@ -831,23 +787,14 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
-    // Computation Queueing (no witness required)
+    // Computation Queueing (internal only, no witness required)
     // -------------------------------------------------------------------------
 
-    /// Queue a single computation (no witness required).
+    /// Queue a single computation with an optional label.
     ///
     /// Computations are derived facts that don't alter state - they only emit
     /// signals. They can execute without user decisions.
-    pub fn queue_computation(&mut self, computation: Computation) {
-        self.queue_computation_with_label(computation, None);
-    }
-
-    /// Queue a single computation with an explicit label (no witness required).
-    pub fn queue_computation_with_label(&mut self, computation: Computation, label: Option<String>) {
-        self.queue_computation_internal(computation, label);
-    }
-
-    fn queue_computation_internal(&mut self, computation: Computation, label: Option<String>) {
+    fn queue_computation_with_label(&mut self, computation: Computation, label: Option<String>) {
         self.transition_to_working();
 
         let task = Task::Computation(computation);
@@ -858,91 +805,23 @@ impl Witch {
         self.spawn_task(task, task_label, Instant::now());
     }
 
-    /// Queue multiple computations (no witness required).
-    ///
-    /// Computations are derived facts that don't alter state - they only emit
-    /// signals. They can execute without user decisions.
-    pub fn queue_computations(&mut self, computations: impl IntoIterator<Item = Computation>) {
-        self.queue_computations_with_label(computations, None);
-    }
-
-    /// Queue multiple computations with an explicit label (no witness required).
-    pub fn queue_computations_with_label(&mut self, computations: impl IntoIterator<Item = Computation>, label: Option<String>) {
-        self.transition_to_working();
-
-        let queue_time = Instant::now();
-        let computations: Vec<_> = computations.into_iter().collect();
-
-        self.session_queued += computations.len();
-        self.in_flight += computations.len();
-
-        for computation in computations {
-            let task = Task::Computation(computation);
-            let task_label = self.resolve_label(label.clone(), &task);
-            self.spawn_task(task, task_label, queue_time);
-        }
-    }
-
     // -------------------------------------------------------------------------
     // Migration Queueing (requires witness, bypasses accepting_mutations)
     // -------------------------------------------------------------------------
 
-    /// Queue a single migration for execution.
+    /// Queue a single migration for execution (internal, called from DecisionScope).
     ///
     /// Migrations require a [`DecisionWitness`] (user approval) but bypass the
     /// `accepting_mutations` gate. They can run before observing completes.
-    pub fn queue_migration(&mut self, migration: Migration, _witness: &DecisionWitness) {
-        self.queue_migration_internal(migration, None);
-    }
-
-    /// Queue a single migration with an explicit label.
-    pub fn queue_migration_with_label(
-        &mut self,
-        migration: Migration,
-        label: Option<String>,
-        _witness: &DecisionWitness,
-    ) {
-        self.queue_migration_internal(migration, label);
-    }
-
-    /// Queue multiple migrations for execution.
-    pub fn queue_migrations(
-        &mut self,
-        migrations: impl IntoIterator<Item = Migration>,
-        _witness: &DecisionWitness,
-    ) {
-        self.queue_migrations_internal(migrations, None);
-    }
-
-    fn queue_migration_internal(&mut self, migration: Migration, label: Option<String>) {
+    pub(crate) fn queue_migration(&mut self, migration: Migration, _witness: &DecisionWitness) {
         self.transition_to_working();
 
         let task = Task::Migration(migration);
-        let task_label = self.resolve_label(label, &task);
+        let task_label = self.resolve_label(None, &task);
 
         self.session_queued += 1;
         self.in_flight += 1;
         self.spawn_task(task, task_label, Instant::now());
-    }
-
-    fn queue_migrations_internal(
-        &mut self,
-        migrations: impl IntoIterator<Item = Migration>,
-        label: Option<String>,
-    ) {
-        self.transition_to_working();
-
-        let queue_time = Instant::now();
-        let migrations: Vec<_> = migrations.into_iter().collect();
-
-        self.session_queued += migrations.len();
-        self.in_flight += migrations.len();
-
-        for migration in migrations {
-            let task = Task::Migration(migration);
-            let task_label = self.resolve_label(label.clone(), &task);
-            self.spawn_task(task, task_label, queue_time);
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -1159,21 +1038,6 @@ impl Witch {
     /// cached values via the corresponding getter methods.
     pub fn ui_read_cache(&self) -> &UiReadCache {
         &self.ui_read_cache
-    }
-
-    /// Check if there's a lingering completed session to display.
-    pub fn has_completed_session(&self) -> bool {
-        self.state == TaskExecutionState::Completed
-    }
-
-    /// Cancel all pending tasks.
-    ///
-    /// Note: With rayon, spawned tasks will still complete but their results
-    /// are drained and discarded. The in_flight counter is reset to 0.
-    pub fn cancel(&mut self) {
-        // Drain any pending results (discard them)
-        while self.result_rx.try_recv().is_ok() {}
-        self.in_flight = 0;
     }
 }
 

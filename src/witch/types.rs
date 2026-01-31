@@ -176,11 +176,6 @@ pub mod sealed {
         pub fn into_inner(self) -> crate::corpus::mutations::Mutation {
             self.mutation
         }
-
-        /// Get a reference to the inner mutation.
-        pub fn mutation(&self) -> &crate::corpus::mutations::Mutation {
-            &self.mutation
-        }
     }
 
     /// A zero-sized token proving code is executing inside the Witch's migration worker.
@@ -252,14 +247,6 @@ impl<'a> DecisionScope<'a> {
             witch,
             witness: DecisionWitness::new(),
         }
-    }
-
-    /// Start a new transaction.
-    ///
-    /// Called when the user is about to be presented with Decisions.
-    /// Only one transaction may be active at a time.
-    pub fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {
-        self.witch.start_transaction(label)
     }
 
     /// Add a witnessed decision to the active transaction.

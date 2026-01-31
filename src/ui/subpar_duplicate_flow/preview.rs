@@ -195,14 +195,27 @@ impl SubparDuplicatePreviewState {
         let count = self.cached_data.files.len();
         let list_focused = self.focus_pane == FocusPane::List;
 
+        // Split into detail pane (top) and list pane (bottom)
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4), // Detail pane: 2 lines + borders
+                Constraint::Min(6),    // List pane
+            ])
+            .split(area);
+
+        // Render detail pane with full paths of current selection
+        self.render_detail_pane(f, chunks[0]);
+
+        // Render list pane with three columns
         let block = Block::default()
             .title(format!(" Subpar Files ({}) ", count))
             .title_style(Style::default().fg(if count > 0 { Color::Cyan } else { Color::DarkGray }))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if list_focused { Color::Cyan } else { Color::DarkGray }));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = block.inner(chunks[1]);
+        f.render_widget(block, chunks[1]);
 
         if self.cached_data.files.is_empty() {
             let empty = Paragraph::new("No subpar duplicates found")
@@ -211,35 +224,15 @@ impl SubparDuplicatePreviewState {
             return;
         }
 
-        // Render description
-        let desc_height = 3;
-        let desc_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: desc_height,
-        };
-        let list_area = Rect {
-            x: inner.x,
-            y: inner.y + desc_height,
-            width: inner.width,
-            height: inner.height.saturating_sub(desc_height),
-        };
-
-        let description = Paragraph::new(vec![
-            Line::from("These files are lower-quality versions of tracks you already have."),
-            Line::from("Stashing will move them to stash/subpar/ and drop from index."),
-        ])
-        .style(Style::default().fg(Color::DarkGray));
-        f.render_widget(description, desc_area);
-
-        // Calculate visible lines based on list area height
-        let visible_lines = list_area.height as usize;
+        // Calculate visible lines
+        let visible_lines = inner.height as usize;
         let scroll = self.scroll;
 
-        // Calculate width for path (leave room for reason column)
-        let reason_width = 20usize;
-        let path_width = list_area.width.saturating_sub(reason_width as u16 + 4) as usize;
+        // Three columns: 45% subpar path | 10% reason | 45% superior path
+        let total_width = inner.width as usize;
+        let left_width = (total_width * 45) / 100;
+        let mid_width = (total_width * 10) / 100;
+        let right_width = total_width.saturating_sub(left_width + mid_width);
 
         let items: Vec<ListItem> = self
             .cached_data
@@ -247,17 +240,36 @@ impl SubparDuplicatePreviewState {
             .iter()
             .skip(scroll)
             .take(visible_lines)
-            .map(|file| {
-                let path = truncate_left(&file.corpus_path, path_width);
+            .enumerate()
+            .map(|(visible_idx, file)| {
+                // First visible item (visible_idx 0) is the selected one
+                let is_selected = visible_idx == 0;
+                let style = if is_selected && list_focused {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let reason_style = if is_selected && list_focused {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                };
+
+                let subpar_path = truncate_left(&file.corpus_path, left_width.saturating_sub(1));
+                let superior_path = truncate_left(&file.superior_path, right_width.saturating_sub(1));
+
                 let line = Line::from(vec![
                     Span::styled(
-                        format!("{:<width$}", path, width = path_width),
-                        Style::default().fg(Color::White),
+                        format!("{:<width$}", subpar_path, width = left_width),
+                        style,
                     ),
-                    Span::raw("  "),
                     Span::styled(
-                        format!("{:<width$}", file.reason, width = reason_width),
-                        Style::default().fg(Color::Yellow),
+                        format!("{:^width$}", file.reason, width = mid_width),
+                        reason_style,
+                    ),
+                    Span::styled(
+                        format!("{:<width$}", superior_path, width = right_width),
+                        style,
                     ),
                 ]);
                 ListItem::new(line)
@@ -265,7 +277,41 @@ impl SubparDuplicatePreviewState {
             .collect();
 
         let list = List::new(items);
-        f.render_widget(list, list_area);
+        f.render_widget(list, inner);
+    }
+
+    fn render_detail_pane(&self, f: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Selected Pair ")
+            .title_style(Style::default().fg(Color::DarkGray))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        // Get current file if any
+        let current_file = self.cached_data.files.get(self.scroll);
+
+        let lines = if let Some(file) = current_file {
+            vec![
+                Line::from(vec![
+                    Span::styled("Subpar: ", Style::default().fg(Color::Red)),
+                    Span::styled(&file.corpus_path, Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Better: ", Style::default().fg(Color::Green)),
+                    Span::styled(&file.superior_path, Style::default().fg(Color::White)),
+                ]),
+            ]
+        } else {
+            vec![
+                Line::from(Span::styled("No file selected", Style::default().fg(Color::DarkGray))),
+            ]
+        };
+
+        let para = Paragraph::new(lines);
+        f.render_widget(para, inner);
     }
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {

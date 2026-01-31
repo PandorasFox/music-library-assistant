@@ -626,15 +626,23 @@ pub fn execute_apply_db_tags_to_disk(
     abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
+    use crate::corpus::paths;
     use crate::corpus::tags::{write_file_tags, TagSet};
     use crate::db_thread;
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get track info (need relative path for DB operations)
-    let track = db.get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+    // Convert abs_path to relative for DB operations.
+    // Use mutation's abs_path parameter, not track.path from DB (may be stale).
+    let resolver = paths::get_resolver();
+    let relative_path = resolver
+        .to_relative(abs_path)
+        .with_context(|| format!(
+            "Path {} does not match root. Check config.kdl roots.",
+            abs_path.display(),
+        ))?;
+    let rel_path_str = relative_path.to_string_lossy();
 
     // Get DB tags and convert to TagSet
     let db_tags = db.get_track_tags(track_id)?;
@@ -649,7 +657,7 @@ pub fn execute_apply_db_tags_to_disk(
         .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
 
     // Clear needs_disk_flush flag
-    sender.set_needs_disk_flush(&track.path, false, witness);
+    sender.set_needs_disk_flush(&rel_path_str, false, witness);
 
     Ok(())
 }
@@ -669,25 +677,43 @@ pub fn execute_assimilate_disk_tags_to_db(
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::corpus::paths;
     use crate::corpus::tags::TagSet;
     use crate::db_thread;
+    use std::os::unix::fs::MetadataExt;
     use std::time::UNIX_EPOCH;
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get track info (need relative path for DB operations)
+    // Convert abs_path to relative for DB operations.
+    // IMPORTANT: We use the mutation's abs_path parameter, NOT track.path from DB.
+    // When spawned from Transcode, the DB read connection may not have seen the
+    // track path update yet (async write via db_thread), causing stale reads.
+    let resolver = paths::get_resolver();
+    let relative_path = resolver
+        .to_relative(abs_path)
+        .with_context(|| format!(
+            "Path {} does not match root. Check config.kdl roots.",
+            abs_path.display(),
+        ))?;
+    let rel_path_str = relative_path.to_string_lossy();
+
+    // Get track source (needed for scan_state key).
+    // Source doesn't change during transcode, so this read is safe.
     let track = db.get_track_by_id(track_id)?
         .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+    let source = track.source;
 
     // Read disk tags using TagSet
     let disk_tagset = TagSet::from_file(abs_path)
         .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
     // Update DB with disk tags via db_thread
-    sender.set_track_tags(&track.path, disk_tagset.into_vec(), witness);
+    // Use rel_path_str (from mutation param), not track.path (potentially stale)
+    sender.set_track_tags(&rel_path_str, disk_tagset.into_vec(), witness);
 
-    // Read disk mtime using portable API (consistent with comparison code)
+    // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)
         .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
     let (mtime_secs, mtime_nanos) = file_metadata
@@ -697,32 +723,36 @@ pub fn execute_assimilate_disk_tags_to_db(
         .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
         .unwrap_or((0, 0));
 
+    // Get current inode from filesystem (not from potentially stale DB read).
+    // After transcode, the inode changed and we need the NEW inode for scan_state lookup.
+    let current_inode = file_metadata.ino() as i64;
+
     // Update scan_state mtime via db_thread using (source, inode) key
     sender.update_scan_state_mtime(
-        &track.source,
-        track.inode,
+        &source,
+        current_inode,
         mtime_secs,
         mtime_nanos,
         witness,
     );
 
     // Clear tag_mismatches for this track via db_thread
-    sender.clear_tag_mismatches_for_track(&track.path, witness);
+    sender.clear_tag_mismatches_for_track(&rel_path_str, witness);
 
     // Clear OOB signals via db_thread
     sender.clear_file_signal(
         CorpusFileSignalType::OutOfBandTagSync.into(),
-        &track.path,
+        &rel_path_str,
         witness,
     );
     sender.clear_file_signal(
         CorpusFileSignalType::OutOfBandTagConflict.into(),
-        &track.path,
+        &rel_path_str,
         witness,
     );
     sender.clear_file_signal(
         CorpusFileSignalType::MtimeOnlyMismatch.into(),
-        &track.path,
+        &rel_path_str,
         witness,
     );
 

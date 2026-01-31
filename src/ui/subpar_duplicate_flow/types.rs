@@ -31,14 +31,14 @@ pub struct SubparFileEntry {
 /// Loaded once when the modal opens. All renders use this cached data.
 #[derive(Debug, Clone, Default)]
 pub struct SubparDuplicateModalData {
-    /// Files with InferiorDuplicate signals
+    /// Files with SubparDuplicate signals
     pub files: Vec<SubparFileEntry>,
 }
 
 impl SubparDuplicateModalData {
     /// Load subpar duplicate files from the database.
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        // Get all InferiorDuplicate signals with metadata
+        // Get all SubparDuplicate signals with metadata
         let subpar_entries = read_db.get_subpar_duplicate_files()?;
 
         if subpar_entries.is_empty() {
@@ -59,8 +59,8 @@ impl SubparDuplicateModalData {
 
             // Convert reason to human-readable
             let reason = match entry.reason.as_str() {
-                "InferiorBitrate" => "Lower bitrate".to_string(),
-                "InferiorFormat" => "Worse format".to_string(),
+                "SubparBitrate" => "Lower bitrate".to_string(),
+                "SubparFormat" => "Worse format".to_string(),
                 other => other.to_string(),
             };
 

@@ -99,7 +99,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagValues | — | CompoundTagValue | CompoundTagValue (all, then recreate) |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
-| AnalyzeFingerprintDuplicates | — | InferiorDuplicate | InferiorDuplicate (all, then recreate) |
+| AnalyzeFingerprintDuplicates | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |

@@ -1444,18 +1444,18 @@ fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
     }
 }
 
-/// Reason why a track is inferior.
+/// Reason why a track is subpar.
 #[derive(Debug, Clone, Copy)]
-enum InferiorReason {
-    InferiorFormat,
-    InferiorBitrate,
+enum SubparReason {
+    SubparFormat,
+    SubparBitrate,
 }
 
-impl InferiorReason {
+impl SubparReason {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::InferiorFormat => "InferiorFormat",
-            Self::InferiorBitrate => "InferiorBitrate",
+            Self::SubparFormat => "SubparFormat",
+            Self::SubparBitrate => "SubparBitrate",
         }
     }
 }
@@ -1496,8 +1496,8 @@ pub fn execute_analyze_fingerprint_duplicates(
     let similarity_threshold = config.opinions.duplicate_analysis.fingerprint_similarity_threshold;
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
 
-    // Clear all existing InferiorDuplicate signals
-    sender.clear_signals_by_type(SignalType::from(CorpusFileSignalType::InferiorDuplicate), witness);
+    // Clear all existing SubparDuplicate signals
+    sender.clear_signals_by_type(SignalType::from(CorpusFileSignalType::SubparDuplicate), witness);
 
     // Get all FingerprintDuplicate signals
     let fp_dup_signals = read_only_db
@@ -1510,7 +1510,7 @@ pub fn execute_analyze_fingerprint_duplicates(
     }
 
     let mut total_groups = 0;
-    let mut inferior_count = 0;
+    let mut subpar_count = 0;
     let mut variant_skipped = 0;
 
     for signal in &fp_dup_signals {
@@ -1604,7 +1604,7 @@ pub fn execute_analyze_fingerprint_duplicates(
                 }
             }
 
-            // For each true duplicate group, rank by quality and emit InferiorDuplicate signals
+            // For each true duplicate group, rank by quality and emit SubparDuplicate signals
             for group in true_duplicate_groups {
                 // Compute quality scores
                 let mut scored: Vec<(usize, u32)> = group
@@ -1628,15 +1628,15 @@ pub fn execute_analyze_fingerprint_duplicates(
                 let best_track = &cluster[best_idx];
                 let best_identity = &identities[best_idx];
 
-                // Emit InferiorDuplicate for all others
+                // Emit SubparDuplicate for all others
                 for &(idx, score) in scored.iter().skip(1) {
                     let track = &cluster[idx];
 
                     // Determine reason: format difference or bitrate/quality difference
                     let reason = if classify_format(&track.file_type) < classify_format(&best_track.file_type) {
-                        InferiorReason::InferiorFormat
+                        SubparReason::SubparFormat
                     } else {
-                        InferiorReason::InferiorBitrate
+                        SubparReason::SubparBitrate
                     };
 
                     let metadata = serde_json::json!({
@@ -1649,21 +1649,21 @@ pub fn execute_analyze_fingerprint_duplicates(
                     });
 
                     sender.ensure_file_signal_with_metadata(
-                        CorpusFileSignalType::InferiorDuplicate.into(),
+                        CorpusFileSignalType::SubparDuplicate.into(),
                         &track.path,
                         Some(&metadata.to_string()),
                         witness,
                     );
 
-                    inferior_count += 1;
+                    subpar_count += 1;
                 }
             }
         }
     }
 
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintDuplicates: analyzed {} groups, emitted {} InferiorDuplicate signals, skipped {} variants",
-        total_groups, inferior_count, variant_skipped
+        "[COMPUTE] AnalyzeFingerprintDuplicates: analyzed {} groups, emitted {} SubparDuplicate signals, skipped {} variants",
+        total_groups, subpar_count, variant_skipped
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

@@ -95,7 +95,7 @@ pub enum Computation {
     ///
     /// Reads FingerprintDuplicate signals, clusters by duration, computes
     /// fingerprint similarity, detects variants via release metadata, ranks
-    /// by quality, and emits InferiorDuplicate signals for non-best tracks.
+    /// by quality, and emits SubparDuplicate signals for non-best tracks.
     AnalyzeFingerprintDuplicates,
 
     /// Detect deployment conflicts (bulk).

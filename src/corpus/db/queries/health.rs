@@ -710,8 +710,8 @@ impl Database {
             .saturating_sub(known_variants);
 
         // Subpar duplicates (lower quality versions identified by fingerprint analysis)
-        // Note: stored as "inferior_duplicate" in database for backwards compatibility
-        let subpar_duplicate_count = self.count_signal_type("inferior_duplicate")?;
+        // Note: stored as "subpar_duplicate" in database for backwards compatibility
+        let subpar_duplicate_count = self.count_signal_type("subpar_duplicate")?;
 
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
@@ -759,7 +759,7 @@ impl Database {
         let mut entries = Vec::new();
 
         // Aggregate signals with affected counts
-        // Note: fingerprint_dup and inferior_duplicate are now in the TagSquash bucket
+        // Note: fingerprint_dup and subpar_duplicate are now in the TagSquash bucket
         for (signal_type, label) in [
             ("metadata_dup", "Metadata Duplicates"),
             ("duplicate_inode", "Duplicate Inodes"),
@@ -1151,7 +1151,7 @@ impl Database {
 
     /// Get all subpar duplicate files with metadata.
     ///
-    /// Returns (corpus_path, reason, superior_path) for each inferior_duplicate signal.
+    /// Returns (corpus_path, reason, superior_path) for each subpar_duplicate signal.
     /// Used by the subpar duplicate resolution modal.
     pub fn get_subpar_duplicate_files(&self) -> Result<Vec<crate::corpus::db::types::SubparDuplicateEntry>> {
         use crate::corpus::db::types::SubparDuplicateEntry;
@@ -1164,7 +1164,7 @@ impl Database {
                  COALESCE(json_extract(metadata_json, '$.quality_score'), 0) as quality_score,
                  COALESCE(json_extract(metadata_json, '$.superior_quality_score'), 0) as superior_quality_score
                FROM signals
-               WHERE issue_type = 'inferior_duplicate'
+               WHERE issue_type = 'subpar_duplicate'
                ORDER BY issue_key"#
         )?;
 

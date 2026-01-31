@@ -150,9 +150,9 @@ pub enum SignalType {
     /// File is in a non-Vorbis container format (MP3, M4A, AAC, WMA, or lossless needing remux)
     /// Actionable signal with resolution flow (transcode to Opus/FLAC)
     ShitFormat,
-    /// Track is an inferior duplicate (lower quality version of another track)
-    /// Actionable signal with resolution flow (stash inferior copy)
-    InferiorDuplicate,
+    /// Track is an subpar duplicate (lower quality version of another track)
+    /// Actionable signal with resolution flow (stash subpar copy)
+    SubparDuplicate,
 }
 
 impl SignalType {
@@ -193,7 +193,7 @@ impl SignalType {
             Self::WaveformReadError => "waveform_read_error",
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
-            Self::InferiorDuplicate => "inferior_duplicate",
+            Self::SubparDuplicate => "subpar_duplicate",
         }
     }
 
@@ -234,7 +234,7 @@ impl SignalType {
             "waveform_read_error" => Some(Self::WaveformReadError),
             "corrupt_file" => Some(Self::CorruptFile),
             "shit_format" => Some(Self::ShitFormat),
-            "inferior_duplicate" => Some(Self::InferiorDuplicate),
+            "subpar_duplicate" => Some(Self::SubparDuplicate),
 
             // Legacy DB values → map to new types
             "missing_from_disk" => Some(Self::MissingFile),
@@ -264,7 +264,7 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::InodeChanged => Self::InodeChanged,
             CorpusFileSignalType::CorruptFile => Self::CorruptFile,
             CorpusFileSignalType::ShitFormat => Self::ShitFormat,
-            CorpusFileSignalType::InferiorDuplicate => Self::InferiorDuplicate,
+            CorpusFileSignalType::SubparDuplicate => Self::SubparDuplicate,
         }
     }
 }
@@ -332,8 +332,8 @@ pub enum CorpusFileSignalType {
     CorruptFile,
     /// File is in a non-Vorbis container format (MP3, M4A, AAC, WMA, or lossless needing remux)
     ShitFormat,
-    /// Track is an inferior duplicate (lower quality version of another track)
-    InferiorDuplicate,
+    /// Track is an subpar duplicate (lower quality version of another track)
+    SubparDuplicate,
 }
 
 impl CorpusFileSignalType {
@@ -353,7 +353,7 @@ impl CorpusFileSignalType {
             Self::InodeChanged => "inode_changed",
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
-            Self::InferiorDuplicate => "inferior_duplicate",
+            Self::SubparDuplicate => "subpar_duplicate",
         }
     }
 
@@ -373,7 +373,7 @@ impl CorpusFileSignalType {
             Self::InodeChanged => SignalType::InodeChanged,
             Self::CorruptFile => SignalType::CorruptFile,
             Self::ShitFormat => SignalType::ShitFormat,
-            Self::InferiorDuplicate => SignalType::InferiorDuplicate,
+            Self::SubparDuplicate => SignalType::SubparDuplicate,
         }
     }
 }
@@ -827,7 +827,7 @@ pub struct ConflictGroup {
 pub struct SubparDuplicateEntry {
     /// Path in the corpus (this is the subpar file)
     pub corpus_path: String,
-    /// Reason for being subpar (e.g., "InferiorBitrate", "InferiorFormat")
+    /// Reason for being subpar (e.g., "SubparBitrate", "SubparFormat")
     pub reason: String,
     /// Path to the superior version
     pub superior_path: String,

@@ -461,9 +461,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        InsightType::InferiorDuplicates => {
+        InsightType::SubparDuplicates => {
             lines.push(Line::from(Span::styled(
-                "Inferior Duplicates",
+                "Subpar Duplicates",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
@@ -477,7 +477,7 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Press Enter to stash inferior copies.",
+                "Press Enter to stash subpar copies.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
             )));
         }

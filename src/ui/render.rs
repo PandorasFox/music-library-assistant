@@ -3,6 +3,8 @@
 //! This module contains all top-level render functions that dispatch
 //! to mode-specific renderers.
 
+use std::time::Instant;
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -10,21 +12,16 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use std::collections::VecDeque;
-use std::time::Instant;
-
-use crate::config::Config;
 
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split, corrupt_file_flow, deploy_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
+use super::{compound_split, corrupt_file_flow, deploy_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
 pub struct RenderContext<'a> {
     pub mode: super::UiMode,
-    pub config: &'a Config,
     pub status_message: Option<&'a str>,
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
@@ -45,8 +42,8 @@ pub struct RenderContext<'a> {
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub corrupt_file_preview: Option<&'a corrupt_file_flow::CorruptFilePreviewState>,
     pub shit_format_preview: Option<&'a shit_format_flow::ShitFormatPreviewState>,
+    pub subpar_duplicate_preview: Option<&'a subpar_duplicate_flow::SubparDuplicatePreviewState>,
     pub eye: &'a EyeAnimation,
-    pub throughput_samples: &'a VecDeque<(Instant, u64)>,
     pub witch_status: Option<crate::witch::DaemonStatus>,
     pub corpus_summary: Option<crate::corpus::db::types::CorpusSummary>,
     pub db_stats: Option<crate::db_thread::DbThreadStats>,
@@ -175,6 +172,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::FormatStandardization => Some("Format Standardization"),
         super::UiMode::CorruptFileResolution => Some("Corrupt File Resolution"),
         super::UiMode::ShitFormatResolution => Some("Shit Format Resolution"),
+        super::UiMode::SubparDuplicateResolution => Some("Subpar Duplicate Resolution"),
     };
 
     let title = match suffix {
@@ -299,6 +297,12 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::ShitFormatResolution => {
             view_name = "shit_format_resolution";
             if let Some(ref preview) = ctx.shit_format_preview {
+                preview.render(f, area);
+            }
+        }
+        super::UiMode::SubparDuplicateResolution => {
+            view_name = "subpar_duplicate_resolution";
+            if let Some(ref preview) = ctx.subpar_duplicate_preview {
                 preview.render(f, area);
             }
         }
@@ -777,6 +781,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::FormatStandardization => control_presets::format_standardization(),
         super::UiMode::CorruptFileResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::ShitFormatResolution => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::SubparDuplicateResolution => control_presets::empty(), // Modal handles its own hints
     };
     lines.push(controls.render_line());
 

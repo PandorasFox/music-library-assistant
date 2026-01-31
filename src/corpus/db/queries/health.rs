@@ -709,8 +709,9 @@ impl Database {
         let fingerprint_duplicate_count = self.count_signal_type("fingerprint_dup")?
             .saturating_sub(known_variants);
 
-        // Inferior duplicates (lower quality versions identified by fingerprint analysis)
-        let inferior_duplicate_count = self.count_signal_type("inferior_duplicate")?;
+        // Subpar duplicates (lower quality versions identified by fingerprint analysis)
+        // Note: stored as "inferior_duplicate" in database for backwards compatibility
+        let subpar_duplicate_count = self.count_signal_type("inferior_duplicate")?;
 
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
@@ -745,7 +746,7 @@ impl Database {
 
         Ok(TagSquashBucket {
             fingerprint_duplicate_count,
-            inferior_duplicate_count,
+            subpar_duplicate_count,
             tag_canonicity,
             inconsistent_album_artist_count,
             compound_tag_value_count,
@@ -1140,6 +1141,44 @@ impl Database {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?
             .collect::<rusqlite::Result<Vec<(String, i64)>>>()?;
+
+        Ok(results)
+    }
+
+    // ========================================================================
+    // Subpar Duplicate Resolution Queries
+    // ========================================================================
+
+    /// Get all subpar duplicate files with metadata.
+    ///
+    /// Returns (corpus_path, reason, superior_path) for each inferior_duplicate signal.
+    /// Used by the subpar duplicate resolution modal.
+    pub fn get_subpar_duplicate_files(&self) -> Result<Vec<crate::corpus::db::types::SubparDuplicateEntry>> {
+        use crate::corpus::db::types::SubparDuplicateEntry;
+
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                 issue_key,
+                 COALESCE(json_extract(metadata_json, '$.reason'), 'unknown') as reason,
+                 COALESCE(json_extract(metadata_json, '$.superior_path'), '') as superior_path,
+                 COALESCE(json_extract(metadata_json, '$.quality_score'), 0) as quality_score,
+                 COALESCE(json_extract(metadata_json, '$.superior_quality_score'), 0) as superior_quality_score
+               FROM signals
+               WHERE issue_type = 'inferior_duplicate'
+               ORDER BY issue_key"#
+        )?;
+
+        let results = stmt
+            .query_map(params![], |row| {
+                Ok(SubparDuplicateEntry {
+                    corpus_path: row.get(0)?,
+                    reason: row.get(1)?,
+                    superior_path: row.get(2)?,
+                    quality_score: row.get(3)?,
+                    superior_quality_score: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<SubparDuplicateEntry>>>()?;
 
         Ok(results)
     }

@@ -561,6 +561,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_shit_format_counts_by_type()
     }
 
+    /// Get subpar duplicate files with metadata.
+    pub fn get_subpar_duplicate_files(&self) -> Result<Vec<crate::corpus::db::types::SubparDuplicateEntry>> {
+        self.db.get_subpar_duplicate_files()
+    }
+
     // =========================================================================
     // Library Scan Queries
     // =========================================================================

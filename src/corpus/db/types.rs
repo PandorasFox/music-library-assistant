@@ -751,8 +751,8 @@ pub struct CorpusFilesBucket {
 pub struct TagSquashBucket {
     /// Fingerprint duplicate groups (easy resolutions at top)
     pub fingerprint_duplicate_count: usize,
-    /// Inferior duplicates (lower quality versions, easy stash candidates)
-    pub inferior_duplicate_count: usize,
+    /// Subpar duplicates (lower quality versions, easy stash candidates)
+    pub subpar_duplicate_count: usize,
     /// Tag canonicity issues grouped by tag name (e.g., "artist": 50 clusters)
     pub tag_canonicity: Vec<TagSquashEntry>,
     /// Inconsistent album_artist issues count
@@ -859,6 +859,25 @@ pub struct ConflictGroup {
     pub deploy_path: String,
     /// List of conflicting corpus files: (corpus_path, track_id)
     pub conflicting_files: Vec<(String, i64)>,
+}
+
+// ============================================================================
+// Subpar Duplicate Resolution Types
+// ============================================================================
+
+/// A subpar duplicate file (lower quality version identified by fingerprint analysis).
+#[derive(Debug, Clone)]
+pub struct SubparDuplicateEntry {
+    /// Path in the corpus (this is the subpar file)
+    pub corpus_path: String,
+    /// Reason for being subpar (e.g., "InferiorBitrate", "InferiorSampleRate")
+    pub reason: String,
+    /// Path to the superior version
+    pub superior_path: String,
+    /// Quality score of this file
+    pub quality_score: i64,
+    /// Quality score of the superior file
+    pub superior_quality_score: i64,
 }
 
 // ============================================================================

@@ -74,6 +74,8 @@ pub(crate) enum UiMode {
     CorruptFileResolution,
     /// Shit format transcode resolution modal
     ShitFormatResolution,
+    /// Subpar duplicate resolution modal (stash + drop lower quality versions)
+    SubparDuplicateResolution,
 }
 
 // ============================================================================
@@ -91,11 +93,3 @@ pub(crate) struct ExitConfirmModalState {
     pub has_operations: bool,
 }
 
-impl ExitConfirmModalState {
-    pub fn new(has_operations: bool) -> Self {
-        Self {
-            selected_no: true,
-            has_operations,
-        }
-    }
-}

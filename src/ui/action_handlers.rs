@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::corpus::paths;
-use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -95,8 +95,8 @@ impl App {
                     Some(insights_view::InsightAction::LaunchFingerprintDuplicateResolution) => {
                         self.status_message = Some("Fingerprint duplicate flow not yet implemented".to_string());
                     }
-                    Some(insights_view::InsightAction::LaunchInferiorDuplicateResolution) => {
-                        self.status_message = Some("Inferior duplicate flow not yet implemented".to_string());
+                    Some(insights_view::InsightAction::LaunchSubparDuplicateResolution) => {
+                        self.start_subpar_duplicate_resolution();
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Flow not yet implemented".to_string());
@@ -731,6 +731,79 @@ impl App {
 
     /// Stage shit format mutations for transaction review.
     fn stage_shit_format_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+        let Some(ref mut witch) = self.witch else {
+            return;
+        };
+
+        // Start transaction and stage the decision
+        let _ = witch.start_transaction(label);
+        let _ = super::operator_decisions::stage_decision(
+            witch,
+            0,
+            label,
+            mutations,
+        );
+    }
+
+    // ========================================================================
+    // Subpar Duplicate Resolution
+    // ========================================================================
+
+    /// Start subpar duplicate resolution modal from Insights view.
+    fn start_subpar_duplicate_resolution(&mut self) {
+        // Load subpar duplicate file data
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                subpar_duplicate_flow::SubparDuplicateModalData::load(&read_db).ok()
+            })
+            .unwrap_or_default();
+
+        if data.total_count() == 0 {
+            self.status_message = Some("No subpar duplicates to resolve".to_string());
+            return;
+        }
+
+        // Create preview state with cached data
+        let preview = subpar_duplicate_flow::SubparDuplicatePreviewState::new(data);
+        self.subpar_duplicate_preview = Some(preview);
+        self.mode = UiMode::SubparDuplicateResolution;
+    }
+
+    /// Handle subpar duplicate preview actions.
+    pub(super) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_flow::SubparDuplicatePreviewAction) {
+        match action {
+            subpar_duplicate_flow::SubparDuplicatePreviewAction::None => {}
+            subpar_duplicate_flow::SubparDuplicatePreviewAction::ConfirmStashAll => {
+                // Generate stash + drop mutations and stage for review
+                if let Some(ref preview) = self.subpar_duplicate_preview {
+                    let mutations = preview.cached_data.stash_and_drop_mutations();
+                    let count = mutations.len();
+                    if count > 0 {
+                        self.stage_subpar_duplicate_mutations(mutations, "Stash subpar duplicates");
+                        // Note: subpar_duplicate_preview state is NOT cleared - preserved for Cancel return
+                        self.start_transaction_review(transaction_review::TransactionReviewSource::SubparDuplicateResolution);
+                    } else {
+                        self.status_message = Some("No files to stash".to_string());
+                    }
+                }
+            }
+            subpar_duplicate_flow::SubparDuplicatePreviewAction::Cancel => {
+                crate::logging::log_general("Subpar duplicate resolution cancelled");
+                // Discard any active transaction from review flow
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.subpar_duplicate_preview = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Stage subpar duplicate mutations for transaction review.
+    fn stage_subpar_duplicate_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
         let Some(ref mut witch) = self.witch else {
             return;
         };
@@ -1851,6 +1924,10 @@ impl App {
                         // shit_format_preview state was preserved
                         self.mode = UiMode::ShitFormatResolution;
                     }
+                    Some(TransactionReviewSource::SubparDuplicateResolution) => {
+                        // subpar_duplicate_preview state was preserved
+                        self.mode = UiMode::SubparDuplicateResolution;
+                    }
                     None => self.start_insights_view(),
                 }
             }
@@ -1925,6 +2002,7 @@ impl App {
         self.oob_conflict_state = None;
         self.corrupt_file_preview = None;
         self.shit_format_preview = None;
+        self.subpar_duplicate_preview = None;
     }
 
     /// Transition to the standardized transaction review modal.

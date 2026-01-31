@@ -45,6 +45,7 @@ pub mod progress_screen;
 pub mod render;
 pub mod shit_format_flow;
 pub mod startup;
+pub mod subpar_duplicate_flow;
 pub mod tag_canonicity;
 pub mod tag_editor;
 pub mod tag_search;
@@ -181,6 +182,8 @@ pub(crate) struct App {
     pub(super) corrupt_file_preview: Option<corrupt_file_flow::CorruptFilePreviewState>,
     // Shit format transcode resolution modal
     pub(super) shit_format_preview: Option<shit_format_flow::ShitFormatPreviewState>,
+    // Subpar duplicate resolution modal
+    pub(super) subpar_duplicate_preview: Option<subpar_duplicate_flow::SubparDuplicatePreviewState>,
 
     // The Witch - enforcer of orderliness, handles all mutations and background work
     pub(super) witch: Option<crate::witch::Witch>,
@@ -227,6 +230,7 @@ impl App {
             format_std: None,
             corrupt_file_preview: None,
             shit_format_preview: None,
+            subpar_duplicate_preview: None,
             witch: None,
             log_rx: Some(log_rx),
             throughput_samples: VecDeque::with_capacity(100),
@@ -266,6 +270,7 @@ impl App {
             format_std: None,
             corrupt_file_preview: None,
             shit_format_preview: None,
+            subpar_duplicate_preview: None,
             witch: Some(witch),
             log_rx: None,  // Already consumed by Witch
             throughput_samples: VecDeque::with_capacity(100),
@@ -498,6 +503,12 @@ impl App {
                     self.handle_shit_format_preview_action(action);
                 }
             }
+            UiMode::SubparDuplicateResolution => {
+                if let Some(ref mut preview) = self.subpar_duplicate_preview {
+                    let action = preview.handle_key(key);
+                    self.handle_subpar_duplicate_preview_action(action);
+                }
+            }
         }
     }
 
@@ -663,7 +674,6 @@ fn render(f: &mut Frame, app: &mut App) {
 
     let mut ctx = render::RenderContext {
         mode: app.mode,
-        config: &app.config,
         status_message: app.status_message.as_deref(),
         tree_browser: app.tree_browser.as_mut(),
         deployment_preview: app.deployment_preview.as_mut(),
@@ -683,9 +693,9 @@ fn render(f: &mut Frame, app: &mut App) {
         format_std: app.format_std.as_ref(),
         corrupt_file_preview: app.corrupt_file_preview.as_ref(),
         shit_format_preview: app.shit_format_preview.as_ref(),
+        subpar_duplicate_preview: app.subpar_duplicate_preview.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
-        throughput_samples: &app.throughput_samples,
         witch_status,
         corpus_summary,
         db_stats,

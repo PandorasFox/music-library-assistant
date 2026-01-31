@@ -137,7 +137,7 @@ pub enum InsightType {
     CorpusShitFormatFiles,
     // Tag resolution bucket entries (duplicates at top for easy resolution)
     FingerprintDuplicates,
-    InferiorDuplicates,
+    SubparDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
     CompoundTagValue,
@@ -175,8 +175,8 @@ pub enum InsightAction {
     LaunchIntakeConfirmation,
     /// Launch fingerprint duplicate resolution flow
     LaunchFingerprintDuplicateResolution,
-    /// Launch inferior duplicate stash flow
-    LaunchInferiorDuplicateResolution,
+    /// Launch subpar duplicate stash flow
+    LaunchSubparDuplicateResolution,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -245,15 +245,15 @@ impl BucketEntry {
         }
     }
 
-    /// Create inferior duplicates entry
-    fn inferior_duplicates(count: usize) -> Self {
+    /// Create subpar duplicates entry
+    fn subpar_duplicates(count: usize) -> Self {
         Self {
-            insight_type: InsightType::InferiorDuplicates,
-            label: "Inferior duplicates".to_string(),
+            insight_type: InsightType::SubparDuplicates,
+            label: "Subpar duplicates".to_string(),
             count: Some(count),
             color: if count > 0 { Color::Cyan } else { Color::Green },
             rank: 0,
-            action: InsightAction::LaunchInferiorDuplicateResolution,
+            action: InsightAction::LaunchSubparDuplicateResolution,
         }
     }
 
@@ -472,9 +472,9 @@ impl CachedBucketEntries {
             entries.push(BucketEntry::fingerprint_duplicates(bucket.fingerprint_duplicate_count));
         }
 
-        // Inferior duplicates - identified low-quality copies ready to stash
-        if bucket.inferior_duplicate_count > 0 {
-            entries.push(BucketEntry::inferior_duplicates(bucket.inferior_duplicate_count));
+        // Subpar duplicates - identified low-quality copies ready to stash
+        if bucket.subpar_duplicate_count > 0 {
+            entries.push(BucketEntry::subpar_duplicates(bucket.subpar_duplicate_count));
         }
 
         // Add inconsistent album_artist if present
@@ -744,7 +744,7 @@ mod tests {
             },
             bucket_placeholder: TagSquashBucket {
                 fingerprint_duplicate_count: 0,
-                inferior_duplicate_count: 0,
+                subpar_duplicate_count: 0,
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
                 compound_tag_value_count: 0,

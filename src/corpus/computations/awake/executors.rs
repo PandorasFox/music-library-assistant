@@ -41,6 +41,7 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectInconsistentAlbumArtist,
         Computation::DetectCompoundTagValues,
         Computation::DetectShitFormats,
+        Computation::AnalyzeFingerprintDuplicates,
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
     ];
@@ -1221,4 +1222,494 @@ pub fn execute_detect_inconsistent_album_artist(
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Fingerprint Duplicate Analysis
+// ============================================================================
+
+/// Quality tier for audio format classification.
+/// Higher value = better format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FormatClass {
+    /// Lossy non-Vorbis (MP3, M4A, AAC, WMA)
+    OtherLossy = 0,
+    /// Lossless non-Vorbis (WAV, AIFF, APE, WV)
+    OtherLossless = 1,
+    /// Vorbis lossy (Opus, OGG)
+    VorbisLossy = 2,
+    /// Vorbis lossless (FLAC)
+    VorbisLossless = 3,
+}
+
+/// Classify a file type into its format class.
+fn classify_format(file_type: &str) -> FormatClass {
+    match file_type.to_lowercase().as_str() {
+        "flac" => FormatClass::VorbisLossless,
+        "opus" | "ogg" => FormatClass::VorbisLossy,
+        "wav" | "aiff" | "aif" | "ape" | "wv" => FormatClass::OtherLossless,
+        _ => FormatClass::OtherLossy, // mp3, m4a, aac, wma, etc.
+    }
+}
+
+/// Check if a format is lossless.
+fn is_lossless(file_type: &str) -> bool {
+    matches!(
+        file_type.to_lowercase().as_str(),
+        "flac" | "wav" | "aiff" | "aif" | "ape" | "wv"
+    )
+}
+
+/// Compute quality score for a track (0-1000 range).
+/// Format class provides the major tier (0-750), audio quality provides the minor score.
+fn compute_quality_score(
+    file_type: &str,
+    bitrate_kbps: Option<i32>,
+    sample_rate: Option<i32>,
+) -> u32 {
+    let format_class = classify_format(file_type);
+    let format_score = (format_class as u32) * 250; // 0, 250, 500, 750
+
+    // For lossless, use sample rate (higher = better)
+    // For lossy, use bitrate (higher = better)
+    let audio_score = if is_lossless(file_type) {
+        // Sample rate: 44100 -> 100, 48000 -> 109, 96000 -> 218, 192000 -> 436
+        // Cap at 250 to not exceed format tier
+        sample_rate.unwrap_or(44100).min(192000) as u32 * 250 / 192000
+    } else {
+        // Bitrate: 128 -> 80, 192 -> 120, 256 -> 160, 320 -> 200, etc.
+        // Cap at 250 to not exceed format tier
+        bitrate_kbps.unwrap_or(128).min(500) as u32 * 250 / 500
+    };
+
+    format_score + audio_score.min(249) // Max 999, never overflow into next tier
+}
+
+/// Compute fingerprint similarity using bit-level Hamming distance.
+/// Returns similarity as percentage (0.0 - 100.0).
+///
+/// Chromaprint fingerprints are Vec<u32> where each u32 encodes 32 bits of spectral features.
+/// We use XOR + popcount to count differing bits, then compute similarity.
+fn fingerprint_similarity(fp1: &[u32], fp2: &[u32]) -> f64 {
+    if fp1.is_empty() || fp2.is_empty() {
+        return 0.0;
+    }
+
+    // Use shorter as reference length
+    let min_len = fp1.len().min(fp2.len());
+    let max_len = fp1.len().max(fp2.len());
+
+    // If lengths differ significantly, they're likely different recordings
+    if max_len > min_len * 2 {
+        return 0.0;
+    }
+
+    // Compare overlapping portions, find best alignment
+    // For simplicity, we compare the overlapping portion without sliding
+    // (sliding would be O(n²) and chromaprint handles alignment internally)
+    let total_bits = (min_len * 32) as u64;
+    let mut matching_bits = 0u64;
+
+    for i in 0..min_len {
+        let xor = fp1[i] ^ fp2[i];
+        let differing = xor.count_ones() as u64;
+        matching_bits += 32 - differing;
+    }
+
+    (matching_bits as f64 / total_bits as f64) * 100.0
+}
+
+/// Normalize album name for comparison.
+/// Strips edition suffixes, normalizes case and whitespace.
+fn normalize_album_name(s: &str) -> String {
+    // Common suffixes to strip
+    let suffixes = [
+        "(deluxe edition)",
+        "(deluxe)",
+        "[deluxe edition]",
+        "[deluxe]",
+        "(remastered)",
+        "[remastered]",
+        "(remaster)",
+        "[remaster]",
+        "(expanded edition)",
+        "[expanded edition]",
+        "(special edition)",
+        "[special edition]",
+        "(anniversary edition)",
+        "[anniversary edition]",
+        "(bonus track version)",
+        "[bonus track version]",
+    ];
+
+    let mut normalized = s.to_lowercase();
+
+    for suffix in &suffixes {
+        if let Some(pos) = normalized.find(suffix) {
+            normalized = normalized[..pos].to_string();
+        }
+    }
+
+    // Normalize whitespace
+    normalized
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+/// Variant keywords that indicate different versions of a track.
+const VARIANT_KEYWORDS: &[&str] = &[
+    "remix",
+    "live",
+    "acoustic",
+    "remaster",
+    "remastered",
+    "demo",
+    "edit",
+    "instrumental",
+    "radio edit",
+    "extended",
+    "alternate",
+    "bonus",
+    "unplugged",
+    "orchestral",
+    "piano version",
+    "stripped",
+];
+
+/// Check if a title contains variant keywords.
+fn has_variant_keyword(title: &str) -> Option<&'static str> {
+    let lower = title.to_lowercase();
+    for keyword in VARIANT_KEYWORDS {
+        if lower.contains(keyword) {
+            return Some(keyword);
+        }
+    }
+    None
+}
+
+/// Release identity information for variant detection.
+#[derive(Debug)]
+struct TrackReleaseIdentity {
+    track_id: i64,
+    path: String,
+    album: String,
+    title: String,
+    isrc: String,
+    catalog_number: String,
+}
+
+/// Check if two tracks are from the same release (true duplicates, not variants).
+///
+/// Tracks are "same release" if:
+/// - Same ISRC (definitively same recording), OR
+/// - Same catalog number, OR
+/// - Same normalized album AND same normalized title AND no exclusive variant keywords
+fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
+    // ISRC match = definitive same recording
+    if !a.isrc.is_empty() && !b.isrc.is_empty() && a.isrc.eq_ignore_ascii_case(&b.isrc) {
+        return true;
+    }
+
+    // Catalog number match = same release
+    if !a.catalog_number.is_empty()
+        && !b.catalog_number.is_empty()
+        && a.catalog_number.eq_ignore_ascii_case(&b.catalog_number)
+    {
+        return true;
+    }
+
+    // Check album names (normalized)
+    let album_a = normalize_album_name(&a.album);
+    let album_b = normalize_album_name(&b.album);
+
+    if album_a != album_b {
+        return false; // Different albums = different releases
+    }
+
+    // Check for exclusive variant keywords in titles
+    let title_a = a.title.to_lowercase();
+    let title_b = b.title.to_lowercase();
+
+    let variant_a = has_variant_keyword(&title_a);
+    let variant_b = has_variant_keyword(&title_b);
+
+    // If one has a variant keyword the other doesn't, they're different versions
+    match (variant_a, variant_b) {
+        (Some(kw_a), Some(kw_b)) if kw_a != kw_b => false, // Different variant types
+        (Some(_), None) | (None, Some(_)) => false,       // One is variant, other isn't
+        _ => true, // Both have same variant or neither has variant
+    }
+}
+
+/// Reason why a track is inferior.
+#[derive(Debug, Clone, Copy)]
+enum InferiorReason {
+    InferiorFormat,
+    InferiorBitrate,
+    InferiorSampleRate,
+}
+
+impl InferiorReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::InferiorFormat => "inferior_format",
+            Self::InferiorBitrate => "inferior_bitrate",
+            Self::InferiorSampleRate => "inferior_sample_rate",
+        }
+    }
+}
+
+/// Execute AnalyzeFingerprintDuplicates - deep analysis of fingerprint duplicate groups.
+pub fn execute_analyze_fingerprint_duplicates(
+    read_only_db: &Database,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    use crate::corpus::db::types::CorpusFileSignalType;
+
+    let computation = Computation::AnalyzeFingerprintDuplicates;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Load configuration
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to load config: {}", e),
+            );
+        }
+    };
+
+    let similarity_threshold = config.opinions.duplicate_analysis.fingerprint_similarity_threshold;
+    let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
+
+    // Clear all existing InferiorDuplicate signals
+    sender.clear_signals_by_type(SignalType::from(CorpusFileSignalType::InferiorDuplicate), witness);
+
+    // Get all FingerprintDuplicate signals
+    let fp_dup_signals = read_only_db
+        .get_aggregate_signals(Some(AggregateSignalType::FingerprintDuplicate))
+        .unwrap_or_default();
+
+    if fp_dup_signals.is_empty() {
+        log_general("[COMPUTE] AnalyzeFingerprintDuplicates: no fingerprint duplicate signals to analyze");
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+    }
+
+    let mut total_groups = 0;
+    let mut inferior_count = 0;
+    let mut variant_skipped = 0;
+
+    for signal in &fp_dup_signals {
+        let track_ids = signal.track_ids();
+        if track_ids.len() < 2 {
+            continue;
+        }
+
+        total_groups += 1;
+
+        // Get tracks for this group
+        let tracks = match read_only_db.get_tracks_by_ids(&track_ids) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        if tracks.len() < 2 {
+            continue;
+        }
+
+        // Cluster by duration (tracks with similar duration are more likely true duplicates)
+        let duration_clusters = cluster_by_duration(&tracks, duration_tolerance_ms);
+
+        for cluster in duration_clusters {
+            if cluster.len() < 2 {
+                continue;
+            }
+
+            // Get release identity info for each track
+            let mut identities: Vec<TrackReleaseIdentity> = Vec::new();
+            for track in &cluster {
+                let track_id = track.id.unwrap_or(0);
+                let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
+                let tag_map: HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                    .collect();
+
+                identities.push(TrackReleaseIdentity {
+                    track_id,
+                    path: track.path.clone(),
+                    album: tag_map.get("album").cloned().unwrap_or_default(),
+                    title: tag_map.get("title").cloned().unwrap_or_default(),
+                    isrc: tag_map.get("isrc").cloned().unwrap_or_default(),
+                    catalog_number: tag_map.get("catalognumber").cloned().unwrap_or_default(),
+                });
+            }
+
+            // Check fingerprint similarity between all pairs
+            // Build groups of "true duplicates" (high similarity + same release)
+            let mut true_duplicate_groups: Vec<Vec<usize>> = Vec::new();
+            let mut assigned: Vec<bool> = vec![false; cluster.len()];
+
+            for i in 0..cluster.len() {
+                if assigned[i] {
+                    continue;
+                }
+
+                let mut group = vec![i];
+                assigned[i] = true;
+
+                for j in (i + 1)..cluster.len() {
+                    if assigned[j] {
+                        continue;
+                    }
+
+                    // Check fingerprint similarity
+                    let fp_i = cluster[i].fingerprint.as_ref();
+                    let fp_j = cluster[j].fingerprint.as_ref();
+
+                    if let (Some(fp1), Some(fp2)) = (fp_i, fp_j) {
+                        let similarity = fingerprint_similarity(fp1, fp2);
+                        if similarity < similarity_threshold {
+                            continue; // Not similar enough
+                        }
+                    }
+
+                    // Check if same release
+                    if !is_same_release(&identities[i], &identities[j]) {
+                        variant_skipped += 1;
+                        continue; // Different variants
+                    }
+
+                    // This is a true duplicate of the group leader
+                    group.push(j);
+                    assigned[j] = true;
+                }
+
+                if group.len() >= 2 {
+                    true_duplicate_groups.push(group);
+                }
+            }
+
+            // For each true duplicate group, rank by quality and emit InferiorDuplicate signals
+            for group in true_duplicate_groups {
+                // Compute quality scores
+                let mut scored: Vec<(usize, u32)> = group
+                    .iter()
+                    .map(|&idx| {
+                        let track = &cluster[idx];
+                        let score = compute_quality_score(
+                            &track.file_type,
+                            track.bitrate_kbps,
+                            track.sample_rate,
+                        );
+                        (idx, score)
+                    })
+                    .collect();
+
+                // Sort by score descending (best first)
+                scored.sort_by(|a, b| b.1.cmp(&a.1));
+
+                // Best track is the first one
+                let (best_idx, best_score) = scored[0];
+                let best_track = &cluster[best_idx];
+                let best_identity = &identities[best_idx];
+
+                // Emit InferiorDuplicate for all others
+                for &(idx, score) in scored.iter().skip(1) {
+                    let track = &cluster[idx];
+
+                    // Determine reason
+                    let reason = if classify_format(&track.file_type) < classify_format(&best_track.file_type) {
+                        InferiorReason::InferiorFormat
+                    } else if is_lossless(&track.file_type) {
+                        InferiorReason::InferiorSampleRate
+                    } else {
+                        InferiorReason::InferiorBitrate
+                    };
+
+                    let metadata = serde_json::json!({
+                        "reason": reason.as_str(),
+                        "superior_track_id": best_identity.track_id,
+                        "superior_path": best_identity.path,
+                        "dupe_group_fingerprint": signal.key.clone(),
+                        "quality_score": score,
+                        "superior_quality_score": best_score,
+                    });
+
+                    sender.ensure_file_signal_with_metadata(
+                        CorpusFileSignalType::InferiorDuplicate.into(),
+                        &track.path,
+                        Some(&metadata.to_string()),
+                        witness,
+                    );
+
+                    inferior_count += 1;
+                }
+            }
+        }
+    }
+
+    log_general(format!(
+        "[COMPUTE] AnalyzeFingerprintDuplicates: analyzed {} groups, emitted {} InferiorDuplicate signals, skipped {} variants",
+        total_groups, inferior_count, variant_skipped
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Cluster tracks by duration within tolerance.
+fn cluster_by_duration<'a>(
+    tracks: &'a [crate::corpus::db::types::Track],
+    tolerance_ms: i64,
+) -> Vec<Vec<&'a crate::corpus::db::types::Track>> {
+    if tracks.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort by duration
+    let mut sorted: Vec<_> = tracks.iter().collect();
+    sorted.sort_by_key(|t| t.duration_ms.unwrap_or(0));
+
+    let mut clusters: Vec<Vec<&crate::corpus::db::types::Track>> = Vec::new();
+    let mut current_cluster: Vec<&crate::corpus::db::types::Track> = vec![sorted[0]];
+    let mut cluster_start_duration = sorted[0].duration_ms.unwrap_or(0);
+
+    for track in sorted.iter().skip(1) {
+        let duration = track.duration_ms.unwrap_or(0);
+
+        // If within tolerance of cluster start, add to cluster
+        if (duration - cluster_start_duration).abs() <= tolerance_ms {
+            current_cluster.push(track);
+        } else {
+            // Start new cluster
+            if !current_cluster.is_empty() {
+                clusters.push(current_cluster);
+            }
+            current_cluster = vec![track];
+            cluster_start_duration = duration;
+        }
+    }
+
+    // Don't forget the last cluster
+    if !current_cluster.is_empty() {
+        clusters.push(current_cluster);
+    }
+
+    clusters
 }

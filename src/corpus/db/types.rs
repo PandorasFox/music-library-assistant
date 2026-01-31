@@ -150,6 +150,9 @@ pub enum SignalType {
     /// File is in a non-Vorbis container format (MP3, M4A, AAC, WMA, or lossless needing remux)
     /// Actionable signal with resolution flow (transcode to Opus/FLAC)
     ShitFormat,
+    /// Track is an inferior duplicate (lower quality version of another track)
+    /// Actionable signal with resolution flow (stash inferior copy)
+    InferiorDuplicate,
 }
 
 impl SignalType {
@@ -190,6 +193,7 @@ impl SignalType {
             Self::WaveformReadError => "waveform_read_error",
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
+            Self::InferiorDuplicate => "inferior_duplicate",
         }
     }
 
@@ -230,6 +234,7 @@ impl SignalType {
             "waveform_read_error" => Some(Self::WaveformReadError),
             "corrupt_file" => Some(Self::CorruptFile),
             "shit_format" => Some(Self::ShitFormat),
+            "inferior_duplicate" => Some(Self::InferiorDuplicate),
 
             // Legacy DB values → map to new types
             "missing_from_disk" => Some(Self::MissingFile),
@@ -259,6 +264,7 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::InodeChanged => Self::InodeChanged,
             CorpusFileSignalType::CorruptFile => Self::CorruptFile,
             CorpusFileSignalType::ShitFormat => Self::ShitFormat,
+            CorpusFileSignalType::InferiorDuplicate => Self::InferiorDuplicate,
         }
     }
 }
@@ -326,6 +332,8 @@ pub enum CorpusFileSignalType {
     CorruptFile,
     /// File is in a non-Vorbis container format (MP3, M4A, AAC, WMA, or lossless needing remux)
     ShitFormat,
+    /// Track is an inferior duplicate (lower quality version of another track)
+    InferiorDuplicate,
 }
 
 impl CorpusFileSignalType {
@@ -345,6 +353,7 @@ impl CorpusFileSignalType {
             Self::InodeChanged => "inode_changed",
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
+            Self::InferiorDuplicate => "inferior_duplicate",
         }
     }
 
@@ -366,6 +375,7 @@ impl CorpusFileSignalType {
             "inode_changed" => Some(Self::InodeChanged),
             "corrupt_file" => Some(Self::CorruptFile),
             "shit_format" => Some(Self::ShitFormat),
+            "inferior_duplicate" => Some(Self::InferiorDuplicate),
             _ => None,
         }
     }
@@ -386,6 +396,7 @@ impl CorpusFileSignalType {
             Self::InodeChanged => SignalType::InodeChanged,
             Self::CorruptFile => SignalType::CorruptFile,
             Self::ShitFormat => SignalType::ShitFormat,
+            Self::InferiorDuplicate => SignalType::InferiorDuplicate,
         }
     }
 }

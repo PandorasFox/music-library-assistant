@@ -54,6 +54,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums |
 | DetectCompoundTagValues | Find separators needing splits |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
+| AnalyzeFingerprintDuplicates | Analyze fingerprint duplicates for similarity, variants, quality |
 | DetectDeployConflicts | Detect path collisions in deployment |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
 | DeriveCorpusDeployStatus | Derive corpus deploy status |
@@ -98,6 +99,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagValues | — | CompoundTagValue | CompoundTagValue (all, then recreate) |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
+| AnalyzeFingerprintDuplicates | — | InferiorDuplicate | InferiorDuplicate (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |

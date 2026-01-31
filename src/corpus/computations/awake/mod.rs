@@ -91,6 +91,13 @@ pub enum Computation {
     /// should be transcoded to Opus (lossy) or FLAC (lossless).
     DetectShitFormats,
 
+    /// Analyze fingerprint duplicates for similarity, variants, and quality.
+    ///
+    /// Reads FingerprintDuplicate signals, clusters by duration, computes
+    /// fingerprint similarity, detects variants via release metadata, ranks
+    /// by quality, and emits InferiorDuplicate signals for non-best tracks.
+    AnalyzeFingerprintDuplicates,
+
     /// Detect deployment conflicts (bulk).
     ///
     /// Groups healthy tracks by deployment path, flags conflicts.
@@ -126,6 +133,7 @@ impl Computation {
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::DetectCompoundTagValues => "Detecting compound tag values",
             Computation::DetectShitFormats => "Detecting shit format files",
+            Computation::AnalyzeFingerprintDuplicates => "Analyzing fingerprint duplicates",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",

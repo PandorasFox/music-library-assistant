@@ -22,6 +22,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | HealthyFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In corpus, indexed, mtime matches, no OOB signals |
 | CorruptFile | VerifyTags, VerifyAudio, IndexFileFromPath, Transcode | VerifyAudio (if valid), MoveToStash, DropFromIndex | Tag read or audio decode failed |
 | ShitFormat | IndexFileFromPath, DetectShitFormats | Transcode (to Opus/FLAC), DetectShitFormats | Non-Vorbis container (MP3, M4A, WAV, etc.) |
+| InferiorDuplicate | AnalyzeFingerprintDuplicates | AnalyzeFingerprintDuplicates, MoveToStash | Track is inferior quality duplicate |
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |

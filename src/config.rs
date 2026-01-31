@@ -34,6 +34,7 @@ pub struct Opinions {
     pub health_detection: HealthDetectionOpinions,
     pub performance: PerformanceOpinions,
     pub tag_splitting: TagSplittingOpinions,
+    pub duplicate_analysis: DuplicateAnalysisOpinions,
 }
 
 
@@ -210,6 +211,29 @@ impl Default for TagSplittingOpinions {
             vec![";".to_string(), ",".to_string(), "/".to_string()],
         );
         Self { tag_separators }
+    }
+}
+
+/// Opinions for fingerprint duplicate analysis.
+///
+/// Controls similarity thresholds and duration tolerance for detecting
+/// true duplicates vs. different versions of tracks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateAnalysisOpinions {
+    /// Fingerprint similarity threshold (0-100). Pairs below this are not duplicates.
+    /// Default: 85.0
+    pub fingerprint_similarity_threshold: f64,
+    /// Duration tolerance in milliseconds. Tracks with duration difference above this
+    /// are clustered separately. Default: 2000 (2 seconds)
+    pub duration_tolerance_ms: i64,
+}
+
+impl Default for DuplicateAnalysisOpinions {
+    fn default() -> Self {
+        Self {
+            fingerprint_similarity_threshold: 85.0,
+            duration_tolerance_ms: 2000,
+        }
     }
 }
 
@@ -726,6 +750,31 @@ fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplitting
     }
 }
 
+/// Parse duplicate-analysis opinions from KDL node
+fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut DuplicateAnalysisOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "fingerprint-similarity-threshold" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.fingerprint_similarity_threshold = val;
+                        }
+                    }
+                }
+                "duration-tolerance-ms" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            opinions.duration_tolerance_ms = val;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 fn parse_kdl_config(content: &str) -> Result<Config> {
     let doc: kdl::KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
@@ -814,6 +863,9 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "tag-splitting" => {
                                 parse_tag_splitting_opinions(child, &mut config.opinions.tag_splitting);
+                            }
+                            "duplicate-analysis" => {
+                                parse_duplicate_analysis_opinions(child, &mut config.opinions.duplicate_analysis);
                             }
                             _ => {}
                         }

@@ -746,9 +746,13 @@ pub struct CorpusFilesBucket {
     pub directory_breakdown: DirectoryBreakdown,
 }
 
-/// Bucket 2: Tag Squash - tag canonicity, album_artist, and compound tag issues
+/// Bucket 2: Tag Squash - duplicates, tag canonicity, album_artist, and compound tag issues
 #[derive(Debug, Clone, Default)]
 pub struct TagSquashBucket {
+    /// Fingerprint duplicate groups (easy resolutions at top)
+    pub fingerprint_duplicate_count: usize,
+    /// Inferior duplicates (lower quality versions, easy stash candidates)
+    pub inferior_duplicate_count: usize,
     /// Tag canonicity issues grouped by tag name (e.g., "artist": 50 clusters)
     pub tag_canonicity: Vec<TagSquashEntry>,
     /// Inconsistent album_artist issues count

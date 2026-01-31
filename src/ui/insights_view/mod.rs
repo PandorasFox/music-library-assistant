@@ -135,7 +135,9 @@ pub enum InsightType {
     CorpusFilesRelocated,
     CorpusCorruptFiles,
     CorpusShitFormatFiles,
-    // Tag resolution bucket entries
+    // Tag resolution bucket entries (duplicates at top for easy resolution)
+    FingerprintDuplicates,
+    InferiorDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
     CompoundTagValue,
@@ -171,6 +173,10 @@ pub enum InsightAction {
     LaunchShitFormatTranscode,
     /// Launch intake confirmation flow for unindexed files
     LaunchIntakeConfirmation,
+    /// Launch fingerprint duplicate resolution flow
+    LaunchFingerprintDuplicateResolution,
+    /// Launch inferior duplicate stash flow
+    LaunchInferiorDuplicateResolution,
     /// Flow not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -224,6 +230,30 @@ impl BucketEntry {
             color,
             rank: 0, // Library uses count for sorting, not rank
             action: InsightAction::LaunchDeploymentPreview,
+        }
+    }
+
+    /// Create fingerprint duplicates entry
+    fn fingerprint_duplicates(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::FingerprintDuplicates,
+            label: "Fingerprint duplicates".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Cyan } else { Color::Green },
+            rank: 0,
+            action: InsightAction::LaunchFingerprintDuplicateResolution,
+        }
+    }
+
+    /// Create inferior duplicates entry
+    fn inferior_duplicates(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::InferiorDuplicates,
+            label: "Inferior duplicates".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Cyan } else { Color::Green },
+            rank: 0,
+            action: InsightAction::LaunchInferiorDuplicateResolution,
         }
     }
 
@@ -436,6 +466,16 @@ impl CachedBucketEntries {
 
     fn build_placeholder_entries(bucket: &TagSquashBucket) -> Vec<BucketEntry> {
         let mut entries = Vec::new();
+
+        // Fingerprint duplicates at top - easy resolutions
+        if bucket.fingerprint_duplicate_count > 0 {
+            entries.push(BucketEntry::fingerprint_duplicates(bucket.fingerprint_duplicate_count));
+        }
+
+        // Inferior duplicates - identified low-quality copies ready to stash
+        if bucket.inferior_duplicate_count > 0 {
+            entries.push(BucketEntry::inferior_duplicates(bucket.inferior_duplicate_count));
+        }
 
         // Add inconsistent album_artist if present
         if bucket.inconsistent_album_artist_count > 0 {
@@ -703,6 +743,8 @@ mod tests {
                 directory_breakdown: Default::default(),
             },
             bucket_placeholder: TagSquashBucket {
+                fingerprint_duplicate_count: 0,
+                inferior_duplicate_count: 0,
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
                 compound_tag_value_count: 0,

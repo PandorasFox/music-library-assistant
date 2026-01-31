@@ -699,6 +699,19 @@ impl Database {
     fn compute_tag_resolution_bucket(&self) -> Result<crate::corpus::db::types::TagSquashBucket> {
         use crate::corpus::db::types::*;
 
+        // Fingerprint duplicates (easy resolutions - at top of bucket)
+        // Subtract known variants since those are intentional duplicates
+        let known_variants: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM known_variants",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        let fingerprint_duplicate_count = self.count_signal_type("fingerprint_dup")?
+            .saturating_sub(known_variants);
+
+        // Inferior duplicates (lower quality versions identified by fingerprint analysis)
+        let inferior_duplicate_count = self.count_signal_type("inferior_duplicate")?;
+
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
 
@@ -731,6 +744,8 @@ impl Database {
             .collect();
 
         Ok(TagSquashBucket {
+            fingerprint_duplicate_count,
+            inferior_duplicate_count,
             tag_canonicity,
             inconsistent_album_artist_count,
             compound_tag_value_count,
@@ -742,34 +757,18 @@ impl Database {
 
         let mut entries = Vec::new();
 
-        // Get known_variants count to subtract from fingerprint duplicates
-        let known_variants: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM known_variants",
-            params![],
-            |row| row.get(0),
-        ).unwrap_or(0);
-
         // Aggregate signals with affected counts
+        // Note: fingerprint_dup and inferior_duplicate are now in the TagSquash bucket
         for (signal_type, label) in [
-            ("fingerprint_dup", "Fingerprint Duplicates"),
             ("metadata_dup", "Metadata Duplicates"),
             ("duplicate_inode", "Duplicate Inodes"),
             ("missing_tag", "Missing Tags"),
             ("deploy_conflict", "Deploy Conflicts"),
         ] {
-            let mut count = self.count_signal_type(signal_type)?;
-
-            // Subtract known variants from fingerprint duplicates
-            if signal_type == "fingerprint_dup" {
-                count = count.saturating_sub(known_variants);
-            }
+            let count = self.count_signal_type(signal_type)?;
 
             if count > 0 {
-                let mut affected = self.count_affected_by_signal(signal_type)?;
-                // Also subtract known variants from affected count for fingerprint dupes
-                if signal_type == "fingerprint_dup" {
-                    affected = affected.saturating_sub(known_variants);
-                }
+                let affected = self.count_affected_by_signal(signal_type)?;
                 entries.push(OtherSignalEntry {
                     signal_type: signal_type.to_string(),
                     display_label: label.to_string(),

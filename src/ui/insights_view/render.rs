@@ -439,7 +439,49 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        // Tag resolution bucket entries
+        // Tag resolution bucket entries (duplicates at top)
+        InsightType::FingerprintDuplicates => {
+            lines.push(Line::from(Span::styled(
+                "Fingerprint Duplicates",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Files with identical audio content",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "(same acoustic fingerprint).",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to review and resolve.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
+        InsightType::InferiorDuplicates => {
+            lines.push(Line::from(Span::styled(
+                "Inferior Duplicates",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Lower quality versions of tracks",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "identified by fingerprint analysis.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to stash inferior copies.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
         InsightType::InconsistentAlbumArtist => {
             lines.push(Line::from(Span::styled(
                 "Inconsistent Album Artist",

@@ -240,6 +240,45 @@ impl App {
         }
     }
 
+    /// Create a new App with a pre-existing Witch instance.
+    ///
+    /// Used when the Witch is created early (before migrations) and
+    /// needs to be passed to the App rather than created lazily.
+    fn new_with_witch(config: Config, witch: crate::witch::Witch) -> Self {
+        Self {
+            config,
+            should_quit: false,
+            status_message: None,
+            mode: UiMode::Insights,
+            tree_browser: None,
+            deployment_preview: None,
+            missing_file_preview: None,
+            tag_canonicity_state: None,
+            tag_canonicity_clusters: None,
+            compound_split_state: None,
+            compound_split_clusters: None,
+            oob_sync_state: None,
+            oob_conflict_state: None,
+            inode_changed_state: None,
+            transaction_review: None,
+            unified_tag_editor: None,
+            exit_confirm_modal_state: None,
+            progress_screen: None,
+            insights_view: None,
+            tag_search: None,
+            intake_confirmation: None,
+            format_std: None,
+            corrupt_file_preview: None,
+            shit_format_preview: None,
+            witch: Some(witch),
+            log_rx: None,  // Already consumed by Witch
+            throughput_samples: VecDeque::with_capacity(100),
+            eye: EyeAnimation::default(),
+            filter_popup_state: None,
+            filter_popup_context: None,
+        }
+    }
+
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         // Filter popup intercepts keys when active
         if let Some(ref mut popup) = self.filter_popup_state {
@@ -703,10 +742,31 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Check for and run database migrations before starting app
-    startup::check_and_run_migrations(&mut terminal)?;
+    // Determine initial state based on database
+    let db_path = crate::config::get_db_path()?;
+    let initial_state = crate::witch::InitialUiState::determine(&db_path);
 
-    let mut app = App::new(config, log_rx);
+    // Handle first-time setup (no Witch needed - creates the database)
+    if initial_state == crate::witch::InitialUiState::FirstTimeSetup {
+        startup::handle_first_time_setup(&mut terminal, &db_path)?;
+    }
+
+    // Create Witch early (without db_thread yet)
+    // The Witch handles migrations via rayon tasks, then spawns db_thread after.
+    let force_freshen = config.opinions.startup.freshen_last_stage_at_startup;
+    let force_check = config.opinions.startup.force_check_all_files_at_startup;
+    let mut witch = crate::witch::Witch::with_opinions(&config, false, force_freshen, force_check, Some(log_rx));
+
+    // Run migrations if needed (self-contained loop with its own UI)
+    if witch.needs_migrations() {
+        startup::run_migration_flow(&mut terminal, &mut witch)?;
+    }
+
+    // NOW spawn db_thread - schema is guaranteed correct
+    witch.spawn_db_thread();
+
+    // Create App with pre-existing Witch
+    let mut app = App::new_with_witch(config, witch);
 
     // Observing ALWAYS runs at startup
     // Start observing via the Witch - this sets observation_state and queues work

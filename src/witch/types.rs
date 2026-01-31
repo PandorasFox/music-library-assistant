@@ -3,7 +3,7 @@
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::corpus::computations::Computation;
 use crate::corpus::mutations::Mutation;
@@ -86,14 +86,16 @@ pub enum Task {
 ///
 /// Migrations require DecisionWitness (user approval) but bypass the `accepting_mutations`
 /// gate. They must run before indexing can happen if schema changes are required.
+///
+/// Note: Description is not stored here - it's looked up from MigrationRegistry
+/// during execution by version number. UI gets descriptions via
+/// `Witch::pending_migration_descriptions()`.
 #[derive(Debug, Clone)]
 pub struct Migration {
     /// Version number this migration starts from.
     pub from_version: u32,
     /// Version number after migration completes.
     pub to_version: u32,
-    /// Human-readable description of the migration.
-    pub description: String,
 }
 
 // ============================================================================
@@ -269,9 +271,12 @@ impl<'a> DecisionScope<'a> {
         self.witch.discard_transaction(&self.witness)
     }
 
-    /// Discard a single decision by index.
-    pub fn discard_decision(&mut self, idx: usize) -> Result<Option<WitnessedDecision>, TransactionError> {
-        self.witch.discard_decision(idx, &self.witness)
+    /// Queue a migration for execution.
+    ///
+    /// Migrations bypass the `accepting_mutations` gate and can run before
+    /// observing completes. They require DecisionWitness (user approval).
+    pub fn queue_migration(&mut self, migration: Migration) {
+        self.witch.queue_migration(migration, &self.witness)
     }
 }
 
@@ -283,17 +288,11 @@ impl<'a> DecisionScope<'a> {
 //   1. operator_decisions::start_transaction()
 //   2. operator_decisions::stage_decision() - repeat for each decision
 //   3. operator_decisions::commit_transaction() or discard_transaction()
-
-/// Create a MigrationWitness for startup migrations (pre-Witch context).
-///
-/// Call this when the user approves database migrations at startup.
-/// The returned witness can then be passed to [`MigrationRegistry::apply_all_pending`].
-///
-/// This is separate from the Witch's `execute_migration()` context witness -
-/// it's for migrations that run before the Witch exists.
-pub fn confirm_startup_migration() -> MigrationWitness {
-    MigrationWitness::new()
-}
+//
+// NOTE: confirm_startup_migration() has been removed. The Witch now orchestrates
+// migrations via queue_pending_migrations() which uses with_operator_decision()
+// internally to get a proper DecisionWitness. See run_migration_flow() in
+// ui/startup/migrations.rs for the new flow.
 
 // ============================================================================
 // Labels and Status Types
@@ -304,10 +303,6 @@ pub fn confirm_startup_migration() -> MigrationWitness {
 pub struct TaskLabel(pub String);
 
 impl TaskLabel {
-    pub fn new(label: impl Into<String>) -> Self {
-        Self(label.into())
-    }
-
     /// Create label from a mutation (fallback if no explicit label provided).
     pub fn from_mutation(mutation: &Mutation) -> Self {
         use crate::corpus::mutations::MutationCategory;
@@ -352,8 +347,6 @@ impl TaskLabel {
 /// Summary of a completed Witch session (for lingering display).
 #[derive(Debug, Clone)]
 pub struct CompletedSession {
-    /// When the session completed
-    pub completed_at: Instant,
     /// How long the session took (first queue to last complete)
     pub duration: Duration,
     /// Total tasks processed
@@ -362,13 +355,6 @@ pub struct CompletedSession {
     pub failed: usize,
     /// Breakdown by task type
     pub task_counts: HashMap<String, usize>,
-}
-
-impl CompletedSession {
-    /// Check if this session should still be displayed (within linger duration).
-    pub fn should_display(&self, linger_duration: Duration) -> bool {
-        self.completed_at.elapsed() < linger_duration
-    }
 }
 
 /// Status information returned from tick().
@@ -438,8 +424,6 @@ pub struct WitnessedDecision {
 pub struct PendingTransaction {
     /// Human-readable label for this transaction
     pub label: String,
-    /// When the transaction was started
-    pub started_at: Instant,
     /// Accumulated decisions by index (UI-provided, may have gaps)
     pub(super) decisions: HashMap<usize, WitnessedDecision>,
 }
@@ -449,7 +433,6 @@ impl PendingTransaction {
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
-            started_at: Instant::now(),
             decisions: HashMap::new(),
         }
     }
@@ -496,19 +479,6 @@ impl std::fmt::Display for TransactionError {
 
 impl std::error::Error for TransactionError {}
 
-/// Information about an active transaction for UI display.
-#[derive(Debug, Clone)]
-pub struct TransactionInfo {
-    /// Human-readable label for this transaction
-    pub label: String,
-    /// Number of decisions accumulated
-    pub decision_count: usize,
-    /// Total mutations across all decisions
-    pub mutation_count: usize,
-    /// When the transaction was started
-    pub started_at: Instant,
-}
-
 /// Summary returned when a transaction is committed.
 #[derive(Debug, Clone)]
 pub struct CommitSummary {
@@ -519,13 +489,11 @@ pub struct CommitSummary {
 }
 
 /// Summary returned when a transaction is discarded.
-#[derive(Debug, Clone)]
-pub struct DiscardSummary {
-    /// Number of decisions that were discarded
-    pub decision_count: usize,
-    /// Total mutations that were discarded
-    pub mutation_count: usize,
-}
+///
+/// Unit struct - callers typically `let _ = discard_transaction(...)` since
+/// discarding always succeeds and the details aren't needed.
+#[derive(Debug, Clone, Copy)]
+pub struct DiscardSummary;
 
 // ============================================================================
 // Internal Task Result

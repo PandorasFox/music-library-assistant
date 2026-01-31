@@ -4,7 +4,7 @@
 
 use super::types::{
     CommitSummary, DecisionWitness, DiscardSummary, PendingTransaction,
-    TransactionError, TransactionInfo, WitnessedDecision,
+    TransactionError, WitnessedDecision,
 };
 use crate::corpus::mutations::Mutation;
 impl super::Witch {
@@ -57,16 +57,6 @@ impl super::Witch {
         self.pending_transaction.is_some()
     }
 
-    /// Get transaction info for UI display.
-    pub fn transaction_info(&self) -> Option<TransactionInfo> {
-        self.pending_transaction.as_ref().map(|txn| TransactionInfo {
-            label: txn.label.clone(),
-            decision_count: txn.decision_count(),
-            mutation_count: txn.mutation_count(),
-            started_at: txn.started_at,
-        })
-    }
-
     /// Add a witnessed decision to the transaction.
     ///
     /// - `idx`: UI-provided index (may have gaps, largely sequential)
@@ -115,23 +105,6 @@ impl super::Witch {
         );
 
         Ok(())
-    }
-
-    /// Discard a single decision by index.
-    ///
-    /// Requires a witness - discarding is also a decision.
-    /// Used primarily for review screen before confirm/discard.
-    ///
-    /// Returns the discarded decision, or None if no decision at that index.
-    pub fn discard_decision(
-        &mut self,
-        idx: usize,
-        _witness: &DecisionWitness,
-    ) -> Result<Option<WitnessedDecision>, TransactionError> {
-        self.require_active_transaction(&format!("discard_decision(idx={})", idx))?;
-
-        let txn = self.pending_transaction.as_mut().unwrap();
-        Ok(txn.decisions.remove(&idx))
     }
 
     /// Fetch a decision by index.
@@ -224,9 +197,6 @@ impl super::Witch {
             txn.decision_count(), txn.mutation_count()
         ));
 
-        Ok(DiscardSummary {
-            decision_count: txn.decision_count(),
-            mutation_count: txn.mutation_count(),
-        })
+        Ok(DiscardSummary)
     }
 }

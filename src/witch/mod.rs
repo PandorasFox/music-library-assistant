@@ -19,33 +19,31 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
-
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config};
 use crate::corpus::computations::{Computation, asleep, awakening, awake};
 use crate::corpus::db::{Database, ReadOnlyDb};
 use crate::corpus::mutations::Mutation;
-use crate::corpus::paths::PathResolver;
 use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
 
 // Module declarations
 mod execution;
+pub mod messages;
 mod transaction;
 mod types;
 mod ui_read_cache;
 mod worker_stats;
 
 // Re-export public types
-#[allow(unused_imports)] // Re-exports for public API
+pub use messages::InitialUiState;
 pub use types::{
-    confirm_startup_migration, CommitSummary, CompletedSession,
-    CorpusObservationState, TaskExecutionState, TaskExecutionStateSnapshot, DaemonStatus,
-    DecisionScope, DecisionWitness, DiscardSummary, EyeState, Migration, MigrationWitness,
-    MutationExecutionWitness, PendingTransaction, Task, TaskLabel, TransactionError,
-    TransactionInfo, WitnessedDecision, WorkerStats,
+    CommitSummary, CompletedSession, CorpusObservationState, DaemonStatus, DecisionWitness,
+    DiscardSummary, EyeState, Migration, MigrationWitness, MutationExecutionWitness,
+    PendingTransaction, Task, TaskExecutionState, TaskExecutionStateSnapshot, TaskLabel,
+    TransactionError, WorkerStats,
 };
+// NOTE: confirm_startup_migration() has been removed - Witch now handles witness internally.
 // NOTE: confirm_decision() is deliberately NOT exported.
 // All decision authority flows through with_operator_decision() which should
 // ONLY be called from ui/operator_decisions.rs. See types.rs for details.
@@ -68,10 +66,6 @@ pub struct Witch {
     // Rayon-based task execution with channel for results
     result_tx: Sender<TaskResult>,
     result_rx: Receiver<TaskResult>,
-
-    /// When this Witch instance was created.
-    /// Used for signal freshness tracking (`discovered_at > launch_time` = new signal).
-    launch_time: DateTime<Utc>,
 
     // State machine
     state: TaskExecutionState,
@@ -133,7 +127,8 @@ pub struct Witch {
 
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
-    db_thread_handle: DbThreadHandle,
+    /// None during migration phase (before db_thread is safe to spawn).
+    db_thread_handle: Option<DbThreadHandle>,
 
     // -------------------------------------------------------------------------
     // Worker Performance Stats (Thread-Safe, Isolated)
@@ -146,10 +141,6 @@ pub struct Witch {
     /// Background cache for UI read queries.
     /// UI calls want_*() methods, the Witch spawns refresh tasks in tick().
     ui_read_cache: UiReadCache,
-
-    /// Path resolver for converting between absolute filesystem paths and
-    /// relative database paths. Created from Config at startup.
-    path_resolver: PathResolver,
 
     /// Handle to the dedicated logging thread for shutdown coordination.
     log_thread_handle: Option<crate::logging::LogThreadHandle>,
@@ -180,8 +171,9 @@ impl Witch {
         // Channel for receiving task results
         let (result_tx, result_rx) = mpsc::channel();
 
-        // Spawn the dedicated DB write thread
-        let db_thread_handle = db_thread::spawn();
+        // NOTE: db_thread is NOT spawned here. It is spawned later via spawn_db_thread()
+        // after migrations complete. This ensures the schema is correct before
+        // db_thread opens its write connection.
 
         // Create isolated worker stats only when timing instrumentation is enabled
         let worker_stats_shared = if config::is_timing_enabled() {
@@ -193,7 +185,6 @@ impl Witch {
         let she = Self {
             result_tx,
             result_rx,
-            launch_time: Utc::now(),
             state: TaskExecutionState::Idle,
             eye_state: EyeState::Closed,
             observation_state: CorpusObservationState::Unseen,
@@ -215,10 +206,9 @@ impl Witch {
             completed_at: None,
             pending_transaction: None,
             read_only_conn: None,
-            db_thread_handle,
+            db_thread_handle: None,  // Spawned later via spawn_db_thread()
             worker_stats_shared,
             ui_read_cache: UiReadCache::new(),
-            path_resolver: PathResolver::new(cfg),
             log_thread_handle,
         };
 
@@ -254,20 +244,35 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
+    // DB Thread Lifecycle
+    // -------------------------------------------------------------------------
+
+    /// Spawn the db_thread. Called after migrations complete.
+    ///
+    /// # Panics
+    ///
+    /// Panics if db_thread is already spawned.
+    pub fn spawn_db_thread(&mut self) {
+        assert!(
+            self.db_thread_handle.is_none(),
+            "db_thread already spawned"
+        );
+        crate::logging::log_general("[WITCH] Spawning db_thread");
+        self.db_thread_handle = Some(db_thread::spawn());
+    }
+
+    /// Check if db_thread is ready for normal operation.
+    pub fn is_db_thread_ready(&self) -> bool {
+        self.db_thread_handle.is_some()
+    }
+
+    // -------------------------------------------------------------------------
     // State Machine API
     // -------------------------------------------------------------------------
 
     /// O(1) state check - returns current Witch state.
     pub fn state(&self) -> TaskExecutionState {
         self.state
-    }
-
-    /// Get the timestamp when this Witch was created.
-    ///
-    /// Used for signal freshness tracking: signals with `discovered_at > launch_time`
-    /// are new this session.
-    pub fn launch_time(&self) -> DateTime<Utc> {
-        self.launch_time
     }
 
     // -------------------------------------------------------------------------
@@ -503,7 +508,6 @@ impl Witch {
         let mut queue_content_analysis_after_reset = false;
 
         self.completed_session = Some(CompletedSession {
-            completed_at: Instant::now(),
             duration,
             total_processed: self.total_processed,
             failed: self.total_failed,
@@ -939,6 +943,100 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
+    // Migration-Aware Startup Methods
+    // -------------------------------------------------------------------------
+
+    /// Check if migrations are needed.
+    ///
+    /// Returns true if the database exists and has pending schema migrations.
+    pub fn needs_migrations(&self) -> bool {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        matches!(
+            InitialUiState::determine(&db_path),
+            InitialUiState::MigrationRequired
+        )
+    }
+
+    /// Get pending migration descriptions for UI display.
+    ///
+    /// Returns a list of human-readable descriptions of pending migrations.
+    pub fn pending_migration_descriptions(&self) -> Vec<String> {
+        use crate::corpus::mutations::MigrationRegistry;
+
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
+        };
+        MigrationRegistry::new().pending_descriptions(&db)
+    }
+
+    /// Queue all pending migrations for execution.
+    ///
+    /// Creates a DecisionWitness internally via with_operator_decision.
+    /// Call this only after user approval of migrations.
+    pub fn queue_pending_migrations(&mut self) {
+        use crate::corpus::mutations::MigrationRegistry;
+
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "[WITCH] queue_pending_migrations: no db path: {}",
+                    e
+                ));
+                return;
+            }
+        };
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "[WITCH] queue_pending_migrations: failed to open db: {}",
+                    e
+                ));
+                return;
+            }
+        };
+
+        let registry = MigrationRegistry::new();
+        let current_version = db.get_schema_version().unwrap_or(1);
+
+        // Collect migrations to queue
+        let migrations: Vec<_> = registry
+            .pending_migrations(current_version)
+            .iter()
+            .map(|m| Migration {
+                from_version: m.from_version,
+                to_version: m.to_version,
+            })
+            .collect();
+
+        if migrations.is_empty() {
+            crate::logging::log_general("[WITCH] No migrations to queue");
+            return;
+        }
+
+        crate::logging::log_general(format!(
+            "[WITCH] Queueing {} migrations via operator decision",
+            migrations.len()
+        ));
+
+        // Queue via with_operator_decision to get proper witness
+        self.with_operator_decision(|scope| {
+            for migration in migrations {
+                scope.queue_migration(migration);
+            }
+        });
+    }
+
+    // -------------------------------------------------------------------------
     // Read-Only Database Access (UI Queries)
     // -------------------------------------------------------------------------
 
@@ -1008,18 +1106,32 @@ impl Witch {
 
     /// Check if there's pending work (tasks queued or in-flight).
     pub fn has_pending(&self) -> bool {
-        self.in_flight > 0 || !self.db_thread_handle.queue_empty()
+        // Check rayon in-flight tasks
+        if self.in_flight > 0 {
+            return true;
+        }
+        // Check db_thread queue (if spawned)
+        if let Some(ref handle) = self.db_thread_handle {
+            if !handle.queue_empty() {
+                return true;
+            }
+        }
+        false
     }
 
     /// Get current DB thread stats for UI display.
-    /// Returns None if timing instrumentation is disabled.
+    /// Returns None if db_thread not spawned or timing instrumentation is disabled.
     pub fn db_stats(&self) -> Option<DbThreadStats> {
-        self.db_thread_handle.stats()
+        self.db_thread_handle.as_ref()?.stats()
     }
 
     /// Get pending DB write queue depth (always available, no timing guard).
+    /// Returns 0 if db_thread not spawned.
     pub fn db_queue_depth(&self) -> u64 {
-        self.db_thread_handle.queue_depth()
+        self.db_thread_handle
+            .as_ref()
+            .map(|h| h.queue_depth())
+            .unwrap_or(0)
     }
 
     /// Get current worker performance stats for UI display.
@@ -1044,11 +1156,6 @@ impl Witch {
     /// cached values via the corresponding getter methods.
     pub fn ui_read_cache(&self) -> &UiReadCache {
         &self.ui_read_cache
-    }
-
-    /// Get the path resolver for converting between absolute and relative paths.
-    pub fn path_resolver(&self) -> &PathResolver {
-        &self.path_resolver
     }
 
     /// Check if there's a lingering completed session to display.
@@ -1093,8 +1200,13 @@ impl Drop for Witch {
         }
 
         // Step 4: Shut down the DB thread (it will checkpoint and close write connection)
-        crate::db_thread::request_shutdown();
-        self.db_thread_handle.join();
+        // Only if db_thread was spawned (may not be if shutdown during migrations)
+        if self.db_thread_handle.is_some() {
+            crate::db_thread::request_shutdown();
+            if let Some(ref mut handle) = self.db_thread_handle {
+                handle.join();
+            }
+        }
 
         // Step 5: Shut down the logging thread last so all shutdown messages get logged
         crate::logging::request_shutdown();

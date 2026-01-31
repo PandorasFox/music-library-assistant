@@ -17,4 +17,4 @@ mod migrations;
 
 pub use first_time_setup::handle_first_time_setup;
 pub use intake_confirmation::{IntakeConfirmationState, IntakeConfirmationAction};
-pub use migrations::check_and_run_migrations;
+pub use migrations::run_migration_flow;

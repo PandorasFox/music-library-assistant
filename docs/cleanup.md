@@ -28,23 +28,39 @@ These have complete send/receive paths but variants are never constructed.
 
 ---
 
-### Category 6: Witch/Transaction System - PARTIAL IMPLEMENTATION
-Looks like transaction management was built but not fully wired up.
+### Category 6: Witch/Transaction System - FULLY RESOLVED
 
-| Location | Item | Notes |
-|----------|------|-------|
-| `witch/types.rs:78` | `Task::Migration` variant | Migration task type unused |
-| `witch/types.rs:96` | `Migration.description` field | |
-| `witch/types.rs:224,255` | `start_transaction`, `discard_decision` | DecisionScope methods |
-| `witch/types.rs:289` | `TaskLabel::new` | |
-| `witch/types.rs:338,351` | `CompletedSession.completed_at`, `should_display` | Session display logic |
-| `witch/types.rs:424` | `PendingTransaction.started_at` | |
-| `witch/types.rs:483` | `TransactionInfo` struct | |
-| `witch/types.rs:507` | `DiscardSummary` fields | |
-| `witch/transaction.rs:61` | `transaction_info`, `discard_decision` | |
-| `witch/mod.rs:74` | `launch_time`, `path_resolver` fields | |
-| `witch/mod.rs:261` | Multiple methods | |
-| `witch/ui_read_cache.rs:340` | `want_deploy_modal_data` | |
+**Resolved 2026-01-30:** Dead code cleanup, architecture clarification, and migration integration.
+
+**Removed (Phase 1):**
+- `TransactionInfo` struct and `transaction_info()` method - unused
+- `PendingTransaction.started_at` field - set but never read
+- `discard_decision()` method - existed but never called from UI
+- `TaskLabel::new()` - unused factory method
+- `CompletedSession.should_display()` - unused method
+
+**Removed (Phase 2 - Migration Integration):**
+- `confirm_startup_migration()` - Witch now handles witness internally via `queue_pending_migrations()`
+- `DecisionScope`, `WitnessedDecision` re-exports from witch/mod.rs - internal-only types
+
+**Removed (Phase 3 - Final Cleanup):**
+- `Migration.description` field - description looked up from MigrationRegistry by version
+- `Witch.launch_time` field and accessor - unused
+- `Witch.path_resolver` field and accessor - unused (paths accessed via global resolver)
+- `CompletedSession.completed_at` field - set but never read (Witch.completed_at used instead)
+- `DiscardSummary` fields - made unit struct (callers do `let _ = discard_transaction(...)`)
+- `UiReadCache.deploy_modal_data` and associated methods - deployment feature incomplete
+
+**Architecture (fully integrated):**
+- Witch is created early (before migrations) with db_thread deferred
+- Migrations run via Witch's rayon pool as `Task::Migration` tasks
+- `run_migration_flow()` in ui/startup/migrations.rs drives the migration UI
+- After migrations complete, `spawn_db_thread()` is called
+- db_thread is `Option<DbThreadHandle>` - None during migration phase
+- Transaction API properly wired via `operator_decisions.rs`
+
+**Pending (needs future plan):**
+- `SpawnedMutationWitness` - created by `MutationExecutionWitness::spawn()` but never used to authorize spawned mutations
 
 ---
 

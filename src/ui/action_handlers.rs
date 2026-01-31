@@ -104,32 +104,17 @@ impl App {
     }
 
     /// Start deployment preview from Insights view.
-    ///
-    /// Uses cached data if available, otherwise loads from database.
     fn start_deployment_preview_from_insights(&mut self) {
-        // Try to use cached deploy modal data first
-        let data = self.witch.as_ref()
-            .and_then(|w| w.ui_read_cache().deploy_modal_data())
-            .or_else(|| {
-                // Fall back to loading from database
-                self.witch.as_mut().and_then(|w| {
-                    let read_db = w.read_db();
-                    deploy_flow::DeployModalData::load(&read_db).ok()
-                })
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                deploy_flow::DeployModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
-        // Trigger cache warming for next time
-        if let Some(ref witch) = self.witch {
-            witch.ui_read_cache().warm_deploy_modal_data();
-        }
-
-        // Create preview state with cached data
         let preview = deploy_flow::DeploymentPreviewState::new(data);
         self.deployment_preview = Some(preview);
         self.mode = UiMode::DeploymentPreview;
-
-        // Keep insights view alive for return
     }
 
     /// Start intake confirmation from Insights view.

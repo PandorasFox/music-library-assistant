@@ -40,8 +40,8 @@ pub use messages::InitialUiState;
 pub use types::{
     CommitSummary, CompletedSession, CorpusObservationState, DaemonStatus, DecisionWitness,
     DiscardSummary, EyeState, Migration, MigrationWitness, MutationExecutionWitness,
-    PendingTransaction, Task, TaskExecutionState, TaskExecutionStateSnapshot, TaskLabel,
-    TransactionError, WorkerStats,
+    PendingTransaction, SpawnedMutation, Task, TaskExecutionState, TaskExecutionStateSnapshot,
+    TaskLabel, TransactionError, WorkerStats,
 };
 // NOTE: confirm_startup_migration() has been removed - Witch now handles witness internally.
 // NOTE: confirm_decision() is deliberately NOT exported.
@@ -381,7 +381,7 @@ impl Witch {
 
         // Drain completed results and collect spawned computations and mutations
         let mut spawned_computations: Vec<Computation> = Vec::new();
-        let mut spawned_mutations: Vec<Mutation> = Vec::new();
+        let mut spawned_mutations: Vec<types::SpawnedMutation> = Vec::new();
 
         while let Ok(result) = self.result_rx.try_recv() {
             // Task has completed - no longer in flight
@@ -779,7 +779,10 @@ impl Witch {
     /// parent mutation's witness - no additional operator decision required.
     ///
     /// Example: SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
-    fn queue_spawned_mutation(&mut self, mutation: Mutation) {
+    fn queue_spawned_mutation(&mut self, spawned: types::SpawnedMutation) {
+        // Extract the inner mutation - SpawnedMutation's existence proves authorization
+        let mutation = spawned.into_inner();
+
         // Spawned mutations inherit the working state from their parent
         // (transition_to_working already happened when parent was queued)
         self.mutations_ran_this_session = true;

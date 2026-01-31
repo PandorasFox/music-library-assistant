@@ -18,7 +18,7 @@ use crate::corpus::db::Database;
 use crate::corpus::mutations::Mutation;
 use crate::db_thread;
 
-use super::types::{Migration, MigrationWitness, MutationExecutionWitness, Task, TaskResult};
+use super::types::{Migration, MigrationWitness, MutationExecutionWitness, SpawnedMutation, Task, TaskResult};
 
 // ============================================================================
 // Database Opening Helper (Migrations Only)
@@ -112,7 +112,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 (r.success, r.error, r.spawn_mutations)
             }
             MutationCategory::Migration => {
-                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::new())
+                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new())
             }
             MutationCategory::Transcode => {
                 let r = crate::corpus::mutations::transcode::execute_single(

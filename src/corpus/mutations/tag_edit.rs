@@ -14,7 +14,7 @@ use anyhow::Result;
 
 use crate::corpus::db::Database;
 use crate::corpus::paths;
-use crate::witch::MutationExecutionWitness;
+use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
 use super::types::{Mutation, MutationResult};
 
@@ -22,7 +22,7 @@ use super::types::{Mutation, MutationResult};
 ///
 /// - Writes complete tag set to DB via set_track_tags()
 /// - Sets needs_disk_flush = TRUE
-/// - Returns spawn instruction for ApplyDbTagsToDisk (step 2)
+/// - Returns authorized SpawnedMutation for ApplyDbTagsToDisk (step 2)
 ///
 /// The spawned ApplyDbTagsToDisk will sync DB tags to disk.
 fn execute_set_track_tags_db(
@@ -30,7 +30,7 @@ fn execute_set_track_tags_db(
     track_id: i64,
     tags: &[(String, String)],
     witness: &MutationExecutionWitness,
-) -> Result<Option<Mutation>> {
+) -> Result<Option<SpawnedMutation>> {
     use crate::db_thread;
 
     let sender = db_thread::signal_sender()
@@ -50,11 +50,11 @@ fn execute_set_track_tags_db(
     let resolver = paths::get_resolver();
     let abs_path = resolver.resolve(std::path::Path::new(&track.path));
 
-    // Return spawn instruction for disk sync
-    Ok(Some(Mutation::ApplyDbTagsToDisk {
+    // Create authorized spawned mutation via witness factory
+    Ok(Some(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk {
         track_id,
         path: abs_path,
-    }))
+    })))
 }
 
 /// Execute a single tag edit mutation.

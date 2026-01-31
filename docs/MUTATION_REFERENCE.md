@@ -116,7 +116,7 @@ SetTrackTagsDb { track_id, tags }
     │
     ├── 1. Write tags to DB
     ├── 2. Set needs_disk_flush = true
-    └── 3. Return spawn instruction: ApplyDbTagsToDisk { track_id, path }
+    └── 3. Return SpawnedMutation via witness.spawn_mutation(ApplyDbTagsToDisk { ... })
               │
               └── Witch queues spawned mutation automatically
                         │
@@ -125,15 +125,18 @@ SetTrackTagsDb { track_id, tags }
                         └── 3. Clear needs_disk_flush
 ```
 
-The spawn chain is maintained via `SpawnedMutationWitness`:
-- Only creatable from `MutationExecutionWitness::spawn()`
-- Proves spawned mutations originate from authorized mutation execution
-- Zero runtime cost (ZST compiles away)
+The spawn chain is maintained via `SpawnedMutation`:
+- Created via `MutationExecutionWitness::spawn_mutation(mutation)`
+- The existence of `SpawnedMutation` IS the proof of authorization (factory pattern)
+- Can only be created inside mutation execution context
+- Executors return `Vec<SpawnedMutation>` in `MutationResult.spawn_mutations`
+- Witch extracts inner mutation via `spawned.into_inner()` when queueing
 
 Spawn chaining ensures:
 - DB writes and disk syncs stay atomic from user perspective
 - Interruption between steps leaves `needs_disk_flush=true` for recovery
 - Single-track mutations enable parallel execution
+- Type-level guarantee: spawned mutations must pass through authorized witness
 
 ### Post-Mutation Signal Flow
 

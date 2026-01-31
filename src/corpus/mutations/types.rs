@@ -541,7 +541,7 @@ pub struct MutationResult {
     pub duration_ms: u64,
     /// Follow-up mutations to queue (from spawn chaining).
     /// E.g., SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
-    pub spawn_mutations: Vec<Mutation>,
+    pub spawn_mutations: Vec<crate::witch::SpawnedMutation>,
 }
 
 #[cfg(test)]

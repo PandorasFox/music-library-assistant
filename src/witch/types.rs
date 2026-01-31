@@ -148,24 +148,40 @@ pub mod sealed {
             Self(())
         }
 
-        /// Create a SpawnedMutationWitness from this execution witness.
+        /// Create an authorized SpawnedMutation from a Mutation.
         ///
-        /// Only callable from within mutation execution context. This allows
-        /// mutations to spawn follow-up mutations with proper witness chain.
-        pub fn spawn(&self) -> SpawnedMutationWitness {
-            SpawnedMutationWitness(())
+        /// Only callable from within mutation execution context. The existence
+        /// of SpawnedMutation IS the proof - it can only be created here.
+        ///
+        /// Use case: `SetTrackTagsDb` spawns `ApplyDbTagsToDisk` after DB write succeeds.
+        pub fn spawn_mutation(&self, mutation: crate::corpus::mutations::Mutation) -> SpawnedMutation {
+            SpawnedMutation { mutation }
         }
     }
 
-    /// A zero-sized token authorizing a mutation spawned by another mutation.
+    /// A mutation spawned by another mutation during execution.
     ///
     /// Can ONLY be created inside mutation execution context via
-    /// [`MutationExecutionWitness::spawn()`]. This maintains the witness chain
-    /// for spawned mutations without requiring a new operator decision.
+    /// [`MutationExecutionWitness::spawn_mutation()`]. The existence of this
+    /// type IS the proof of authorization - no separate witness token needed.
     ///
     /// Use case: `SetTrackTagsDb` spawns `ApplyDbTagsToDisk` after DB write succeeds.
-    #[derive(Clone, Copy)]
-    pub struct SpawnedMutationWitness(());
+    #[derive(Debug, Clone)]
+    pub struct SpawnedMutation {
+        pub(super) mutation: crate::corpus::mutations::Mutation,
+    }
+
+    impl SpawnedMutation {
+        /// Extract the inner mutation, consuming the wrapper.
+        pub fn into_inner(self) -> crate::corpus::mutations::Mutation {
+            self.mutation
+        }
+
+        /// Get a reference to the inner mutation.
+        pub fn mutation(&self) -> &crate::corpus::mutations::Mutation {
+            &self.mutation
+        }
+    }
 
     /// A zero-sized token proving code is executing inside the Witch's migration worker.
     ///
@@ -205,6 +221,7 @@ pub use sealed::ContentAnalysisWitness;
 pub use sealed::DecisionWitness;
 pub use sealed::MigrationWitness;
 pub use sealed::MutationExecutionWitness;
+pub use sealed::SpawnedMutation;
 
 // ============================================================================
 // Operator Decision Scope (Sealed Access Pattern)
@@ -508,7 +525,7 @@ pub(super) struct TaskResult {
     /// Follow-up computations to queue (from computation chaining)
     pub spawn: Vec<Computation>,
     /// Follow-up mutations to queue (from mutation spawn chaining)
-    pub spawn_mutations: Vec<Mutation>,
+    pub spawn_mutations: Vec<SpawnedMutation>,
     /// Task execution duration in milliseconds
     pub duration_ms: u64,
     /// Time task waited in queue before execution (milliseconds)

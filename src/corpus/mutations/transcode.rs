@@ -205,10 +205,10 @@ pub fn execute_single(
             // and update the index. This picks up any encoder tags added by ffmpeg
             // while preserving the original metadata that ffmpeg copies.
             let new_path = source_path.with_extension(target_format.extension());
-            let spawn = vec![Mutation::AssimilateDiskTagsToDb {
+            let spawn = vec![witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb {
                 track_id,
                 path: new_path,
-            }];
+            })];
             (true, None, spawn)
         }
         Err(e) => (false, Some(format!("{:#}", e)), Vec::new()),

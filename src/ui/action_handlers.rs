@@ -92,6 +92,12 @@ impl App {
                     Some(insights_view::InsightAction::LaunchIntakeConfirmation) => {
                         self.start_intake_confirmation_from_insights();
                     }
+                    Some(insights_view::InsightAction::LaunchFingerprintDuplicateResolution) => {
+                        self.status_message = Some("Fingerprint duplicate flow not yet implemented".to_string());
+                    }
+                    Some(insights_view::InsightAction::LaunchInferiorDuplicateResolution) => {
+                        self.status_message = Some("Inferior duplicate flow not yet implemented".to_string());
+                    }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Flow not yet implemented".to_string());
                     }
@@ -271,14 +277,30 @@ impl App {
             UnifiedTagEditorAction::CloseModal => {}
 
             UnifiedTagEditorAction::StageDecisionAndNext { index, mutations } => {
-                // Stage the decision AND navigate to next sibling
+                // Stage the decision AND navigate to next item
                 self.stage_decision(index, mutations);
-                self.navigate_to_next_sibling();
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    if editor.current_item_idx < editor.total_items.saturating_sub(1) {
+                        editor.current_item_idx += 1;
+                        editor.reset_field_state();
+                    }
+                }
+            }
+
+            UnifiedTagEditorAction::StageDecisionAndPrev { index, mutations } => {
+                // Stage the decision AND navigate to previous item
+                self.stage_decision(index, mutations);
+                if let Some(ref mut editor) = self.unified_tag_editor {
+                    if editor.current_item_idx > 0 {
+                        editor.current_item_idx -= 1;
+                        editor.reset_field_state();
+                    }
+                }
             }
 
             UnifiedTagEditorAction::StageDecisionAndReview { index, mutations } => {
                 // Stage the decision AND immediately show transaction review
-                // Used for aggregated mode or single-item contexts where "next sibling" is meaningless
+                // Used for aggregated mode or single-item contexts
                 self.stage_decision(index, mutations);
 
                 // Transition to standardized review modal
@@ -312,14 +334,6 @@ impl App {
                         editor.reset_field_state();
                     }
                 }
-            }
-
-            UnifiedTagEditorAction::NextSibling => {
-                self.navigate_to_next_sibling();
-            }
-
-            UnifiedTagEditorAction::PrevSibling => {
-                self.navigate_to_prev_sibling();
             }
 
             UnifiedTagEditorAction::StatusMessage(msg) => {

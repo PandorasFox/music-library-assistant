@@ -44,14 +44,12 @@ pub enum TagEditContext {
     BulkEdit {
         tracks: Vec<Track>,
         source: TagEditorSource,
-        group_context: Option<GroupContext>,
     },
 }
 
 /// Group context for multi-step workflows (duplicate resolution, deploy conflicts)
 #[derive(Debug, Clone)]
 pub struct GroupContext {
-    pub source: TagEditorSource,
     pub group_index: usize,
     pub total_groups: usize,
 }
@@ -59,7 +57,7 @@ pub struct GroupContext {
 /// Unified focus enum for the tag editor
 ///
 /// Note: ContextList (left pane) is display-only and not focusable.
-/// Tab/Shift-Tab navigate between siblings.
+/// Tab/Shift-Tab navigate between items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnifiedTagEditorFocus {
     /// Tag fields pane (center) - default
@@ -88,9 +86,11 @@ pub enum TagEditorButton {
 pub enum UnifiedTagEditorAction {
     /// No action
     None,
-    /// Stage decision AND navigate to next sibling (combines stage + navigation)
+    /// Stage decision AND navigate to next item (Tab with changes)
     StageDecisionAndNext { index: usize, mutations: Vec<Mutation> },
-    /// Stage decision AND show transaction review (for aggregated mode or single-sibling contexts)
+    /// Stage decision AND navigate to previous item (Shift-Tab with changes)
+    StageDecisionAndPrev { index: usize, mutations: Vec<Mutation> },
+    /// Stage decision AND show transaction review (for aggregated mode or single-item contexts)
     StageDecisionAndReview { index: usize, mutations: Vec<Mutation> },
     /// Discard all staged decisions and exit
     DiscardTransaction,
@@ -98,10 +98,6 @@ pub enum UnifiedTagEditorAction {
     NextItem,
     /// Navigate to previous item
     PrevItem,
-    /// Navigate to next sibling (directory in DirectoryEdit, track in bulk edit)
-    NextSibling,
-    /// Navigate to previous sibling
-    PrevSibling,
     /// Close the current modal
     CloseModal,
     /// Display a status message
@@ -113,6 +109,16 @@ pub enum UnifiedTagEditorAction {
     RequestTransactionReview,
 }
 
+/// Navigation direction for change preview modal
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NavigationDirection {
+    /// Moving to next item (Tab)
+    #[default]
+    Forward,
+    /// Moving to previous item (Shift-Tab)
+    Backward,
+}
+
 /// Modal dialogs for the unified tag editor
 #[derive(Debug)]
 pub enum UnifiedTagEditorModal {
@@ -121,11 +127,11 @@ pub enum UnifiedTagEditorModal {
         changes: Vec<GroupedChange>,
         single_changes: Vec<TagChange>,
         scroll: usize,
+        /// Which direction to navigate after staging
+        direction: NavigationDirection,
     },
-    /// Warn about unsaved changes when navigating away
+    /// Warn about unsaved changes when trying to exit
     UnsavedChanges {
-        /// Where the user is trying to go
-        destination: UnsavedChangesDestination,
         /// Selected button (defaults to KeepEditing for safety)
         selected_button: UnsavedChangesButton,
     },
@@ -144,20 +150,6 @@ pub enum UnifiedTagEditorModal {
     },
 }
 
-/// Where the user is trying to navigate when unsaved changes exist
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnsavedChangesDestination {
-    /// Exiting the tag editor entirely
-    Exit,
-    /// Moving to next item
-    NextItem,
-    /// Moving to previous item
-    PrevItem,
-    /// Moving to next sibling (directory or track based on mode)
-    NextSibling,
-    /// Moving to previous sibling
-    PrevSibling,
-}
 
 /// Buttons on the unsaved changes modal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -191,8 +183,6 @@ pub struct TagField {
     pub name: String,
     pub value: String,
     pub editable: bool,
-    /// Fields like title/track_number are unique per track and cannot be filled to all
-    pub is_unique_per_track: bool,
     /// Marked for deletion (shown with strikethrough)
     pub deleted: bool,
 }
@@ -204,10 +194,6 @@ pub struct TagChange {
     pub field_name: String,
     pub old_value: String,
     pub new_value: String,
-    /// Original tag name if renamed (e.g., "trackNumber" -> "track_number")
-    pub old_name: Option<String>,
-    /// Tag marked for deletion
-    pub deleted: bool,
 }
 
 /// Multiple tracks with the same change (for preview display)
@@ -236,21 +222,11 @@ pub enum AggregatedValue {
     Edited(String),
 }
 
-/// Confirmation state for editing "(various values)" fields
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VariousConfirmState {
-    /// First Enter pressed - showing "you sure?"
-    Confirming,
-    /// Second Enter pressed - now in edit mode
-    Editing,
-}
-
 /// An aggregated tag field representing the same field across all files
 #[derive(Debug, Clone)]
 pub struct AggregatedTagField {
     pub name: String,
     pub value: AggregatedValue,
     pub original_value: AggregatedValue,
-    pub editable: bool,
 }
 

@@ -7,14 +7,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::corpus::db::{Signal, Track};
+use crate::corpus::db::Track;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths;
 
 use super::types::{
     AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, GroupedChange,
-    TagChange, TagEditContext, TagEditorButton, TagEditorMode, TagEditorSource, TagField,
-    UnifiedTagEditorAction, UnifiedTagEditorFocus, UnifiedTagEditorModal, VariousConfirmState,
+    NavigationDirection, TagChange, TagEditContext, TagEditorButton, TagEditorMode,
+    TagEditorSource, TagField, UnifiedTagEditorAction, UnifiedTagEditorFocus,
+    UnifiedTagEditorModal,
 };
 
 // ============================================================================
@@ -68,9 +69,6 @@ pub struct UnifiedTagEditorState {
     /// Buffer for editing tag value
     pub value_buffer: String,
 
-    /// Various value confirmation state (BulkEdit only)
-    pub various_confirm_state: Option<VariousConfirmState>,
-
     /// Whether focus is on value (true) or name (false) in SingleFile mode
     pub focus_on_value: bool,
 
@@ -90,9 +88,6 @@ pub struct UnifiedTagEditorState {
     /// BulkEdit: aggregated fields (alternative representation)
     pub aggregated_fields: Option<Vec<AggregatedTagField>>,
 
-    /// BulkEdit: original aggregated fields
-    pub original_aggregated_fields: Option<Vec<AggregatedTagField>>,
-
     // ========================================================================
     // UI State
     // ========================================================================
@@ -106,28 +101,8 @@ pub struct UnifiedTagEditorState {
     /// Currently active modal dialog (if any)
     pub modal: Option<UnifiedTagEditorModal>,
 
-    // ========================================================================
-    // Signals (SingleFile context)
-    // ========================================================================
-
-    /// Signals for the current track
-    pub signals: Vec<Signal>,
-
     /// Whether OOB (out-of-band) tag change signal is present
     pub has_oob_signal: bool,
-
-    // ========================================================================
-    // Sibling Directory Navigation (DirectoryEdit mode)
-    // ========================================================================
-
-    /// Sibling directories for DirectoryEdit mode (shown in context list)
-    pub sibling_directories: Vec<std::path::PathBuf>,
-
-    /// Currently selected sibling directory index
-    pub current_sibling_idx: usize,
-
-    /// Current directory being edited
-    pub current_directory: Option<std::path::PathBuf>,
 
     // ========================================================================
     // Staged Mutations Tracking (for skipping redundant confirmations)
@@ -162,11 +137,10 @@ impl UnifiedTagEditorState {
         let original_tag_fields = tag_fields.clone();
 
         // For Aggregated mode, also build aggregated view
-        let (aggregated_fields, original_aggregated_fields) = if mode == TagEditorMode::Aggregated {
-            let agg = aggregate_tags_across_tracks(&tracks);
-            (Some(agg.clone()), Some(agg))
+        let aggregated_fields = if mode == TagEditorMode::Aggregated {
+            Some(aggregate_tags_across_tracks(&tracks))
         } else {
-            (None, None)
+            None
         };
 
         // Build context based on track count
@@ -181,7 +155,6 @@ impl UnifiedTagEditorState {
             TagEditContext::BulkEdit {
                 tracks,
                 source,
-                group_context,
             }
         };
 
@@ -196,20 +169,14 @@ impl UnifiedTagEditorState {
             field_edit_state: FieldEditState::NonEditable,
             name_buffer: String::new(),
             value_buffer: String::new(),
-            various_confirm_state: None,
             focus_on_value: true,
             tag_fields,
             original_tag_fields,
             aggregated_fields,
-            original_aggregated_fields,
             focus: UnifiedTagEditorFocus::TagFields,
             selected_button: TagEditorButton::Confirm,
             modal: None,
-            signals: Vec::new(),
             has_oob_signal: false,
-            sibling_directories: Vec::new(),
-            current_sibling_idx: 0,
-            current_directory: None,
             staged_mutations_for_current: None,
         }
     }
@@ -233,7 +200,6 @@ impl UnifiedTagEditorState {
     /// Create a new unified state for aggregated bulk editing (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all tracks at once.
-    /// No sibling navigation - all tracks are edited as one unit.
     pub fn aggregated_bulk(
         tracks: Vec<Track>,
         source: TagEditorSource,
@@ -246,27 +212,8 @@ impl UnifiedTagEditorState {
     /// Uses Aggregated mode - shows unified view, changes apply to all tracks.
     pub fn directory_aggregated(
         tracks: Vec<Track>,
-        group_context: Option<GroupContext>,
     ) -> Self {
-        Self::new(TagEditorMode::Aggregated, tracks, TagEditorSource::DirectoryEdit, group_context)
-    }
-
-    /// Set sibling directories for DirectoryEdit mode navigation
-    pub fn set_sibling_directories(&mut self, current_dir: std::path::PathBuf, siblings: Vec<std::path::PathBuf>) {
-        self.current_directory = Some(current_dir.clone());
-        // Find current directory in siblings list
-        self.current_sibling_idx = siblings.iter()
-            .position(|p| p == &current_dir)
-            .unwrap_or(0);
-        self.sibling_directories = siblings;
-    }
-
-    /// Check if this is a DirectoryEdit mode
-    pub fn is_directory_edit(&self) -> bool {
-        match &self.context {
-            TagEditContext::SingleFile { source, .. } => matches!(source, TagEditorSource::DirectoryEdit),
-            TagEditContext::BulkEdit { source, .. } => matches!(source, TagEditorSource::DirectoryEdit),
-        }
+        Self::new(TagEditorMode::Aggregated, tracks, TagEditorSource::DirectoryEdit, None)
     }
 
     /// Check if using Aggregated mode (unified view across all tracks)
@@ -274,34 +221,10 @@ impl UnifiedTagEditorState {
         self.mode == TagEditorMode::Aggregated
     }
 
-    /// Check if using Individual mode (one track at a time)
-    pub fn is_individual_mode(&self) -> bool {
-        self.mode == TagEditorMode::Individual
+    /// Check if there are multiple items to navigate between
+    pub fn has_multiple_items(&self) -> bool {
+        self.total_items > 1
     }
-
-    /// Check if there are meaningful siblings to navigate to.
-    ///
-    /// Returns true if:
-    /// - DirectoryEdit mode with multiple sibling directories
-    /// - Individual mode with multiple tracks
-    ///
-    /// Returns false if:
-    /// - Aggregated mode (all tracks edited as one unit, no sibling concept)
-    /// - Only one track/directory
-    pub fn has_siblings(&self) -> bool {
-        if self.is_directory_edit() {
-            // Directory edit: siblings are other directories at the same level
-            self.sibling_directories.len() > 1
-        } else if self.is_individual_mode() {
-            // Individual mode: siblings are other tracks in the batch
-            self.total_items > 1
-        } else {
-            // Aggregated mode: no sibling concept, all tracks are one unit
-            false
-        }
-    }
-
-    // TODO: bulk_from_directory() - starts async gathering
 
     // ========================================================================
     // Query Methods
@@ -329,15 +252,6 @@ impl UnifiedTagEditorState {
         }
     }
 
-    /// Check if there are any unsaved changes (all items)
-    pub fn has_changes(&self) -> bool {
-        if self.is_aggregated_mode() {
-            self.has_aggregated_changes()
-        } else {
-            !compute_changes(&self.original_tag_fields, &self.tag_fields).is_empty()
-        }
-    }
-
     /// Check if there are any unsaved changes for the current item only
     pub fn has_changes_for_current_item(&self) -> bool {
         if self.is_aggregated_mode() {
@@ -360,16 +274,6 @@ impl UnifiedTagEditorState {
     }
 
     /// Get changes for preview (all items)
-    pub fn get_changes_for_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
-        if self.is_aggregated_mode() {
-            let changes = self.compute_aggregated_changes();
-            group_common_changes(&changes)
-        } else {
-            let changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
-            group_common_changes(&changes)
-        }
-    }
-
     /// Get changes for preview (current item only)
     pub fn get_changes_for_current_item_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
         if self.is_aggregated_mode() {
@@ -417,8 +321,6 @@ impl UnifiedTagEditorState {
                             field_name: field.name.clone(),
                             old_value,
                             new_value: new_value.clone(),
-                            old_name: None,
-                            deleted: false,
                         });
                     }
                 }
@@ -468,15 +370,6 @@ impl UnifiedTagEditorState {
         changes_to_mutations(&current_changes, &tracks, &self.tag_fields)
     }
 
-    /// Revert to original state (all items)
-    pub fn drop_changes(&mut self) {
-        self.tag_fields = self.original_tag_fields.clone();
-        if let Some(ref orig) = self.original_aggregated_fields {
-            self.aggregated_fields = Some(orig.clone());
-        }
-        self.field_edit_state = FieldEditState::NonEditable;
-    }
-
     /// Revert to original state for current item only
     pub fn drop_changes_for_current_item(&mut self) {
         if let (Some(orig), Some(current)) = (
@@ -519,18 +412,6 @@ impl UnifiedTagEditorState {
         self.current_field_idx = 0;
         self.field_scroll_offset = 0;
         self.clear_staged_mutations();
-    }
-
-    // ========================================================================
-    // Signals
-    // ========================================================================
-
-    /// Load health signals for the current track(s)
-    pub fn load_signals(&mut self, _db: &crate::corpus::db::Database) {
-        // TODO: Query signals table for current track(s)
-        // Set has_oob_signal based on presence of OutOfBandTagSync/Conflict signals
-        self.signals.clear();
-        self.has_oob_signal = false;
     }
 
     /// Get available action buttons based on context and signals
@@ -597,7 +478,6 @@ impl UnifiedTagEditorState {
                 name,
                 value,
                 editable: true,
-                is_unique_per_track: false,
                 deleted: false,
             })
             .collect();
@@ -610,7 +490,6 @@ impl UnifiedTagEditorState {
             name: "New Tag".to_string(),
             value: String::new(),
             editable: false,
-            is_unique_per_track: false,
             deleted: false,
         });
 
@@ -655,32 +534,50 @@ impl UnifiedTagEditorState {
     }
 
     fn handle_modal_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+        // Handle ChangePreview Enter/Esc separately to avoid borrow conflicts
+        if let Some(UnifiedTagEditorModal::ChangePreview { direction, .. }) = &self.modal {
+            let dir = *direction;
+            match key.code {
+                KeyCode::Enter => {
+                    // Confirm changes -> stage decision for current item
+                    let mutations = self.generate_mutations_for_current_item();
+                    self.modal = None;
+
+                    // If there are multiple items to navigate, go in the requested direction.
+                    // Otherwise (aggregated mode or single item), go directly to review.
+                    if self.has_multiple_items() {
+                        match dir {
+                            NavigationDirection::Forward => {
+                                return UnifiedTagEditorAction::StageDecisionAndNext {
+                                    index: self.current_item_idx,
+                                    mutations,
+                                };
+                            }
+                            NavigationDirection::Backward => {
+                                return UnifiedTagEditorAction::StageDecisionAndPrev {
+                                    index: self.current_item_idx,
+                                    mutations,
+                                };
+                            }
+                        }
+                    } else {
+                        return UnifiedTagEditorAction::StageDecisionAndReview {
+                            index: self.current_item_idx,
+                            mutations,
+                        };
+                    }
+                }
+                KeyCode::Esc => {
+                    self.modal = None;
+                    return UnifiedTagEditorAction::CloseModal;
+                }
+                _ => {} // Fall through to mutable match for scroll handling
+            }
+        }
+
         match &mut self.modal {
             Some(UnifiedTagEditorModal::ChangePreview { scroll, .. }) => {
                 match key.code {
-                    KeyCode::Enter => {
-                        // Confirm changes -> stage decision for current item
-                        let mutations = self.generate_mutations_for_current_item();
-                        self.modal = None;
-
-                        // If there are siblings to navigate to, go to the next one.
-                        // Otherwise (aggregated mode or single item), go directly to review.
-                        if self.has_siblings() {
-                            UnifiedTagEditorAction::StageDecisionAndNext {
-                                index: self.current_item_idx,
-                                mutations,
-                            }
-                        } else {
-                            UnifiedTagEditorAction::StageDecisionAndReview {
-                                index: self.current_item_idx,
-                                mutations,
-                            }
-                        }
-                    }
-                    KeyCode::Esc => {
-                        self.modal = None;
-                        UnifiedTagEditorAction::CloseModal
-                    }
                     KeyCode::Up => {
                         *scroll = scroll.saturating_sub(1);
                         UnifiedTagEditorAction::None
@@ -692,7 +589,7 @@ impl UnifiedTagEditorState {
                     _ => UnifiedTagEditorAction::None,
                 }
             }
-            Some(UnifiedTagEditorModal::UnsavedChanges { destination, selected_button }) => {
+            Some(UnifiedTagEditorModal::UnsavedChanges { selected_button }) => {
                 match key.code {
                     KeyCode::Enter => {
                         // Execute selected button action
@@ -702,26 +599,10 @@ impl UnifiedTagEditorState {
                                 UnifiedTagEditorAction::CloseModal
                             }
                             super::types::UnsavedChangesButton::DiscardAndProceed => {
-                                let dest = *destination;
                                 self.drop_changes_for_current_item();
                                 self.modal = None;
-                                match dest {
-                                    super::types::UnsavedChangesDestination::Exit => {
-                                        UnifiedTagEditorAction::DiscardTransaction
-                                    }
-                                    super::types::UnsavedChangesDestination::NextItem => {
-                                        UnifiedTagEditorAction::NextItem
-                                    }
-                                    super::types::UnsavedChangesDestination::PrevItem => {
-                                        UnifiedTagEditorAction::PrevItem
-                                    }
-                                    super::types::UnsavedChangesDestination::NextSibling => {
-                                        UnifiedTagEditorAction::NextSibling
-                                    }
-                                    super::types::UnsavedChangesDestination::PrevSibling => {
-                                        UnifiedTagEditorAction::PrevSibling
-                                    }
-                                }
+                                // UnsavedChanges is now only used for Exit
+                                UnifiedTagEditorAction::DiscardTransaction
                             }
                         }
                     }
@@ -837,7 +718,6 @@ impl UnifiedTagEditorState {
                     UnifiedTagEditorAction::None
                 } else if self.has_changes_for_current_item() {
                     self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
-                        destination: super::types::UnsavedChangesDestination::Exit,
                         selected_button: super::types::UnsavedChangesButton::default(),
                     });
                     UnifiedTagEditorAction::None
@@ -895,7 +775,7 @@ impl UnifiedTagEditorState {
                 UnifiedTagEditorAction::None
             }
             KeyCode::Tab => {
-                // Tab: advance to next sibling (show change preview if current item has changes)
+                // Tab: advance to next item (show change preview if current item has changes)
                 // Skip confirmation if changes match what's already staged
                 if self.has_changes_for_current_item() && !self.changes_match_staged() {
                     let (grouped, single) = self.get_changes_for_current_item_preview();
@@ -903,23 +783,27 @@ impl UnifiedTagEditorState {
                         changes: grouped,
                         single_changes: single,
                         scroll: 0,
+                        direction: NavigationDirection::Forward,
                     });
                     UnifiedTagEditorAction::None
                 } else {
-                    UnifiedTagEditorAction::NextSibling
+                    UnifiedTagEditorAction::NextItem
                 }
             }
             KeyCode::BackTab => {
-                // Shift-Tab: go to previous sibling
+                // Shift-Tab: go to previous item (show change preview if current item has changes)
                 // Skip confirmation if current item's changes match what's already staged
                 if self.has_changes_for_current_item() && !self.changes_match_staged() {
-                    self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
-                        destination: super::types::UnsavedChangesDestination::PrevSibling,
-                        selected_button: super::types::UnsavedChangesButton::default(),
+                    let (grouped, single) = self.get_changes_for_current_item_preview();
+                    self.modal = Some(UnifiedTagEditorModal::ChangePreview {
+                        changes: grouped,
+                        single_changes: single,
+                        scroll: 0,
+                        direction: NavigationDirection::Backward,
                     });
                     UnifiedTagEditorAction::None
                 } else {
-                    UnifiedTagEditorAction::PrevSibling
+                    UnifiedTagEditorAction::PrevItem
                 }
             }
             KeyCode::Enter => {
@@ -993,6 +877,7 @@ impl UnifiedTagEditorState {
                                 changes: grouped,
                                 single_changes: single,
                                 scroll: 0,
+                                direction: NavigationDirection::Forward,
                             });
                             UnifiedTagEditorAction::None
                         }
@@ -1155,7 +1040,6 @@ impl UnifiedTagEditorState {
             name: "new_tag".to_string(),
             value: String::new(),
             editable: true,
-            is_unique_per_track: false,
             deleted: false,
         };
 
@@ -1224,20 +1108,6 @@ impl UnifiedTagEditorState {
         }
     }
 
-    /// Get all values for a tag name (case-insensitive) in the current item
-    fn get_values_for_tag(&self, normalized_name: &str) -> Vec<String> {
-        self.tag_fields
-            .get(self.current_item_idx)
-            .map(|fields| {
-                fields
-                    .iter()
-                    .filter(|f| f.name.to_lowercase() == normalized_name)
-                    .map(|f| f.value.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     /// Check if current field is part of a multi-value group and get the count
     fn is_multi_value_field(&self) -> Option<usize> {
         let fields = self.tag_fields.get(self.current_item_idx)?;
@@ -1255,26 +1125,6 @@ impl UnifiedTagEditorState {
         } else {
             None
         }
-    }
-
-    /// Check if a field at given index is the first occurrence of its name
-    fn is_first_occurrence(&self, field_idx: usize) -> bool {
-        let fields = match self.tag_fields.get(self.current_item_idx) {
-            Some(f) => f,
-            None => return true,
-        };
-        let field = match fields.get(field_idx) {
-            Some(f) => f,
-            None => return true,
-        };
-        let normalized_name = field.name.to_lowercase();
-
-        // Find first occurrence index
-        fields
-            .iter()
-            .position(|f| f.name.to_lowercase() == normalized_name)
-            .map(|idx| idx == field_idx)
-            .unwrap_or(true)
     }
 
     /// Open multi-value editor modal for current field
@@ -1320,11 +1170,6 @@ use ratatui::{
 use crate::ui::widgets::{PaneConfig, ThreePaneLayout};
 
 impl UnifiedTagEditorState {
-    /// Check if a modal is currently active
-    pub fn has_modal(&self) -> bool {
-        self.modal.is_some()
-    }
-
     /// Render the unified tag editor
     pub fn render(&mut self, f: &mut Frame, area: Rect, status_message: Option<&str>) {
         // Layout: info pane | 3-column | status box
@@ -1447,29 +1292,7 @@ impl UnifiedTagEditorState {
     fn render_context_list(&self, f: &mut Frame, area: Rect) {
         // ContextList is display-only (not focusable), so border is never highlighted
 
-        // For DirectoryEdit mode with sibling directories, show directories instead of tracks
-        let (items, title): (Vec<Line>, &str) = if self.is_directory_edit() && !self.sibling_directories.is_empty() {
-            // DirectoryEdit mode - show sibling directories
-            let lines: Vec<Line> = self.sibling_directories
-                .iter()
-                .enumerate()
-                .map(|(idx, dir)| {
-                    let prefix = if idx == self.current_sibling_idx { ">> " } else { "   " };
-                    let dir_name = dir.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("?");
-                    let line = format!("{}{}", prefix, dir_name);
-
-                    let style = if idx == self.current_sibling_idx {
-                        Style::default().bg(Color::DarkGray)
-                    } else {
-                        Style::default()
-                    };
-                    Line::from(line).style(style)
-                })
-                .collect();
-            (lines, "Directories")
-        } else if self.is_aggregated_mode() {
+        let (items, title): (Vec<Line>, &str) = if self.is_aggregated_mode() {
             // Aggregated mode - show single summary entry (no individual track navigation)
             let count = self.total_items;
             let summary = format!(">> {} tracks", count);
@@ -1894,11 +1717,11 @@ impl UnifiedTagEditorState {
 
     fn render_modal(&self, f: &mut Frame, area: Rect, modal: &UnifiedTagEditorModal) {
         match modal {
-            UnifiedTagEditorModal::ChangePreview { changes, single_changes, scroll } => {
+            UnifiedTagEditorModal::ChangePreview { changes, single_changes, scroll, direction: _ } => {
                 self.render_change_preview_modal(f, area, changes, single_changes, *scroll);
             }
-            UnifiedTagEditorModal::UnsavedChanges { destination, selected_button } => {
-                self.render_unsaved_changes_modal(f, area, *destination, *selected_button);
+            UnifiedTagEditorModal::UnsavedChanges { selected_button } => {
+                self.render_unsaved_changes_modal(f, area, *selected_button);
             }
             UnifiedTagEditorModal::MultiValueEditor {
                 field_idx,
@@ -2009,7 +1832,6 @@ impl UnifiedTagEditorState {
         &self,
         f: &mut Frame,
         area: Rect,
-        destination: super::types::UnsavedChangesDestination,
         selected_button: super::types::UnsavedChangesButton,
     ) {
         let modal_area = crate::ui::helpers::centered_rect_fixed(60, 12, area);
@@ -2023,14 +1845,6 @@ impl UnifiedTagEditorState {
 
         let inner = modal_block.inner(modal_area);
         f.render_widget(modal_block, modal_area);
-
-        let dest_text = match destination {
-            super::types::UnsavedChangesDestination::Exit => "exit the editor",
-            super::types::UnsavedChangesDestination::NextItem => "go to the next item",
-            super::types::UnsavedChangesDestination::PrevItem => "go to the previous item",
-            super::types::UnsavedChangesDestination::NextSibling => "go to the next sibling",
-            super::types::UnsavedChangesDestination::PrevSibling => "go to the previous sibling",
-        };
 
         // Style buttons based on selection state (safe option selected by default)
         let (keep_style, discard_style) = match selected_button {
@@ -2047,7 +1861,7 @@ impl UnifiedTagEditorState {
         let lines = vec![
             Line::from(""),
             Line::from("You have unsaved changes."),
-            Line::from(format!("Discard changes and {}?", dest_text)),
+            Line::from("Discard changes and exit the editor?"),
             Line::from(""),
             Line::from(vec![
                 Span::styled(" Keep Editing ", keep_style),
@@ -2190,8 +2004,7 @@ impl UnifiedTagEditorState {
                     name: field_name.clone(),
                     value,
                     editable: true,
-                    is_unique_per_track: false,
-                    deleted: false,
+                        deleted: false,
                 },
             );
         }
@@ -2303,7 +2116,6 @@ pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
             name,
             value,
             editable: true,
-            is_unique_per_track: false,
             deleted: false,
         })
         .collect();
@@ -2313,7 +2125,6 @@ pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
         name: "New Tag".to_string(),
         value: "[Press Enter to create]".to_string(),
         editable: true,
-        is_unique_per_track: false,
         deleted: false,
     });
 
@@ -2381,8 +2192,6 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
                         field_name: display_name.clone(),
                         old_value: orig_value,
                         new_value: field.value.clone(),
-                        old_name: None,
-                        deleted: true,
                     });
                 }
             }
@@ -2405,8 +2214,6 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
                         field_name: display_name.clone(),
                         old_value: String::new(), // New value, no old
                         new_value: field.value.clone(),
-                        old_name: None,
-                        deleted: false,
                     });
                 }
             }
@@ -2422,8 +2229,6 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
                             field_name: display_name.clone(),
                             old_value: field.value.clone(),
                             new_value: String::new(), // Removed
-                            old_name: None,
-                            deleted: true,
                         });
                     }
                 }
@@ -2524,7 +2329,7 @@ pub fn aggregate_tags_across_tracks(tracks: &[Track]) -> Vec<AggregatedTagField>
     // Convert to AggregatedTagField entries
     let mut result: Vec<AggregatedTagField> = tag_values
         .into_iter()
-        .map(|(normalized, (display_name, values))| {
+        .map(|(_normalized, (display_name, values))| {
             let value = if values.len() == 1 {
                 // All tracks have the same value
                 AggregatedValue::Consistent(values.into_iter().next().unwrap_or_default())
@@ -2533,17 +2338,10 @@ pub fn aggregate_tags_across_tracks(tracks: &[Track]) -> Vec<AggregatedTagField>
                 AggregatedValue::Various
             };
 
-            // Per-track unique fields (title, track number) shouldn't be bulk-edited
-            let is_unique = matches!(
-                normalized.as_str(),
-                "title" | "tracknumber" | "track_number" | "discnumber" | "disc_number"
-            );
-
             AggregatedTagField {
                 name: display_name,
                 value: value.clone(),
                 original_value: value,
-                editable: !is_unique,
             }
         })
         .collect();
@@ -2556,7 +2354,6 @@ pub fn aggregate_tags_across_tracks(tracks: &[Track]) -> Vec<AggregatedTagField>
         name: "New Tag".to_string(),
         value: AggregatedValue::Consistent(String::new()),
         original_value: AggregatedValue::Consistent(String::new()),
-        editable: true,
     });
 
     result

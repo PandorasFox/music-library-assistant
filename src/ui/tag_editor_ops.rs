@@ -135,7 +135,7 @@ impl App {
             );
         } else {
             // Multiple tracks in same directory - use bulk mode with CorpusBrowser source
-            // This allows cycling through sibling files with tab/shift-tab
+            // This allows cycling through items with tab/shift-tab
             self.open_unified_tag_editor_bulk(
                 tracks,
                 tag_editor::TagEditorSource::CorpusBrowser,
@@ -235,24 +235,6 @@ impl App {
             return;
         }
 
-        // Find sibling directories (other directories at the same level)
-        let sibling_directories = if let Some(parent) = directory.parent() {
-            std::fs::read_dir(parent)
-                .ok()
-                .map(|entries| {
-                    let mut dirs: Vec<std::path::PathBuf> = entries
-                        .filter_map(|e| e.ok())
-                        .filter(|e| e.path().is_dir())
-                        .map(|e| e.path())
-                        .collect();
-                    dirs.sort();
-                    dirs
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
         self.tree_browser = None;
 
         // Start transaction for directory edits
@@ -261,71 +243,10 @@ impl App {
         }
 
         // Use directory_aggregated for aggregated tag view across all files
-        let mut editor = tag_editor::UnifiedTagEditorState::directory_aggregated(tracks, None);
-        editor.set_sibling_directories(directory.to_path_buf(), sibling_directories);
+        let editor = tag_editor::UnifiedTagEditorState::directory_aggregated(tracks);
 
         self.unified_tag_editor = Some(editor);
         self.mode = UiMode::UnifiedTagEditor;
-    }
-
-    /// Navigate to the next sibling in the tag editor.
-    /// For DirectoryEdit mode: next sibling directory.
-    /// For bulk edit mode: next track.
-    pub(super) fn navigate_to_next_sibling(&mut self) {
-        let is_directory_edit = self.unified_tag_editor
-            .as_ref()
-            .map(|e| e.is_directory_edit())
-            .unwrap_or(false);
-
-        if is_directory_edit {
-            // Navigate to next sibling directory
-            if let Some(ref editor) = self.unified_tag_editor {
-                let next_idx = editor.current_sibling_idx + 1;
-                if next_idx < editor.sibling_directories.len() {
-                    let next_dir = editor.sibling_directories[next_idx].clone();
-                    // Re-open the tag editor for the new directory
-                    self.open_unified_tag_editor_for_directory(&next_dir);
-                }
-            }
-        } else {
-            // Navigate to next track (same as NextItem)
-            if let Some(ref mut editor) = self.unified_tag_editor {
-                if editor.current_item_idx < editor.total_items.saturating_sub(1) {
-                    editor.current_item_idx += 1;
-                    editor.reset_field_state();
-                }
-            }
-        }
-    }
-
-    /// Navigate to the previous sibling in the tag editor.
-    /// For DirectoryEdit mode: previous sibling directory.
-    /// For bulk edit mode: previous track.
-    pub(super) fn navigate_to_prev_sibling(&mut self) {
-        let is_directory_edit = self.unified_tag_editor
-            .as_ref()
-            .map(|e| e.is_directory_edit())
-            .unwrap_or(false);
-
-        if is_directory_edit {
-            // Navigate to previous sibling directory
-            if let Some(ref editor) = self.unified_tag_editor {
-                if editor.current_sibling_idx > 0 {
-                    let prev_idx = editor.current_sibling_idx - 1;
-                    let prev_dir = editor.sibling_directories[prev_idx].clone();
-                    // Re-open the tag editor for the new directory
-                    self.open_unified_tag_editor_for_directory(&prev_dir);
-                }
-            }
-        } else {
-            // Navigate to previous track (same as PrevItem)
-            if let Some(ref mut editor) = self.unified_tag_editor {
-                if editor.current_item_idx > 0 {
-                    editor.current_item_idx -= 1;
-                    editor.reset_field_state();
-                }
-            }
-        }
     }
 
     /// Start unified tag editor for a single track from tag search results

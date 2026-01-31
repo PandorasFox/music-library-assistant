@@ -74,10 +74,6 @@ pub struct Witch {
     eye_state: EyeState,
     observation_state: CorpusObservationState,
 
-    /// Whether mutations are accepted. Only becomes true when observing completes,
-    /// and only if read_only_mode opinion is false. Never reverts to false.
-    accepting_mutations: bool,
-
     /// Whether legacy library observation is enabled.
     /// Derived from Config at construction time.
     legacy_enabled: bool,
@@ -188,7 +184,6 @@ impl Witch {
             state: TaskExecutionState::Idle,
             eye_state: EyeState::Closed,
             observation_state: CorpusObservationState::Unseen,
-            accepting_mutations: false,
             legacy_enabled: cfg.legacy_enabled,
             read_only_mode: false,
             mutations_ran_this_session: false,
@@ -273,6 +268,18 @@ impl Witch {
     /// Check if observing is currently in progress.
     pub fn is_observing(&self) -> bool {
         matches!(self.observation_state, CorpusObservationState::Observing)
+    }
+
+    /// Check if mutations are currently accepted.
+    ///
+    /// Mutations are only accepted when:
+    /// - Eye state is Awake (observing and awakening complete)
+    /// - Not in read-only mode
+    ///
+    /// This is derived state - mutations are automatically blocked during
+    /// re-awakening cycles after mutations drain.
+    fn accepting_mutations(&self) -> bool {
+        self.eye_state == EyeState::Awake && !self.read_only_mode
     }
 
     /// Start observing. Returns false if observing already in progress.
@@ -474,6 +481,8 @@ impl Witch {
         let mut queue_awakening_after_reset = false;
         // Flag to auto-queue content analysis after mutations drain
         let mut queue_content_analysis_after_reset = false;
+        // Flag to queue re-observation (WalkCorpus) after mutations complete
+        let mut queue_reobservation_after_reset = false;
 
         self.completed_session = Some(CompletedSession {
             duration,
@@ -511,12 +520,18 @@ impl Witch {
                 queue_awakening_after_reset = true;
             }
 
-            // Invalid: cannot complete observing while in the middle of awakening
+            // Re-walk completed during re-awakening: proceed to derivations
             (true, EyeState::Awakening) => {
-                panic!("Invalid state: observing completed while eye is Awakening");
+                self.observation_state = CorpusObservationState::Complete;
+                crate::logging::log_general(format!(
+                    "[STATE] Re-observation complete during Awakening. Queueing derivations. \
+                     Processed {} tasks.",
+                    self.total_processed
+                ));
+                queue_awakening_after_reset = true;
             }
 
-            // Awakening completed: transition to Awake
+            // Awakening completed: transition to Awake and queue content analysis
             (false, EyeState::Awakening) => {
                 crate::logging::log_general(format!(
                     "[STATE] Awakening complete. Transitioning Awakening -> Awake. \
@@ -526,40 +541,35 @@ impl Witch {
                 self.eye_state = EyeState::Awake;
 
                 if !self.read_only_mode {
-                    self.accepting_mutations = true;
                     crate::logging::log_general("[STATE] Mutations now enabled (read-write mode).");
                 }
 
+                // Always queue content analysis after awakening (both initial and re-awakening)
+                queue_content_analysis_after_reset = true;
+
+                // Clear the one-shot latch if it was set (consumed by this awakening)
                 if self.freshen_last_stage_at_startup {
-                    crate::logging::log_general(
-                        "[STATE] freshen_last_stage_at_startup set - queueing content analysis"
-                    );
-                    queue_content_analysis_after_reset = true;
                     self.freshen_last_stage_at_startup = false;
+                    crate::logging::log_general(
+                        "[DAEMON] freshen_last_stage_at_startup latch cleared (consumed by awakening)"
+                    );
                 }
             }
 
             // Normal operation: work completed while Awake
             (false, EyeState::Awake) => {
-                if had_mutations || self.freshen_last_stage_at_startup {
-                    let reason = if self.freshen_last_stage_at_startup && !had_mutations {
-                        "freshen_last_stage_at_startup (one-shot)"
-                    } else {
-                        "post-mutation"
-                    };
+                if had_mutations {
+                    // Mutations ran - re-validate everything via re-awakening
                     crate::logging::log_general(format!(
-                        "[STATE] Session complete (Awake, {}). Auto-triggering content analysis. \
+                        "[STATE] Mutations complete. Transitioning Awake -> Awakening for re-validation. \
                          Processed {} tasks.",
-                        reason, self.total_processed
+                        self.total_processed
                     ));
-                    queue_content_analysis_after_reset = true;
-                    if self.freshen_last_stage_at_startup {
-                        self.freshen_last_stage_at_startup = false;
-                        crate::logging::log_general(
-                            "[DAEMON] freshen_last_stage_at_startup latch cleared (one-shot complete)"
-                        );
-                    }
+                    self.eye_state = EyeState::Awakening;
+                    self.observation_state = CorpusObservationState::Observing;
+                    queue_reobservation_after_reset = true;
                 }
+                // If no mutations, stay Awake (normal work completion)
             }
 
             // Invalid: cannot have non-observing work complete while Closed
@@ -583,6 +593,9 @@ impl Witch {
 
         // Queue follow-up computations AFTER reset to fix off-by-one counting
         // (if queued before reset, the task's queue count gets wiped but it still completes)
+        if queue_reobservation_after_reset {
+            self.queue_reobservation_computations();
+        }
         if queue_awakening_after_reset {
             self.queue_awakening_computations();
         }
@@ -607,6 +620,47 @@ impl Witch {
             Computation::Awakening(awakening::Computation::ScheduleSecondLevelDerivations),
             Some("Computing directory signals".to_string()),
         );
+    }
+
+    /// Queue re-observation computations (WalkCorpus) for re-awakening after mutations.
+    ///
+    /// Similar to `queue_observing_computations` but for re-awakening cycles.
+    /// Uses mtime optimization (`force_check: false`) since mutations that changed
+    /// files will naturally trigger verification via mtime changes.
+    fn queue_reobservation_computations(&mut self) {
+        let resolver = crate::corpus::paths::get_resolver();
+
+        crate::logging::log_general(
+            "[STATE] Queueing re-observation computations for post-mutation re-awakening"
+        );
+
+        // Clear stale observation state first - ensures deleted files get MissingFile signals
+        self.queue_computation_with_label(
+            Computation::Asleep(asleep::Computation::ClearExistingObservationState),
+            Some("Clearing observation state".to_string()),
+        );
+
+        // Re-walk corpus (mtime-optimized)
+        self.queue_computation_with_label(
+            Computation::Asleep(asleep::Computation::WalkCorpus {
+                root: resolver.corpus_dir(),
+                source: "corpus".to_string(),
+                force_check: false,
+            }),
+            Some("Re-observing corpus".to_string()),
+        );
+
+        // Re-walk legacy library if enabled (mtime-optimized)
+        if self.legacy_enabled {
+            self.queue_computation_with_label(
+                Computation::Asleep(asleep::Computation::WalkCorpus {
+                    root: resolver.libraries_dir().join("legacy"),
+                    source: "legacy".to_string(),
+                    force_check: false,
+                }),
+                Some("Re-observing legacy".to_string()),
+            );
+        }
     }
 
     /// Queue content analysis computations (internal only).

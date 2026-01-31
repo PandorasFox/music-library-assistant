@@ -134,8 +134,8 @@ impl super::Witch {
         &mut self,
         _witness: &DecisionWitness,
     ) -> Result<CommitSummary, TransactionError> {
-        // Gate: mutations must be accepted (eyeballing complete, not read-only)
-        if !self.accepting_mutations {
+        // Gate: mutations must be accepted (eye is Awake, not read-only)
+        if !self.accepting_mutations() {
             crate::logging::log_mutation(
                 "[TRANSACTION] confirm_transaction REJECTED: not accepting mutations (eyeballing incomplete or read-only mode)"
             );

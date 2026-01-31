@@ -108,7 +108,7 @@ impl Database {
                    AND LOWER(isrc.tag_name) = 'isrc'
                LEFT JOIN track_tags catalog
                    ON album.track_id = catalog.track_id
-                   AND LOWER(catalog.tag_name) = 'catalognumber'
+                   AND LOWER(catalog.tag_name) = 'catalog_number'
                WHERE LOWER(album.tag_name) = 'album'
                    AND album.tag_value IS NOT NULL
                    AND album.tag_value != ''"#,

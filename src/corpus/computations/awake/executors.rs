@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
+use mla_utils::tag_names::find_tag_in_map;
+
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     drop_stale_file_signal, ensure_file_signal_if_missing,
@@ -1405,24 +1407,32 @@ struct TrackReleaseIdentity {
 /// Check if two tracks are from the same release (true duplicates, not variants).
 ///
 /// Tracks are "same release" if:
-/// - Same ISRC (definitively same recording), OR
-/// - Same catalog number, OR
+/// - Same catalog number (compilation albums with same ISRC but different catalog = different releases), OR
+/// - Same ISRC (if no catalog numbers to differentiate), OR
 /// - Same normalized album AND same normalized title AND no exclusive variant keywords
+///
+/// IMPORTANT: Catalog number is checked BEFORE ISRC because the same recording (same ISRC)
+/// can appear on multiple compilation albums with different catalog numbers. These are
+/// legitimate variants that should be kept, not flagged as duplicates.
 fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
-    // ISRC match = definitive same recording
+    // First: Check catalog numbers - different catalog = different release
+    // This catches the compilation album case where the same recording (same ISRC)
+    // appears on different albums with different catalog numbers.
+    if !a.catalog_number.is_empty() && !b.catalog_number.is_empty() {
+        if !a.catalog_number.eq_ignore_ascii_case(&b.catalog_number) {
+            return false; // Different catalog numbers = different releases (compilation variant)
+        }
+        return true; // Same catalog number = same release
+    }
+
+    // Second: ISRC match (only if no catalog numbers to differentiate)
+    // If we get here, at least one track is missing a catalog number,
+    // so ISRC is the best differentiator available.
     if !a.isrc.is_empty() && !b.isrc.is_empty() && a.isrc.eq_ignore_ascii_case(&b.isrc) {
         return true;
     }
 
-    // Catalog number match = same release
-    if !a.catalog_number.is_empty()
-        && !b.catalog_number.is_empty()
-        && a.catalog_number.eq_ignore_ascii_case(&b.catalog_number)
-    {
-        return true;
-    }
-
-    // Check album names (normalized)
+    // Fall through: Check album names (normalized)
     let album_a = normalize_album_name(&a.album);
     let album_b = normalize_album_name(&b.album);
 
@@ -1556,7 +1566,10 @@ pub fn execute_analyze_fingerprint_overlaps(
                     album: tag_map.get("album").cloned().unwrap_or_default(),
                     title: tag_map.get("title").cloned().unwrap_or_default(),
                     isrc: tag_map.get("isrc").cloned().unwrap_or_default(),
-                    catalog_number: tag_map.get("catalognumber").cloned().unwrap_or_default(),
+                    // Use fuzzy lookup for catalog number - handles "catalog_number" vs "catalognumber"
+                    catalog_number: find_tag_in_map(&tag_map, "catalognumber")
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(),
                 });
             }
 
@@ -1787,7 +1800,10 @@ pub fn execute_cluster_directory_overlaps(
                 album: tag_map.get("album").cloned().unwrap_or_default(),
                 title: tag_map.get("title").cloned().unwrap_or_default(),
                 isrc: tag_map.get("isrc").cloned().unwrap_or_default(),
-                catalog_number: tag_map.get("catalognumber").cloned().unwrap_or_default(),
+                // Use fuzzy lookup for catalog number - handles "catalog_number" vs "catalognumber"
+                catalog_number: find_tag_in_map(&tag_map, "catalognumber")
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
             });
         }
 

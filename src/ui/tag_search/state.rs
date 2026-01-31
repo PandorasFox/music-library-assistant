@@ -112,10 +112,17 @@ impl TagSearchState {
             QueryFieldFocus::AddCondition => {
                 if !self.conditions.is_empty() {
                     self.focused_condition = self.conditions.len() - 1;
-                    self.field_focus = QueryFieldFocus::TagName;
+                    self.field_focus = QueryFieldFocus::ConditionType;
                 }
             }
-            QueryFieldFocus::Operator | QueryFieldFocus::TagName | QueryFieldFocus::Comparison | QueryFieldFocus::Value => {
+            QueryFieldFocus::Operator
+            | QueryFieldFocus::ConditionType
+            | QueryFieldFocus::TagName
+            | QueryFieldFocus::Comparison
+            | QueryFieldFocus::Value
+            | QueryFieldFocus::RangeMin
+            | QueryFieldFocus::RangeMax
+            | QueryFieldFocus::FileTypeCategory => {
                 if self.focused_condition > 0 {
                     self.focused_condition -= 1;
                 }
@@ -126,7 +133,14 @@ impl TagSearchState {
     /// Move focus down.
     pub fn move_focus_down(&mut self) {
         match self.field_focus {
-            QueryFieldFocus::Operator | QueryFieldFocus::TagName | QueryFieldFocus::Comparison | QueryFieldFocus::Value => {
+            QueryFieldFocus::Operator
+            | QueryFieldFocus::ConditionType
+            | QueryFieldFocus::TagName
+            | QueryFieldFocus::Comparison
+            | QueryFieldFocus::Value
+            | QueryFieldFocus::RangeMin
+            | QueryFieldFocus::RangeMax
+            | QueryFieldFocus::FileTypeCategory => {
                 if self.focused_condition + 1 < self.conditions.len() {
                     self.focused_condition += 1;
                 } else {
@@ -152,9 +166,21 @@ impl TagSearchState {
                 self.field_focus = QueryFieldFocus::TagName;
             }
             QueryFieldFocus::TagName => {
+                self.field_focus = QueryFieldFocus::ConditionType;
+            }
+            QueryFieldFocus::ConditionType => {
                 if self.focused_condition > 0 {
                     self.field_focus = QueryFieldFocus::Operator;
                 }
+            }
+            QueryFieldFocus::RangeMax => {
+                self.field_focus = QueryFieldFocus::RangeMin;
+            }
+            QueryFieldFocus::RangeMin => {
+                self.field_focus = QueryFieldFocus::ConditionType;
+            }
+            QueryFieldFocus::FileTypeCategory => {
+                self.field_focus = QueryFieldFocus::ConditionType;
             }
             _ => {}
         }
@@ -162,15 +188,36 @@ impl TagSearchState {
 
     /// Move focus right.
     pub fn move_focus_right(&mut self) {
+        let condition_type = self.conditions.get(self.focused_condition)
+            .map(|c| c.condition_type)
+            .unwrap_or_default();
+
         match self.field_focus {
             QueryFieldFocus::Operator => {
-                self.field_focus = QueryFieldFocus::TagName;
+                self.field_focus = QueryFieldFocus::ConditionType;
+            }
+            QueryFieldFocus::ConditionType => {
+                // Move to appropriate fields based on condition type
+                match condition_type {
+                    ConditionType::Tag => {
+                        self.field_focus = QueryFieldFocus::TagName;
+                    }
+                    ConditionType::FileType => {
+                        self.field_focus = QueryFieldFocus::FileTypeCategory;
+                    }
+                    ConditionType::SampleRate | ConditionType::Bitrate | ConditionType::Duration => {
+                        self.field_focus = QueryFieldFocus::RangeMin;
+                    }
+                }
             }
             QueryFieldFocus::TagName => {
                 self.field_focus = QueryFieldFocus::Comparison;
             }
             QueryFieldFocus::Comparison => {
                 self.field_focus = QueryFieldFocus::Value;
+            }
+            QueryFieldFocus::RangeMin => {
+                self.field_focus = QueryFieldFocus::RangeMax;
             }
             _ => {}
         }
@@ -207,6 +254,17 @@ impl TagSearchState {
                 QueryFieldFocus::Value => {
                     condition.value.push(c);
                 }
+                QueryFieldFocus::RangeMin => {
+                    // Only allow digits for range fields
+                    if c.is_ascii_digit() {
+                        condition.range_min.push(c);
+                    }
+                }
+                QueryFieldFocus::RangeMax => {
+                    if c.is_ascii_digit() {
+                        condition.range_max.push(c);
+                    }
+                }
                 _ => {}
             }
         }
@@ -221,6 +279,12 @@ impl TagSearchState {
                 }
                 QueryFieldFocus::Value => {
                     condition.value.pop();
+                }
+                QueryFieldFocus::RangeMin => {
+                    condition.range_min.pop();
+                }
+                QueryFieldFocus::RangeMax => {
+                    condition.range_max.pop();
                 }
                 _ => {}
             }

@@ -168,11 +168,6 @@ impl App {
                 self.tag_search = None;
                 self.start_unified_tag_editor_for_track(track);
             }
-            tag_search::TagSearchAction::EditAllTracks(tracks) => {
-                // Open unified tag editor for all result tracks
-                self.tag_search = None;
-                self.start_unified_tag_editor_for_tracks(tracks);
-            }
         }
     }
 
@@ -284,11 +279,6 @@ impl App {
             UnifiedTagEditorAction::None => {}
             UnifiedTagEditorAction::CloseModal => {}
 
-            UnifiedTagEditorAction::StageDecision { index, mutations } => {
-                // User confirmed changes for this item - stage to transaction
-                self.stage_decision(index, mutations);
-            }
-
             UnifiedTagEditorAction::StageDecisionAndNext { index, mutations } => {
                 // Stage the decision AND navigate to next sibling
                 self.stage_decision(index, mutations);
@@ -303,29 +293,6 @@ impl App {
                 // Transition to standardized review modal
                 // Note: unified_tag_editor state is NOT cleared - preserved for Cancel return
                 self.start_transaction_review(transaction_review::TransactionReviewSource::TagEditor);
-            }
-
-            UnifiedTagEditorAction::CommitTransaction => {
-                // Commit all staged decisions via sealed operator decision handler
-                let commit_message = if let Some(the_witch) = self.witch.as_mut() {
-                    match super::operator_decisions::commit_transaction(the_witch) {
-                        Ok(summary) => {
-                            format!(
-                                "Committed {} decisions ({} mutations)",
-                                summary.decision_count,
-                                summary.mutation_count
-                            )
-                        }
-                        Err(e) => {
-                            format!("Commit failed: {}", e)
-                        }
-                    }
-                } else {
-                    "The Witch is not available".to_string()
-                };
-                self.unified_tag_editor = None;
-                self.start_insights_view();
-                self.status_message = Some(commit_message);
             }
 
             UnifiedTagEditorAction::DiscardTransaction => {
@@ -362,12 +329,6 @@ impl App {
 
             UnifiedTagEditorAction::PrevSibling => {
                 self.navigate_to_prev_sibling();
-            }
-
-            UnifiedTagEditorAction::ShowModal(modal) => {
-                if let Some(ref mut editor) = self.unified_tag_editor {
-                    editor.modal = Some(modal);
-                }
             }
 
             UnifiedTagEditorAction::StatusMessage(msg) => {
@@ -1119,6 +1080,7 @@ impl App {
             oob_sync_flow::OobSyncAction::OpenFilter => {
                 // Open filter popup overlay
                 self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
+                self.filter_popup_context = Some(FilterPopupContext::OobSync);
             }
         }
     }
@@ -1217,6 +1179,7 @@ impl App {
             oob_conflict_flow::OobConflictAction::OpenFilter => {
                 // Open filter popup overlay
                 self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
+                self.filter_popup_context = Some(FilterPopupContext::OobConflict);
             }
         }
     }

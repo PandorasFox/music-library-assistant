@@ -161,8 +161,6 @@ impl App {
             let label = match source {
                 tag_editor::TagEditorSource::CorpusBrowser => "Tag edits",
                 tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
-                tag_editor::TagEditorSource::DuplicateResolution => "Duplicate resolution",
-                tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
                 tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             };
             let _ = the_witch.start_transaction(label);
@@ -188,8 +186,6 @@ impl App {
             let label = match source {
                 tag_editor::TagEditorSource::CorpusBrowser => "Bulk tag edits",
                 tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
-                tag_editor::TagEditorSource::DuplicateResolution => "Duplicate resolution",
-                tag_editor::TagEditorSource::DeployConflict => "Deploy conflict resolution",
                 tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             };
             let _ = the_witch.start_transaction(label);

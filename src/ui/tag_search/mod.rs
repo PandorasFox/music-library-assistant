@@ -100,6 +100,12 @@ impl TagSearchState {
                 } else if self.is_on_comparison_field() {
                     self.cycle_comparison();
                     TagSearchAction::None
+                } else if self.field_focus == QueryFieldFocus::ConditionType {
+                    self.cycle_condition_type();
+                    TagSearchAction::None
+                } else if self.field_focus == QueryFieldFocus::FileTypeCategory {
+                    self.cycle_file_type_category();
+                    TagSearchAction::None
                 } else {
                     // Move to next field
                     self.move_focus_right();
@@ -288,6 +294,8 @@ impl TagSearchState {
     }
 
     fn render_condition_row(&self, f: &mut Frame, area: Rect, idx: usize, condition: &SearchCondition, is_focused: bool) {
+        use types::ConditionType;
+
         let mut spans = Vec::new();
 
         // Operator (for non-first conditions)
@@ -303,56 +311,128 @@ impl TagSearchState {
             spans.push(Span::raw("    ")); // Align with operators (4 chars: "AND ")
         }
 
-        // Tag name field
-        let name_focused = is_focused && self.field_focus == QueryFieldFocus::TagName;
-        let name_style = if name_focused {
-            Style::default().bg(Color::DarkGray).fg(Color::White)
+        // Condition type selector [TAG/TYPE/RATE/KBPS/TIME]
+        let type_focused = is_focused && self.field_focus == QueryFieldFocus::ConditionType;
+        let type_style = if type_focused {
+            Style::default().bg(Color::Blue).fg(Color::White)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(Color::Blue)
         };
-        let name_display = if condition.tag_name.is_empty() {
-            "<tag name>".to_string()
-        } else {
-            condition.tag_name.clone()
-        };
-        // Show cursor for focused text input
-        let name_with_cursor = if name_focused {
-            format!("{}_", name_display)
-        } else {
-            name_display
-        };
-        spans.push(Span::styled(format!("{:<16}", name_with_cursor), name_style));
+        spans.push(Span::styled(format!("[{:<4}]", condition.condition_type.label()), type_style));
         spans.push(Span::raw(" "));
 
-        // Comparison operator
-        let comp_focused = is_focused && self.field_focus == QueryFieldFocus::Comparison;
-        let comp_style = if comp_focused {
-            Style::default().bg(Color::Magenta).fg(Color::Black)
-        } else {
-            Style::default().fg(Color::Magenta)
-        };
-        spans.push(Span::styled(format!("{:<8}", condition.comparison.label()), comp_style));
-        spans.push(Span::raw(" "));
+        // Render fields based on condition type
+        match condition.condition_type {
+            ConditionType::Tag => {
+                // Tag name field
+                let name_focused = is_focused && self.field_focus == QueryFieldFocus::TagName;
+                let name_style = if name_focused {
+                    Style::default().bg(Color::DarkGray).fg(Color::White)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let name_display = if condition.tag_name.is_empty() {
+                    "<tag>".to_string()
+                } else {
+                    condition.tag_name.clone()
+                };
+                let name_with_cursor = if name_focused {
+                    format!("{}_", name_display)
+                } else {
+                    name_display
+                };
+                spans.push(Span::styled(format!("{:<12}", name_with_cursor), name_style));
+                spans.push(Span::raw(" "));
 
-        // Value field
-        let value_focused = is_focused && self.field_focus == QueryFieldFocus::Value;
-        let value_style = if value_focused {
-            Style::default().bg(Color::DarkGray).fg(Color::White)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let value_display = if condition.value.is_empty() {
-            "<value>".to_string()
-        } else {
-            condition.value.clone()
-        };
-        // Show cursor for focused text input
-        let value_with_cursor = if value_focused {
-            format!("{}_", value_display)
-        } else {
-            value_display
-        };
-        spans.push(Span::styled(value_with_cursor, value_style));
+                // Comparison operator
+                let comp_focused = is_focused && self.field_focus == QueryFieldFocus::Comparison;
+                let comp_style = if comp_focused {
+                    Style::default().bg(Color::Magenta).fg(Color::Black)
+                } else {
+                    Style::default().fg(Color::Magenta)
+                };
+                spans.push(Span::styled(format!("{:<8}", condition.comparison.label()), comp_style));
+                spans.push(Span::raw(" "));
+
+                // Value field
+                let value_focused = is_focused && self.field_focus == QueryFieldFocus::Value;
+                let value_style = if value_focused {
+                    Style::default().bg(Color::DarkGray).fg(Color::White)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let value_display = if condition.value.is_empty() {
+                    "<value>".to_string()
+                } else {
+                    condition.value.clone()
+                };
+                let value_with_cursor = if value_focused {
+                    format!("{}_", value_display)
+                } else {
+                    value_display
+                };
+                spans.push(Span::styled(value_with_cursor, value_style));
+            }
+            ConditionType::FileType => {
+                // File type category selector
+                let cat_focused = is_focused && self.field_focus == QueryFieldFocus::FileTypeCategory;
+                let cat_style = if cat_focused {
+                    Style::default().bg(Color::Green).fg(Color::Black)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+                spans.push(Span::styled(format!("[{}]", condition.file_type_category.label()), cat_style));
+            }
+            ConditionType::SampleRate | ConditionType::Bitrate | ConditionType::Duration => {
+                // Range min field
+                let min_focused = is_focused && self.field_focus == QueryFieldFocus::RangeMin;
+                let min_style = if min_focused {
+                    Style::default().bg(Color::DarkGray).fg(Color::White)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let min_display = if condition.range_min.is_empty() {
+                    "<min>".to_string()
+                } else {
+                    condition.range_min.clone()
+                };
+                let min_with_cursor = if min_focused {
+                    format!("{}_", min_display)
+                } else {
+                    min_display
+                };
+                spans.push(Span::styled(format!("{:<8}", min_with_cursor), min_style));
+                spans.push(Span::styled(" to ", Style::default().fg(Color::DarkGray)));
+
+                // Range max field
+                let max_focused = is_focused && self.field_focus == QueryFieldFocus::RangeMax;
+                let max_style = if max_focused {
+                    Style::default().bg(Color::DarkGray).fg(Color::White)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let max_display = if condition.range_max.is_empty() {
+                    "<max>".to_string()
+                } else {
+                    condition.range_max.clone()
+                };
+                let max_with_cursor = if max_focused {
+                    format!("{}_", max_display)
+                } else {
+                    max_display
+                };
+                spans.push(Span::styled(format!("{:<8}", max_with_cursor), max_style));
+
+                // Show unit hint
+                let unit = match condition.condition_type {
+                    ConditionType::SampleRate => "Hz",
+                    ConditionType::Bitrate => "kbps",
+                    ConditionType::Duration => "sec",
+                    _ => "",
+                };
+                spans.push(Span::styled(format!(" {}", unit), Style::default().fg(Color::DarkGray)));
+            }
+        }
 
         f.render_widget(Paragraph::new(Line::from(spans)), area);
     }
@@ -453,10 +533,18 @@ impl TagSearchState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QueryFieldFocus {
     Operator,
+    /// Condition type selector (TAG/TYPE/RATE/KBPS/TIME)
+    ConditionType,
     #[default]
     TagName,
     Comparison,
     Value,
+    /// Range minimum for range conditions
+    RangeMin,
+    /// Range maximum for range conditions
+    RangeMax,
+    /// File type category selector (for FileType conditions)
+    FileTypeCategory,
     AddCondition,
     SearchButton,
 }

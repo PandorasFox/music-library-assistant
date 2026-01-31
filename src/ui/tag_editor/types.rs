@@ -16,25 +16,8 @@ pub enum TagEditorSource {
     CorpusBrowser,
     /// Bulk edit from directory selection
     DirectoryEdit,
-    /// From duplicate detection flow
-    DuplicateResolution,
-    /// From deploy conflict resolution
-    DeployConflict,
     /// From tag search results
     TagSearch,
-}
-
-impl TagEditorSource {
-    /// Get the transaction label for this source.
-    pub fn transaction_label(&self) -> &'static str {
-        match self {
-            Self::CorpusBrowser => "Tag edits",
-            Self::DirectoryEdit => "Directory tag edits",
-            Self::DuplicateResolution => "Duplicate resolution",
-            Self::DeployConflict => "Deploy conflict resolution",
-            Self::TagSearch => "Tag search edits",
-        }
-    }
 }
 
 /// Editing mode for the tag editor
@@ -105,14 +88,10 @@ pub enum TagEditorButton {
 pub enum UnifiedTagEditorAction {
     /// No action
     None,
-    /// Stage mutations for current item to the active transaction
-    StageDecision { index: usize, mutations: Vec<Mutation> },
     /// Stage decision AND navigate to next sibling (combines stage + navigation)
     StageDecisionAndNext { index: usize, mutations: Vec<Mutation> },
     /// Stage decision AND show transaction review (for aggregated mode or single-sibling contexts)
     StageDecisionAndReview { index: usize, mutations: Vec<Mutation> },
-    /// Commit all staged decisions and exit
-    CommitTransaction,
     /// Discard all staged decisions and exit
     DiscardTransaction,
     /// Navigate to next item (within current transaction)
@@ -123,8 +102,6 @@ pub enum UnifiedTagEditorAction {
     NextSibling,
     /// Navigate to previous sibling
     PrevSibling,
-    /// Show an overlay modal
-    ShowModal(UnifiedTagEditorModal),
     /// Close the current modal
     CloseModal,
     /// Display a status message

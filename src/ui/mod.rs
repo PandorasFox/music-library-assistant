@@ -129,10 +129,6 @@ impl TagCanonicityClusters {
     pub fn is_last(&self) -> bool {
         self.current_index + 1 >= self.signal_ids.len()
     }
-
-    pub fn is_first(&self) -> bool {
-        self.current_index == 0
-    }
 }
 
 // ============================================================================
@@ -365,12 +361,6 @@ impl App {
             UiMode::Progress => {
                 // Progress screen ignores keys - can't interact during loading/computation
             }
-            UiMode::DirBrowser => {
-                if let Some(ref mut browser) = self.tree_browser {
-                    let action = browser.handle_key(key);
-                    self.handle_tree_browser_action(action);
-                }
-            }
             UiMode::DeploymentPreview => {
                 if let Some(ref mut preview) = self.deployment_preview {
                     let action = preview.handle_key(key);
@@ -542,24 +532,6 @@ impl App {
         self.status_message = Some(format!("Decision staged (item {})", index + 1));
     }
 
-    /// Gather transaction decisions from the Witch for review modal.
-    ///
-    /// Returns list of (decision_index, label, mutation_count) for all staged decisions.
-    pub(super) fn gather_transaction_decisions(&self) -> Vec<(usize, String, usize)> {
-        if let Some(the_witch) = self.witch.as_ref() {
-            the_witch.decision_indices()
-                .iter()
-                .filter_map(|&idx| {
-                    the_witch.get_decision(idx).map(|d| {
-                        (idx, d.label.clone(), d.mutations.len())
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
-    }
-
     /// Abort current operation and return to insights view with a status message.
     ///
     /// Helper for error handling in start_tag_editor_for_path.
@@ -603,12 +575,6 @@ impl App {
             widgets::LateralView::Insights => self.start_insights_view(),
             widgets::LateralView::FormatStandardization => self.start_format_standardization(),
         }
-    }
-
-    pub(super) fn start_deployment_preview(&mut self) {
-        // TODO: Reconnect when corpus::deploy is re-enabled
-        // This function requires compute_full_deployment_status from the disabled deploy module.
-        self.status_message = Some("Deployment preview disabled - deploy module being updated".to_string());
     }
 
     pub(super) fn start_corpus_browser(&mut self) {

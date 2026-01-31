@@ -158,7 +158,6 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
     // Get mode-specific suffix (if any)
     let suffix = match ctx.mode {
         super::UiMode::Progress => None, // Never reached - handled separately
-        super::UiMode::DirBrowser => Some("Directory Browser"),
         super::UiMode::DeploymentPreview => Some("Deployment Preview"),
         super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
         super::UiMode::CorpusBrowser => Some("Corpus Browser"),
@@ -199,12 +198,6 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::Progress => {
             // Never reached - handled separately in render() before this function
             view_name = "progress";
-        }
-        super::UiMode::DirBrowser => {
-            view_name = "dir_browser";
-            if let Some(ref mut browser) = ctx.tree_browser {
-                browser.render(f, area);
-            }
         }
         super::UiMode::DeploymentPreview => {
             view_name = "deployment_preview";
@@ -767,7 +760,6 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
     // Get mode-specific controls hint
     let controls = match ctx.mode {
         super::UiMode::Progress => control_presets::empty(), // No controls during loading/analysis
-        super::UiMode::DirBrowser => control_presets::dir_browser(),
         super::UiMode::DeploymentPreview => control_presets::deployment_preview(),
         super::UiMode::ExitConfirmModal => control_presets::exit_confirm_modal(),
         super::UiMode::CorpusBrowser => control_presets::corpus_browser(),

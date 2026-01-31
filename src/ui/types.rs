@@ -41,7 +41,6 @@ impl ProgressStatsUpdater for crate::ui::progress_screen::ProgressScreen {
 pub(crate) enum UiMode {
     /// Unified progress screen - startup eyeballing, content analysis, signal refresh
     Progress,
-    DirBrowser,
     DeploymentPreview,
     /// Exit confirmation modal (when operations are in progress)
     ExitConfirmModal,

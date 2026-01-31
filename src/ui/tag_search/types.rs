@@ -362,8 +362,6 @@ pub enum TagSearchAction {
     ExecuteSearch,
     /// Open tag editor for a single track.
     EditTrack(Track),
-    /// Open tag editor for all results (track list navigation).
-    EditAllTracks(Vec<Track>),
 }
 
 /// Modal dialogs for tag search.

@@ -1532,8 +1532,6 @@ impl UnifiedTagEditorState {
             let title = match &self.context {
                 TagEditContext::SingleFile { source, .. } => match source {
                     TagEditorSource::CorpusBrowser => "Track",
-                    TagEditorSource::DuplicateResolution => "Duplicate Group",
-                    TagEditorSource::DeployConflict => "Deploy Conflict",
                     TagEditorSource::DirectoryEdit => "File",
                     TagEditorSource::TagSearch => "Search Result",
                 },

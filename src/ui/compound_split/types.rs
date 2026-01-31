@@ -121,7 +121,7 @@ impl CompoundSplitState {
         let mut mutations = Vec::new();
 
         for &track_id in &self.data.track_ids {
-            let Some((path, current_tagset)) = track_info.get(&track_id) else {
+            let Some((_path, current_tagset)) = track_info.get(&track_id) else {
                 continue;
             };
 

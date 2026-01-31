@@ -47,26 +47,6 @@ impl Database {
         Ok(())
     }
 
-    /// Get tag mismatches for a specific track
-    /// Returns Vec of (field, db_value, disk_value)
-    pub fn get_tag_mismatches_for_track(&self, track_id: i64) -> Result<Vec<(String, Option<String>, Option<String>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT field, db_value, disk_value FROM tag_mismatches WHERE track_id = ?1 ORDER BY field"
-        )?;
-        let rows = stmt.query_map(params![track_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
-    }
-
     // ========================================================================
     // Tag Collision Detection Queries (for canonicalization signals)
     // ========================================================================
@@ -220,34 +200,6 @@ impl Database {
                 mismatches,
             });
         }
-
-        Ok(files)
-    }
-
-    /// Get files with OOB tag conflict signals.
-    ///
-    /// Returns a flat file list from signals (track_id + path). Mismatch detail
-    /// is computed on-demand per file, because the tag_mismatches table requires
-    /// write access that computations cannot provide on read-only connections.
-    pub fn get_oob_conflict_files(&self) -> Result<Vec<crate::corpus::db::types::OobSignalFile>> {
-        use crate::corpus::db::types::OobSignalFile;
-
-        // Get all tracks with oob_tag_conflict signals (include legacy "oob_tag")
-        // signals.issue_key stores the file path for file-level signals
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT t.id, s.issue_key
-             FROM signals s
-             INNER JOIN tracks t ON t.path = s.issue_key AND t.source = 'corpus'
-             WHERE s.issue_type IN ('oob_tag_conflict', 'oob_tag')
-             ORDER BY s.issue_key"
-        )?;
-
-        let files: Vec<OobSignalFile> = stmt.query_map(params![], |row| {
-            Ok(OobSignalFile {
-                track_id: row.get(0)?,
-                path: row.get(1)?,
-            })
-        })?.filter_map(|r| r.ok()).collect();
 
         Ok(files)
     }

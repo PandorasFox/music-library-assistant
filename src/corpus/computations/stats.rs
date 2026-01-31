@@ -72,23 +72,6 @@ impl ThreadStats {
         }
     }
 
-    /// Average DB read time in microseconds
-    pub fn avg_db_read_us(&self) -> u64 {
-        if self.db_read_count > 0 {
-            self.total_db_read_us / self.db_read_count
-        } else {
-            0
-        }
-    }
-
-    /// Average task time in milliseconds
-    pub fn avg_task_ms(&self) -> u64 {
-        if self.tasks_completed > 0 {
-            self.total_task_ms / self.tasks_completed
-        } else {
-            0
-        }
-    }
 }
 
 // ============================================================================

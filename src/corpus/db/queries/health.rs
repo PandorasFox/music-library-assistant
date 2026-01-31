@@ -20,7 +20,7 @@ use super::Database;
 use crate::db_thread::SignalWitness;
 use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, Signal,
-    SignalType, SignalSummary, Track,
+    SignalType, SignalSummary,
 };
 
 impl Database {
@@ -567,61 +567,6 @@ impl Database {
     }
 
     // Note: get_tracks_in_directory_with_fingerprint is defined in tracks.rs
-
-    /// Get signals discovered since a given timestamp.
-    pub fn get_signals_since(
-        &self,
-        signal_type: SignalType,
-        since: &str,
-    ) -> Result<Vec<Signal>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-               FROM signals
-               WHERE issue_type = ?1 AND discovered_at > ?2
-               ORDER BY discovered_at DESC"#
-        )?;
-
-        let rows = stmt.query_map(
-            params![signal_type.as_str(), since],
-            Self::row_to_signal
-        )?;
-
-        let mut issues = Vec::new();
-        for row in rows {
-            issues.push(row?);
-        }
-        Ok(issues)
-    }
-
-    /// Get tracks associated with an aggregate signal (from embedded track_ids in metadata_json).
-    ///
-    /// Aggregate signals store track IDs directly in metadata_json["track_ids"].
-    pub fn get_aggregate_signal_tracks(&self, signal_id: i64) -> Result<Vec<Track>> {
-        // Get the signal to extract track_ids from metadata
-        let signal: Signal = self.conn.query_row(
-            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-               FROM signals WHERE id = ?1"#,
-            params![signal_id],
-            Self::row_to_signal,
-        ).context("Signal not found")?;
-
-        // Parse track_ids from metadata_json
-        let track_ids: Vec<i64> = signal
-            .metadata_json
-            .as_ref()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.get("track_ids").cloned())
-            .and_then(|v| v.as_array().cloned())
-            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-            .unwrap_or_default();
-
-        if track_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Batch fetch tracks by ID
-        self.get_tracks_by_ids(&track_ids)
-    }
 
     /// Get health summary statistics.
     pub fn get_signal_summary(&self) -> Result<SignalSummary> {

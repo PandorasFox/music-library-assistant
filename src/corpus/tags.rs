@@ -167,6 +167,7 @@ impl TagSet {
     ///
     /// For single-value fields, this is THE value.
     /// For multi-value fields, this returns an arbitrary one.
+    #[cfg(test)]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values_for(key).next()
     }
@@ -177,11 +178,13 @@ impl TagSet {
     }
 
     /// Number of tag pairs (not unique keys).
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.tags.len()
     }
 
     /// True if no tags.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.tags.is_empty()
     }
@@ -192,6 +195,7 @@ impl TagSet {
     }
 
     /// Borrow as slice (for DB storage, etc).
+    #[cfg(test)]
     pub fn as_slice(&self) -> &[(String, String)] {
         &self.tags
     }
@@ -202,6 +206,7 @@ impl TagSet {
     /// - `only_left`: tags in self but not in other
     /// - `only_right`: tags in other but not in self
     /// - `common`: tags in both
+    #[cfg(test)]
     pub fn diff(&self, other: &TagSet) -> TagSetDiff {
         use std::collections::HashSet;
 
@@ -232,10 +237,11 @@ impl TagSet {
 }
 
 // =============================================================================
-// TagSetDiff - Result of comparing two TagSets
+// TagSetDiff - Result of comparing two TagSets (test-only)
 // =============================================================================
 
 /// Result of comparing two TagSets.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct TagSetDiff {
     /// Tags in the first set but not the second.
@@ -246,6 +252,7 @@ pub struct TagSetDiff {
     pub common: TagSet,
 }
 
+#[cfg(test)]
 impl TagSetDiff {
     /// True if the sets are identical (no differences).
     pub fn is_empty(&self) -> bool {
@@ -264,6 +271,7 @@ impl TagSetDiff {
 }
 
 /// Classification of tag differences between two sources.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffClassification {
     /// No differences - tags are identical.

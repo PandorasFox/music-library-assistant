@@ -65,28 +65,6 @@ impl BulkSelectionState {
         }
     }
 
-    /// Select all indices in the given range (0..total).
-    pub fn select_all(&mut self, total: usize) {
-        self.selected_indices = (0..total).collect();
-        if total > 0 {
-            self.mode = SelectionMode::Active;
-        }
-    }
-
-    /// Select all indices from a filtered view.
-    pub fn select_filtered(&mut self, filtered_indices: &[usize]) {
-        self.selected_indices.extend(filtered_indices.iter().copied());
-        if !filtered_indices.is_empty() {
-            self.mode = SelectionMode::Active;
-        }
-    }
-
-    /// Deselect all items and reset mode.
-    pub fn clear(&mut self) {
-        self.selected_indices.clear();
-        self.mode = SelectionMode::None;
-    }
-
     /// Toggle select all / deselect all for filtered view.
     ///
     /// If all filtered items are selected, deselects all filtered items.
@@ -187,24 +165,5 @@ mod tests {
         state.toggle(0);
         assert_eq!(state.marker(0), "[x]");
         assert_eq!(state.marker(1), "[ ]");
-    }
-
-    #[test]
-    fn test_select_all() {
-        let mut state = BulkSelectionState::new();
-        state.select_all(5);
-        assert_eq!(state.selection_count(), 5);
-        for i in 0..5 {
-            assert!(state.is_selected(i));
-        }
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut state = BulkSelectionState::new();
-        state.select_all(5);
-        state.clear();
-        assert!(!state.is_active());
-        assert_eq!(state.selection_count(), 0);
     }
 }

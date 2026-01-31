@@ -151,7 +151,7 @@ impl Computation {
 /// compile-time enforcement mechanism for phase boundaries.
 #[derive(Debug)]
 pub struct Result {
-    pub computation: Computation,
+    pub _computation: Computation,
     pub success: bool,
     pub error: Option<String>,
     pub duration_ms: u64,
@@ -162,7 +162,7 @@ pub struct Result {
 impl Result {
     pub fn success(computation: Computation, duration_ms: u64, spawn: Vec<Computation>) -> Self {
         Self {
-            computation,
+            _computation: computation,
             success: true,
             error: None,
             duration_ms,
@@ -172,7 +172,7 @@ impl Result {
 
     pub fn failure(computation: Computation, duration_ms: u64, error: String) -> Self {
         Self {
-            computation,
+            _computation: computation,
             success: false,
             error: Some(error),
             duration_ms,

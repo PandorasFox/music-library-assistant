@@ -361,7 +361,7 @@ impl TagCanonicalityState {
 
         // For each track, create a mutation only if its current value is a selected variant
         for &track_id in &self.data.track_ids {
-            if let Some((path, current_tagset)) = track_info.get(&track_id) {
+            if let Some((_path, current_tagset)) = track_info.get(&track_id) {
                 // Get current values for this tag from the TagSet
                 let current_values: Vec<&str> = current_tagset
                     .values_for(&self.data.tag_name)

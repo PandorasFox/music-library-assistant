@@ -1,26 +1,34 @@
 # Dead Code Cleanup Backlog
 
-Generated from cargo check warnings audit (2026-01-30). **112 warnings remaining** (started at 115).
+Generated from cargo check warnings audit (2026-01-30). **~85 warnings remaining** (started at 115).
 
 ---
 
-## Unused Variables (2 warnings)
+## Unused Variables - RESOLVED
 
-Quick fixes - prefix with underscore or use the value.
+**Resolved 2026-01-30:** Prefixed with underscore.
 
-| Location | Variable | Context |
-|----------|----------|---------|
-| `ui/compound_split/types.rs:124` | `path` | Destructured but unused in track_info lookup |
-| `ui/tag_canonicity/types.rs:364` | `path` | Destructured but unused in track_info lookup |
+- `ui/compound_split/types.rs:124` - `path` → `_path`
+- `ui/tag_canonicity/types.rs:364` - `path` → `_path`
 
 ---
 
 ## Category 1: Corpus Core - Computation/Mutation Infrastructure
 
+### Resolved Items
+
+**Resolved 2026-01-30:**
+- `ComputationResult.label` - removed (field was set but never read)
+- `computations/stats.rs` - removed `avg_db_read_us()`, `avg_task_ms()` methods
+- `corpus/deploy.rs` - removed `compute_deployment_path()` (superseded by `_with_tags` variant)
+- `corpus/paths.rs` - marked `root()`, `stash_dir()`, `is_stash_path()` as `#[cfg(test)]`
+- `corpus/tags.rs` - marked `get()`, `len()`, `is_empty()`, `as_slice()`, `diff()`, `TagSetDiff`, `DiffClassification` as `#[cfg(test)]`
+- Phase Result structs (`asleep/awakening/awake`) - renamed `computation` → `_computation` (72 call sites, field stored but unused after label removal)
+
+### Remaining
+
 | Location | Item | Notes |
 |----------|------|-------|
-| `computations/mod.rs:94` | `ComputationResult.label` | Field set but never read |
-| `computations/stats.rs:76` | `avg_db_read_us()`, `avg_task_ms()` | Stats methods never called |
 | `mutations/types.rs:35` | `ExtractedMetadata::from_track_with_tags`, `from_track`, `get_tag` | Construction helpers unused |
 | `mutations/types.rs:295` | `Mutation::is_db_only`, `requires_serial`, `affected_track_id`, `affected_directories` | Mutation introspection methods |
 | `mutations/types.rs:516` | `MutationResult.mutation`, `duration_ms` | Result fields unused |
@@ -44,13 +52,31 @@ Quick fixes - prefix with underscore or use the value.
 
 ## Category 3: Database Layer
 
-### Query Methods (Never Called)
+### tracks.rs - RESOLVED
 
-| Location | Methods |
-|----------|---------|
-| `db/queries/health.rs:572` | `get_signals_since`, `get_aggregate_signal_tracks` |
-| `db/queries/metadata.rs:52,232` | `get_tag_mismatches_for_track`, `get_oob_conflict_files` |
-| `db/queries/tracks.rs` | **28 methods**: `fingerprint_to_blob`, `insert_track`, `insert_track_with_tags`, `insert_track_with_tags_inner`, `clear_source`, `delete_track_by_path`, `delete_tracks_by_paths`, `get_all_tracks_for_source`, `log_scan`, `get_sources`, `get_tracks_by_fingerprint`, `get_tracks_by_inode`, `get_tracks_by_ids`, `get_tracks_by_metadata`, `get_library_tracks_by_source`, `get_tracks_by_paths`, `get_tracks_by_exact_paths`, `get_tracks_in_directory_with_fingerprint`, `get_duplicate_inodes_in_corpus`, `search_tracks_by_tag`, `set_track_tags`, `update_track_tag`, `delete_track_tag`, `get_track_tag_value`, `update_track_inode`, `update_track_path`, `delete_track`, `update_track_metadata`, `update_track_metadata_with_tags`, `get_tracks_needing_disk_flush` |
+**Resolved 2026-01-30:** Vestigial direct-mutation API removed.
+
+The old tracks.rs had ~1160 lines with 28+ dead methods - a mix of:
+- **Write methods** (insert/update/delete) - vestigial from before `db_thread::SignalWriteSender` migration
+- **Unused query methods** - forward-looking API that was never connected
+
+**Architectural context:** All writes now go through `SignalWriteSender` which enforces the operator-driven invariant via typed witness tokens. The old direct Database mutation methods were the pre-migration API.
+
+**After cleanup:** 500 lines, 20 query methods - all actively used:
+- Core track queries: `get_all_tracks`, `get_track_by_id`, `get_track_by_path`, `get_track_count`, `get_tracks_by_ids`, `get_tracks_by_corpus_path_prefix`, `get_tracks_for_tag_editing`, `get_all_track_inodes`
+- Tag queries: `get_track_tags`, `get_all_tracks_with_tags`, `get_track_ids_for_tag_values`
+- Format queries: `get_track_counts_by_file_type`, `get_tracks_by_file_types`
+- Aggregate queries for computations: `get_duplicate_fingerprint_groups`, `get_duplicate_inode_groups`, `get_tracks_with_tag_presence`, `get_all_track_tags_ordered`, `get_album_artist_data`
+- Helpers: `fingerprint_to_text`, `blob_to_fingerprint`, `row_to_track`
+
+UI code properly uses `ReadOnlyDb` wrapper (no `.inner()` calls needed). Computation executors use `&Database` directly in worker threads.
+
+### Query Methods - RESOLVED
+
+**Resolved 2026-01-30:** Removed unused query methods.
+
+- `db/queries/health.rs` - removed `get_signals_since`, `get_aggregate_signal_tracks`
+- `db/queries/metadata.rs` - removed `get_tag_mismatches_for_track`, `get_oob_conflict_files`
 
 ### Type Definitions (Fields Never Read)
 
@@ -66,13 +92,13 @@ Quick fixes - prefix with underscore or use the value.
 | `db/types.rs:652` | `CorpusSummary` | `track_count`, `deployment_stats`, `pending_changes`, `last_scan` |
 | `db/types.rs:724` | `CorpusFilesBucket` | `directory_breakdown` |
 | `db/types.rs:746` | `TagSquashEntry` | `total_tracks` |
-| `db/types.rs:751-752` | Type aliases | `TagResolutionBucket`, `TagResolutionEntry` |
+| `db/types.rs:751-752` | Type aliases | ~~`TagResolutionBucket`, `TagResolutionEntry`~~ REMOVED |
 | `db/types.rs:786` | `DirectoryBreakdown` | `entries` |
 | `db/types.rs:792` | `DirectoryBreakdownEntry` | `directory`, `count` |
 | `db/types.rs:808` | `DeploySignalFile` | `track_id` |
 | `db/types.rs:819` | `StaleSignalFile` | `corpus_path`, `track_id` |
 | `db/types.rs:866` | `TagMismatchEntry` | `db_values`, `disk_values` |
-| `db/types.rs:886` | `OobSignalFile` | Never constructed |
+| `db/types.rs:886` | `OobSignalFile` | ~~Never constructed~~ REMOVED |
 
 ---
 
@@ -81,7 +107,7 @@ Quick fixes - prefix with underscore or use the value.
 | Location | Item | Notes |
 |----------|------|-------|
 | `db_thread.rs:375` | `DbThreadStats` | Fields: `signal_writes`, `index_writes`, `queue_empty` |
-| `db_thread.rs:408` | `timing_enabled()` | Method never called |
+| `db_thread.rs:408` | `timing_enabled()` | ~~Method never called~~ REMOVED |
 
 ---
 
@@ -190,11 +216,13 @@ Quick fixes - prefix with underscore or use the value.
 
 ---
 
-## Category 12: Eye Animation
+## Category 12: Eye Animation - RESOLVED
 
-| Location | Item | Notes |
-|----------|------|-------|
-| `ui/eye.rs:110-254` | `Eye` methods | `animation_state`, `blink_just_completed`, `trigger_flutter` |
+**Resolved 2026-01-30:** Removed unused animation trigger methods.
+
+- `animation_state()` - removed
+- `blink_just_completed()` - removed
+- `trigger_flutter()` - removed
 
 ---
 
@@ -208,11 +236,13 @@ Quick fixes - prefix with underscore or use the value.
 
 ---
 
-## Category 14: Bulk Selection
+## Category 14: Bulk Selection - RESOLVED
 
-| Location | Item | Notes |
-|----------|------|-------|
-| `ui/bulk_selection/state.rs:69-85` | `BulkSelectionState` | `select_all`, `select_filtered`, `clear` |
+**Resolved 2026-01-30:** Removed unused selection methods (only used in tests, removed with tests).
+
+- `select_all()` - removed
+- `select_filtered()` - removed
+- `clear()` - removed
 
 ---
 
@@ -225,11 +255,11 @@ Quick fixes - prefix with underscore or use the value.
 
 ---
 
-## Category 16: Insights View
+## Category 16: Insights View - RESOLVED
 
-| Location | Item | Notes |
-|----------|------|-------|
-| `ui/insights_view/mod.rs:557` | `current_selection()` | Selection accessor |
+**Resolved 2026-01-30:** Marked test-only method.
+
+- `current_selection()` - marked `#[cfg(test)]`
 
 ---
 
@@ -286,7 +316,7 @@ Quick fixes - prefix with underscore or use the value.
 
 ### High Priority (Blocking Features)
 - ~~**Witch API** (Category 5): 14+ core methods unused~~ **RESOLVED** - dead API surface removed
-- **DB Query Layer** (Category 3): 28+ track query methods never called - entire track query API unused
+- ~~**DB Query Layer** (Category 3): 28+ track query methods never called~~ **RESOLVED** - vestigial mutation API removed, remaining 4 methods in health.rs/metadata.rs
 
 ### Medium Priority (Incomplete Features)
 - **Tree Browser** (Category 10): Directory browser partially built
@@ -306,3 +336,5 @@ Quick fixes - prefix with underscore or use the value.
 |------|----------|--------|-------|
 | 2026-01-30 (initial) | 115 | - | Initial audit |
 | 2026-01-30 (witch cleanup) | 112 | -3 | Removed 16 dead Witch API methods |
+| 2026-01-30 (tracks.rs cleanup) | 109 | -3 | Removed 28 vestigial methods, kept 20 active queries |
+| 2026-01-30 (low-priority sweep) | ~85 | -24 | Removed unused vars, stats methods, deploy helper, DB queries, type aliases, eye animation, bulk selection; marked test-only code with #[cfg(test)] |

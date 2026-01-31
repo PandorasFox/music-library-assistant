@@ -108,14 +108,6 @@ pub fn compute_deployment_path_with_tags(track: &Track, tags: &HashMap<String, S
     }
 }
 
-/// Compute deployment path (convenience wrapper that uses empty tags).
-///
-/// Note: This will produce fallback paths. For proper deployment paths,
-/// use `compute_deployment_path_with_tags` with tags loaded from track_tags table.
-pub fn compute_deployment_path(track: &Track) -> PathBuf {
-    compute_deployment_path_with_tags(track, &HashMap::new())
-}
-
 // ============================================================================
 // Tests
 // ============================================================================

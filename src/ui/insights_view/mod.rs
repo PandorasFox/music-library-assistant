@@ -553,7 +553,8 @@ impl InsightsViewState {
         self.cached_entries.entries_for(bucket).len()
     }
 
-    /// Get current bucket's selection state
+    /// Get current bucket's selection state (test-only)
+    #[cfg(test)]
     fn current_selection(&self) -> &BucketSelection {
         &self.bucket_selections[self.focused_bucket.index()]
     }

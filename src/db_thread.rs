@@ -404,11 +404,6 @@ impl DbThreadHandle {
         self.stats.queue_depth.load(Ordering::Relaxed)
     }
 
-    /// Check if timing instrumentation is enabled.
-    pub fn timing_enabled(&self) -> bool {
-        self.stats.timing_enabled
-    }
-
     /// Get current stats snapshot for UI display.
     /// Returns None if timing instrumentation is disabled.
     pub fn stats(&self) -> Option<DbThreadStats> {

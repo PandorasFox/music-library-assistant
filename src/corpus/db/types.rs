@@ -770,8 +770,6 @@ pub struct TagSquashEntry {
 
 // Aliases for compatibility
 pub type PlaceholderBucket = TagSquashBucket;
-pub type TagResolutionBucket = TagSquashBucket;
-pub type TagResolutionEntry = TagSquashEntry;
 
 /// Bucket 3: Library/Deploy state
 #[derive(Debug, Clone, Default)]
@@ -898,17 +896,6 @@ pub struct OobSyncFile {
     pub path: String,
     pub direction: OobSyncDirection,
     pub mismatches: Vec<TagMismatchEntry>,
-}
-
-/// A file with an OOB tag signal (conflict or sync).
-/// Lightweight — mismatch detail is computed on-demand from disk+DB tags,
-/// because the tag_mismatches table requires write access that computations
-/// (running on read-only connections) cannot provide.
-#[derive(Debug, Clone)]
-pub struct OobSignalFile {
-    pub track_id: i64,
-    /// Relative path (as stored in signals/tracks)
-    pub path: String,
 }
 
 /// Classification bucket for OOB signal files.

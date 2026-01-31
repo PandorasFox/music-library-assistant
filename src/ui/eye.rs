@@ -106,11 +106,6 @@ impl Eye {
     // Animation State Queries
     // ========================================================================
 
-    /// Get the current animation state.
-    pub fn animation_state(&self) -> EyeAnimationState {
-        self.state
-    }
-
     /// Get the current eye frame to display.
     ///
     /// Pure mapping from animation state to frame. Lifecycle checks are
@@ -123,16 +118,6 @@ impl Eye {
             EyeAnimationState::Closing | EyeAnimationState::FlutterClosing => EyeFrame::Closing,
             EyeAnimationState::Closed | EyeAnimationState::FlutterClosed => EyeFrame::Closed,
         }
-    }
-
-    /// Check if a blink just completed (for d20 roll trigger in UI).
-    ///
-    /// Returns true once per blink completion. Caller should check this
-    /// after calling `update()` to decide whether to roll d20.
-    pub fn blink_just_completed(&mut self) -> bool {
-        let completed = self.blink_completed;
-        self.blink_completed = false;
-        completed
     }
 
     // ========================================================================
@@ -245,17 +230,6 @@ impl Eye {
         self.state_start_time = now;
         self.next_blink_delay_secs = Self::random_blink_delay();
         self.blink_completed = true;
-    }
-
-    /// Trigger an immediate flutter blink sequence.
-    ///
-    /// Use this for visual feedback. The flutter consists of 3 rapid blinks
-    /// before returning to idle.
-    pub fn trigger_flutter(&mut self) {
-        self.current_blink_type = BlinkType::Flutter;
-        self.flutter_count = 2; // Will do 3 total (initial + 2 more)
-        self.state = EyeAnimationState::Closing;
-        self.state_start_time = Instant::now();
     }
 
     // ========================================================================

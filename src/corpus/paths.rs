@@ -64,6 +64,7 @@ impl PathResolver {
     }
 
     /// Get the archive root path.
+    #[cfg(test)]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -79,6 +80,7 @@ impl PathResolver {
     }
 
     /// Get the stash directory path.
+    #[cfg(test)]
     pub fn stash_dir(&self) -> PathBuf {
         self.root.join("stash")
     }
@@ -99,6 +101,7 @@ pub fn is_library_path(rel: &Path) -> bool {
 }
 
 /// Check if a root-relative path is a stash path.
+#[cfg(test)]
 pub fn is_stash_path(rel: &Path) -> bool {
     rel.starts_with("stash")
 }

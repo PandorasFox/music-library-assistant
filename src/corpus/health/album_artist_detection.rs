@@ -30,31 +30,6 @@ pub struct AlbumArtistIssue {
     pub album_artist_variants: HashMap<String, usize>,
 }
 
-impl AlbumArtistIssue {
-    /// Get the most common artist value (for pre-fill suggestions).
-    pub fn most_common_artist(&self) -> Option<&str> {
-        self.artist_variants
-            .iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(name, _)| name.as_str())
-    }
-
-    /// Get the most common album_artist value (may be empty string for missing).
-    pub fn most_common_album_artist(&self) -> Option<&str> {
-        self.album_artist_variants
-            .iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(name, _)| name.as_str())
-    }
-
-    /// Check if most tracks are missing album_artist.
-    pub fn mostly_missing_album_artist(&self) -> bool {
-        let missing_count = self.album_artist_variants.get("").copied().unwrap_or(0);
-        let total: usize = self.album_artist_variants.values().sum();
-        missing_count > total / 2
-    }
-}
-
 /// Detect albums needing album_artist resolution.
 ///
 /// Returns albums where:

@@ -372,12 +372,12 @@ impl SharedStats {
 #[derive(Debug, Clone, Default)]
 pub struct DbThreadStats {
     pub total_writes: u64,
-    pub signal_writes: u64,
-    pub index_writes: u64,
+    pub _signal_writes: u64,
+    pub _index_writes: u64,
     pub queue_depth: u64,
     pub avg_latency_us: u64,
     pub writes_per_sec: f64,
-    pub queue_empty: bool,
+    pub _queue_empty: bool,
 }
 
 /// Handle to the DB thread for stats access and shutdown coordination.
@@ -417,8 +417,8 @@ impl DbThreadHandle {
 
         Some(DbThreadStats {
             total_writes,
-            signal_writes: self.stats.signal_writes.load(Ordering::Relaxed),
-            index_writes: self.stats.index_writes.load(Ordering::Relaxed),
+            _signal_writes: self.stats.signal_writes.load(Ordering::Relaxed),
+            _index_writes: self.stats.index_writes.load(Ordering::Relaxed),
             queue_depth: self.stats.queue_depth.load(Ordering::Relaxed),
             avg_latency_us: if total_writes > 0 {
                 total_db_time_us / total_writes
@@ -430,7 +430,7 @@ impl DbThreadHandle {
             } else {
                 0.0
             },
-            queue_empty: self.stats.queue_empty.load(Ordering::Acquire),
+            _queue_empty: self.stats.queue_empty.load(Ordering::Acquire),
         })
     }
 }

@@ -22,9 +22,9 @@ pub struct TagCollision {
     /// Count per variant
     pub variant_counts: HashMap<String, usize>,
     /// Suggested canonical value (most common spelling)
-    pub canonical: String,
+    pub _canonical: String,
     /// Confidence score (ratio of canonical count to total)
-    pub confidence: f64,
+    pub _confidence: f64,
 }
 
 impl TagCollision {
@@ -51,8 +51,8 @@ impl TagCollision {
             normalized_key: normalized_key.to_string(),
             variants: variants.keys().cloned().collect(),
             variant_counts: variants.clone(),
-            canonical,
-            confidence,
+            _canonical: canonical,
+            _confidence: confidence,
         }
     }
 }

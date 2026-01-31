@@ -676,7 +676,7 @@ impl Database {
             corrupt_files,
             shit_format_files,
             file_type_breakdown,
-            directory_breakdown,
+            _directory_breakdown: directory_breakdown,
         })
     }
 
@@ -745,7 +745,7 @@ impl Database {
                 Ok(TagSquashEntry {
                     tag_name: row.get(0)?,
                     cluster_count: row.get(1)?,
-                    total_tracks: row.get::<_, i64>(2).unwrap_or(0) as usize,
+                    _total_tracks: row.get::<_, i64>(2).unwrap_or(0) as usize,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -855,13 +855,13 @@ impl Database {
 
         let entries = stmt.query_map(params![signal_type], |row| {
             Ok(DirectoryBreakdownEntry {
-                directory: row.get(0)?,
-                count: row.get(1)?,
+                _directory: row.get(0)?,
+                _count: row.get(1)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        Ok(DirectoryBreakdown { entries })
+        Ok(DirectoryBreakdown { _entries: entries })
     }
 
     // ========================================================================
@@ -910,7 +910,7 @@ impl Database {
             Ok(DeploySignalFile {
                 corpus_path: row.get(0)?,
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                track_id: row.get(2)?,
+                _track_id: row.get(2)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -941,7 +941,7 @@ impl Database {
             Ok(DeploySignalFile {
                 corpus_path: row.get(0)?,
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                track_id: row.get(2)?,
+                _track_id: row.get(2)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -972,8 +972,8 @@ impl Database {
             Ok(StaleSignalFile {
                 library_path: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 expected_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                corpus_path: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                track_id: row.get::<_, i64>(3).unwrap_or(0),
+                _corpus_path: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                _track_id: row.get::<_, i64>(3).unwrap_or(0),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1181,8 +1181,8 @@ impl Database {
                     corpus_path: row.get(0)?,
                     reason: row.get(1)?,
                     superior_path: row.get(2)?,
-                    quality_score: row.get(3)?,
-                    superior_quality_score: row.get(4)?,
+                    _quality_score: row.get(3)?,
+                    _superior_quality_score: row.get(4)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<SubparDuplicateEntry>>>()?;

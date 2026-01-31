@@ -43,12 +43,12 @@ impl Database {
 
         let entries = stmt.query_map(&params[..], |row| {
             Ok(ScanStateEntry {
-                source: row.get(0)?,
+                _source: row.get(0)?,
                 inode: row.get(1)?,
-                path: row.get(2)?,
+                _path: row.get(2)?,
                 mtime_secs: row.get(3)?,
                 mtime_nanos: row.get(4)?,
-                file_size: row.get(5)?,
+                _file_size: row.get(5)?,
             })
         })?;
 

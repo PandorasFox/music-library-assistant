@@ -21,7 +21,7 @@ pub struct CompoundTagValue {
     /// The parts after splitting (e.g., ["Rock", "Metal"])
     pub split_parts: Vec<String>,
     /// Number of tracks with this compound value
-    pub count: usize,
+    pub _count: usize,
 }
 
 impl CompoundTagValue {
@@ -67,7 +67,7 @@ pub fn detect_compound_values(
                     compound_value: value.clone(),
                     separator: separator.clone(),
                     split_parts,
-                    count,
+                    _count: count,
                 });
                 // Only report the first matching separator
                 break;

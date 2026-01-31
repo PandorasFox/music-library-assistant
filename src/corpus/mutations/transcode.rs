@@ -179,10 +179,10 @@ pub fn execute_single(
         } => (*track_id, source_path.clone(), *target_format),
         _ => {
             return MutationResult {
-                mutation: mutation.clone(),
+                _mutation: mutation.clone(),
                 success: false,
                 error: Some("Not a transcode mutation".to_string()),
-                duration_ms: start.elapsed().as_millis() as u64,
+                _duration_ms: start.elapsed().as_millis() as u64,
                 spawn_mutations: Vec::new(),
             };
         }
@@ -215,10 +215,10 @@ pub fn execute_single(
     };
 
     MutationResult {
-        mutation: mutation.clone(),
+        _mutation: mutation.clone(),
         success,
         error,
-        duration_ms: start.elapsed().as_millis() as u64,
+        _duration_ms: start.elapsed().as_millis() as u64,
         spawn_mutations,
     }
 }

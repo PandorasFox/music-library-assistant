@@ -40,12 +40,12 @@ pub struct TrackTag {
 /// Tracks inode + mtime to detect file changes.
 #[derive(Debug, Clone)]
 pub struct ScanStateEntry {
-    pub source: String,
+    pub _source: String,
     pub inode: i64,
-    pub path: String,
+    pub _path: String,
     pub mtime_secs: i64,
     pub mtime_nanos: i64, // SQLite INTEGER is i64; cast to u32 at comparison time
-    pub file_size: i64,
+    pub _file_size: i64,
 }
 
 /// Deployment statistics for corpus health tracking.
@@ -357,29 +357,6 @@ impl CorpusFileSignalType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "file_in_corpus" => Some(Self::FileInCorpus),
-            "unindexed_file" => Some(Self::UnindexedFile),
-            "healthy_file" => Some(Self::HealthyFile),
-            "missing_file" | "missing_from_disk" => Some(Self::MissingFile),
-            "corpus_file_modified_oob" | "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
-            "moved_file" | "file_relocated" => Some(Self::MovedFile),
-            "oob_tag_sync" => Some(Self::OutOfBandTagSync),
-            "oob_tag_conflict" => Some(Self::OutOfBandTagConflict),
-            "mtime_only_mismatch" => Some(Self::MtimeOnlyMismatch),
-            // Legacy: treat old "oob_tag" as conflict (conservative)
-            "oob_tag" => Some(Self::OutOfBandTagConflict),
-            "tag_parse_error" => Some(Self::TagParseError),
-            "waveform_read_error" => Some(Self::WaveformReadError),
-            "inode_changed" => Some(Self::InodeChanged),
-            "corrupt_file" => Some(Self::CorruptFile),
-            "shit_format" => Some(Self::ShitFormat),
-            "inferior_duplicate" => Some(Self::InferiorDuplicate),
-            _ => None,
-        }
-    }
-
     pub fn to_signal_type(&self) -> SignalType {
         match self {
             Self::FileInCorpus => SignalType::FileInCorpus,
@@ -432,16 +409,6 @@ impl LibraryFileSignalType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "library_leftover" => Some(Self::LibraryLeftover),
-            "library_stale" => Some(Self::LibraryStale),
-            "deploy_ready" => Some(Self::DeployReady),
-            "deployed_healthy" => Some(Self::DeployedHealthy),
-            _ => None,
-        }
-    }
-
     pub fn to_signal_type(&self) -> SignalType {
         match self {
             Self::LibraryLeftover => SignalType::LibraryLeftover,
@@ -476,16 +443,6 @@ impl FileSignalType {
             Self::Corpus(t) => t.as_str(),
             Self::Library(t) => t.as_str(),
         }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        if let Some(t) = CorpusFileSignalType::from_str(s) {
-            return Some(Self::Corpus(t));
-        }
-        if let Some(t) = LibraryFileSignalType::from_str(s) {
-            return Some(Self::Library(t));
-        }
-        None
     }
 
     /// Convert to SignalType for DB queries.
@@ -671,13 +628,13 @@ pub struct SignalSummary {
 /// Aggregated corpus summary for UI display.
 #[derive(Debug, Clone, Default)]
 pub struct CorpusSummary {
-    pub track_count: usize,
+    pub _track_count: usize,
     /// Number of unresolved deployment conflicts (tracks that would deploy to same path)
     pub deploy_conflicts: usize,
     pub signal_summary: SignalSummary,
-    pub deployment_stats: Option<DeploymentStats>,
-    pub pending_changes: HashMap<String, usize>,
-    pub last_scan: Option<String>,
+    pub _deployment_stats: Option<DeploymentStats>,
+    pub _pending_changes: HashMap<String, usize>,
+    pub _last_scan: Option<String>,
 
     // File-level stats (benign signals, shown separately from issues)
     /// Total files discovered in corpus directories
@@ -743,7 +700,7 @@ pub struct CorpusFilesBucket {
     /// Filetype breakdown for files_in_corpus
     pub file_type_breakdown: Vec<(String, usize)>,
     /// Directory-level aggregation for selected signal
-    pub directory_breakdown: DirectoryBreakdown,
+    pub _directory_breakdown: DirectoryBreakdown,
 }
 
 /// Bucket 2: Tag Squash - duplicates, tag canonicity, album_artist, and compound tag issues
@@ -769,7 +726,7 @@ pub struct TagSquashEntry {
     /// Number of clusters needing resolution
     pub cluster_count: usize,
     /// Total tracks affected (for ordering - higher = more important)
-    pub total_tracks: usize,
+    pub _total_tracks: usize,
 }
 
 // Aliases for compatibility
@@ -807,14 +764,14 @@ pub struct OtherSignalEntry {
 #[derive(Debug, Clone, Default)]
 pub struct DirectoryBreakdown {
     /// Sorted by count descending
-    pub entries: Vec<DirectoryBreakdownEntry>,
+    pub _entries: Vec<DirectoryBreakdownEntry>,
 }
 
 /// Single entry in directory breakdown
 #[derive(Debug, Clone)]
 pub struct DirectoryBreakdownEntry {
-    pub directory: String,
-    pub count: usize,
+    pub _directory: String,
+    pub _count: usize,
 }
 
 // ============================================================================
@@ -829,7 +786,7 @@ pub struct DeploySignalFile {
     /// Computed deploy path in library
     pub deploy_path: String,
     /// Track ID for mutation generation
-    pub track_id: i64,
+    pub _track_id: i64,
 }
 
 /// A stale library file (deployed path differs from expected).
@@ -840,9 +797,9 @@ pub struct StaleSignalFile {
     /// Expected path (computed from current tags)
     pub expected_path: String,
     /// Corpus file path (source)
-    pub corpus_path: String,
+    pub _corpus_path: String,
     /// Track ID for mutation generation
-    pub track_id: i64,
+    pub _track_id: i64,
 }
 
 /// A leftover file (in library but no corpus backing).
@@ -875,9 +832,9 @@ pub struct SubparDuplicateEntry {
     /// Path to the superior version
     pub superior_path: String,
     /// Quality score of this file
-    pub quality_score: i64,
+    pub _quality_score: i64,
     /// Quality score of the superior file
-    pub superior_quality_score: i64,
+    pub _superior_quality_score: i64,
 }
 
 // ============================================================================
@@ -906,9 +863,9 @@ pub struct TagMismatchEntry {
     /// Display string (values joined with "; ") - for UI
     pub disk_value: Option<String>,
     /// Individual tag values from DB (for mutations)
-    pub db_values: Vec<String>,
+    pub _db_values: Vec<String>,
     /// Individual tag values from disk (for mutations)
-    pub disk_values: Vec<String>,
+    pub _disk_values: Vec<String>,
 }
 
 /// A file with purely sync-direction tag mismatches (all extras in one direction).

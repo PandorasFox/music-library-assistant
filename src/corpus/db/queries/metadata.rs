@@ -171,8 +171,8 @@ impl Database {
                     disk_value: row.get(2)?,
                     // Individual values not available from tag_mismatches table
                     // (display-only context, mutations use live disk/DB reads)
-                    db_values: Vec::new(),
-                    disk_values: Vec::new(),
+                    _db_values: Vec::new(),
+                    _disk_values: Vec::new(),
                 })
             })?.filter_map(|r| r.ok()).collect();
 

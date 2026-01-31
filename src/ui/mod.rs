@@ -192,7 +192,7 @@ pub(crate) struct App {
     log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
 
     // Throughput tracking for rolling average (timestamp, bytes_processed)
-    throughput_samples: VecDeque<(Instant, u64)>,
+    _throughput_samples: VecDeque<(Instant, u64)>,
 
     // Eye animation
     eye: EyeAnimation,
@@ -204,42 +204,6 @@ pub(crate) struct App {
 }
 
 impl App {
-    fn new(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>) -> Self {
-        Self {
-            config,
-            should_quit: false,
-            status_message: None,
-            mode: UiMode::Insights,
-            tree_browser: None,
-            deployment_preview: None,
-            missing_file_preview: None,
-            tag_canonicity_state: None,
-            tag_canonicity_clusters: None,
-            compound_split_state: None,
-            compound_split_clusters: None,
-            oob_sync_state: None,
-            oob_conflict_state: None,
-            inode_changed_state: None,
-            transaction_review: None,
-            unified_tag_editor: None,
-            exit_confirm_modal_state: None,
-            progress_screen: None,
-            insights_view: None,
-            tag_search: None,
-            intake_confirmation: None,
-            format_std: None,
-            corrupt_file_preview: None,
-            shit_format_preview: None,
-            subpar_duplicate_preview: None,
-            witch: None,
-            log_rx: Some(log_rx),
-            throughput_samples: VecDeque::with_capacity(100),
-            eye: EyeAnimation::default(),
-            filter_popup_state: None,
-            filter_popup_context: None,
-        }
-    }
-
     /// Create a new App with a pre-existing Witch instance.
     ///
     /// Used when the Witch is created early (before migrations) and
@@ -273,7 +237,7 @@ impl App {
             subpar_duplicate_preview: None,
             witch: Some(witch),
             log_rx: None,  // Already consumed by Witch
-            throughput_samples: VecDeque::with_capacity(100),
+            _throughput_samples: VecDeque::with_capacity(100),
             eye: EyeAnimation::default(),
             filter_popup_state: None,
             filter_popup_context: None,

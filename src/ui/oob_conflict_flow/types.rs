@@ -406,8 +406,8 @@ pub fn compute_tag_diff(
                 db_value: db_display,
                 disk_value: disk_display,
                 // Store individual values for proper mutation generation
-                db_values: db_values.iter().map(|s| s.to_string()).collect(),
-                disk_values: disk_values.iter().map(|s| s.to_string()).collect(),
+                _db_values: db_values.iter().map(|s| s.to_string()).collect(),
+                _disk_values: disk_values.iter().map(|s| s.to_string()).collect(),
             });
         }
     }

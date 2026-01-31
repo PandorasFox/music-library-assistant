@@ -16,13 +16,13 @@ pub struct AudioMetadata {
     pub duration_ms: Option<i64>,
     pub bitrate_kbps: Option<i32>,
     pub sample_rate: Option<i32>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    pub title: Option<String>,
-    pub track_number: Option<i32>,
-    pub genre: Option<String>,
-    pub isrc: Option<String>,
+    pub _artist: Option<String>,
+    pub _album: Option<String>,
+    pub _album_artist: Option<String>,
+    pub _title: Option<String>,
+    pub _track_number: Option<i32>,
+    pub _genre: Option<String>,
+    pub _isrc: Option<String>,
 }
 
 pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
@@ -182,13 +182,13 @@ fn extract_audio_metadata(path: &Path) -> Result<AudioMetadata> {
         duration_ms,
         bitrate_kbps,
         sample_rate: sample_rate.map(|sr| sr as i32),
-        artist,
-        album,
-        album_artist,
-        title,
-        track_number,
-        genre,
-        isrc,
+        _artist: artist,
+        _album: album,
+        _album_artist: album_artist,
+        _title: title,
+        _track_number: track_number,
+        _genre: genre,
+        _isrc: isrc,
     })
 }
 

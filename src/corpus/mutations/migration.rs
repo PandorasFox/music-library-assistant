@@ -708,6 +708,7 @@ impl MigrationRegistry {
 
     /// Get fingerprint as text from BLOB for signal key compatibility.
     /// Used when we need to create signal keys that match the old text format.
+    #[cfg(test)]
     pub fn fingerprint_blob_to_text(blob: &[u8]) -> String {
         // BLOB is stored as little-endian u32 values
         blob.chunks_exact(4)
@@ -720,6 +721,7 @@ impl MigrationRegistry {
     }
 
     /// Convert fingerprint text to BLOB format.
+    #[cfg(test)]
     pub fn fingerprint_text_to_blob(text: &str) -> Vec<u8> {
         text.split(',')
             .filter_map(|s| s.trim().parse::<u32>().ok())
@@ -781,27 +783,6 @@ impl MigrationRegistry {
             .context(format!("Migration {} not found", migration_id))?;
 
         (migration.apply)(db)
-    }
-
-    /// Apply all pending migrations.
-    ///
-    /// Returns the number of migrations applied.
-    ///
-    /// Requires a `MigrationWitness` to prove this is being called from an
-    /// authorized migration context (either daemon execution or startup with
-    /// user approval).
-    pub fn apply_all_pending(&self, db: &Database, _witness: &MigrationWitness) -> Result<usize> {
-        let current = db.get_schema_version().unwrap_or(1);
-        let pending = self.pending_migrations(current);
-        let count = pending.len();
-
-        for migration in pending {
-            // Note: Consider adding logging here if needed
-            // For now, migrations are applied silently
-            (migration.apply)(db)?;
-        }
-
-        Ok(count)
     }
 }
 

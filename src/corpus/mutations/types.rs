@@ -62,28 +62,8 @@ pub struct ExtractedMetadata {
 }
 
 impl ExtractedMetadata {
-    /// Create ExtractedMetadata from a Track and tags.
-    ///
-    /// Tags must be provided separately since they're stored in track_tags table.
-    pub fn from_track_with_tags(track: &crate::corpus::db::Track, tags: Vec<(String, String)>) -> Self {
-        Self {
-            inode: track.inode,
-            file_size: track.file_size,
-            file_type: track.file_type.clone(),
-            duration_ms: track.duration_ms,
-            bitrate_kbps: track.bitrate_kbps,
-            sample_rate: track.sample_rate,
-            fingerprint: track.fingerprint.clone(),
-            tags,
-        }
-    }
-
-    /// Create ExtractedMetadata from a Track (without tags).
-    pub fn from_track(track: &crate::corpus::db::Track) -> Self {
-        Self::from_track_with_tags(track, Vec::new())
-    }
-
     /// Get a tag value by name.
+    #[cfg(test)]
     pub fn get_tag(&self, name: &str) -> Option<&str> {
         self.tags
             .iter()
@@ -325,6 +305,7 @@ impl Mutation {
     }
 
     /// Check if this mutation is database-only (no file system operations).
+    #[cfg(test)]
     pub fn is_db_only(&self) -> bool {
         matches!(
             self,
@@ -342,6 +323,7 @@ impl Mutation {
     }
 
     /// Check if this mutation requires serial execution (cannot be parallelized).
+    #[cfg(test)]
     pub fn requires_serial(&self) -> bool {
         matches!(self, Mutation::DbMigration { .. })
     }
@@ -349,6 +331,7 @@ impl Mutation {
     /// Get the track ID affected by this mutation, if any.
     ///
     /// Used to trigger health signal refresh after mutations.
+    #[cfg(test)]
     pub fn affected_track_id(&self) -> Option<i64> {
         match self {
             Mutation::SetTrackTagsDb { track_id, .. }
@@ -380,6 +363,7 @@ impl Mutation {
     ///
     /// After a mutation completes, signals in these directories may need
     /// to be recomputed (e.g., UnindexedFile → HealthyFile after indexing).
+    #[cfg(test)]
     pub fn affected_directories(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
 
@@ -779,10 +763,10 @@ impl Mutation {
 /// Result of executing a single mutation.
 #[derive(Debug)]
 pub struct MutationResult {
-    pub mutation: Mutation,
+    pub _mutation: Mutation,
     pub success: bool,
     pub error: Option<String>,
-    pub duration_ms: u64,
+    pub _duration_ms: u64,
     /// Follow-up mutations to queue (from spawn chaining).
     /// E.g., SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
     pub spawn_mutations: Vec<crate::witch::SpawnedMutation>,

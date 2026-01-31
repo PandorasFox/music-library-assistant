@@ -740,7 +740,7 @@ mod tests {
                 corrupt_files: 0,
                 shit_format_files: 0,
                 file_type_breakdown: vec![],
-                directory_breakdown: Default::default(),
+                _directory_breakdown: Default::default(),
             },
             bucket_placeholder: TagSquashBucket {
                 fingerprint_duplicate_count: 0,

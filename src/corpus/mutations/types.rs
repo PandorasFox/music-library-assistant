@@ -268,48 +268,26 @@ pub enum Mutation {
     // Computations don't alter state - they only emit signals.
 }
 
-/// Category for batching same-type operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MutationCategory {
-    TagEdit,
-    Indexing,
-    FileMove,
-    FileCopy,
-    Deployment,
-    Migration,
-    Transcode,
-}
-
 impl Mutation {
-    /// Get the category of this mutation for batching.
-    pub fn category(&self) -> MutationCategory {
+    /// Human-readable label for this mutation (for logging/display).
+    pub fn label(&self) -> &'static str {
         match self {
-            // Tag sync operations (write to disk)
-            Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. } => MutationCategory::TagEdit,
-
-            // SetTrackTagsDb is DB-only and fast, categorized with indexing
-            Mutation::SetTrackTagsDb { .. }
-            | Mutation::IndexTrack { .. }
-            | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateScanState { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateTrackPath { .. }
-            | Mutation::UpdateScanStatePath { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::UpdateTrack { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. } => MutationCategory::Indexing,
-
-            Mutation::Move { .. } | Mutation::MoveToStash { .. } => MutationCategory::FileMove,
-
-            Mutation::Copy { .. } => MutationCategory::FileCopy,
-
-            Mutation::HardLink { .. } | Mutation::LibraryMove { .. } => MutationCategory::Deployment,
-
-            Mutation::DbMigration { .. } => MutationCategory::Migration,
-
-            Mutation::Transcode { .. } => MutationCategory::Transcode,
+            Mutation::SetTrackTagsDb { .. } => "Tag edit (DB)",
+            Mutation::ApplyDbTagsToDisk { .. } => "Tag sync (DB→disk)",
+            Mutation::AssimilateDiskTagsToDb { .. } => "Tag sync (disk→DB)",
+            Mutation::IndexTrack { .. } | Mutation::IndexFileFromPath { .. } => "Indexing",
+            Mutation::UpdateScanState { .. } | Mutation::CleanupStaleScanState { .. } => "Scan state",
+            Mutation::UpdateTrackPath { .. } | Mutation::UpdateScanStatePath { .. } => "Path update",
+            Mutation::DropFromIndex { .. } => "Drop from index",
+            Mutation::UpdateTrack { .. } => "Track update",
+            Mutation::AcknowledgeMtimeOnly { .. } => "Acknowledge mtime",
+            Mutation::AcknowledgeInodeChanged { .. } => "Acknowledge inode",
+            Mutation::Move { .. } | Mutation::MoveToStash { .. } => "File move",
+            Mutation::Copy { .. } => "File copy",
+            Mutation::HardLink { .. } => "Hard link",
+            Mutation::LibraryMove { .. } => "Library move",
+            Mutation::DbMigration { .. } => "Migration",
+            Mutation::Transcode { .. } => "Transcode",
         }
     }
 
@@ -549,32 +527,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_mutation_category() {
+    fn test_mutation_labels() {
         let set_tags = Mutation::SetTrackTagsDb {
             track_id: 1,
             tags: vec![("artist".to_string(), "New".to_string())],
         };
-        assert_eq!(set_tags.category(), MutationCategory::Indexing);
+        assert_eq!(set_tags.label(), "Tag edit (DB)");
         assert!(set_tags.is_db_only());
 
         let apply_tags = Mutation::ApplyDbTagsToDisk {
             track_id: 1,
             path: PathBuf::from("/test/file.flac"),
         };
-        assert_eq!(apply_tags.category(), MutationCategory::TagEdit);
+        assert_eq!(apply_tags.label(), "Tag sync (DB→disk)");
         assert!(!apply_tags.is_db_only());
 
         let file_move = Mutation::Move {
             source: PathBuf::from("/a"),
             destination: PathBuf::from("/b"),
         };
-        assert_eq!(file_move.category(), MutationCategory::FileMove);
+        assert_eq!(file_move.label(), "File move");
 
         let migration = Mutation::DbMigration {
             migration_id: 3,
             description: "test".to_string(),
         };
-        assert_eq!(migration.category(), MutationCategory::Migration);
+        assert_eq!(migration.label(), "Migration");
         assert!(migration.is_db_only());
         assert!(migration.requires_serial());
     }

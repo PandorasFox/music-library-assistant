@@ -108,7 +108,7 @@ mod tests {
 
         // Verify SetTrackTagsDb mutations
         assert!(matches!(&mutations[0], Mutation::SetTrackTagsDb { track_id: 1, .. }));
-        assert_eq!(mutations[0].category(), MutationCategory::Indexing); // DB-only
+        assert_eq!(mutations[0].label(), "Tag edit (DB)");
         assert!(mutations[0].is_db_only());
 
         assert!(matches!(&mutations[1], Mutation::SetTrackTagsDb { track_id: 2, .. }));

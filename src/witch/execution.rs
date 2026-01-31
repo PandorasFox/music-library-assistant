@@ -71,13 +71,13 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
 /// All writes go through `db_thread::signal_sender()`. Read operations use
 /// the same thread-local cached connection as computations.
 pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> TaskResult {
-    use crate::corpus::mutations::{file_ops, tag_edit, indexing, MutationCategory};
+    use crate::corpus::mutations::{file_ops, tag_edit, indexing};
 
     let start = Instant::now();
 
     crate::logging::log_mutation(format!(
-        "[EXECUTION] execute_mutation START: {:?} (label={:?})",
-        mutation.category(), label
+        "[EXECUTION] execute_mutation START: {} (label={:?})",
+        mutation.label(), label
     ));
 
     // Create execution witness - proves we're inside the Witch's execution context
@@ -92,33 +92,54 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Execute mutation using thread-local read-only DB connection.
     // All writes go through db_thread::signal_sender() (fire-and-forget).
     // Result tuple: (success, error, spawn_mutations)
+    //
+    // Route directly by variant to the appropriate executor module.
     let result = with_read_only_db(|read_db| {
-        match mutation.category() {
-            MutationCategory::TagEdit => {
-                crate::logging::log_mutation(format!(
-                    "[EXECUTION] TagEdit mutation: {:?}",
-                    mutation
-                ));
+        match &mutation {
+            // Tag edit: DB write that spawns disk sync
+            Mutation::SetTrackTagsDb { .. } => {
                 let r = tag_edit::execute_single(read_db, &mutation, session_id, &witness);
                 (r.success, r.error, r.spawn_mutations)
             }
-            MutationCategory::FileMove | MutationCategory::FileCopy |
-            MutationCategory::Deployment => {
-                let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
-                (r.success, r.error, r.spawn_mutations)
-            }
-            MutationCategory::Indexing => {
+
+            // Indexing operations (including OOB tag sync which does disk I/O)
+            Mutation::IndexTrack { .. }
+            | Mutation::IndexFileFromPath { .. }
+            | Mutation::UpdateScanState { .. }
+            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateTrackPath { .. }
+            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::DropFromIndex { .. }
+            | Mutation::UpdateTrack { .. }
+            | Mutation::AcknowledgeMtimeOnly { .. }
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::ApplyDbTagsToDisk { .. }
+            | Mutation::AssimilateDiskTagsToDb { .. } => {
                 let r = indexing::execute_single(read_db, &mutation, &witness);
                 (r.success, r.error, r.spawn_mutations)
             }
-            MutationCategory::Migration => {
-                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new())
+
+            // File operations
+            Mutation::Move { .. }
+            | Mutation::Copy { .. }
+            | Mutation::MoveToStash { .. }
+            | Mutation::HardLink { .. }
+            | Mutation::LibraryMove { .. } => {
+                let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
+                (r.success, r.error, r.spawn_mutations)
             }
-            MutationCategory::Transcode => {
+
+            // Transcode
+            Mutation::Transcode { .. } => {
                 let r = crate::corpus::mutations::transcode::execute_single(
                     read_db, &mutation, stash_root.as_deref(), &witness,
                 );
                 (r.success, r.error, r.spawn_mutations)
+            }
+
+            // Migrations are handled separately (require write DB connection)
+            Mutation::DbMigration { .. } => {
+                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new())
             }
         }
     });

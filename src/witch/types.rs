@@ -322,23 +322,7 @@ pub struct TaskLabel(pub String);
 impl TaskLabel {
     /// Create label from a mutation (fallback if no explicit label provided).
     pub fn from_mutation(mutation: &Mutation) -> Self {
-        use crate::corpus::mutations::MutationCategory;
-        let label = match mutation.category() {
-            MutationCategory::TagEdit => "Tag edits",
-            MutationCategory::Indexing => match mutation {
-                Mutation::IndexTrack { .. } | Mutation::IndexFileFromPath { .. } => "Indexing tracks",
-                Mutation::DropFromIndex { .. } => "Dropping from index",
-                Mutation::UpdateTrack { .. } => "Updating tracks",
-                Mutation::UpdateTrackPath { .. } => "Updating paths",
-                _ => "Index operations",
-            },
-            MutationCategory::FileMove => "File moves",
-            MutationCategory::FileCopy => "File copies",
-            MutationCategory::Deployment => "Deployment",
-            MutationCategory::Migration => "Migrations",
-            MutationCategory::Transcode => "Transcoding",
-        };
-        Self(label.to_string())
+        Self(mutation.label().to_string())
     }
 
     /// Create label from a computation (fallback if no explicit label provided).

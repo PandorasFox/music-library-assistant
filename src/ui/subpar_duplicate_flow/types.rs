@@ -46,14 +46,8 @@ impl SubparDuplicateModalData {
         }
 
         // Get track info for each path
-        // Skip InferiorSampleRate for now - detection seems suspicious
         let mut files = Vec::new();
         for entry in subpar_entries {
-            // Skip sample rate comparisons for now
-            if entry.reason == "InferiorSampleRate" {
-                continue;
-            }
-
             // Get track info for this path
             let track = match read_db.get_track_by_path(&entry.corpus_path)? {
                 Some(t) => t,
@@ -66,6 +60,7 @@ impl SubparDuplicateModalData {
             // Convert reason to human-readable
             let reason = match entry.reason.as_str() {
                 "InferiorBitrate" => "Lower bitrate".to_string(),
+                "InferiorFormat" => "Worse format".to_string(),
                 other => other.to_string(),
             };
 

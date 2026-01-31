@@ -827,7 +827,7 @@ pub struct ConflictGroup {
 pub struct SubparDuplicateEntry {
     /// Path in the corpus (this is the subpar file)
     pub corpus_path: String,
-    /// Reason for being subpar (e.g., "InferiorBitrate", "InferiorSampleRate")
+    /// Reason for being subpar (e.g., "InferiorBitrate", "InferiorFormat")
     pub reason: String,
     /// Path to the superior version
     pub superior_path: String,

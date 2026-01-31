@@ -1449,15 +1449,13 @@ fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
 enum InferiorReason {
     InferiorFormat,
     InferiorBitrate,
-    InferiorSampleRate,
 }
 
 impl InferiorReason {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::InferiorFormat => "inferior_format",
-            Self::InferiorBitrate => "inferior_bitrate",
-            Self::InferiorSampleRate => "inferior_sample_rate",
+            Self::InferiorFormat => "InferiorFormat",
+            Self::InferiorBitrate => "InferiorBitrate",
         }
     }
 }
@@ -1634,11 +1632,9 @@ pub fn execute_analyze_fingerprint_duplicates(
                 for &(idx, score) in scored.iter().skip(1) {
                     let track = &cluster[idx];
 
-                    // Determine reason
+                    // Determine reason: format difference or bitrate/quality difference
                     let reason = if classify_format(&track.file_type) < classify_format(&best_track.file_type) {
                         InferiorReason::InferiorFormat
-                    } else if is_lossless(&track.file_type) {
-                        InferiorReason::InferiorSampleRate
                     } else {
                         InferiorReason::InferiorBitrate
                     };

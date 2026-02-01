@@ -1828,10 +1828,23 @@ pub fn execute_cluster_directory_overlaps(
             continue;
         }
 
-        // Build cluster key from sorted path suffixes
-        let mut sorted_suffixes: Vec<&str> = divergence.iter().map(|(s, _)| s.as_str()).collect();
-        sorted_suffixes.sort();
-        let cluster_key = sorted_suffixes.join("|");
+        // Extract first component of each divergent suffix for higher-level clustering
+        let first_comps: Vec<&str> = divergence
+            .iter()
+            .map(|(suffix, _)| extract_first_component(suffix))
+            .collect();
+
+        // Only emit for cross-directory patterns (multiple distinct first components)
+        let unique_comps: std::collections::HashSet<_> = first_comps.iter().copied().collect();
+        if unique_comps.len() < 2 {
+            // All paths diverge within same top-level dir - skip (future: emit different signal)
+            continue;
+        }
+
+        // Build cluster key from sorted & deduped first components
+        let mut sorted_comps: Vec<_> = unique_comps.into_iter().collect();
+        sorted_comps.sort();
+        let cluster_key = sorted_comps.join("|");
 
         // Add to cluster map
         let builder = cluster_map.entry(cluster_key.clone()).or_insert_with(|| {
@@ -1844,9 +1857,10 @@ pub fn execute_cluster_directory_overlaps(
         // Add fingerprint key
         builder.fingerprint_keys.push(signal.key.clone());
 
-        // Add track IDs to their respective directories
+        // Add track IDs to their respective directories, aggregated under first component
         for (suffix, track_ids_for_suffix) in divergence {
-            let dir_entry = builder.directories.entry(suffix).or_insert_with(Vec::new);
+            let first_comp = extract_first_component(&suffix).to_string();
+            let dir_entry = builder.directories.entry(first_comp).or_insert_with(Vec::new);
             for tid in track_ids_for_suffix {
                 if !dir_entry.contains(&tid) {
                     dir_entry.push(tid);
@@ -1964,4 +1978,9 @@ fn find_directory_divergence_with_tracks(path_track_pairs: &[(&str, i64)]) -> Ve
 
     // Convert to vec and return
     suffix_map.into_iter().collect()
+}
+
+/// Extract the first path component from a suffix.
+fn extract_first_component(suffix: &str) -> &str {
+    suffix.split('/').next().unwrap_or(suffix)
 }

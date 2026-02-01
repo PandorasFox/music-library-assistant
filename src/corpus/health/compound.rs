@@ -97,13 +97,13 @@ pub fn detect_all_compound_values(
 
 /// Get track IDs that have a specific compound tag value.
 ///
-/// Used when emitting signals to record which tracks are affected.
-pub fn get_track_ids_for_compound_value(
+/// Used when emitting signals to record which files are affected.
+pub fn get_inodes_for_compound_value(
     db: &Database,
     tag_name: &str,
     compound_value: &str,
 ) -> Result<Vec<i64>> {
-    db.get_track_ids_for_tag_values(tag_name, &[compound_value])
+    db.get_inodes_for_tag_values(tag_name, &[compound_value])
 }
 
 #[cfg(test)]

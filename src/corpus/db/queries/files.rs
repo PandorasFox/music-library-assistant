@@ -340,7 +340,7 @@ impl Database {
 
     /// Get duplicate fingerprint groups.
     /// Returns: Vec<(fingerprint_blob, comma_separated_inodes)>
-    pub fn get_duplicate_fingerprint_groups_new(&self) -> Result<Vec<(Vec<u8>, String)>> {
+    pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
         let query = "SELECT fingerprint, GROUP_CONCAT(inode) as inodes
                      FROM audio_info
                      WHERE fingerprint IS NOT NULL
@@ -352,6 +352,181 @@ impl Database {
             let fp_blob: Vec<u8> = row.get(0)?;
             let inodes_str: String = row.get(1)?;
             Ok((fp_blob, inodes_str))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get inode groups with duplicates (multiple paths for same inode).
+    /// Returns: Vec<(inode, comma_separated_paths)>
+    pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {
+        let query = r#"SELECT inode, GROUP_CONCAT(path) as paths
+                       FROM files
+                       WHERE is_dir = 0
+                       GROUP BY inode
+                       HAVING COUNT(*) > 1"#;
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let paths_str: String = row.get(1)?;
+            Ok((inode, paths_str))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get audio files with their present tag names (for missing tag detection).
+    /// Returns: Vec<(inode, path, album_or_none, comma_separated_lowercase_tags)>
+    pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
+        let query = r#"
+            SELECT f.inode, f.path,
+                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND LOWER(tag_name) = 'album' LIMIT 1) as album,
+                   GROUP_CONCAT(LOWER(ct.tag_name), ',') as present_tags
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            LEFT JOIN corpus_tags ct ON f.inode = ct.inode
+            WHERE f.is_dir = 0
+            GROUP BY f.inode
+        "#;
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get inodes that have any of the given tag values for a specific tag name.
+    pub fn get_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
+        let sql = format!(
+            r#"SELECT DISTINCT ct.inode FROM corpus_tags ct
+               INNER JOIN files f ON ct.inode = f.inode AND f.source = 'corpus'
+               WHERE ct.tag_name = ?1 AND ct.tag_value IN ({})"#,
+            placeholders.join(",")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 1);
+        params.push(&tag_name);
+        for v in values {
+            params.push(v);
+        }
+
+        let ids = stmt
+            .query_map(params.as_slice(), |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?;
+
+        Ok(ids)
+    }
+
+    /// Get all corpus audio file inodes mapped to their paths.
+    pub fn get_all_corpus_inodes(&self) -> Result<HashMap<i64, String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path FROM files WHERE source = 'corpus' AND is_dir = 0"
+        )?;
+
+        let mut result = HashMap::new();
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (inode, path) = row?;
+            result.insert(inode, path);
+        }
+
+        Ok(result)
+    }
+
+    /// Get all tags ordered by inode and tag name (for metadata duplicate detection).
+    /// Returns: Vec<(inode, tag_name, tag_value)>
+    pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
+        let query = r#"
+            SELECT f.inode, ct.tag_name, ct.tag_value
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            JOIN corpus_tags ct ON f.inode = ct.inode
+            WHERE f.is_dir = 0
+            ORDER BY f.inode, LOWER(ct.tag_name)
+        "#;
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection).
+    /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc)>
+    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
+        let sql = r#"
+            SELECT
+                f.inode,
+                COALESCE(album.tag_value, '') as album,
+                COALESCE(artist.tag_value, '') as artist,
+                COALESCE(album_artist.tag_value, '') as album_artist,
+                COALESCE(catalog.tag_value, '') as catalog_number,
+                COALESCE(isrc.tag_value, '') as isrc
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            LEFT JOIN corpus_tags album
+                ON f.inode = album.inode AND LOWER(album.tag_name) = 'album'
+            LEFT JOIN corpus_tags artist
+                ON f.inode = artist.inode AND LOWER(artist.tag_name) = 'artist'
+            LEFT JOIN corpus_tags album_artist
+                ON f.inode = album_artist.inode AND LOWER(album_artist.tag_name) = 'album_artist'
+            LEFT JOIN corpus_tags catalog
+                ON f.inode = catalog.inode AND LOWER(catalog.tag_name) = 'catalognumber'
+            LEFT JOIN corpus_tags isrc
+                ON f.inode = isrc.inode AND LOWER(isrc.tag_name) = 'isrc'
+            WHERE f.is_dir = 0 AND album.tag_value IS NOT NULL AND album.tag_value != ''
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
         })?;
 
         let mut results = Vec::new();

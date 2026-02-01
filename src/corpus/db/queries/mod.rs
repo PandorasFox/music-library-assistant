@@ -1,8 +1,7 @@
 //! Database operations and queries.
 //!
 //! All SQLite operations are organized into domain-specific submodules:
-//! - `files`: Low-level inode-based queries for files/audio_info/corpus_tags tables
-//! - `tracks`: Compatibility layer returning Track/TrackTag types (queries new schema)
+//! - `files`: Inode-based queries for files/audio_info/corpus_tags tables
 //! - `health`: Health issues, summaries
 //! - `metadata`: App metadata, tag canonicalization
 //! - `library_scan`: Library scanning state
@@ -12,7 +11,6 @@ pub mod files;
 mod health;
 mod library_scan;
 mod metadata;
-pub mod tracks;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};

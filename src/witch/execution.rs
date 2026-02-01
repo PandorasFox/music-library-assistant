@@ -420,8 +420,8 @@ fn emit_file_inherent_signals(mutation: &Mutation, witness: &MutationExecutionWi
             if let Some(rel) = resolver.to_relative(path) {
                 let rel_str = rel.to_string_lossy();
                 let _ = with_read_only_db(|read_db| {
-                    if let Ok(Some(track)) = read_db.get_track_by_path(&rel_str) {
-                        emit_signals_for_track(path, &track.fingerprint, &track.file_type, &sender, witness);
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_path(&rel_str) {
+                        emit_signals_for_track(path, &audio_file.audio.fingerprint, &audio_file.audio.file_type, &sender, witness);
                     }
                 });
             }

@@ -15,7 +15,7 @@ use crate::corpus::computations::helpers::{
     parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, LibraryFileSignalType, SignalType};
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSource, LibraryFileSignalType, SignalType};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::Database;
 use crate::db_thread;
@@ -275,13 +275,13 @@ pub fn execute_detect_missing_tags(
     // Clear all existing MissingTag signals (routes through db_thread)
     sender.clear_signals_by_type(SignalType::MissingTag, witness);
 
-    let tracks_with_tags = match read_only_db.get_tracks_with_tag_presence() {
+    let tracks_with_tags = match read_only_db.get_audio_files_with_tag_presence() {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query tracks with tag presence: {}", e),
+                format!("Failed to query files with tag presence: {}", e),
             );
         }
     };
@@ -377,13 +377,13 @@ pub fn execute_detect_metadata_duplicates(
     // Clear all MetadataDuplicate signals (routes through db_thread)
     sender.clear_signals_by_type(SignalType::MetadataDuplicate, witness);
 
-    let all_tags = match read_only_db.get_all_track_tags_ordered() {
+    let all_tags = match read_only_db.get_all_tags_ordered() {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query track tags: {}", e),
+                format!("Failed to query tags: {}", e),
             );
         }
     };
@@ -499,7 +499,7 @@ pub fn execute_detect_tag_canonicalizations(
             // Get track_ids for all variants in this collision
             let variant_refs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
             let track_ids = read_only_db
-                .get_track_ids_for_tag_values(&collision.tag_name, &variant_refs)
+                .get_inodes_for_tag_values(&collision.tag_name, &variant_refs)
                 .unwrap_or_default();
 
             // Build metadata JSON
@@ -562,7 +562,7 @@ pub fn execute_detect_compound_tag_values(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::health::compound::{detect_all_compound_values, get_track_ids_for_compound_value};
+    use crate::corpus::health::compound::{detect_all_compound_values, get_inodes_for_compound_value};
 
     let computation = Computation::DetectCompoundTagValues;
 
@@ -603,8 +603,8 @@ pub fn execute_detect_compound_tag_values(
     let mut signal_count = 0;
 
     for cv in compound_values {
-        // Get track IDs for this compound value
-        let track_ids = get_track_ids_for_compound_value(read_only_db, &cv.tag_name, &cv.compound_value)
+        // Get inodes for this compound value
+        let track_ids = get_inodes_for_compound_value(read_only_db, &cv.tag_name, &cv.compound_value)
             .unwrap_or_default();
 
         if track_ids.is_empty() {
@@ -683,30 +683,30 @@ pub fn execute_detect_shit_formats(
     // Clear all existing ShitFormat signals and rebuild
     sender.clear_signals_by_type(SignalType::ShitFormat, witness);
 
-    // Query all tracks and filter for shit formats
-    let tracks = match read_only_db.get_all_tracks(None) {
-        Ok(t) => t,
+    // Query all audio files and filter for shit formats
+    let audio_files = match read_only_db.get_all_audio_files(FileSource::Corpus) {
+        Ok(f) => f,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query tracks: {}", e),
+                format!("Failed to query audio files: {}", e),
             );
         }
     };
 
     let mut signal_count = 0;
 
-    for track in tracks {
-        let file_type_lower = track.file_type.to_lowercase();
+    for audio_file in audio_files {
+        let file_type_lower = audio_file.audio.file_type.to_lowercase();
         if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
             let metadata_json = serde_json::json!({
-                "file_type": track.file_type
+                "file_type": audio_file.audio.file_type
             }).to_string();
 
             sender.ensure_file_signal_with_metadata(
                 CorpusFileSignalType::ShitFormat.into(),
-                &track.path,
+                audio_file.path(),
                 Some(&metadata_json),
                 witness,
             );
@@ -862,8 +862,8 @@ pub fn execute_derive_deploy_health_signals(
         .map(|entry| (entry.file_path, entry.inode))
         .collect();
 
-    // Get all corpus track inodes
-    let corpus_inodes = read_only_db.get_all_track_inodes().unwrap_or_default();
+    // Get all corpus audio file inodes
+    let corpus_inodes = read_only_db.get_all_corpus_inodes().unwrap_or_default();
 
     let mut healthy_count: usize = 0;
     let mut stale_count: usize = 0;
@@ -1764,29 +1764,29 @@ pub fn execute_cluster_directory_overlaps(
             continue;
         }
 
-        // Get tracks for this overlap group
-        let tracks = match read_only_db.get_tracks_by_ids(&track_ids) {
-            Ok(t) => t,
+        // Get audio files for this overlap group
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids) {
+            Ok(f) => f,
             Err(_) => continue,
         };
 
-        if tracks.len() < 2 {
+        if audio_files.len() < 2 {
             continue;
         }
 
         // Get release identity info for filtering
         let mut identities: Vec<TrackReleaseIdentity> = Vec::new();
-        for track in &tracks {
-            let track_id = track.id.unwrap_or(0);
-            let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
+        for audio_file in &audio_files {
+            let inode = audio_file.inode();
+            let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
             let tag_map: HashMap<String, String> = tags
                 .into_iter()
                 .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
                 .collect();
 
             identities.push(TrackReleaseIdentity {
-                track_id,
-                path: track.path.clone(),
+                track_id: inode,
+                path: audio_file.path().to_string(),
                 album: tag_map.get("album").cloned().unwrap_or_default(),
                 title: tag_map.get("title").cloned().unwrap_or_default(),
                 isrc: tag_map.get("isrc").cloned().unwrap_or_default(),

@@ -301,9 +301,9 @@ pub fn execute_update_track(
         })?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Verify track exists (read-only check)
-    let _existing = db.get_track_by_path(&rel_path_str)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", rel_path_str))?;
+    // Verify audio file exists (read-only check)
+    let _existing = db.get_audio_file_by_path(&rel_path_str)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found: {}", rel_path_str))?;
 
     // Build TrackData from ExtractedMetadata
     let track_data = TrackData {
@@ -636,8 +636,8 @@ pub fn execute_apply_db_tags_to_disk(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Get DB tags and convert to TagSet
-    let db_tags = db.get_track_tags(track_id)?;
+    // Get DB tags and convert to TagSet (track_id == inode)
+    let db_tags = db.get_corpus_tags(track_id)?;
     let tag_set = TagSet::new(
         db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
     );
@@ -785,30 +785,28 @@ pub fn execute_clear_all_fingerprints(
 
 /// Execute ScheduleFingerprintRefill mutation.
 ///
-/// Queries all tracks and spawns a RefillSingleFingerprint mutation for each.
+/// Queries all audio files and spawns a RefillSingleFingerprint mutation for each.
 pub fn execute_schedule_fingerprint_refill(
     db: &Database,
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<crate::witch::SpawnedMutation>> {
     use crate::logging::log_general;
+    use crate::corpus::db::types::FileSource;
 
-    let tracks = db.get_all_tracks(None)?;
-    let count = tracks.len();
+    let audio_files = db.get_all_audio_files(FileSource::Corpus)?;
+    let count = audio_files.len();
 
     log_general(format!(
         "[MUTATION] ScheduleFingerprintRefill: spawning {} individual fingerprint mutations",
         count
     ));
 
-    let spawned: Vec<_> = tracks
+    let spawned: Vec<_> = audio_files
         .into_iter()
-        .filter_map(|track| {
-            // track.id is Option<i64> - skip tracks without IDs (shouldn't happen)
-            track.id.map(|id| {
-                witness.spawn_mutation(super::types::Mutation::RefillSingleFingerprint {
-                    track_id: id,
-                    path: track.path,
-                })
+        .map(|audio_file| {
+            witness.spawn_mutation(super::types::Mutation::RefillSingleFingerprint {
+                track_id: audio_file.inode(),
+                path: audio_file.entry.path,
             })
         })
         .collect();

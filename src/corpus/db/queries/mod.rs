@@ -538,11 +538,11 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
-    // Library Scan Queries
+    // Library File Queries
     // =========================================================================
 
-    /// Get all library scan entries.
-    pub fn get_library_scan_files_all(&self) -> Result<Vec<library_scan::LibraryScanEntry>> {
-        self.db.get_library_scan_files_all()
+    /// Get all library files.
+    pub fn get_all_library_files(&self) -> Result<Vec<library_scan::LibraryScanEntry>> {
+        self.db.get_all_library_files()
     }
 }

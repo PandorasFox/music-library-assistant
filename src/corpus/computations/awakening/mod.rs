@@ -74,7 +74,7 @@ pub enum Computation {
 
     /// Scan a single library directory.
     ///
-    /// Collects (path, inode) pairs and stores them in library_scan_state table.
+    /// Collects (path, inode) pairs and stores them in files table (source='library').
     /// Deploy health derivation happens in Awake phase.
     ScanLibraryDirectory {
         directory: PathBuf,

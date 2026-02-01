@@ -50,7 +50,7 @@ pub fn execute_schedule_content_analysis(
     ];
 
     // Also spawn DeriveDeployHealthSignals for each configured library
-    // The scan data was stored in library_scan_state during Awakening phase
+    // The scan data was stored in files table (source='library') during Awakening phase
     if let Ok(config) = crate::config::load_config() {
         let library_names = get_configured_library_names(&config);
         for library_name in library_names {
@@ -64,7 +64,7 @@ pub fn execute_schedule_content_analysis(
         }
     }
 
-    // Suppress unused read_only_db warning - will be used once library_scan_state is implemented
+    // Suppress unused read_only_db warning - not used in this function
     let _ = read_only_db;
 
     Result::success(
@@ -816,7 +816,7 @@ pub fn execute_detect_deploy_conflicts(
 
 /// Execute DeriveDeployHealthSignals - derive library health from scan data.
 ///
-/// Reads library scan data from library_scan_state table and compares against
+/// Reads library file data from files table (source='library') and compares against
 /// corpus index to identify leftovers and stale deployments.
 pub fn execute_derive_deploy_health_signals(
     read_only_db: &Database,
@@ -845,8 +845,8 @@ pub fn execute_derive_deploy_health_signals(
         }
     };
 
-    // Query library scan data from Awakening phase
-    let library_scan_entries = match read_only_db.get_library_scan_files(library_name) {
+    // Query library file data from Awakening phase
+    let library_scan_entries = match read_only_db.get_library_files(library_name) {
         Ok(entries) => entries,
         Err(e) => {
             log_general(format!(
@@ -965,7 +965,7 @@ pub fn execute_derive_deploy_health_signals(
 /// Execute DeriveCorpusDeployStatus - derive corpus-side deployment signals.
 ///
 /// For each HealthyFile signal, checks if the file's inode exists in any library
-/// (via library_scan_state) and emits:
+/// (via files table) and emits:
 /// - DeployReady: healthy file not in any library
 /// - DeployedHealthy: healthy file correctly deployed (in library, not stale)
 pub fn execute_derive_corpus_deploy_status(
@@ -991,8 +991,8 @@ pub fn execute_derive_corpus_deploy_status(
         .get_signals(Some(SignalType::HealthyFile))
         .unwrap_or_default();
 
-    // Build set of deployed inodes from library_scan_state
-    let deployed_inodes = read_only_db.get_all_library_scan_inodes().unwrap_or_default();
+    // Build set of deployed inodes from files table (source='library')
+    let deployed_inodes = read_only_db.get_all_library_inodes().unwrap_or_default();
 
     // Get set of stale library paths (files in library but at wrong path)
     // LibraryStale keys have format "library_stale:{library_name}:{library_path}"
@@ -1002,7 +1002,7 @@ pub fn execute_derive_corpus_deploy_status(
 
     // Build set of inodes that are deployed but stale
     let mut stale_inodes: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    if let Ok(all_library_files) = read_only_db.get_library_scan_files_all() {
+    if let Ok(all_library_files) = read_only_db.get_all_library_files() {
         for entry in all_library_files {
             // Check if this library file has a stale signal
             let is_stale = stale_signals.iter().any(|s| {

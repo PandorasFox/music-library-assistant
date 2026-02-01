@@ -13,7 +13,7 @@
 //! - Health signals (corpus file signals, aggregate signals, library signals)
 //! - Index operations (track inserts, updates, deletes)
 //! - Tag operations (edits, sets, history logging)
-//! - Scan state operations (upsert, mtime updates, cleanup)
+//! - File entry operations (upsert, mtime updates, cleanup)
 //!
 //! ## Witness Semantics
 //!
@@ -81,12 +81,12 @@ pub struct TrackData {
     pub fingerprint: Option<Vec<u32>>,
 }
 
-/// Scan state metadata for incremental scanning (legacy format).
+/// File entry data for files table operations.
 ///
-/// **DEPRECATED**: Use `FileData` instead. Scan state is now stored
-/// directly in the `files` table via mtime_* columns.
+/// Used for upsert operations that don't need full FileData (e.g., UpdateFileEntry).
+/// Contains the core file identity and mtime fields stored in the files table.
 #[derive(Debug, Clone)]
-pub struct ScanStateData {
+pub struct FileEntryData {
     pub inode: i64,
     pub mtime_secs: i64,
     pub mtime_nanos: i64,
@@ -176,11 +176,11 @@ enum SignalWriteOp {
     },
 
     // =========================================================================
-    // Library Scan State Operations (Awakening phase)
+    // Library File Operations (Awakening phase)
     // =========================================================================
 
-    /// Clear all scan state for a library before re-scanning.
-    ClearLibraryScanState {
+    /// Clear all files for a library before re-scanning.
+    ClearLibraryFiles {
         library_name: String,
     },
     /// Record a file discovered during library scanning.
@@ -203,9 +203,9 @@ enum SignalWriteOp {
     ClearSignalsByType {
         issue_type: SignalType,
     },
-    /// Update scan_state mtime for a file (after OOB verification).
+    /// Update file mtime in files table (after OOB verification).
     /// Uses (source, inode) as the unique key for reliable updates.
-    UpdateScanStateMtime {
+    UpdateFileMtime {
         source: String,
         inode: i64,
         mtime_secs: i64,
@@ -243,7 +243,7 @@ enum SignalWriteOp {
     },
 
     /// Drop file from index (file no longer exists or excluded).
-    /// Cascades to tags, scan_state, tag_edit_history.
+    /// Cascades to audio_info, corpus_tags/inbox_tags, tag_edit_history.
     DropFromIndex {
         path: String,
     },
@@ -284,14 +284,14 @@ enum SignalWriteOp {
     },
 
     // =========================================================================
-    // Scan State Operations (for mutations)
+    // File Entry Operations (for mutations)
     // =========================================================================
 
-    /// Upsert scan state entry.
-    UpsertScanState {
+    /// Upsert file entry in files table.
+    UpsertFileEntry {
         path: String,
         source: String,
-        scan_state: ScanStateData,
+        file_entry: FileEntryData,
     },
 
     /// Drop file from index by inode (removes from files table).
@@ -300,15 +300,15 @@ enum SignalWriteOp {
         inode: i64,
     },
 
-    /// Update scan state path (file moved/renamed).
-    UpdateScanStatePath {
+    /// Update file path in files table (file moved/renamed).
+    UpdateFilePath {
         source: String,
         inode: i64,
         new_path: String,
     },
 
-    /// Cleanup stale scan state entries (files no longer exist).
-    CleanupStaleScanState {
+    /// Cleanup stale file entries (files no longer exist).
+    CleanupStaleFiles {
         source: String,
         valid_inodes: Vec<i64>,
     },
@@ -575,13 +575,13 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
-    // Library Scan State Operations (Awakening phase)
+    // Library File Operations (Awakening phase)
     // =========================================================================
 
-    /// Clear all scan state for a library before re-scanning.
-    pub fn clear_library_scan_state(&self, library_name: &str, _witness: &ComputationWitness) {
+    /// Clear all files for a library before re-scanning.
+    pub fn clear_library_files(&self, library_name: &str, _witness: &ComputationWitness) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearLibraryScanState {
+        let _ = self.tx.send(SignalWriteOp::ClearLibraryFiles {
             library_name: library_name.to_string(),
         });
     }
@@ -626,9 +626,9 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::ClearSignalsByType { issue_type });
     }
 
-    /// Update scan_state mtime for a file (after OOB verification).
+    /// Update file mtime in files table (after OOB verification).
     /// Uses (source, inode) as the unique key for reliable updates.
-    pub fn update_scan_state_mtime(
+    pub fn update_file_mtime(
         &self,
         source: &str,
         inode: i64,
@@ -637,7 +637,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateScanStateMtime {
+        let _ = self.tx.send(SignalWriteOp::UpdateFileMtime {
             source: source.to_string(),
             inode,
             mtime_secs,
@@ -793,19 +793,19 @@ impl SignalWriteSender {
         });
     }
 
-    /// Upsert scan state entry.
-    pub fn upsert_scan_state(
+    /// Upsert file entry in files table.
+    pub fn upsert_file_entry(
         &self,
         path: &str,
         source: &str,
-        scan_state: ScanStateData,
+        file_entry: FileEntryData,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpsertScanState {
+        let _ = self.tx.send(SignalWriteOp::UpsertFileEntry {
             path: path.to_string(),
             source: source.to_string(),
-            scan_state,
+            file_entry,
         });
     }
 
@@ -823,8 +823,8 @@ impl SignalWriteSender {
         });
     }
 
-    /// Update scan state path (file moved/renamed).
-    pub fn update_scan_state_path(
+    /// Update file path in files table (file moved/renamed).
+    pub fn update_file_path(
         &self,
         source: &str,
         inode: i64,
@@ -832,22 +832,22 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateScanStatePath {
+        let _ = self.tx.send(SignalWriteOp::UpdateFilePath {
             source: source.to_string(),
             inode,
             new_path: new_path.to_string(),
         });
     }
 
-    /// Cleanup stale scan state entries (files no longer exist).
-    pub fn cleanup_stale_scan_state(
+    /// Cleanup stale file entries (files no longer exist).
+    pub fn cleanup_stale_files(
         &self,
         source: &str,
         valid_inodes: Vec<i64>,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::CleanupStaleScanState {
+        let _ = self.tx.send(SignalWriteOp::CleanupStaleFiles {
             source: source.to_string(),
             valid_inodes,
         });
@@ -1139,10 +1139,10 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        // Library scan state operations (Awakening phase)
-        SignalWriteOp::ClearLibraryScanState { library_name } => {
-            with_retry("clear_library_scan_state", library_name, || {
-                db.clear_library_scan_state(library_name, &witness).map(|_| ())
+        // Library file operations (Awakening phase)
+        SignalWriteOp::ClearLibraryFiles { library_name } => {
+            with_retry("clear_library_files", library_name, || {
+                db.clear_library_files(library_name, &witness).map(|_| ())
             });
         }
         SignalWriteOp::RecordLibraryFile {
@@ -1185,7 +1185,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
             });
         }
-        SignalWriteOp::UpdateScanStateMtime {
+        SignalWriteOp::UpdateFileMtime {
             source,
             inode,
             mtime_secs,
@@ -1285,9 +1285,9 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::UpsertScanState { path, source, scan_state } => {
-            with_retry("upsert_scan_state", path, || {
-                execute_upsert_scan_state(db, path, source, scan_state)
+        SignalWriteOp::UpsertFileEntry { path, source, file_entry } => {
+            with_retry("upsert_file_entry", path, || {
+                execute_upsert_file_entry(db, path, source, file_entry)
             });
         }
 
@@ -1297,13 +1297,13 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::UpdateScanStatePath { source, inode, new_path } => {
+        SignalWriteOp::UpdateFilePath { source, inode, new_path } => {
             with_retry("update_file_path", new_path, || {
                 db.update_file_path(source, *inode, new_path, &witness)
             });
         }
 
-        SignalWriteOp::CleanupStaleScanState { source, valid_inodes } => {
+        SignalWriteOp::CleanupStaleFiles { source, valid_inodes } => {
             with_retry("cleanup_stale_files", source, || {
                 let valid_set: std::collections::HashSet<i64> = valid_inodes.iter().copied().collect();
                 db.cleanup_stale_files(source, &valid_set, &witness).map(|_| ())
@@ -1713,13 +1713,12 @@ fn execute_update_track_path_with_metadata(
     Ok(())
 }
 
-/// Execute UpsertScanState: update file mtime in files table.
-/// The scan_state is now stored directly in the files table.
-fn execute_upsert_scan_state(
+/// Execute UpsertFileEntry: insert or update file entry in files table.
+fn execute_upsert_file_entry(
     db: &Database,
     path: &str,
     source: &str,
-    scan_state: &ScanStateData,
+    file_entry: &FileEntryData,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1729,7 +1728,7 @@ fn execute_upsert_scan_state(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    // Upsert into files table (scan state is now part of files)
+    // Upsert into files table
     db.conn().execute(
         r#"
         INSERT INTO files (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
@@ -1741,12 +1740,12 @@ fn execute_upsert_scan_state(
             scanned_at = excluded.scanned_at
         "#,
         params![
-            scan_state.inode,
+            file_entry.inode,
             source,
             path,
-            scan_state.mtime_secs,
-            scan_state.mtime_nanos,
-            scan_state.file_size,
+            file_entry.mtime_secs,
+            file_entry.mtime_nanos,
+            file_entry.file_size,
             scanned_at,
         ],
     )?;

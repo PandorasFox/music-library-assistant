@@ -8,7 +8,7 @@
 //! 2. Transcode via ffmpeg subprocess
 //! 3. Stash original file under stash_name
 //! 4. Update track record (path, inode, file_size, file_type)
-//! 5. Update scan_state entry
+//! 5. Update files table entry
 //! 6. Spawn AssimilateDiskTagsToDb to sync tags from new file to index
 
 use anyhow::{Context, Result};
@@ -114,7 +114,7 @@ fn execute_transcode(
         ))?;
 
     // Get signal_sender for DB writes
-    use crate::db_thread::{self, ScanStateData};
+    use crate::db_thread::{self, FileEntryData};
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
@@ -132,24 +132,24 @@ fn execute_transcode(
         witness,
     );
 
-    // Update scan_state: upsert new entry for new file
+    // Update files table: upsert new entry for new file
     let mtime_secs = fs_metadata.mtime();
     let mtime_nanos = fs_metadata.mtime_nsec();
 
-    let scan_state = ScanStateData {
+    let file_entry = FileEntryData {
         inode: new_inode,
         mtime_secs,
         mtime_nanos,
         file_size: new_file_size,
     };
-    sender.upsert_scan_state(
+    sender.upsert_file_entry(
         &relative_path_str,
         &existing_track.source,
-        scan_state,
+        file_entry,
         witness,
     );
 
-    // Delete old scan_state entry if inode changed (which it will, since it's a new file)
+    // Delete old files table entry if inode changed (which it will, since it's a new file)
     if existing_track.inode != new_inode {
         sender.drop_file_index_by_inode(&existing_track.source, existing_track.inode, witness);
     }

@@ -122,10 +122,10 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             // Indexing operations (including OOB tag sync which does disk I/O)
             Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateScanState { .. }
-            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateFileEntry { .. }
+            | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateTrackPath { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::DropFromIndex { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }

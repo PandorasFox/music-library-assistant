@@ -63,7 +63,7 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
         }
     };
 
-    // Note: Tag fields (artist, album, title, etc.) are stored separately in track_tags table.
+    // Note: Tag fields (artist, album, title, etc.) are stored separately in corpus_tags table.
     // Use corpus::tags::TagSet::from_file() to get tags from the file if needed.
     Ok(Track {
         id: None,

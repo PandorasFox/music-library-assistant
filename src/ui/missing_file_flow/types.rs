@@ -13,7 +13,7 @@ use crate::corpus::paths;
 
 /// A missing corpus file that can be restored from library.
 ///
-/// The same inode exists in library_scan_state, meaning we can
+/// The same inode exists in the files table (source='library'), meaning we can
 /// hard-link from library back to corpus.
 #[derive(Debug, Clone)]
 pub struct RestorableMissingFile {
@@ -54,7 +54,7 @@ pub struct MissingFileModalData {
 impl MissingFileModalData {
     /// Load and categorize missing files from the database.
     ///
-    /// A file is restorable if its inode exists in library_scan_state.
+    /// A file is restorable if its inode exists in the files table (source='library').
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
         // Step 1: Get all MissingFile signals (issue_key = corpus path)
         let missing_paths = read_db.get_missing_file_paths()?;
@@ -63,8 +63,8 @@ impl MissingFileModalData {
             return Ok(Self::default());
         }
 
-        // Step 2: Build inode -> library_path map from library_scan_state
-        let library_files = read_db.get_library_scan_files_all()?;
+        // Step 2: Build inode -> library_path map from files table (library source)
+        let library_files = read_db.get_all_library_files()?;
         let inode_to_library: HashMap<i64, String> = library_files
             .into_iter()
             .map(|e| (e.inode, e.file_path.to_string_lossy().to_string()))

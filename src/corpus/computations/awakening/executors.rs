@@ -361,9 +361,9 @@ pub fn execute_walk_library(
         );
     }
 
-    // Clear previous scan state for this library before re-scanning
+    // Clear previous files for this library before re-scanning
     // Routes through db_thread which has write access
-    sender.clear_library_scan_state(library_name, witness);
+    sender.clear_library_files(library_name, witness);
 
     let (directories, _symlink_count) = enumerate_all_directories(library_root);
 
@@ -387,7 +387,7 @@ pub fn execute_walk_library(
     Result::success(computation, start.elapsed().as_millis() as u64, spawn)
 }
 
-/// Scan a single library directory and store results in library_scan_state table.
+/// Scan a single library directory and store results in files table.
 ///
 /// The actual deploy health derivation (comparing against corpus) happens in
 /// the Awake phase via DeriveDeployHealthSignals.

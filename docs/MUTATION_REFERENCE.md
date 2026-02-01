@@ -98,13 +98,13 @@ ClearAllFingerprints
 - Tracks that succeed clear any existing `CorruptFile` signal
 - Each mutation succeeds regardless of fingerprint outcome (corruption is a result, not an error)
 
-### Scan State Operations
+### File Entry Operations
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| UpdateScanState | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update scan_state entry |
-| UpdateScanStatePath | — | — | — | Update path in scan_state |
-| CleanupStaleScanState | — | — | — | Remove orphaned scan_state |
+| UpdateFileEntry | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update file entry in files table |
+| UpdateFilePath | — | — | — | Update path in files table |
+| CleanupStaleFiles | — | — | — | Remove orphaned file entries |
 
 ### File Operations
 
@@ -127,8 +127,8 @@ ClearAllFingerprints
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| AcknowledgeMtimeOnly | UpdateCorpusFileSignals | — | MtimeOnlyMismatch | Update scan_state mtime, acknowledge touch |
-| AcknowledgeInodeChanged | UpdateCorpusFileSignals | — | InodeChanged | Update tracks.inode and scan_state for replaced files |
+| AcknowledgeMtimeOnly | UpdateCorpusFileSignals | — | MtimeOnlyMismatch | Update file mtime, acknowledge touch |
+| AcknowledgeInodeChanged | UpdateCorpusFileSignals | — | InodeChanged | Update tracks.inode and files table for replaced files |
 
 Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutations documented in Tag Operations above. They clear OutOfBandTagSync, OutOfBandTagConflict, and tag_mismatch signals.
 

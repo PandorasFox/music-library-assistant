@@ -56,7 +56,7 @@ pub enum Computation {
     /// Walk and scan a single directory subtree.
     ///
     /// Walks the directory recursively, collects disk state, and compares
-    /// against scan_state. Creates FileInCorpus signals and spawns
+    /// against files table. Creates FileInCorpus signals and spawns
     /// mtime/tag verification as needed.
     ScanCorpusDirectory {
         directory: PathBuf,

@@ -116,8 +116,8 @@ pub enum Mutation {
         source: String,
     },
 
-    /// Update scan state entry for incremental scanning.
-    UpdateScanState {
+    /// Update file entry for incremental scanning.
+    UpdateFileEntry {
         source: String,
         inode: u64,
         mtime_secs: i64,
@@ -126,8 +126,8 @@ pub enum Mutation {
         path: PathBuf,
     },
 
-    /// Cleanup stale scan state entries (files that no longer exist).
-    CleanupStaleScanState {
+    /// Cleanup stale file entries (files that no longer exist).
+    CleanupStaleFiles {
         source: String,
         valid_inodes: Vec<u64>,
     },
@@ -204,8 +204,8 @@ pub enum Mutation {
         new_path: PathBuf,
     },
 
-    /// Update scan state path (for relocated files).
-    UpdateScanStatePath {
+    /// Update file path in files table (for relocated files).
+    UpdateFilePath {
         source: String,
         inode: i64,
         new_path: PathBuf,
@@ -215,7 +215,7 @@ pub enum Mutation {
     DropFromIndex {
         track_id: i64,
         path: PathBuf,
-        /// Also remove scan_state entry for this inode
+        /// Also remove files table entry for this inode
         inode: Option<i64>,
         source: Option<String>,
     },
@@ -230,19 +230,19 @@ pub enum Mutation {
     // ========================================================================
     // OOB Resolution Operations
     // ========================================================================
-    /// Acknowledge mtime-only change - update scan_state, clear MtimeOnlyMismatch signal.
+    /// Acknowledge mtime-only change - update file mtime, clear MtimeOnlyMismatch signal.
     ///
-    /// Used when disk file mtime changed but tags are identical. Updates scan_state
+    /// Used when disk file mtime changed but tags are identical. Updates file mtime
     /// to match current disk mtime so file is considered synced.
     AcknowledgeMtimeOnly {
         /// Track IDs with their absolute paths: (track_id, abs_path)
         tracks: Vec<(i64, PathBuf)>,
     },
 
-    /// Acknowledge inode change - update track.inode and scan_state, clear InodeChanged signal.
+    /// Acknowledge inode change - update track.inode and files table, clear InodeChanged signal.
     ///
     /// Used when a file was replaced (same path, different inode). Updates the stored
-    /// inode to match disk and refreshes scan_state. Tag differences are handled separately
+    /// inode to match disk and refreshes file entry. Tag differences are handled separately
     /// through the OOB tag resolution flow.
     AcknowledgeInodeChanged {
         /// Track IDs with their absolute paths: (track_id, abs_path)
@@ -253,9 +253,9 @@ pub enum Mutation {
     ///
     /// - Reads tags from database (source of truth)
     /// - Writes to disk via write_file_tags()
-    /// - Updates mtime in scan_state after write
+    /// - Updates file mtime after write
     /// - Clears needs_disk_flush flag
-    /// - Clears OOB signals and tag_mismatches
+    /// - Clears OOB signals
     ///
     /// Used for:
     /// - OOB sync resolution (reject disk changes)
@@ -269,8 +269,8 @@ pub enum Mutation {
     ///
     /// - Reads tags from disk file
     /// - Writes to database, overwriting DB values
-    /// - Updates mtime in scan_state to match disk
-    /// - Clears OOB signals and tag_mismatches
+    /// - Updates file mtime to match disk
+    /// - Clears OOB signals
     ///
     /// Used for OOB sync resolution (accept disk changes).
     AssimilateDiskTagsToDb {
@@ -322,8 +322,8 @@ impl Mutation {
             Mutation::ApplyDbTagsToDisk { .. } => "Tag sync (DB→disk)",
             Mutation::AssimilateDiskTagsToDb { .. } => "Tag sync (disk→DB)",
             Mutation::IndexTrack { .. } | Mutation::IndexFileFromPath { .. } => "Indexing",
-            Mutation::UpdateScanState { .. } | Mutation::CleanupStaleScanState { .. } => "Scan state",
-            Mutation::UpdateTrackPath { .. } | Mutation::UpdateScanStatePath { .. } => "Path update",
+            Mutation::UpdateFileEntry { .. } | Mutation::CleanupStaleFiles { .. } => "File entry",
+            Mutation::UpdateTrackPath { .. } | Mutation::UpdateFilePath { .. } => "Path update",
             Mutation::DropFromIndex { .. } => "Drop from index",
             Mutation::UpdateTrack { .. } => "Track update",
             Mutation::AcknowledgeMtimeOnly { .. } => "Acknowledge mtime",
@@ -346,10 +346,10 @@ impl Mutation {
         matches!(
             self,
             Mutation::SetTrackTagsDb { .. }
-                | Mutation::CleanupStaleScanState { .. }
+                | Mutation::CleanupStaleFiles { .. }
                 | Mutation::DbMigration { .. }
                 | Mutation::UpdateTrackPath { .. }
-                | Mutation::UpdateScanStatePath { .. }
+                | Mutation::UpdateFilePath { .. }
                 | Mutation::DropFromIndex { .. }
                 | Mutation::UpdateTrack { .. }
                 | Mutation::AcknowledgeMtimeOnly { .. }
@@ -379,10 +379,10 @@ impl Mutation {
             // These don't have a single track_id directly (batch operations or no track)
             Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateScanState { .. }
-            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateFileEntry { .. }
+            | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateTrackPath { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::DropFromIndex { .. }
             | Mutation::Move { .. }
             | Mutation::Copy { .. }
@@ -421,12 +421,12 @@ impl Mutation {
             // Indexing operations affect the file's directory
             Mutation::IndexTrack { path, .. }
             | Mutation::IndexFileFromPath { path, .. }
-            | Mutation::UpdateScanState { path, .. } => {
+            | Mutation::UpdateFileEntry { path, .. } => {
                 if let Some(parent) = path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
-            Mutation::CleanupStaleScanState { .. } => {
+            Mutation::CleanupStaleFiles { .. } => {
                 // Affects multiple paths, but we don't track which ones
                 // Signal recomputation will happen naturally on next eyeball
             }
@@ -466,8 +466,8 @@ impl Mutation {
                     dirs.push(parent.to_path_buf());
                 }
             }
-            // UpdateScanStatePath only has new_path (old path not tracked)
-            Mutation::UpdateScanStatePath { new_path, .. } => {
+            // UpdateFilePath only has new_path (old path not tracked)
+            Mutation::UpdateFilePath { new_path, .. } => {
                 if let Some(parent) = new_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
@@ -519,7 +519,7 @@ impl Mutation {
             // Indexing: the file being indexed
             Mutation::IndexTrack { path, .. }
             | Mutation::IndexFileFromPath { path, .. }
-            | Mutation::UpdateScanState { path, .. } => vec![path.clone()],
+            | Mutation::UpdateFileEntry { path, .. } => vec![path.clone()],
 
             // Tag operations: single-track mutations with path
             Mutation::ApplyDbTagsToDisk { path, .. }
@@ -564,9 +564,9 @@ impl Mutation {
 
             // Operations without specific file paths that need signal updates
             Mutation::SetTrackTagsDb { .. }
-            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::CleanupStaleFiles { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
@@ -605,13 +605,13 @@ impl Mutation {
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateScanState { .. } => SignalClearScope::MutableOnly,
+            | Mutation::UpdateFileEntry { .. } => SignalClearScope::MutableOnly,
 
             // No signal clearing (DB-only or no file impact)
             Mutation::SetTrackTagsDb { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::CleanupStaleFiles { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => SignalClearScope::None,
@@ -632,7 +632,7 @@ impl Mutation {
             // Most mutations: use affected_paths equivalent
             Mutation::IndexTrack { path, .. }
             | Mutation::IndexFileFromPath { path, .. }
-            | Mutation::UpdateScanState { path, .. }
+            | Mutation::UpdateFileEntry { path, .. }
             | Mutation::MoveToStash { path, .. }
             | Mutation::DropFromIndex { path, .. }
             | Mutation::UpdateTrack { path, .. }
@@ -658,8 +658,8 @@ impl Mutation {
             // No signal updates needed
             Mutation::SetTrackTagsDb { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::CleanupStaleFiles { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
@@ -695,10 +695,10 @@ impl Mutation {
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateScanState { .. }
+            | Mutation::UpdateFileEntry { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::CleanupStaleFiles { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => Some(false),
@@ -733,10 +733,10 @@ impl Mutation {
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateScanState { .. }
+            | Mutation::UpdateFileEntry { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::CleanupStaleFiles { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => Some(""),
@@ -777,10 +777,10 @@ impl Mutation {
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateScanState { .. }
+            | Mutation::UpdateFileEntry { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::CleanupStaleFiles { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
         }
@@ -819,10 +819,10 @@ impl Mutation {
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateScanState { .. }
+            | Mutation::UpdateFileEntry { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleScanState { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::CleanupStaleFiles { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => Vec::new(),

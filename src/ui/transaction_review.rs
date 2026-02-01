@@ -216,13 +216,13 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
             | Mutation::Move { .. }
             | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateScanState { .. }
-            | Mutation::CleanupStaleScanState { .. }
+            | Mutation::UpdateFileEntry { .. }
+            | Mutation::CleanupStaleFiles { .. }
             | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateScanStatePath { .. }
+            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill => {}
         }

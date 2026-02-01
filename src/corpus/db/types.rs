@@ -127,13 +127,13 @@ pub struct AudioTag {
 // ============================================================================
 
 /// Universal audio file representation.
-/// Stored in the `tracks` table.
 ///
 /// Contains ONLY file and audio waveform metadata.
-/// Tag metadata (artist, title, album, etc.) is stored in `track_tags` table.
+/// Tag metadata (artist, title, album, etc.) is stored in `corpus_tags` table.
 ///
 /// **DEPRECATED**: Use `AudioFile` instead. This type is retained for
-/// compatibility during the schema migration.
+/// compatibility during the schema migration. Queries the `files` and
+/// `audio_info` tables via the compatibility layer in tracks.rs.
 #[derive(Debug, Clone)]
 pub struct Track {
     pub id: Option<i64>,
@@ -173,9 +173,9 @@ impl Track {
 }
 
 /// A single tag associated with a track.
-/// Stored in the `track_tags` table.
 ///
-/// **DEPRECATED**: Use `AudioTag` instead.
+/// **DEPRECATED**: Use `AudioTag` instead. Queries the `corpus_tags` table
+/// via the compatibility layer in tracks.rs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackTag {
     pub track_id: i64,
@@ -195,8 +195,6 @@ impl TrackTag {
 }
 
 /// Entry from files table with mtime info for incremental scanning.
-///
-/// Replaces ScanStateEntry - mtime is now stored directly in files table.
 #[derive(Debug, Clone)]
 pub struct FileMtimeEntry {
     pub inode: i64,
@@ -207,9 +205,8 @@ pub struct FileMtimeEntry {
     pub file_size: i64,
 }
 
-/// Legacy scan_state entry type.
-///
-/// **DEPRECATED**: Scan state is now tracked via files.mtime_* columns.
+/// **DEPRECATED**: Legacy scan_state entry type. Use FileMtimeEntry instead.
+/// Retained for compatibility during migration.
 #[derive(Debug, Clone)]
 pub struct ScanStateEntry {
     pub _source: String,

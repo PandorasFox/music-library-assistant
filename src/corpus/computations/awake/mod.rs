@@ -114,7 +114,7 @@ pub enum Computation {
 
     /// Derive deploy health signals from library scan data.
     ///
-    /// Compares library_scan_state against corpus to identify leftovers/stale.
+    /// Compares library files (source='library') against corpus to identify leftovers/stale.
     /// Renamed from DeriveLibraryHealthSignals.
     DeriveDeployHealthSignals {
         library_name: String,

@@ -1,7 +1,7 @@
 //! Tag Collision Detection
 //!
 //! Detects tag value collisions (multiple spellings that normalize to the same key)
-//! using efficient SQL queries against the track_tags table.
+//! using efficient SQL queries against the corpus_tags table.
 
 use std::collections::{HashMap, HashSet};
 

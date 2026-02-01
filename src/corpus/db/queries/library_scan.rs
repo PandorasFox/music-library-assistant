@@ -24,7 +24,7 @@ impl Database {
     ///
     /// Deletes all files where source = 'library' and path starts with `library_name/`.
     /// Called at the start of WalkLibrary to ensure fresh scan results.
-    pub fn clear_library_scan_state(&self, library_name: &str, _witness: &impl SignalWitness) -> Result<usize> {
+    pub fn clear_library_files(&self, library_name: &str, _witness: &impl SignalWitness) -> Result<usize> {
         let pattern = dir_like_pattern_str(library_name);
         let count = self
             .conn
@@ -79,7 +79,7 @@ impl Database {
     /// Get all files for a library (for DeriveDeployHealthSignals).
     ///
     /// Returns all files where source = 'library' and path starts with `library_name/`.
-    pub fn get_library_scan_files(&self, library_name: &str) -> Result<Vec<LibraryScanEntry>> {
+    pub fn get_library_files(&self, library_name: &str) -> Result<Vec<LibraryScanEntry>> {
         let pattern = dir_like_pattern_str(library_name);
         let mut stmt = self.conn.prepare(
             "SELECT path, inode
@@ -101,10 +101,10 @@ impl Database {
         Ok(entries)
     }
 
-    /// Get all files across all libraries.
+    /// Get all library files across all libraries.
     ///
     /// Returns all files where source = 'library'.
-    pub fn get_library_scan_files_all(&self) -> Result<Vec<LibraryScanEntry>> {
+    pub fn get_all_library_files(&self) -> Result<Vec<LibraryScanEntry>> {
         let mut stmt = self.conn.prepare(
             "SELECT path, inode FROM files WHERE source = 'library' ORDER BY path",
         )?;
@@ -125,7 +125,7 @@ impl Database {
     /// Get all inodes that are deployed in any library.
     ///
     /// Returns a HashSet for O(1) lookup when checking if a corpus file is deployed.
-    pub fn get_all_library_scan_inodes(&self) -> Result<std::collections::HashSet<i64>> {
+    pub fn get_all_library_inodes(&self) -> Result<std::collections::HashSet<i64>> {
         let mut stmt = self
             .conn
             .prepare("SELECT DISTINCT inode FROM files WHERE source = 'library'")?;

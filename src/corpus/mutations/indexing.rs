@@ -2,8 +2,8 @@
 //!
 //! Handles execution of indexing-related mutations:
 //! - IndexTrack: Insert or update a track in the database
-//! - UpdateScanState: Update scan state for incremental scanning
-//! - CleanupStaleScanState: Remove stale scan state entries
+//! - UpdateFileEntry: Update file entry for incremental scanning
+//! - CleanupStaleFiles: Remove stale file entries
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -17,7 +17,7 @@ use super::types::{ExtractedMetadata, Mutation, MutationResult};
 /// Execute an IndexTrack mutation.
 ///
 /// Inserts or updates a track in the database from extracted metadata.
-/// Tags are stored in the separate track_tags table.
+/// Tags are stored in corpus_tags table (or inbox_tags for inbox files).
 ///
 /// Routes write through signal_sender (fire-and-forget).
 pub fn execute_index_track(
@@ -119,12 +119,12 @@ pub fn execute_index_file_from_path(_db: &Database, path: &Path, source: &str, w
     execute_index_track(_db, path, source, &extracted, witness)
 }
 
-/// Execute an UpdateScanState mutation.
+/// Execute an UpdateFileEntry mutation.
 ///
-/// Updates the scan state entry for a file, enabling incremental scanning.
+/// Updates the file entry for a file, enabling incremental scanning.
 ///
 /// Routes write through signal_sender (fire-and-forget).
-pub fn execute_update_scan_state(
+pub fn execute_update_file_entry(
     _db: &Database,
     source: &str,
     inode: u64,
@@ -134,7 +134,7 @@ pub fn execute_update_scan_state(
     path: &Path,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread::{self, ScanStateData};
+    use crate::db_thread::{self, FileEntryData};
 
     let resolver = paths::get_resolver();
     let sender = db_thread::signal_sender()
@@ -150,7 +150,7 @@ pub fn execute_update_scan_state(
             )
         })?;
 
-    let scan_state = ScanStateData {
+    let file_entry = FileEntryData {
         inode: inode as i64,
         mtime_secs,
         mtime_nanos,
@@ -158,16 +158,16 @@ pub fn execute_update_scan_state(
     };
 
     // Route write through signal_sender
-    sender.upsert_scan_state(&relative_path.to_string_lossy(), source, scan_state, witness);
+    sender.upsert_file_entry(&relative_path.to_string_lossy(), source, file_entry, witness);
 
     Ok(())
 }
 
-/// Execute a CleanupStaleScanState mutation.
+/// Execute a CleanupStaleFiles mutation.
 ///
-/// Removes scan state entries for files that no longer exist.
+/// Removes stale file entries for files that no longer exist.
 /// Routes write through signal_sender (fire-and-forget).
-pub fn execute_cleanup_stale(
+pub fn execute_cleanup_stale_files(
     _db: &Database,
     source: &str,
     valid_inodes: &[u64],
@@ -179,7 +179,7 @@ pub fn execute_cleanup_stale(
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     let valid_i64: Vec<i64> = valid_inodes.iter().map(|&i| i as i64).collect();
-    sender.cleanup_stale_scan_state(source, valid_i64, witness);
+    sender.cleanup_stale_files(source, valid_i64, witness);
 
     Ok(())
 }
@@ -222,10 +222,10 @@ pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path, 
     Ok(())
 }
 
-/// Execute UpdateScanStatePath mutation - update scan state for relocated file.
+/// Execute UpdateFilePath mutation - update file path for relocated file.
 ///
 /// Routes write through signal_sender (fire-and-forget).
-pub fn execute_update_scan_state_path(
+pub fn execute_update_file_path(
     _db: &Database,
     source: &str,
     inode: i64,
@@ -249,7 +249,7 @@ pub fn execute_update_scan_state_path(
         })?;
 
     // Route write through signal_sender
-    sender.update_scan_state_path(source, inode, &relative_path.to_string_lossy(), witness);
+    sender.update_file_path(source, inode, &relative_path.to_string_lossy(), witness);
 
     Ok(())
 }
@@ -276,7 +276,7 @@ pub fn execute_drop_from_index(
     // Delete the track via signal_sender
     sender.drop_from_index(&track.path, witness);
 
-    // Also delete scan_state entry if inode/source provided
+    // Also delete files table entry if inode/source provided
     if let (Some(inode), Some(source)) = (inode, source) {
         sender.drop_file_index_by_inode(source, inode, witness);
     }
@@ -334,8 +334,8 @@ pub fn execute_update_track(
 
 /// Result of tag verification — indicates which types of mismatches were found.
 ///
-/// Used by computations to classify signals without querying `tag_mismatches`
-/// (which may not have committed async writes yet).
+/// Used by computations to classify OOB signals without querying persisted state
+/// (in-memory classification for immediate use before async db_thread writes commit).
 pub struct TagVerifyResult {
     /// At least one tag where both DB and disk have different non-empty values.
     pub has_conflict: bool,
@@ -363,12 +363,11 @@ impl TagVerifyResult {
 
 /// Execute tag verification - compare in-file tags with database, record mismatches.
 ///
-/// This is a read-mostly operation that only writes to the tag_mismatches table.
+/// This is a read-mostly operation that emits OOB signals for detected mismatches.
 /// Writes are routed through the db_thread's write connection via the sender.
 ///
 /// Returns a `TagVerifyResult` summarizing the mismatch directions found.
-/// Computations use this for in-memory classification instead of querying
-/// `tag_mismatches` (which may lag due to async db_thread writes).
+/// Computations use this for in-memory classification (async db_thread writes may lag).
 ///
 /// Note: This function is public because it's called from corpus::computations.
 pub fn execute_verify_tags(
@@ -490,7 +489,7 @@ pub fn execute_verify_tags(
 
 /// Execute AcknowledgeMtimeOnly mutation.
 ///
-/// For each track: updates scan_state mtime to match current disk mtime,
+/// For each track: updates file mtime in files table to match current disk mtime,
 /// then clears the MtimeOnlyMismatch signal. Used when disk file mtime
 /// changed but tags are identical.
 pub fn execute_acknowledge_mtime_only(
@@ -523,8 +522,8 @@ pub fn execute_acknowledge_mtime_only(
             .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
             .unwrap_or((0, 0));
 
-        // Update scan_state mtime via db_thread using (source, inode) key
-        sender.update_scan_state_mtime(
+        // Update file mtime via db_thread using (source, inode) key
+        sender.update_file_mtime(
             &track.source,
             track.inode,
             mtime_secs,
@@ -547,8 +546,8 @@ pub fn execute_acknowledge_mtime_only(
 
 /// Execute AcknowledgeInodeChanged mutation.
 ///
-/// For each track: updates track.inode to the new inode, deletes old scan_state
-/// entry, creates new scan_state with current mtime, and clears the InodeChanged signal.
+/// For each track: updates track.inode to the new inode, deletes old files table
+/// entry, creates new file entry with current mtime, and clears the InodeChanged signal.
 /// Tag differences are handled separately through the OOB tag resolution flow.
 pub fn execute_acknowledge_inode_changed(
     db: &Database,
@@ -556,7 +555,7 @@ pub fn execute_acknowledge_inode_changed(
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::corpus::db::types::CorpusFileSignalType;
-    use crate::db_thread::{self, ScanStateData};
+    use crate::db_thread::{self, FileEntryData};
     use std::os::unix::fs::MetadataExt;
 
     let sender = db_thread::signal_sender()
@@ -581,14 +580,14 @@ pub fn execute_acknowledge_inode_changed(
         // Update track.inode to the new value via db_thread
         sender.update_track_inode(&track.path, new_inode, witness);
 
-        // Delete old scan_state entry (keyed by old inode) via db_thread
+        // Delete old files table entry (keyed by old inode) via db_thread
         sender.drop_file_index_by_inode(&track.source, track.inode, witness);
 
-        // Insert new scan_state entry with new inode and current mtime via db_thread
-        sender.upsert_scan_state(
+        // Insert new file entry with new inode and current mtime via db_thread
+        sender.upsert_file_entry(
             &track.path,
             &track.source,
-            ScanStateData {
+            FileEntryData {
                 inode: new_inode,
                 mtime_secs,
                 mtime_nanos,
@@ -614,9 +613,9 @@ pub fn execute_acknowledge_inode_changed(
 ///
 /// - Reads tags from database (source of truth)
 /// - Writes to disk via write_file_tags()
-/// - Updates mtime in scan_state after write (handled by write_file_tags)
+/// - Updates file mtime after write (handled by write_file_tags)
 /// - Clears needs_disk_flush flag
-/// - Clears OOB signals and tag_mismatches (handled by write_file_tags)
+/// - Clears OOB signals (handled by write_file_tags)
 ///
 /// Used for:
 /// - OOB sync resolution (reject disk changes, restore DB state to disk)
@@ -652,7 +651,7 @@ pub fn execute_apply_db_tags_to_disk(
     );
 
     // Write tags to disk using the consolidated write path
-    // (also clears OOB signals, tag_mismatches, and updates scan_state mtime)
+    // (also clears OOB signals and updates file mtime)
     let token = super::sealed::MutationToken::new();
     write_file_tags(abs_path, &tag_set, &token, witness)
         .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
@@ -667,8 +666,8 @@ pub fn execute_apply_db_tags_to_disk(
 ///
 /// - Reads tags from disk file
 /// - Writes to database, overwriting DB values
-/// - Updates mtime in scan_state to match disk
-/// - Clears OOB signals and tag_mismatches
+/// - Updates file mtime to match disk
+/// - Clears OOB signals
 ///
 /// Used for OOB sync resolution (accept disk changes, update DB to match disk).
 pub fn execute_assimilate_disk_tags_to_db(
@@ -700,7 +699,7 @@ pub fn execute_assimilate_disk_tags_to_db(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Get track source (needed for scan_state key).
+    // Get track source (needed for files table key).
     // Source doesn't change during transcode, so this read is safe.
     let track = db.get_track_by_id(track_id)?
         .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
@@ -725,11 +724,11 @@ pub fn execute_assimilate_disk_tags_to_db(
         .unwrap_or((0, 0));
 
     // Get current inode from filesystem (not from potentially stale DB read).
-    // After transcode, the inode changed and we need the NEW inode for scan_state lookup.
+    // After transcode, the inode changed and we need the NEW inode for files table lookup.
     let current_inode = file_metadata.ino() as i64;
 
-    // Update scan_state mtime via db_thread using (source, inode) key
-    sender.update_scan_state_mtime(
+    // Update file mtime via db_thread using (source, inode) key
+    sender.update_file_mtime(
         &source,
         current_inode,
         mtime_secs,
@@ -913,19 +912,19 @@ pub fn execute_single(
             execute_index_file_from_path(db, path, source, witness)
         }
 
-        Mutation::UpdateScanState {
+        Mutation::UpdateFileEntry {
             source,
             inode,
             mtime_secs,
             mtime_nanos,
             file_size,
             path,
-        } => execute_update_scan_state(db, source, *inode, *mtime_secs, *mtime_nanos, *file_size, path, witness),
+        } => execute_update_file_entry(db, source, *inode, *mtime_secs, *mtime_nanos, *file_size, path, witness),
 
-        Mutation::CleanupStaleScanState {
+        Mutation::CleanupStaleFiles {
             source,
             valid_inodes,
-        } => execute_cleanup_stale(db, source, valid_inodes, witness),
+        } => execute_cleanup_stale_files(db, source, valid_inodes, witness),
 
         // Signal resolution mutations
         Mutation::UpdateTrackPath {
@@ -934,11 +933,11 @@ pub fn execute_single(
             ..
         } => execute_update_track_path(db, *track_id, new_path, witness),
 
-        Mutation::UpdateScanStatePath {
+        Mutation::UpdateFilePath {
             source,
             inode,
             new_path,
-        } => execute_update_scan_state_path(db, source, *inode, new_path, witness),
+        } => execute_update_file_path(db, source, *inode, new_path, witness),
 
         Mutation::DropFromIndex {
             track_id,

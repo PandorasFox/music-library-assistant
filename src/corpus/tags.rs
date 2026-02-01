@@ -297,11 +297,10 @@ pub enum DiffClassification {
 /// Removes legacy ID3v1 tags to avoid encoding issues.
 ///
 /// After successful disk write, automatically:
-/// - Updates `scan_state.mtime` to match the new file mtime
+/// - Updates file mtime in files table to match the new file mtime
 /// - Clears all OOB signals (OutOfBandTagSync, OutOfBandTagConflict, MtimeOnlyMismatch)
-/// - Clears tag_mismatches for this file
 ///
-/// Signals and mismatches will be recomputed by VerifyTags in the next computation cycle.
+/// Signals will be recomputed by VerifyTags in the next computation cycle.
 ///
 /// # Multi-value Support
 ///
@@ -372,7 +371,7 @@ pub fn write_file_tags(
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
 
-    // Update scan_state mtime after successful disk write
+    // Update file mtime after successful disk write
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized during tag write"))?;
     let resolver = paths::get_resolver();
@@ -401,7 +400,7 @@ pub fn write_file_tags(
         .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
         .unwrap_or((0, 0));
 
-    sender.update_scan_state_mtime(
+    sender.update_file_mtime(
         source,
         inode,
         mtime_secs,

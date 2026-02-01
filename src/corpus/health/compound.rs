@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 
 /// A detected compound tag value that should be split.
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ impl CompoundTagValue {
 /// Returns all tag values that contain any of the given separators and would
 /// split into multiple parts.
 pub fn detect_compound_values(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     tag_name: &str,
     separators: &[String],
 ) -> Result<Vec<CompoundTagValue>> {
@@ -82,7 +82,7 @@ pub fn detect_compound_values(
 ///
 /// Takes a map of tag_name -> separators and returns all detected compound values.
 pub fn detect_all_compound_values(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     tag_separators: &HashMap<String, Vec<String>>,
 ) -> Result<Vec<CompoundTagValue>> {
     let mut results = Vec::new();
@@ -99,7 +99,7 @@ pub fn detect_all_compound_values(
 ///
 /// Used when emitting signals to record which files are affected.
 pub fn get_inodes_for_compound_value(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     tag_name: &str,
     compound_value: &str,
 ) -> Result<Vec<i64>> {

@@ -15,7 +15,7 @@ use crate::corpus::computations::helpers::{
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{CorpusFileSignalType, LibraryFileSignalType};
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
 
@@ -27,7 +27,7 @@ use super::{Computation, Result};
 
 /// Schedule second-level signal derivations by spawning per-directory computations.
 pub fn execute_schedule_second_level_derivations(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     start: Instant,
 ) -> Result {
     log_general("[COMPUTE] ScheduleSecondLevelDerivations: starting");
@@ -91,7 +91,7 @@ pub fn execute_schedule_second_level_derivations(
 
 /// Derive second-level signals for files in a single directory.
 pub fn execute_derive_directory_signals(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     directory: &Path,
     witness: &ComputationWitness,
     start: Instant,
@@ -203,7 +203,7 @@ pub fn execute_derive_directory_signals(
 ///
 /// Only valid for paths within the corpus directory.
 pub fn execute_update_corpus_file_signals(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     path: &Path,
     witness: &ComputationWitness,
     start: Instant,
@@ -278,7 +278,7 @@ pub fn execute_update_corpus_file_signals(
 /// Only valid for paths within library directories.
 /// Handles LibraryLeftover signals when files are added/removed from libraries.
 pub fn execute_update_library_file_signals(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     path: &Path,
     witness: &ComputationWitness,
     start: Instant,
@@ -324,7 +324,7 @@ pub fn execute_update_library_file_signals(
 
 /// Walk a library directory tree and spawn per-directory scans.
 pub fn execute_walk_library(
-    _read_only_db: &Database,
+    _read_only_db: &ReadOnlyDb<'_>,
     library_root: &Path,
     library_name: &str,
     corpus_path_prefixes: &[PathBuf],
@@ -392,7 +392,7 @@ pub fn execute_walk_library(
 /// The actual deploy health derivation (comparing against corpus) happens in
 /// the Awake phase via DeriveDeployHealthSignals.
 pub fn execute_scan_library_directory(
-    _read_only_db: &Database,
+    _read_only_db: &ReadOnlyDb<'_>,
     directory: &Path,
     library_name: &str,
     library_root: &Path,
@@ -504,7 +504,7 @@ pub fn execute_scan_library_directory(
 /// - Ensures DeployedHealthy for corpus_path (with library_path metadata)
 /// - Clears any LibraryLeftover/LibraryStale for library_path
 pub fn execute_update_deploy_signals(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     corpus_path: &Path,
     library_path: &Path,
     witness: &ComputationWitness,
@@ -572,7 +572,7 @@ pub fn execute_update_deploy_signals(
 /// These signals use compound keys like "library_leftover:{name}:{path}",
 /// so we query existing signals and clear matching ones.
 fn clear_library_signals_for_path(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     library_path: &str,
     witness: &ComputationWitness,

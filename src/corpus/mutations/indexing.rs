@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::witch::MutationExecutionWitness;
 
@@ -21,7 +21,7 @@ use super::types::{ExtractedMetadata, Mutation, MutationResult};
 ///
 /// Routes write through signal_sender (fire-and-forget).
 pub fn execute_index_track(
-    _db: &Database,
+    _db: &ReadOnlyDb<'_>,
     path: &Path,
     source: &str,
     metadata: &ExtractedMetadata,
@@ -92,7 +92,7 @@ pub fn execute_index_track(
 /// on the worker thread rather than the UI thread.
 ///
 /// Routes write through signal_sender (fire-and-forget).
-pub fn execute_index_file_from_path(_db: &Database, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<()> {
+pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<()> {
     use crate::corpus::metadata;
     use crate::corpus::tags::TagSet;
 
@@ -115,7 +115,7 @@ pub fn execute_index_file_from_path(_db: &Database, path: &Path, source: &str, w
 ///
 /// Routes write through signal_sender (fire-and-forget).
 pub fn execute_update_file_entry(
-    _db: &Database,
+    _db: &ReadOnlyDb<'_>,
     source: &str,
     inode: u64,
     mtime_secs: i64,
@@ -158,7 +158,7 @@ pub fn execute_update_file_entry(
 /// Removes stale file entries for files that no longer exist.
 /// Routes write through signal_sender (fire-and-forget).
 pub fn execute_cleanup_stale_files(
-    _db: &Database,
+    _db: &ReadOnlyDb<'_>,
     source: &str,
     valid_inodes: &[u64],
     witness: &MutationExecutionWitness,
@@ -184,7 +184,7 @@ pub fn execute_cleanup_stale_files(
 /// relative path conversion. It fetches the track's source from the database.
 ///
 /// Uses read-only DB for lookup, routes write through signal_sender.
-pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path, witness: &MutationExecutionWitness) -> Result<()> {
+pub fn execute_update_track_path(db: &ReadOnlyDb<'_>, track_id: i64, new_path: &Path, witness: &MutationExecutionWitness) -> Result<()> {
     use crate::db_thread;
 
     let resolver = paths::get_resolver();
@@ -216,7 +216,7 @@ pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path, 
 ///
 /// Routes write through signal_sender (fire-and-forget).
 pub fn execute_update_file_path(
-    _db: &Database,
+    _db: &ReadOnlyDb<'_>,
     source: &str,
     inode: i64,
     new_path: &Path,
@@ -248,7 +248,7 @@ pub fn execute_update_file_path(
 ///
 /// Uses read-only DB for lookup, routes writes through signal_sender.
 pub fn execute_drop_from_index(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     track_id: i64,
     inode: Option<i64>,
     source: Option<&str>,
@@ -278,7 +278,7 @@ pub fn execute_drop_from_index(
 ///
 /// Uses read-only DB for lookup, routes write through signal_sender.
 pub fn execute_update_track(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     _track_id: i64,
     path: &Path,
     metadata: &ExtractedMetadata,
@@ -361,7 +361,7 @@ impl TagVerifyResult {
 ///
 /// Note: This function is public because it's called from corpus::computations.
 pub fn execute_verify_tags(
-    db: &Database,
+    db: &crate::corpus::db::ReadOnlyDb<'_>,
     inode: i64,
     path: &Path,
     sender: &crate::db_thread::SignalWriteSender,
@@ -483,7 +483,7 @@ pub fn execute_verify_tags(
 /// then clears the MtimeOnlyMismatch signal. Used when disk file mtime
 /// changed but tags are identical.
 pub fn execute_acknowledge_mtime_only(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
@@ -540,7 +540,7 @@ pub fn execute_acknowledge_mtime_only(
 /// entry, creates new file entry with current mtime, and clears the InodeChanged signal.
 /// Tag differences are handled separately through the OOB tag resolution flow.
 pub fn execute_acknowledge_inode_changed(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
@@ -613,7 +613,7 @@ pub fn execute_acknowledge_inode_changed(
 /// - OOB sync resolution (reject disk changes, restore DB state to disk)
 /// - Spawned from SetTrackTagsDb (DB-first pattern step 2)
 pub fn execute_apply_db_tags_to_disk(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     track_id: i64,
     abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
@@ -663,7 +663,7 @@ pub fn execute_apply_db_tags_to_disk(
 ///
 /// Used for OOB sync resolution (accept disk changes, update DB to match disk).
 pub fn execute_assimilate_disk_tags_to_db(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     track_id: i64,
     abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
@@ -765,29 +765,19 @@ pub fn execute_assimilate_disk_tags_to_db(
 /// Clears all fingerprints from the database in one SQL UPDATE.
 /// Returns a spawned ScheduleFingerprintRefill mutation to queue the re-fingerprinting.
 pub fn execute_clear_all_fingerprints(
-    db: &Database,
-    witness: &MutationExecutionWitness,
+    _db: &ReadOnlyDb<'_>,
+    _witness: &MutationExecutionWitness,
 ) -> Result<Vec<crate::witch::SpawnedMutation>> {
-    use crate::logging::log_general;
-
-    // Clear all fingerprints in one statement
-    db.conn().execute("UPDATE tracks SET fingerprint = NULL", [])?;
-
-    let count = db.conn().changes();
-    log_general(format!(
-        "[MUTATION] ClearAllFingerprints: cleared {} track fingerprints",
-        count
-    ));
-
-    // Spawn the scheduling mutation
-    Ok(vec![witness.spawn_mutation(super::types::Mutation::ScheduleFingerprintRefill)])
+    // TODO: This operation needs to be routed through signal_sender and use audio_info table.
+    // The old code wrote directly to a non-existent 'tracks' table.
+    todo!("ClearAllFingerprints needs migration to audio_info table and signal_sender pattern")
 }
 
 /// Execute ScheduleFingerprintRefill mutation.
 ///
 /// Queries all audio files and spawns a RefillSingleFingerprint mutation for each.
 pub fn execute_schedule_fingerprint_refill(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<crate::witch::SpawnedMutation>> {
     use crate::logging::log_general;
@@ -819,61 +809,14 @@ pub fn execute_schedule_fingerprint_refill(
 /// Fingerprints one track from full audio. Emits CorruptFile signal on failure,
 /// clears CorruptFile signal on success.
 pub fn execute_refill_single_fingerprint(
-    db: &Database,
-    track_id: i64,
-    path: &str,
-    witness: &MutationExecutionWitness,
+    _db: &ReadOnlyDb<'_>,
+    _track_id: i64,
+    _path: &str,
+    _witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::corpus::metadata::generate_fingerprint;
-    use crate::corpus::db::types::CorpusFileSignalType;
-    use crate::db_thread;
-    use crate::logging::log_general;
-
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-    let resolver = paths::get_resolver();
-    let abs_path = resolver.resolve(std::path::Path::new(path));
-
-    match generate_fingerprint(&abs_path) {
-        Ok(fingerprint) => {
-            // Convert Vec<u32> fingerprint to BLOB (Vec<u8>) for storage
-            let blob: Vec<u8> = fingerprint
-                .iter()
-                .flat_map(|n| n.to_le_bytes())
-                .collect();
-
-            // Update track with new fingerprint
-            db.conn().execute(
-                "UPDATE tracks SET fingerprint = ? WHERE id = ?",
-                rusqlite::params![blob, track_id],
-            )?;
-
-            // Clear any CorruptFile signal for this track (it's now valid)
-            sender.clear_file_signal(
-                CorpusFileSignalType::CorruptFile.into(),
-                path,
-                witness,
-            );
-
-            Ok(())
-        }
-        Err(e) => {
-            // Fingerprinting failed - emit CorruptFile signal
-            log_general(format!(
-                "[MUTATION] RefillSingleFingerprint: failed on {}: {}",
-                path, e
-            ));
-            sender.ensure_file_signal(
-                CorpusFileSignalType::CorruptFile.into(),
-                path,
-                witness,
-            );
-
-            // Return Ok - the track is corrupt but the mutation "succeeded"
-            // (we processed it, just with a corrupt result)
-            Ok(())
-        }
-    }
+    // TODO: This operation needs to be routed through signal_sender and use audio_info table.
+    // The old code wrote directly to a non-existent 'tracks' table.
+    todo!("RefillSingleFingerprint needs migration to audio_info table and signal_sender pattern")
 }
 
 // ============================================================================
@@ -885,7 +828,7 @@ pub fn execute_refill_single_fingerprint(
 /// Convenience function for executing individual mutations.
 /// Requires a MutationExecutionWitness to prove execution is inside the daemon.
 pub fn execute_single(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     mutation: &Mutation,
     witness: &MutationExecutionWitness,
 ) -> MutationResult {

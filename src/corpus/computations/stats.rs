@@ -129,10 +129,10 @@ pub fn close_thread_local_connection() {
 /// of opening new connections for each task.
 pub fn with_read_only_db<T, F>(f: F) -> Result<T, String>
 where
-    F: FnOnce(&crate::corpus::db::Database) -> T,
+    F: FnOnce(&crate::corpus::db::ReadOnlyDb<'_>) -> T,
 {
     use crate::config;
-    use crate::corpus::db::Database;
+    use crate::corpus::db::{Database, ReadOnlyDb};
 
     THREAD_READ_ONLY_DB.with(|cell| {
         let mut opt = cell.borrow_mut();
@@ -143,14 +143,16 @@ where
             record_db_open();
         }
 
+        let read_only_db = ReadOnlyDb::new(opt.as_ref().unwrap());
+
         // Only time DB access when instrumentation is enabled
         if config::is_timing_enabled() {
             let db_start = std::time::Instant::now();
-            let result = f(opt.as_ref().unwrap());
+            let result = f(&read_only_db);
             record_db_read(db_start.elapsed().as_micros() as u64);
             Ok(result)
         } else {
-            Ok(f(opt.as_ref().unwrap()))
+            Ok(f(&read_only_db))
         }
     })
 }

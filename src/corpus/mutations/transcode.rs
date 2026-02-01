@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::transcode::{self, TranscodeTarget};
 use crate::witch::MutationExecutionWitness;
@@ -28,7 +28,7 @@ use super::types::{Mutation, MutationResult};
 /// Transcodes the source file to the target format, stashes the original,
 /// and updates the track record in the database.
 fn execute_transcode(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     track_id: i64,
     source_path: &Path,
     target_format: TranscodeTarget,
@@ -166,7 +166,7 @@ fn execute_transcode(
 /// Requires a MutationExecutionWitness to prove execution is inside the daemon.
 /// On success, spawns AssimilateDiskTagsToDb to sync tags from the new file.
 pub fn execute_single(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     mutation: &Mutation,
     stash_root: Option<&Path>,
     witness: &MutationExecutionWitness,

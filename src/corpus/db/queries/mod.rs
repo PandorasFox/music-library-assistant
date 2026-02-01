@@ -478,6 +478,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_aggregate_signals(signal_type)
     }
 
+    /// Check if a file signal exists.
+    pub fn file_signal_exists(&self, signal_type: super::types::FileSignalType, key: &str) -> bool {
+        self.db.file_signal_exists(signal_type, key)
+    }
+
     // =========================================================================
     // OOB / Tag Mismatch Queries
     // =========================================================================
@@ -563,5 +568,114 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get all library files.
     pub fn get_all_library_files(&self) -> Result<Vec<library_scan::LibraryScanEntry>> {
         self.db.get_all_library_files()
+    }
+
+    // =========================================================================
+    // File Entry Queries
+    // =========================================================================
+
+    /// Get mtime info for files by inode (for incremental scanning).
+    pub fn get_file_mtime_batch(
+        &self,
+        source: super::types::FileSource,
+        inodes: &[i64],
+    ) -> Result<std::collections::HashMap<i64, (i64, i64)>> {
+        self.db.get_file_mtime_batch(source, inodes)
+    }
+
+    /// Get paths for files by inode (for move detection).
+    pub fn get_file_paths_batch(
+        &self,
+        source: super::types::FileSource,
+        inodes: &[i64],
+    ) -> Result<std::collections::HashMap<i64, String>> {
+        self.db.get_file_paths_batch(source, inodes)
+    }
+
+    /// Get duplicate fingerprint groups.
+    pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
+        self.db.get_duplicate_fingerprint_groups()
+    }
+
+    /// Get inode groups with duplicates (multiple paths for same inode).
+    pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_duplicate_inode_groups()
+    }
+
+    /// Get audio files with their present tag names (for missing tag detection).
+    pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
+        self.db.get_audio_files_with_tag_presence()
+    }
+
+    /// Get inodes that have any of the given tag values for a specific tag name.
+    pub fn get_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
+        self.db.get_inodes_for_tag_values(tag_name, values)
+    }
+
+    /// Get all corpus audio file inodes mapped to their paths.
+    pub fn get_all_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
+        self.db.get_all_corpus_inodes()
+    }
+
+    /// Get all tags ordered by inode and tag name (for metadata duplicate detection).
+    pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
+        self.db.get_all_tags_ordered()
+    }
+
+    /// Get distinct parent directories from tracks table.
+    pub fn get_distinct_track_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+        self.db.get_distinct_track_directories()
+    }
+
+    /// Get distinct parent directories from FileInCorpus signals.
+    pub fn get_distinct_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+        self.db.get_distinct_corpus_directories()
+    }
+
+    /// Get signals in a specific directory.
+    pub fn get_signals_in_directory(
+        &self,
+        dir: &std::path::Path,
+        signal_type: super::types::SignalType,
+    ) -> Result<Vec<super::types::Signal>> {
+        self.db.get_signals_in_directory(dir, signal_type)
+    }
+
+    /// Get all files for a library (for DeriveDeployHealthSignals).
+    pub fn get_library_files(&self, library_name: &str) -> Result<Vec<library_scan::LibraryScanEntry>> {
+        self.db.get_library_files(library_name)
+    }
+
+    /// Get all inodes that are deployed in any library.
+    pub fn get_all_library_inodes(&self) -> Result<std::collections::HashSet<i64>> {
+        self.db.get_all_library_inodes()
+    }
+
+    /// Get aggregate signal keys with metadata for set-difference computations.
+    pub fn get_aggregate_signal_keys_with_metadata(
+        &self,
+        signal_type: super::types::AggregateSignalType,
+    ) -> Result<Vec<(String, Option<String>)>> {
+        self.db.get_aggregate_signal_keys_with_metadata(signal_type)
+    }
+
+    /// Get audio info for a track by inode.
+    pub fn get_audio_info(&self, inode: i64) -> Result<Option<super::types::AudioInfo>> {
+        self.db.get_audio_info(inode)
+    }
+
+    /// Query distinct tag values with file counts from corpus_tags table.
+    pub fn get_distinct_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
+        self.db.get_distinct_tag_values(tag_name)
+    }
+
+    /// Query album data with artist context for collision detection.
+    pub fn get_album_data_for_collision_detection(&self) -> Result<Vec<(String, String, String, String)>> {
+        self.db.get_album_data_for_collision_detection()
+    }
+
+    /// Get album artist data for inconsistency detection.
+    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
+        self.db.get_album_artist_data()
     }
 }

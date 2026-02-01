@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use super::normalization::normalize_artist;
 
 /// An album with inconsistent album_artist that needs resolution.
@@ -39,7 +39,7 @@ pub struct AlbumArtistIssue {
 /// This is designed to catch:
 /// - Compilations where each track has a different artist but album_artist is unset
 /// - Multi-artist albums where album_artist should be unified
-pub fn detect_inconsistent_album_artist(db: &Database) -> Result<Vec<AlbumArtistIssue>> {
+pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<AlbumArtistIssue>> {
     // Query: For each album, get all tracks with their artist and album_artist values
     // Group by normalized album, filter to those with multiple distinct artists
     // and missing/inconsistent album_artist
@@ -126,7 +126,7 @@ struct TrackAlbumData {
 /// Also fetches catalog_number and isrc for release differentiation.
 /// Returns: HashMap<normalized_album, Vec<TrackAlbumData>>
 fn query_album_artist_data(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
 ) -> Result<HashMap<String, Vec<TrackAlbumData>>> {
     let rows = db.get_album_artist_data()?;
 

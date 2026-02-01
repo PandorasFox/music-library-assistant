@@ -17,7 +17,7 @@ use crate::corpus::computations::helpers::{
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSource, LibraryFileSignalType, SignalType};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread;
 
 use super::{Computation, Result};
@@ -28,7 +28,7 @@ use super::{Computation, Result};
 
 /// Execute ScheduleContentAnalysis - spawns all content detection computations.
 pub fn execute_schedule_content_analysis(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     start: Instant,
 ) -> Result {
     log_general("[COMPUTE] ScheduleContentAnalysis: spawning all detection computations");
@@ -80,7 +80,7 @@ pub fn execute_schedule_content_analysis(
 
 /// Execute DetectFingerprintOverlaps - bulk detection of fingerprint overlaps.
 pub fn execute_detect_fingerprint_overlaps(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -163,7 +163,7 @@ pub fn execute_detect_fingerprint_overlaps(
 
 /// Execute DetectDuplicateInodes - bulk detection of duplicate inodes.
 pub fn execute_detect_duplicate_inodes(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -234,7 +234,7 @@ pub fn execute_detect_duplicate_inodes(
 
 /// Execute DetectMissingTags - detect tracks missing required tags.
 pub fn execute_detect_missing_tags(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -357,7 +357,7 @@ pub fn execute_detect_missing_tags(
 
 /// Execute DetectMetadataDuplicates - detect exact metadata duplicates.
 pub fn execute_detect_metadata_duplicates(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -463,7 +463,7 @@ pub fn md5_hash(s: &str) -> u64 {
 ///
 /// Emits TagCanonicity aggregate signals for each detected collision cluster.
 pub fn execute_detect_tag_canonicalizations(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -558,7 +558,7 @@ pub fn execute_detect_tag_canonicalizations(
 ///
 /// Emits CompoundTagValue aggregate signals for each detected compound value.
 pub fn execute_detect_compound_tag_values(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -657,7 +657,7 @@ pub fn execute_detect_compound_tag_values(
 /// Queries all tracks and emits ShitFormat signals for those with file types
 /// that have poor metadata support or inefficient containers (MP3, M4A, WAV, etc).
 pub fn execute_detect_shit_formats(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -729,7 +729,7 @@ pub fn execute_detect_shit_formats(
 
 /// Execute DetectDeployConflicts - bulk detection of deploy path collisions.
 pub fn execute_detect_deploy_conflicts(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -818,7 +818,7 @@ pub fn execute_detect_deploy_conflicts(
 /// Reads library file data from files table (source='library') and compares against
 /// corpus index to identify leftovers and stale deployments.
 pub fn execute_derive_deploy_health_signals(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     library_name: &str,
     library_root: &Path,
     corpus_path_prefixes: &[std::path::PathBuf],
@@ -965,7 +965,7 @@ pub fn execute_derive_deploy_health_signals(
 /// - DeployReady: healthy file not in any library
 /// - DeployedHealthy: healthy file correctly deployed (in library, not stale)
 pub fn execute_derive_corpus_deploy_status(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -1142,7 +1142,7 @@ pub fn execute_derive_corpus_deploy_status(
 /// - Multiple artists are present on the same album
 /// - album_artist tags are missing or inconsistent
 pub fn execute_detect_inconsistent_album_artist(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -1463,7 +1463,7 @@ impl SubparReason {
 
 /// Execute AnalyzeFingerprintOverlaps - deep analysis of fingerprint overlap groups.
 pub fn execute_analyze_fingerprint_overlaps(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -1724,7 +1724,7 @@ fn cluster_by_duration<'a>(
 /// (different ISRC, catalog#, variant keywords), finds directory divergence points,
 /// and emits DirectoryOverlapCluster signals for UI-based resolution.
 pub fn execute_cluster_directory_overlaps(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {

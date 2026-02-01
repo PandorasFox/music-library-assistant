@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSignalType};
+use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread::{self, SignalWitness};
 
 use super::types::ComputationWitness;
@@ -135,7 +136,7 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 /// Uses the read-only DB to check freshness before queueing to the write thread.
 /// This dramatically reduces redundant writes during re-computation.
 pub(crate) fn ensure_file_signal_if_missing(
-    read_only_db: &crate::corpus::db::Database,
+    read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
@@ -150,7 +151,7 @@ pub(crate) fn ensure_file_signal_if_missing(
 ///
 /// For signals like LibraryStale that need extra context in metadata_json.
 pub(super) fn ensure_file_signal_with_metadata_if_missing(
-    read_only_db: &crate::corpus::db::Database,
+    read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
@@ -170,7 +171,7 @@ pub(super) fn ensure_file_signal_with_metadata_if_missing(
 ///
 /// Uses the read-only DB to check existence before queueing to the write thread.
 pub(crate) fn drop_stale_file_signal(
-    read_only_db: &crate::corpus::db::Database,
+    read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
@@ -215,7 +216,7 @@ fn extract_track_ids_from_metadata(metadata_json: Option<&str>) -> Vec<i64> {
 ///
 /// Returns (cleared_count, new_count, updated_count, unchanged_count).
 pub(super) fn reconcile_aggregate_signals(
-    read_only_db: &crate::corpus::db::Database,
+    read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     signal_type: AggregateSignalType,
     computed: Vec<ComputedAggregateSignal>,

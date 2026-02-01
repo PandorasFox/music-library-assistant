@@ -15,7 +15,7 @@ use crate::corpus::computations::helpers::{
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{CorpusFileSignalType, FileSource};
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
 
@@ -30,7 +30,7 @@ use super::{Computation, Result};
 /// This ensures deleted files don't retain stale signals that would cause them
 /// to appear as "healthy" instead of "missing" in DeriveDirectorySignals.
 pub fn execute_clear_existing_observation_state(
-    _read_only_db: &Database,
+    _read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -65,7 +65,7 @@ pub fn execute_clear_existing_observation_state(
 
 /// Phase 1: Enumerate ALL corpus directories and spawn per-directory scans.
 pub fn execute_walk_corpus(
-    _read_only_db: &Database,
+    _read_only_db: &ReadOnlyDb<'_>,
     root: &Path,
     source: &str,
     force_check: bool,
@@ -124,7 +124,7 @@ pub fn execute_walk_corpus(
 
 /// Scan a single corpus directory (non-recursive).
 pub fn execute_scan_corpus_directory(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     directory: &Path,
     source: &str,
     force_check: bool,
@@ -325,7 +325,7 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
 
 /// Phase 3: Verify single file mtime.
 pub fn execute_verify_mtime(
-    _read_only_db: &Database,
+    _read_only_db: &ReadOnlyDb<'_>,
     inode: i64,
     path: &Path,
     expected_mtime_secs: i64,
@@ -374,7 +374,7 @@ pub fn execute_verify_mtime(
 ///
 /// Uses the portable API (extract_mtime) for consistency with ScanCorpusDirectory.
 /// Returns true if mtime differs or if we can't determine (fail-safe to emit signal).
-fn check_mtime_differs(read_only_db: &Database, inode: i64, path: &Path) -> bool {
+fn check_mtime_differs(read_only_db: &ReadOnlyDb<'_>, inode: i64, path: &Path) -> bool {
     // Get mtime info from files table for this inode
     let mtime_info = match read_only_db.get_file_mtime_batch(FileSource::Corpus, &[inode]) {
         Ok(map) => match map.get(&inode) {
@@ -408,7 +408,7 @@ fn check_mtime_differs(read_only_db: &Database, inode: i64, path: &Path) -> bool
 ///
 /// These three signal types are mutually exclusive - emitting one clears the others.
 pub fn execute_verify_tags(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     inode: i64,
     path: &Path,
     witness: &ComputationWitness,
@@ -629,7 +629,7 @@ pub fn execute_verify_tags(
 /// Catches truncated files, corrupt audio data, and other issues that
 /// tag verification wouldn't detect. Emits CorruptFile if decode fails.
 pub fn execute_verify_audio(
-    read_only_db: &Database,
+    read_only_db: &ReadOnlyDb<'_>,
     inode: i64,
     path: &Path,
     witness: &ComputationWitness,

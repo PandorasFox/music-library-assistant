@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 use super::normalization::{normalize_album, normalize_album_artist, normalize_artist, normalize_genre};
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 
 /// A detected collision between tag values.
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ impl TagCollision {
 // ============================================================================
 
 /// Detect artist name collisions from the database.
-pub fn get_artist_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+pub fn get_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
     let values = db.get_distinct_tag_values("artist")?;
 
     // Group by normalized key
@@ -84,7 +84,7 @@ pub fn get_artist_collisions(db: &Database) -> Result<Vec<TagCollision>> {
 }
 
 /// Detect album_artist collisions from the database.
-pub fn get_album_artist_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+pub fn get_album_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
     let values = db.get_distinct_tag_values("album_artist")?;
 
     // Group by normalized key
@@ -113,7 +113,7 @@ pub fn get_album_artist_collisions(db: &Database) -> Result<Vec<TagCollision>> {
 /// Additionally, variants with disjoint ISRCs or catalog numbers are considered
 /// distinct releases and NOT collisions (e.g., "Album EP" with ISRCs {A,B,C} and
 /// "Album" with ISRCs {D,E,F,G} are different releases, not canonicalization issues).
-pub fn get_album_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+pub fn get_album_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
     let rows = db.get_album_data_for_collision_detection()?;
 
     // Group by (normalized_artist, normalized_album)
@@ -219,7 +219,7 @@ fn variants_have_disjoint_release_ids(variants: &HashMap<String, VariantData>) -
 }
 
 /// Detect genre collisions from the database.
-pub fn get_genre_collisions(db: &Database) -> Result<Vec<TagCollision>> {
+pub fn get_genre_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
     let values = db.get_distinct_tag_values("genre")?;
 
     // Group by normalized key

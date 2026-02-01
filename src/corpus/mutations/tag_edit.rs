@@ -12,7 +12,7 @@
 
 use anyhow::Result;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
@@ -26,7 +26,7 @@ use super::types::{Mutation, MutationResult};
 ///
 /// The spawned ApplyDbTagsToDisk will sync DB tags to disk.
 fn execute_set_track_tags_db(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     track_id: i64,
     tags: &[(String, String)],
     witness: &MutationExecutionWitness,
@@ -63,7 +63,7 @@ fn execute_set_track_tags_db(
 /// Returns MutationResult with spawn_mutations populated for chaining.
 /// Requires a MutationExecutionWitness to prove execution is inside the daemon.
 pub fn execute_single(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     mutation: &Mutation,
     _session_id: &str,
     witness: &MutationExecutionWitness,

@@ -26,7 +26,7 @@ use std::time::Instant;
 use crate::config;
 use crate::corpus::computations::{Computation, awakening, with_read_only_db};
 use crate::corpus::db::types::CorpusFileSignalType;
-use crate::corpus::db::Database;
+use crate::corpus::db::{Database, ReadOnlyDb};
 use crate::corpus::mutations::{Mutation, SignalClearScope, SignalToClear};
 use crate::corpus::paths;
 use crate::db_thread;
@@ -382,7 +382,7 @@ fn apply_post_execution(
 /// is compound (e.g., "library_stale:{name}:{path}") and doesn't match simple
 /// path-based clearing.
 fn clear_signals_by_pattern(
-    db: &Database,
+    db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     spec: &SignalToClear,
     witness: &MutationExecutionWitness,

@@ -599,13 +599,6 @@ impl Database {
             }
         }
 
-        // Count known variants
-        summary.known_variants = self.conn.query_row(
-            "SELECT COUNT(*) FROM known_variants",
-            params![],
-            |row| row.get(0),
-        )?;
-
         // Count unconfirmed tag canonicalizations as canonicalization issues
         // These are stored in tag_canonicalization, not signals
         let unconfirmed_canons: usize = self.conn.query_row(

@@ -58,8 +58,8 @@ Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue Ap
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| IndexTrack | UpdateCorpusFileSignals | WaveformReadError (if no fingerprint) | (per-file signals wiped) | Add track to index |
-| IndexFileFromPath | UpdateCorpusFileSignals | WaveformReadError (if no fingerprint) | (per-file signals wiped) | Index by path |
+| IndexTrack | UpdateCorpusFileSignals | CorruptFile (if no fingerprint), ShitFormat | (per-file signals wiped) | Add track to index |
+| IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), ShitFormat | (per-file signals wiped) | Index by path |
 | DropFromIndex | UpdateCorpusFileSignals | — | (per-file signals wiped) | Remove from index |
 | UpdateTrack | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update track metadata |
 | ClearAllFingerprints | — | — | — | Clear all fingerprints, spawn ScheduleFingerprintRefill |

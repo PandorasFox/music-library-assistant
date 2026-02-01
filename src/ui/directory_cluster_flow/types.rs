@@ -49,8 +49,6 @@ pub enum ClusterResolutionOption {
     KeepDirectory { keep_suffix: String },
     /// Auto-select based on quality (higher format class wins)
     AutoQuality { keep_format: String, stash_format: String },
-    /// Skip - don't resolve this cluster
-    Skip,
 }
 
 impl ClusterResolutionOption {
@@ -60,7 +58,6 @@ impl ClusterResolutionOption {
             Self::AutoQuality { keep_format, stash_format } => {
                 format!("Keep {}, stash {}", keep_format, stash_format)
             }
-            Self::Skip => "Skip (mark as variant)".to_string(),
         }
     }
 }
@@ -202,7 +199,6 @@ impl DirectoryClusterModalData {
     ///
     /// For KeepDirectory: MoveToStash + DropFromIndex for all directories EXCEPT the kept one.
     /// For AutoQuality: Same logic, but picks the keep directory by format quality.
-    /// For Skip: No mutations.
     pub fn mutations_for_resolution(
         &self,
         cluster_index: usize,
@@ -217,7 +213,6 @@ impl DirectoryClusterModalData {
         };
 
         let keep_suffix = match option {
-            ClusterResolutionOption::Skip => return mutations,
             ClusterResolutionOption::KeepDirectory { keep_suffix } => keep_suffix.clone(),
             ClusterResolutionOption::AutoQuality { keep_format, .. } => {
                 // Find directory with the preferred format

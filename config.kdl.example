@@ -115,16 +115,4 @@ opinions {
         // Higher = stricter matching, lower = more lenient
         // fuzzy-threshold 0.85
     }
-
-    // -------------------------------------------------------------------------
-    // Re-releases - Same audio appearing on different albums
-    // -------------------------------------------------------------------------
-    re-releases {
-        // How to handle same fingerprint on different albums
-        // Options: "mark-variant" (default), "ignore", "flag"
-        //   mark-variant: Track as known variant, don't flag as duplicate
-        //   ignore: Completely ignore, treat as separate tracks
-        //   flag: Flag for manual review
-        // same-fingerprint-different-album "mark-variant"
-    }
 }

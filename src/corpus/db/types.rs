@@ -681,7 +681,6 @@ pub struct SignalSummary {
     pub metadata_duplicates: usize,
     pub canonicalization_issues: usize,
     pub missing_tag_issues: usize,
-    pub known_variants: usize,
 }
 
 /// Aggregated corpus summary for UI display.

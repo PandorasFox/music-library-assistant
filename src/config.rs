@@ -29,7 +29,6 @@ pub struct Opinions {
     pub fingerprint_matching: FingerprintMatchingOpinions,
     pub quality_resolution: QualityResolutionOpinions,
     pub canonicalization: CanonicalizationOpinions,
-    pub re_releases: ReReleaseOpinions,
     pub startup: StartupOpinions,
     pub health_detection: HealthDetectionOpinions,
     pub performance: PerformanceOpinions,
@@ -94,35 +93,6 @@ impl Default for CanonicalizationOpinions {
             case_insensitive: true,
             strip_parentheticals: false,
             fuzzy_threshold: 0.85,
-        }
-    }
-}
-
-/// How to handle re-releases (same audio on different albums)
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
-pub enum ReReleaseHandling {
-    /// Mark as known variant, don't flag as duplicate
-    #[default]
-    MarkVariant,
-    /// Ignore completely
-    Ignore,
-    /// Flag for manual review
-    Flag,
-}
-
-
-/// Opinions for re-release handling
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReReleaseOpinions {
-    /// How to handle same fingerprint on different albums
-    pub same_fingerprint_different_album: ReReleaseHandling,
-}
-
-impl Default for ReReleaseOpinions {
-    fn default() -> Self {
-        Self {
-            same_fingerprint_different_album: ReReleaseHandling::MarkVariant,
         }
     }
 }
@@ -588,26 +558,6 @@ fn parse_canonicalization_opinions(node: &kdl::KdlNode, opinions: &mut Canonical
     }
 }
 
-/// Parse re-release opinions from KDL node
-fn parse_rerelease_opinions(node: &kdl::KdlNode, opinions: &mut ReReleaseOpinions) {
-    if let Some(children) = node.children() {
-        for child in children.nodes() {
-            if child.name().value() == "same-fingerprint-different-album" {
-                if let Some(entry) = child.entries().first() {
-                    if let Some(val) = entry.value().as_string() {
-                        opinions.same_fingerprint_different_album = match val {
-                            "mark-variant" => ReReleaseHandling::MarkVariant,
-                            "ignore" => ReReleaseHandling::Ignore,
-                            "flag" => ReReleaseHandling::Flag,
-                            _ => ReReleaseHandling::MarkVariant,
-                        };
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Parse startup opinions from KDL node
 fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
     if let Some(children) = node.children() {
@@ -839,9 +789,6 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             "canonicalization" => {
                                 parse_canonicalization_opinions(child, &mut config.opinions.canonicalization);
                             }
-                            "re-releases" => {
-                                parse_rerelease_opinions(child, &mut config.opinions.re_releases);
-                            }
                             "startup" => {
                                 parse_startup_opinions(child, &mut config.opinions.startup);
                             }
@@ -965,7 +912,6 @@ opinions {
         assert!(!config.opinions.canonicalization.case_insensitive);
         assert!(config.opinions.canonicalization.strip_parentheticals);
         assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.90);
-        assert_eq!(config.opinions.re_releases.same_fingerprint_different_album, ReReleaseHandling::Flag);
     }
 
     #[test]
@@ -985,7 +931,6 @@ root "/archive"
         assert!(config.opinions.canonicalization.case_insensitive);
         assert!(!config.opinions.canonicalization.strip_parentheticals);
         assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.85);
-        assert_eq!(config.opinions.re_releases.same_fingerprint_different_album, ReReleaseHandling::MarkVariant);
     }
 
     #[test]

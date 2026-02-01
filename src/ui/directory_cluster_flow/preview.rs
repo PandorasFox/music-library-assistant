@@ -147,9 +147,6 @@ impl DirectoryClusterPreviewState {
             });
         }
 
-        // Always add skip option
-        options.push(ClusterResolutionOption::Skip);
-
         options
     }
 

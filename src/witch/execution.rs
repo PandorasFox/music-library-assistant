@@ -198,6 +198,27 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 "[EXECUTION] Mutation failed (label={:?}): {}", label, err
             ));
         }
+
+        // Emit CorruptFile signal for failed IndexFileFromPath mutations.
+        // These files failed to index (corrupt metadata/audio), so they should
+        // be flagged for stashing rather than remaining as mere UnindexedFile signals.
+        if let Mutation::IndexFileFromPath { path, .. } = &mutation {
+            if let Some(sender) = db_thread::signal_sender() {
+                let resolver = paths::get_resolver();
+                if let Some(rel) = resolver.to_relative(path) {
+                    let rel_str = rel.to_string_lossy();
+                    sender.ensure_file_signal(
+                        CorpusFileSignalType::CorruptFile.into(),
+                        &rel_str,
+                        &witness,
+                    );
+                    crate::logging::log_general(format!(
+                        "[EXECUTION] Emitted CorruptFile signal for failed indexing: {}",
+                        rel_str
+                    ));
+                }
+            }
+        }
     }
 
     // Apply structured post-execution pipeline

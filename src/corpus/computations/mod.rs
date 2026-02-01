@@ -186,14 +186,14 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     asleep::Computation::ScanCorpusDirectory { directory, source, force_check } => {
                         asleep::execute_scan_corpus_directory(read_only_db, directory, source, *force_check, &witness, start)
                     }
-                    asleep::Computation::VerifyMtime { track_id, path, expected_mtime_secs, expected_mtime_nanos } => {
-                        asleep::execute_verify_mtime(read_only_db, *track_id, path, *expected_mtime_secs, *expected_mtime_nanos, start)
+                    asleep::Computation::VerifyMtime { inode, path, expected_mtime_secs, expected_mtime_nanos } => {
+                        asleep::execute_verify_mtime(read_only_db, *inode, path, *expected_mtime_secs, *expected_mtime_nanos, start)
                     }
-                    asleep::Computation::VerifyTags { track_id, path } => {
-                        asleep::execute_verify_tags(read_only_db, *track_id, path, &witness, start)
+                    asleep::Computation::VerifyTags { inode, path } => {
+                        asleep::execute_verify_tags(read_only_db, *inode, path, &witness, start)
                     }
-                    asleep::Computation::VerifyAudio { track_id, path } => {
-                        asleep::execute_verify_audio(read_only_db, *track_id, path, &witness, start)
+                    asleep::Computation::VerifyAudio { inode, path } => {
+                        asleep::execute_verify_audio(read_only_db, *inode, path, &witness, start)
                     }
                 };
                 ComputationResult::from_asleep(result)

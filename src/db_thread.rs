@@ -41,7 +41,35 @@ use crate::config;
 // Index Signal Data Types
 // ============================================================================
 
-/// Track audio/file metadata for indexing (no path, no id - those are signal keys).
+/// File entry metadata for the files table.
+///
+/// Used when indexing a file or directory into the files table.
+#[derive(Debug, Clone)]
+pub struct FileData {
+    pub inode: i64,
+    pub source: String,     // 'corpus', 'library', 'inbox'
+    pub is_dir: bool,
+    pub mtime_secs: i64,
+    pub mtime_nanos: i64,
+    pub file_size: i64,
+}
+
+/// Audio-specific metadata for the audio_info table.
+///
+/// Only for audio files (not directories).
+#[derive(Debug, Clone)]
+pub struct AudioData {
+    pub file_type: String,
+    pub duration_ms: Option<i64>,
+    pub bitrate_kbps: Option<i32>,
+    pub sample_rate: Option<i32>,
+    pub fingerprint: Option<Vec<u32>>,
+}
+
+/// Track audio/file metadata for indexing (legacy format).
+///
+/// **DEPRECATED**: Use `FileData` + `AudioData` instead.
+/// Retained for backward compatibility during schema migration.
 #[derive(Debug, Clone)]
 pub struct TrackData {
     pub inode: i64,
@@ -53,7 +81,10 @@ pub struct TrackData {
     pub fingerprint: Option<Vec<u32>>,
 }
 
-/// Scan state metadata for incremental scanning.
+/// Scan state metadata for incremental scanning (legacy format).
+///
+/// **DEPRECATED**: Use `FileData` instead. Scan state is now stored
+/// directly in the `files` table via mtime_* columns.
 #[derive(Debug, Clone)]
 pub struct ScanStateData {
     pub inode: i64,
@@ -158,6 +189,9 @@ enum SignalWriteOp {
         library_root: PathBuf,
         file_path: PathBuf,
         inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
         scanned_at: i64,
     },
 
@@ -196,20 +230,19 @@ enum SignalWriteOp {
     },
 
     // =========================================================================
-    // Track Index Operations (Mutation execution)
+    // File/Audio Index Operations (Mutation execution)
     // =========================================================================
 
-    /// Index a track (observed file state → DB).
-    /// Atomically: insert/replace track, set tags, upsert scan_state.
-    IndexTrack {
+    /// Index an audio file (files + audio_info + corpus_tags).
+    /// Atomically: insert/replace files row, upsert audio_info, set tags.
+    IndexAudioFile {
         path: String,
-        source: String,
-        track_data: TrackData,
+        file_data: FileData,
+        audio_data: AudioData,
         tags: Vec<(String, String)>,
-        scan_state: ScanStateData,
     },
 
-    /// Drop track from index (file no longer exists or excluded).
+    /// Drop file from index (file no longer exists or excluded).
     /// Cascades to tags, scan_state, tag_edit_history.
     DropFromIndex {
         path: String,
@@ -261,8 +294,8 @@ enum SignalWriteOp {
         scan_state: ScanStateData,
     },
 
-    /// Delete scan state by inode.
-    DeleteScanStateByInode {
+    /// Drop file from index by inode (removes from files table).
+    DropFileIndexByInode {
         source: String,
         inode: i64,
     },
@@ -560,6 +593,9 @@ impl SignalWriteSender {
         library_root: &std::path::Path,
         file_path: &std::path::Path,
         inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
         scanned_at: i64,
         _witness: &ComputationWitness,
     ) {
@@ -569,6 +605,9 @@ impl SignalWriteSender {
             library_root: library_root.to_path_buf(),
             file_path: file_path.to_path_buf(),
             inode,
+            mtime_secs,
+            mtime_nanos,
+            file_size,
             scanned_at,
         });
     }
@@ -643,30 +682,31 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
-    // Track Index Operations (Mutation execution)
+    // File/Audio Index Operations (Mutation execution)
     // =========================================================================
 
-    /// Index a track (atomically insert/replace track, set tags, upsert scan_state).
-    pub fn index_track(
+    /// Index an audio file (files + audio_info + corpus_tags).
+    ///
+    /// For corpus files, tags go to corpus_tags table.
+    /// For inbox files, tags go to inbox_tags table.
+    pub fn index_audio_file(
         &self,
         path: &str,
-        source: &str,
-        track_data: TrackData,
+        file_data: FileData,
+        audio_data: AudioData,
         tags: Vec<(String, String)>,
-        scan_state: ScanStateData,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::IndexTrack {
+        let _ = self.tx.send(SignalWriteOp::IndexAudioFile {
             path: path.to_string(),
-            source: source.to_string(),
-            track_data,
+            file_data,
+            audio_data,
             tags,
-            scan_state,
         });
     }
 
-    /// Drop a track from the index by path.
+    /// Drop a file from the index by path.
     pub fn drop_from_index(&self, path: &str, _witness: &MutationExecutionWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::DropFromIndex {
@@ -769,15 +809,15 @@ impl SignalWriteSender {
         });
     }
 
-    /// Delete scan state by inode.
-    pub fn delete_scan_state_by_inode(
+    /// Drop file from index by inode.
+    pub fn drop_file_index_by_inode(
         &self,
         source: &str,
         inode: i64,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::DeleteScanStateByInode {
+        let _ = self.tx.send(SignalWriteOp::DropFileIndexByInode {
             source: source.to_string(),
             inode,
         });
@@ -1110,11 +1150,24 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             library_root,
             file_path,
             inode,
+            mtime_secs,
+            mtime_nanos,
+            file_size,
             scanned_at,
         } => {
             let ctx = file_path.display().to_string();
             with_retry("record_library_file", &ctx, || {
-                db.record_library_file(library_name, library_root, file_path, *inode, *scanned_at, &witness)
+                db.record_library_file(
+                    library_name,
+                    library_root,
+                    file_path,
+                    *inode,
+                    *mtime_secs,
+                    *mtime_nanos,
+                    *file_size,
+                    *scanned_at,
+                    &witness,
+                )
             });
         }
 
@@ -1138,17 +1191,17 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             mtime_secs,
             mtime_nanos,
         } => {
-            with_retry("update_scan_state_mtime", source, || {
+            with_retry("update_file_mtime", source, || {
                 use rusqlite::params;
                 let rows_affected = db.conn()
                     .execute(
-                        "UPDATE scan_state SET mtime_secs = ?1, mtime_nanos = ?2 WHERE source = ?3 AND inode = ?4",
+                        "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2 WHERE source = ?3 AND inode = ?4",
                         params![mtime_secs, mtime_nanos, source, inode],
                     )
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))?;
                 if rows_affected == 0 {
                     crate::logging::log_error(format!(
-                        "[DB_THREAD] update_scan_state_mtime: no rows matched for source={}, inode={}",
+                        "[DB_THREAD] update_file_mtime: no rows matched for source={}, inode={}",
                         source, inode
                     ));
                 }
@@ -1174,18 +1227,17 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         }
 
         // =====================================================================
-        // Track Index Operations (Mutation execution)
+        // File/Audio Index Operations (Mutation execution)
         // =====================================================================
 
-        SignalWriteOp::IndexTrack {
+        SignalWriteOp::IndexAudioFile {
             path,
-            source,
-            track_data,
+            file_data,
+            audio_data,
             tags,
-            scan_state,
         } => {
-            with_retry("index_track", path, || {
-                execute_index_track(db, path, source, track_data, tags, scan_state)
+            with_retry("index_audio_file", path, || {
+                execute_index_audio_file(db, path, file_data, audio_data, tags)
             });
         }
 
@@ -1239,22 +1291,22 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::DeleteScanStateByInode { source, inode } => {
-            with_retry("delete_scan_state_by_inode", source, || {
-                db.delete_scan_state_by_inode(source, *inode, &witness).map(|_| ())
+        SignalWriteOp::DropFileIndexByInode { source, inode } => {
+            with_retry("drop_file_index_by_inode", source, || {
+                db.drop_file_index_by_inode(source, *inode, &witness).map(|_| ())
             });
         }
 
         SignalWriteOp::UpdateScanStatePath { source, inode, new_path } => {
-            with_retry("update_scan_state_path", new_path, || {
-                db.update_scan_state_path(source, *inode, new_path, &witness)
+            with_retry("update_file_path", new_path, || {
+                db.update_file_path(source, *inode, new_path, &witness)
             });
         }
 
         SignalWriteOp::CleanupStaleScanState { source, valid_inodes } => {
-            with_retry("cleanup_stale_scan_state", source, || {
+            with_retry("cleanup_stale_files", source, || {
                 let valid_set: std::collections::HashSet<i64> = valid_inodes.iter().copied().collect();
-                db.cleanup_stale_scan_state(source, &valid_set, &witness).map(|_| ())
+                db.cleanup_stale_files(source, &valid_set, &witness).map(|_| ())
             });
         }
 
@@ -1297,11 +1349,12 @@ fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
 }
 
 /// Get track_id by path. Returns None if track doesn't exist.
-fn get_track_id_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>> {
+/// Get inode by path from files table. Returns None if file doesn't exist.
+fn get_inode_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>> {
     use rusqlite::params;
     db.conn()
         .query_row(
-            "SELECT id FROM tracks WHERE path = ?1",
+            "SELECT inode FROM files WHERE path = ?1",
             params![path],
             |row| row.get(0),
         )
@@ -1309,109 +1362,124 @@ fn get_track_id_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>
         .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
 }
 
-/// Execute IndexTrack: atomically insert/replace track, set tags, upsert scan_state.
-fn execute_index_track(
+/// Execute IndexAudioFile: insert/replace files + audio_info + corpus_tags.
+fn execute_index_audio_file(
     db: &Database,
     path: &str,
-    source: &str,
-    track_data: &TrackData,
+    file_data: &FileData,
+    audio_data: &AudioData,
     tags: &[(String, String)],
-    scan_state: &ScanStateData,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Convert fingerprint to BLOB if present
-    let fp_blob: Option<Vec<u8>> = track_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
+    let scanned_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
 
-    // Insert or replace track
+    // Insert or replace files row
     db.conn().execute(
         r#"
-        INSERT OR REPLACE INTO tracks
-        (path, source, inode, file_size, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        INSERT OR REPLACE INTO files
+        (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
         "#,
         params![
+            file_data.inode,
+            &file_data.source,
             path,
-            source,
-            track_data.inode,
-            track_data.file_size,
-            &track_data.file_type,
-            track_data.duration_ms,
-            track_data.bitrate_kbps,
-            track_data.sample_rate,
+            0i32, // is_dir = false for audio files
+            file_data.mtime_secs,
+            file_data.mtime_nanos,
+            file_data.file_size,
+            scanned_at,
+        ],
+    )?;
+
+    // Convert fingerprint to BLOB if present
+    let fp_blob: Option<Vec<u8>> = audio_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
+
+    // Insert or replace audio_info row
+    db.conn().execute(
+        r#"
+        INSERT OR REPLACE INTO audio_info
+        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
+        "#,
+        params![
+            file_data.inode,
+            &audio_data.file_type,
+            audio_data.duration_ms,
+            audio_data.bitrate_kbps,
+            audio_data.sample_rate,
             &fp_blob,
         ],
     )?;
 
-    let track_id = db.conn().last_insert_rowid();
+    // Determine which tag table to use based on source
+    let tag_table = if file_data.source == "inbox" {
+        "inbox_tags"
+    } else {
+        "corpus_tags"
+    };
 
-    // Delete existing tags and insert new ones
+    // Delete existing tags for this inode
     db.conn().execute(
-        "DELETE FROM track_tags WHERE track_id = ?1",
-        params![track_id],
+        &format!("DELETE FROM {} WHERE inode = ?1", tag_table),
+        params![file_data.inode],
     )?;
 
+    // Insert new tags
+    let insert_sql = format!(
+        "INSERT INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+        tag_table
+    );
     for (name, value) in tags {
         if !value.is_empty() {
-            db.conn().execute(
-                "INSERT INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                params![track_id, name, value],
-            )?;
+            db.conn().execute(&insert_sql, params![file_data.inode, name, value])?;
         }
     }
-
-    // Upsert scan_state
-    db.conn().execute(
-        r#"
-        INSERT INTO scan_state (source, inode, path, mtime_secs, mtime_nanos, file_size)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-        ON CONFLICT(source, inode) DO UPDATE SET
-            path = excluded.path,
-            mtime_secs = excluded.mtime_secs,
-            mtime_nanos = excluded.mtime_nanos,
-            file_size = excluded.file_size,
-            scanned_at = CURRENT_TIMESTAMP
-        "#,
-        params![
-            source,
-            scan_state.inode,
-            path,
-            scan_state.mtime_secs,
-            scan_state.mtime_nanos,
-            scan_state.file_size,
-        ],
-    )?;
 
     Ok(())
 }
 
-/// Execute DropFromIndex: delete track and cascades.
+/// Execute DropFromIndex: delete file entry and cascades.
+/// audio_info and tags cascade via foreign keys.
 fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
     use rusqlite::params;
 
-    // Get track_id first
-    let track_id = match get_track_id_by_path(db, path)? {
+    // Get inode first
+    let inode = match get_inode_by_path(db, path)? {
         Some(id) => id,
-        None => return Ok(()), // Track doesn't exist, nothing to do
+        None => return Ok(()), // File doesn't exist, nothing to do
     };
 
     // Delete tag_edit_history first (plain FK without CASCADE)
     db.conn().execute(
-        "DELETE FROM tag_edit_history WHERE track_id = ?1",
-        params![track_id],
+        "DELETE FROM tag_edit_history WHERE inode = ?1",
+        params![inode],
     )?;
 
-    // Delete the track (track_tags, tag_mismatches cascade automatically)
+    // Delete the file entry (audio_info, corpus_tags/inbox_tags cascade automatically)
     db.conn().execute(
-        "DELETE FROM tracks WHERE id = ?1",
-        params![track_id],
-    )?;
-
-    // Also clean up scan_state entry for this path
-    db.conn().execute(
-        "DELETE FROM scan_state WHERE path = ?1",
+        "DELETE FROM files WHERE path = ?1",
         params![path],
     )?;
+
+    // If no other paths reference this inode, clean up audio_info
+    // (FK CASCADE should handle this, but be explicit)
+    let count: i64 = db.conn().query_row(
+        "SELECT COUNT(*) FROM files WHERE inode = ?1",
+        params![inode],
+        |row| row.get(0),
+    )?;
+    if count == 0 {
+        db.conn().execute(
+            "DELETE FROM audio_info WHERE inode = ?1",
+            params![inode],
+        )?;
+    }
 
     Ok(())
 }
@@ -1420,15 +1488,9 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
 fn execute_update_track_path(db: &Database, old_path: &str, new_path: &str) -> anyhow::Result<()> {
     use rusqlite::params;
 
-    // Update tracks table
+    // Update files table
     db.conn().execute(
-        "UPDATE tracks SET path = ?1 WHERE path = ?2",
-        params![new_path, old_path],
-    )?;
-
-    // Update scan_state table
-    db.conn().execute(
-        "UPDATE scan_state SET path = ?1 WHERE path = ?2",
+        "UPDATE files SET path = ?1 WHERE path = ?2",
         params![new_path, old_path],
     )?;
 
@@ -1436,36 +1498,66 @@ fn execute_update_track_path(db: &Database, old_path: &str, new_path: &str) -> a
 }
 
 /// Execute UpdateTrackInode: update inode for replaced file.
+/// This handles the case where a file's content is replaced (new inode).
 fn execute_update_track_inode(db: &Database, path: &str, new_inode: i64) -> anyhow::Result<()> {
     use rusqlite::params;
 
+    // Get old inode first
+    let old_inode = match get_inode_by_path(db, path)? {
+        Some(id) => id,
+        None => return Ok(()), // File doesn't exist
+    };
+
+    // Update files table inode
     db.conn().execute(
-        "UPDATE tracks SET inode = ?1 WHERE path = ?2",
+        "UPDATE files SET inode = ?1 WHERE path = ?2",
         params![new_inode, path],
     )?;
+
+    // Move audio_info to new inode if old inode has no other references
+    let count: i64 = db.conn().query_row(
+        "SELECT COUNT(*) FROM files WHERE inode = ?1",
+        params![old_inode],
+        |row| row.get(0),
+    )?;
+    if count == 0 {
+        // Copy audio_info to new inode
+        db.conn().execute(
+            "INSERT OR REPLACE INTO audio_info SELECT ?1, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush FROM audio_info WHERE inode = ?2",
+            params![new_inode, old_inode],
+        )?;
+        // Copy tags to new inode
+        db.conn().execute(
+            "INSERT OR IGNORE INTO corpus_tags SELECT ?1, tag_name, tag_value FROM corpus_tags WHERE inode = ?2",
+            params![new_inode, old_inode],
+        )?;
+        // Delete old entries
+        db.conn().execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
+        db.conn().execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
+    }
 
     Ok(())
 }
 
-/// Execute SetTrackTags: replace all tags for a track.
+/// Execute SetTrackTags: replace all tags for a file (corpus_tags).
 fn execute_set_track_tags(db: &Database, path: &str, tags: &[(String, String)]) -> anyhow::Result<()> {
     use rusqlite::params;
 
-    let track_id = get_track_id_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", path))?;
+    let inode = get_inode_by_path(db, path)?
+        .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
     // Delete existing tags
     db.conn().execute(
-        "DELETE FROM track_tags WHERE track_id = ?1",
-        params![track_id],
+        "DELETE FROM corpus_tags WHERE inode = ?1",
+        params![inode],
     )?;
 
     // Insert new tags
     for (name, value) in tags {
         if !value.is_empty() {
             db.conn().execute(
-                "INSERT INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                params![track_id, name, value],
+                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                params![inode, name, value],
             )?;
         }
     }
@@ -1474,6 +1566,7 @@ fn execute_set_track_tags(db: &Database, path: &str, tags: &[(String, String)]) 
 }
 
 /// Execute UpdateTrackMetadata: full replace for out-of-band changes.
+/// Updates files, audio_info, and corpus_tags.
 fn execute_update_track_metadata(
     db: &Database,
     path: &str,
@@ -1481,45 +1574,67 @@ fn execute_update_track_metadata(
     tags: &[(String, String)],
 ) -> anyhow::Result<()> {
     use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    let track_id = get_track_id_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", path))?;
+    let inode = get_inode_by_path(db, path)?
+        .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
+
+    let scanned_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // Update files table (inode, file_size)
+    db.conn().execute(
+        "UPDATE files SET inode = ?1, file_size = ?2, scanned_at = ?3 WHERE path = ?4",
+        params![track_data.inode, track_data.file_size, scanned_at, path],
+    )?;
 
     // Convert fingerprint to BLOB if present
     let fp_blob: Option<Vec<u8>> = track_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
 
-    // Update track metadata
+    // Update audio_info (or insert if new inode)
     db.conn().execute(
         r#"
-        UPDATE tracks SET
-            inode = ?1, file_size = ?2, file_type = ?3, duration_ms = ?4,
-            bitrate_kbps = ?5, sample_rate = ?6, fingerprint = ?7
-        WHERE id = ?8
+        INSERT OR REPLACE INTO audio_info
+        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
         "#,
         params![
             track_data.inode,
-            track_data.file_size,
             &track_data.file_type,
             track_data.duration_ms,
             track_data.bitrate_kbps,
             track_data.sample_rate,
             &fp_blob,
-            track_id,
         ],
     )?;
 
-    // Replace tags
+    // Replace tags in corpus_tags
     db.conn().execute(
-        "DELETE FROM track_tags WHERE track_id = ?1",
-        params![track_id],
+        "DELETE FROM corpus_tags WHERE inode = ?1",
+        params![inode],
     )?;
 
     for (name, value) in tags {
         if !value.is_empty() {
             db.conn().execute(
-                "INSERT INTO track_tags (track_id, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                params![track_id, name, value],
+                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                params![track_data.inode, name, value],
             )?;
+        }
+    }
+
+    // Clean up old inode's audio_info if orphaned
+    if inode != track_data.inode {
+        let count: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM files WHERE inode = ?1",
+            params![inode],
+            |row| row.get(0),
+        )?;
+        if count == 0 {
+            db.conn().execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
+            db.conn().execute("DELETE FROM corpus_tags WHERE inode = ?1", params![inode])?;
         }
     }
 
@@ -1527,6 +1642,7 @@ fn execute_update_track_metadata(
 }
 
 /// Execute UpdateTrackPathWithMetadata: update path and file metadata for transcoded file.
+/// Updates files table path/inode/file_size, and audio_info file_type.
 fn execute_update_track_path_with_metadata(
     db: &Database,
     old_path: &str,
@@ -1536,20 +1652,69 @@ fn execute_update_track_path_with_metadata(
     new_file_type: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    // Get old inode
+    let old_inode = get_inode_by_path(db, old_path)?
+        .ok_or_else(|| anyhow::anyhow!("File not found at old path: {}", old_path))?;
+
+    let scanned_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // Update files table
     let rows_updated = db.conn().execute(
-        "UPDATE tracks SET path = ?1, inode = ?2, file_size = ?3, file_type = ?4 WHERE path = ?5",
-        params![new_path, new_inode, new_file_size, new_file_type, old_path],
+        "UPDATE files SET path = ?1, inode = ?2, file_size = ?3, scanned_at = ?4 WHERE path = ?5",
+        params![new_path, new_inode, new_file_size, scanned_at, old_path],
     )?;
 
     if rows_updated == 0 {
-        anyhow::bail!("Track not found at old path: {}", old_path);
+        anyhow::bail!("File not found at old path: {}", old_path);
+    }
+
+    // Get old audio_info to copy to new inode
+    let (duration_ms, bitrate_kbps, sample_rate, fingerprint): (Option<i64>, Option<i32>, Option<i32>, Option<Vec<u8>>) =
+        db.conn().query_row(
+            "SELECT duration_ms, bitrate_kbps, sample_rate, fingerprint FROM audio_info WHERE inode = ?1",
+            params![old_inode],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+
+    // Insert new audio_info with new file_type
+    db.conn().execute(
+        r#"
+        INSERT OR REPLACE INTO audio_info
+        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
+        "#,
+        params![new_inode, new_file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint],
+    )?;
+
+    // Copy tags to new inode
+    db.conn().execute(
+        "INSERT OR IGNORE INTO corpus_tags SELECT ?1, tag_name, tag_value FROM corpus_tags WHERE inode = ?2",
+        params![new_inode, old_inode],
+    )?;
+
+    // Clean up old inode if orphaned
+    if old_inode != new_inode {
+        let count: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM files WHERE inode = ?1",
+            params![old_inode],
+            |row| row.get(0),
+        )?;
+        if count == 0 {
+            db.conn().execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
+            db.conn().execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
+        }
     }
 
     Ok(())
 }
 
-/// Execute UpsertScanState: upsert scan state entry.
+/// Execute UpsertScanState: update file mtime in files table.
+/// The scan_state is now stored directly in the files table.
 fn execute_upsert_scan_state(
     db: &Database,
     path: &str,
@@ -1557,61 +1722,72 @@ fn execute_upsert_scan_state(
     scan_state: &ScanStateData,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    let scanned_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // Upsert into files table (scan state is now part of files)
     db.conn().execute(
         r#"
-        INSERT INTO scan_state (source, inode, path, mtime_secs, mtime_nanos, file_size)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-        ON CONFLICT(source, inode) DO UPDATE SET
-            path = excluded.path,
+        INSERT INTO files (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)
+        ON CONFLICT(inode, source, path) DO UPDATE SET
             mtime_secs = excluded.mtime_secs,
             mtime_nanos = excluded.mtime_nanos,
             file_size = excluded.file_size,
-            scanned_at = CURRENT_TIMESTAMP
+            scanned_at = excluded.scanned_at
         "#,
         params![
-            source,
             scan_state.inode,
+            source,
             path,
             scan_state.mtime_secs,
             scan_state.mtime_nanos,
             scan_state.file_size,
+            scanned_at,
         ],
     )?;
 
     Ok(())
 }
 
-/// Execute ClearTagMismatchesForTrack: clear all mismatches for a track.
-fn execute_clear_tag_mismatches_for_track(db: &Database, path: &str) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    let track_id = match get_track_id_by_path(db, path)? {
-        Some(id) => id,
-        None => return Ok(()), // Track doesn't exist, nothing to clear
-    };
-
-    db.conn().execute(
-        "DELETE FROM tag_mismatches WHERE track_id = ?1",
-        params![track_id],
-    )?;
-
+/// Execute ClearTagMismatchesForTrack: clear all mismatches for a file.
+/// NOTE: tag_mismatches table is dropped in new schema. Tag conflicts are
+/// now handled via OOB signals with mismatch details in metadata_json.
+/// This is a no-op placeholder until callers are updated.
+fn execute_clear_tag_mismatches_for_track(_db: &Database, _path: &str) -> anyhow::Result<()> {
+    // TODO: Clear OOB signals for this path when tag conflicts are fully signal-based
     Ok(())
 }
 
-/// Execute SetNeedsDiskFlush: update the needs_disk_flush flag for a track.
+/// Execute SetNeedsDiskFlush: update the needs_tag_flush flag on audio_info.
 fn execute_set_needs_disk_flush(db: &Database, path: &str, value: bool) -> anyhow::Result<()> {
     use rusqlite::params;
 
+    // Get inode from path
+    let inode = match get_inode_by_path(db, path)? {
+        Some(id) => id,
+        None => {
+            crate::logging::log_error(format!(
+                "[DB_THREAD] set_needs_disk_flush: no file found for path={}",
+                path
+            ));
+            return Ok(());
+        }
+    };
+
     let rows_updated = db.conn().execute(
-        "UPDATE tracks SET needs_disk_flush = ?1 WHERE path = ?2",
-        params![value as i32, path],
+        "UPDATE audio_info SET needs_tag_flush = ?1 WHERE inode = ?2",
+        params![value as i32, inode],
     )?;
 
     if rows_updated == 0 {
         crate::logging::log_error(format!(
-            "[DB_THREAD] set_needs_disk_flush: no track found for path={}",
-            path
+            "[DB_THREAD] set_needs_disk_flush: no audio_info found for inode={}",
+            inode
         ));
     }
 

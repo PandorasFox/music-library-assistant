@@ -67,10 +67,10 @@ pub enum Computation {
 
     /// Verify single file mtime.
     ///
-    /// Checks if current mtime differs from expected (from scan_state).
+    /// Checks if current mtime differs from expected (from files table).
     /// Spawns VerifyTags if mtime mismatched.
     VerifyMtime {
-        track_id: i64,
+        inode: i64,
         path: PathBuf,
         expected_mtime_secs: i64,
         expected_mtime_nanos: i64,
@@ -80,7 +80,7 @@ pub enum Computation {
     ///
     /// Compares the actual file tags to what's stored in the index.
     VerifyTags {
-        track_id: i64,
+        inode: i64,
         path: PathBuf,
     },
 
@@ -89,7 +89,7 @@ pub enum Computation {
     /// Catches truncated files, corrupt streams, and other audio-level issues
     /// that tag verification wouldn't detect. Emits CorruptFile if decode fails.
     VerifyAudio {
-        track_id: i64,
+        inode: i64,
         path: PathBuf,
     },
 }

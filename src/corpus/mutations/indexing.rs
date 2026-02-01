@@ -27,7 +27,7 @@ pub fn execute_index_track(
     metadata: &ExtractedMetadata,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread::{self, TrackData, ScanStateData};
+    use crate::db_thread::{self, FileData, AudioData};
     use std::time::UNIX_EPOCH;
 
     let resolver = paths::get_resolver();
@@ -45,18 +45,7 @@ pub fn execute_index_track(
         })?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Build TrackData from ExtractedMetadata
-    let track_data = TrackData {
-        inode: metadata.inode,
-        file_size: metadata.file_size,
-        file_type: metadata.file_type.clone(),
-        duration_ms: metadata.duration_ms,
-        bitrate_kbps: metadata.bitrate_kbps,
-        sample_rate: metadata.sample_rate,
-        fingerprint: metadata.fingerprint.clone(),
-    };
-
-    // Get file metadata for scan_state using portable API (consistent with comparison code)
+    // Get file metadata using portable API (consistent with comparison code)
     let file_metadata = std::fs::metadata(path)
         .with_context(|| format!("Failed to read file metadata: {}", path.display()))?;
     let (mtime_secs, mtime_nanos) = file_metadata
@@ -65,20 +54,32 @@ pub fn execute_index_track(
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
         .unwrap_or((0, 0));
-    let scan_state = ScanStateData {
+
+    // Build FileData from metadata
+    let file_data = FileData {
         inode: metadata.inode,
+        source: source.to_string(),
+        is_dir: false,
         mtime_secs,
         mtime_nanos,
         file_size: metadata.file_size,
     };
 
+    // Build AudioData from ExtractedMetadata
+    let audio_data = AudioData {
+        file_type: metadata.file_type.clone(),
+        duration_ms: metadata.duration_ms,
+        bitrate_kbps: metadata.bitrate_kbps,
+        sample_rate: metadata.sample_rate,
+        fingerprint: metadata.fingerprint.clone(),
+    };
+
     // Route write through signal_sender (fire-and-forget)
-    sender.index_track(
+    sender.index_audio_file(
         &rel_path_str,
-        source,
-        track_data,
+        file_data,
+        audio_data,
         metadata.tags.clone(),
-        scan_state,
         witness,
     );
 
@@ -277,7 +278,7 @@ pub fn execute_drop_from_index(
 
     // Also delete scan_state entry if inode/source provided
     if let (Some(inode), Some(source)) = (inode, source) {
-        sender.delete_scan_state_by_inode(source, inode, witness);
+        sender.drop_file_index_by_inode(source, inode, witness);
     }
 
     Ok(())
@@ -372,7 +373,7 @@ impl TagVerifyResult {
 /// Note: This function is public because it's called from corpus::computations.
 pub fn execute_verify_tags(
     db: &Database,
-    track_id: i64,
+    inode: i64,
     path: &Path,
     sender: &crate::db_thread::SignalWriteSender,
     witness: &crate::corpus::computations::ComputationWitness,
@@ -380,15 +381,15 @@ pub fn execute_verify_tags(
     use crate::corpus::tags::TagSet;
     use std::collections::HashSet;
 
-    // Verify track exists
-    let _track = db
-        .get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+    // Verify audio file exists in the index
+    let _audio_info = db
+        .get_audio_info(inode)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
 
     // Get tags from database as TagSet
-    let db_tags = db.get_track_tags(track_id)?;
+    let db_tags = db.get_corpus_tags(inode)?;
     let db_tagset = TagSet::new(
-        db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
+        db_tags.into_iter().map(|t: crate::corpus::db::types::AudioTag| (t.tag_name, t.tag_value))
     );
 
     // Read tags from file as TagSet
@@ -468,7 +469,7 @@ pub fn execute_verify_tags(
 
             // Record mismatch via db_thread
             sender.record_tag_mismatch(
-                track_id,
+                inode,
                 &tag_name,
                 db_display.as_deref(),
                 disk_display.as_deref(),
@@ -476,7 +477,7 @@ pub fn execute_verify_tags(
             );
         } else {
             // Clear any existing mismatch for this field (now in sync)
-            sender.clear_tag_mismatch(track_id, &tag_name, witness);
+            sender.clear_tag_mismatch(inode, &tag_name, witness);
         }
     }
 
@@ -581,7 +582,7 @@ pub fn execute_acknowledge_inode_changed(
         sender.update_track_inode(&track.path, new_inode, witness);
 
         // Delete old scan_state entry (keyed by old inode) via db_thread
-        sender.delete_scan_state_by_inode(&track.source, track.inode, witness);
+        sender.drop_file_index_by_inode(&track.source, track.inode, witness);
 
         // Insert new scan_state entry with new inode and current mtime via db_thread
         sender.upsert_scan_state(

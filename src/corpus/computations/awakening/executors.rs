@@ -231,7 +231,7 @@ pub fn execute_update_corpus_file_signals(
     let path_str = relative_path.to_string_lossy().to_string();
 
     let file_exists = path.exists() && is_audio_file(path);
-    let is_indexed = read_only_db.get_track_by_path(&path_str).ok().flatten().is_some();
+    let is_indexed = read_only_db.get_audio_file_by_path(&path_str).ok().flatten().is_some();
 
     if file_exists {
         ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
@@ -420,14 +420,34 @@ pub fn execute_scan_library_directory(
     };
 
     // Collect audio files in this directory (non-recursive)
-    let mut library_files: Vec<(PathBuf, i64)> = Vec::new();
+    // Capture: path, inode, mtime, file_size for new files table schema
+    struct LibraryFileInfo {
+        path: PathBuf,
+        inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
+    }
+    let mut library_files: Vec<LibraryFileInfo> = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(directory) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && is_audio_file(&path) {
                 if let Ok(metadata) = std::fs::metadata(&path) {
-                    library_files.push((path, metadata.ino() as i64));
+                    let mtime = metadata.modified().ok().and_then(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH).ok()
+                    });
+                    let (mtime_secs, mtime_nanos) = mtime
+                        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+                        .unwrap_or((0, 0));
+                    library_files.push(LibraryFileInfo {
+                        path,
+                        inode: metadata.ino() as i64,
+                        mtime_secs,
+                        mtime_nanos,
+                        file_size: metadata.len() as i64,
+                    });
                 }
             }
         }
@@ -446,18 +466,21 @@ pub fn execute_scan_library_directory(
             .to_relative(library_root)
             .unwrap_or_else(|| library_root.to_path_buf());
 
-        for (file_path, inode) in &library_files {
+        for info in &library_files {
             // Convert file_path to relative (relative to archive root)
             let relative_file_path = resolver
-                .to_relative(file_path)
-                .unwrap_or_else(|| file_path.clone());
+                .to_relative(&info.path)
+                .unwrap_or_else(|| info.path.clone());
 
             // Routes through db_thread which has write access
             sender.record_library_file(
                 library_name,
                 &relative_library_root,
                 &relative_file_path,
-                *inode,
+                info.inode,
+                info.mtime_secs,
+                info.mtime_nanos,
+                info.file_size,
                 scanned_at,
                 witness,
             );

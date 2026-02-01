@@ -1,13 +1,139 @@
-//! Core database types for track metadata and scan state.
+//! Core database types for file metadata and audio info.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+// ============================================================================
+// New Schema Types (inode-based identity)
+// ============================================================================
+
+/// File source classification.
+///
+/// Determines which root directory the file belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileSource {
+    /// File is in the corpus (source of truth)
+    Corpus,
+    /// File is in a library (deployment target)
+    Library,
+    /// File is in the inbox (pending triage)
+    Inbox,
+}
+
+impl FileSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Corpus => "corpus",
+            Self::Library => "library",
+            Self::Inbox => "inbox",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "corpus" => Some(Self::Corpus),
+            "library" => Some(Self::Library),
+            "inbox" => Some(Self::Inbox),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for FileSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// A path manifestation in the files table.
+///
+/// Represents a single path (file or directory) in one of the source locations.
+/// Multiple paths can share the same inode (hard links across corpus + library).
+#[derive(Debug, Clone)]
+pub struct FileEntry {
+    /// The inode number (content identity)
+    pub inode: i64,
+    /// Which root this path belongs to
+    pub source: FileSource,
+    /// Relative path within the source root
+    pub path: String,
+    /// True if this is a directory, false if a file
+    pub is_dir: bool,
+    /// Filesystem modification time (seconds since epoch)
+    pub mtime_secs: i64,
+    /// Filesystem modification time (nanoseconds component)
+    pub mtime_nanos: i64,
+    /// File size in bytes
+    pub file_size: i64,
+    /// When this entry was last scanned (Unix timestamp)
+    pub scanned_at: i64,
+}
+
+/// Audio-specific metadata for audio files.
+///
+/// Only audio file inodes have entries in audio_info.
+/// Directories do not have audio_info records.
+#[derive(Debug, Clone)]
+pub struct AudioInfo {
+    /// The inode number (links to files.inode)
+    pub inode: i64,
+    /// Audio format (flac, mp3, opus, ogg, etc.)
+    pub file_type: String,
+    /// Duration in milliseconds
+    pub duration_ms: Option<i64>,
+    /// Bitrate in kbps
+    pub bitrate_kbps: Option<i32>,
+    /// Sample rate in Hz
+    pub sample_rate: Option<i32>,
+    /// Chromaprint acoustic fingerprint as raw u32 values
+    pub fingerprint: Option<Vec<u32>>,
+    /// True when DB tags have changed but disk hasn't been updated yet
+    pub needs_tag_flush: bool,
+}
+
+/// Combined view of a file entry with its audio info.
+///
+/// Used for audio files that have both a files row and audio_info row.
+#[derive(Debug, Clone)]
+pub struct AudioFile {
+    pub entry: FileEntry,
+    pub audio: AudioInfo,
+}
+
+impl AudioFile {
+    /// Convenience accessor for the path
+    pub fn path(&self) -> &str {
+        &self.entry.path
+    }
+
+    /// Convenience accessor for the inode
+    pub fn inode(&self) -> i64 {
+        self.entry.inode
+    }
+}
+
+/// A single tag associated with an audio file.
+///
+/// Stored in corpus_tags or inbox_tags tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioTag {
+    pub inode: i64,
+    pub tag_name: String,
+    pub tag_value: String,
+}
+
+// ============================================================================
+// Legacy Types (for compatibility during migration)
+// ============================================================================
 
 /// Universal audio file representation.
 /// Stored in the `tracks` table.
 ///
 /// Contains ONLY file and audio waveform metadata.
 /// Tag metadata (artist, title, album, etc.) is stored in `track_tags` table.
+///
+/// **DEPRECATED**: Use `AudioFile` instead. This type is retained for
+/// compatibility during the schema migration.
 #[derive(Debug, Clone)]
 pub struct Track {
     pub id: Option<i64>,
@@ -27,8 +153,29 @@ pub struct Track {
     pub needs_disk_flush: bool,
 }
 
+impl Track {
+    /// Convert from AudioFile to Track for backward compatibility.
+    pub fn from_audio_file(af: &AudioFile) -> Self {
+        Self {
+            id: None, // New schema doesn't use synthetic track_id
+            path: af.entry.path.clone(),
+            source: af.entry.source.as_str().to_string(),
+            inode: af.entry.inode,
+            file_size: af.entry.file_size,
+            file_type: af.audio.file_type.clone(),
+            duration_ms: af.audio.duration_ms,
+            bitrate_kbps: af.audio.bitrate_kbps,
+            sample_rate: af.audio.sample_rate,
+            fingerprint: af.audio.fingerprint.clone(),
+            needs_disk_flush: af.audio.needs_tag_flush,
+        }
+    }
+}
+
 /// A single tag associated with a track.
 /// Stored in the `track_tags` table.
+///
+/// **DEPRECATED**: Use `AudioTag` instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackTag {
     pub track_id: i64,
@@ -36,8 +183,33 @@ pub struct TrackTag {
     pub tag_value: String,
 }
 
-/// Entry in the scan_state table for incremental scanning.
-/// Tracks inode + mtime to detect file changes.
+impl TrackTag {
+    /// Convert from AudioTag, using inode as track_id for compatibility.
+    pub fn from_audio_tag(at: &AudioTag) -> Self {
+        Self {
+            track_id: at.inode,
+            tag_name: at.tag_name.clone(),
+            tag_value: at.tag_value.clone(),
+        }
+    }
+}
+
+/// Entry from files table with mtime info for incremental scanning.
+///
+/// Replaces ScanStateEntry - mtime is now stored directly in files table.
+#[derive(Debug, Clone)]
+pub struct FileMtimeEntry {
+    pub inode: i64,
+    pub source: FileSource,
+    pub path: String,
+    pub mtime_secs: i64,
+    pub mtime_nanos: i64,
+    pub file_size: i64,
+}
+
+/// Legacy scan_state entry type.
+///
+/// **DEPRECATED**: Scan state is now tracked via files.mtime_* columns.
 #[derive(Debug, Clone)]
 pub struct ScanStateEntry {
     pub _source: String,

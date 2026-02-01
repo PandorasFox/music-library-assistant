@@ -1,9 +1,7 @@
-//! Library scan state queries.
+//! Library scan queries.
 //!
-//! This module handles persistence of library file scan results between
-//! computation phases:
-//! - **Awakening**: ScanLibraryDirectory writes discovered files here
-//! - **Awake**: DeriveDeployHealthSignals reads and processes this data
+//! Library files are stored in the `files` table with `source = 'library'`.
+//! The path includes the library name as a prefix: `library_name/artist/album/track.flac`.
 //!
 //! Write operations require a witness for authorized execution.
 
@@ -11,7 +9,7 @@ use anyhow::{Context, Result};
 use rusqlite::params;
 use std::path::PathBuf;
 
-use super::Database;
+use super::{dir_like_pattern_str, Database};
 use crate::db_thread::SignalWitness;
 
 /// A library file discovered during scanning.
@@ -22,42 +20,55 @@ pub struct LibraryScanEntry {
 }
 
 impl Database {
-    /// Clear all scan state for a library before re-scanning.
+    /// Clear all files for a library before re-scanning.
     ///
+    /// Deletes all files where source = 'library' and path starts with `library_name/`.
     /// Called at the start of WalkLibrary to ensure fresh scan results.
     pub fn clear_library_scan_state(&self, library_name: &str, _witness: &impl SignalWitness) -> Result<usize> {
+        let pattern = dir_like_pattern_str(library_name);
         let count = self
             .conn
             .execute(
-                "DELETE FROM library_scan_state WHERE library_name = ?1",
-                params![library_name],
+                "DELETE FROM files WHERE source = 'library' AND path LIKE ?1 ESCAPE '\\'",
+                params![pattern],
             )
-            .context("Failed to clear library scan state")?;
+            .context("Failed to clear library files")?;
         Ok(count)
     }
 
     /// Record a file discovered during library scanning.
     ///
-    /// Called by ScanLibraryDirectory (Awakening phase) for each audio file found.
+    /// Stores the file in the `files` table with source = 'library'.
+    /// The path is stored as `library_name/relative_path_within_library`.
     pub fn record_library_file(
         &self,
         library_name: &str,
         library_root: &std::path::Path,
         file_path: &std::path::Path,
         inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
         scanned_at: i64,
         _witness: &impl SignalWitness,
     ) -> Result<()> {
+        // Compute library-relative path: strip library_root prefix, prepend library_name
+        let library_relative = file_path
+            .strip_prefix(library_root)
+            .unwrap_or(file_path);
+        let stored_path = format!("{}/{}", library_name, library_relative.display());
+
         self.conn
             .execute(
-                "INSERT OR REPLACE INTO library_scan_state
-                 (library_name, library_root, file_path, inode, scanned_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR REPLACE INTO files
+                 (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+                 VALUES (?1, 'library', ?2, 0, ?3, ?4, ?5, ?6)",
                 params![
-                    library_name,
-                    library_root.to_string_lossy().as_ref(),
-                    file_path.to_string_lossy().as_ref(),
                     inode,
+                    stored_path,
+                    mtime_secs,
+                    mtime_nanos,
+                    file_size,
                     scanned_at
                 ],
             )
@@ -67,34 +78,35 @@ impl Database {
 
     /// Get all files for a library (for DeriveDeployHealthSignals).
     ///
-    /// Returns all files discovered during the most recent scan of the library.
+    /// Returns all files where source = 'library' and path starts with `library_name/`.
     pub fn get_library_scan_files(&self, library_name: &str) -> Result<Vec<LibraryScanEntry>> {
+        let pattern = dir_like_pattern_str(library_name);
         let mut stmt = self.conn.prepare(
-            "SELECT file_path, inode
-             FROM library_scan_state
-             WHERE library_name = ?1
-             ORDER BY file_path",
+            "SELECT path, inode
+             FROM files
+             WHERE source = 'library' AND path LIKE ?1 ESCAPE '\\'
+             ORDER BY path",
         )?;
 
         let entries = stmt
-            .query_map(params![library_name], |row| {
+            .query_map(params![pattern], |row| {
                 Ok(LibraryScanEntry {
                     file_path: PathBuf::from(row.get::<_, String>(0)?),
                     inode: row.get(1)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
-            .context("Failed to query library scan files")?;
+            .context("Failed to query library files")?;
 
         Ok(entries)
     }
 
     /// Get all files across all libraries.
     ///
-    /// Returns all files discovered during library scans, for corpus-side deploy status.
+    /// Returns all files where source = 'library'.
     pub fn get_library_scan_files_all(&self) -> Result<Vec<LibraryScanEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT file_path, inode FROM library_scan_state ORDER BY file_path",
+            "SELECT path, inode FROM files WHERE source = 'library' ORDER BY path",
         )?;
 
         let entries = stmt
@@ -105,7 +117,7 @@ impl Database {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
-            .context("Failed to query all library scan files")?;
+            .context("Failed to query all library files")?;
 
         Ok(entries)
     }
@@ -116,12 +128,12 @@ impl Database {
     pub fn get_all_library_scan_inodes(&self) -> Result<std::collections::HashSet<i64>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT DISTINCT inode FROM library_scan_state")?;
+            .prepare("SELECT DISTINCT inode FROM files WHERE source = 'library'")?;
 
         let inodes = stmt
             .query_map(params![], |row| row.get(0))?
             .collect::<Result<std::collections::HashSet<i64>, _>>()
-            .context("Failed to query library scan inodes")?;
+            .context("Failed to query library inodes")?;
 
         Ok(inodes)
     }

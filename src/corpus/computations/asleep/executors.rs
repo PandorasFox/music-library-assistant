@@ -14,7 +14,7 @@ use crate::corpus::computations::helpers::{
     drop_stale_file_signal,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::CorpusFileSignalType;
+use crate::corpus::db::types::{CorpusFileSignalType, FileSource};
 use crate::corpus::db::Database;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -172,9 +172,10 @@ pub fn execute_scan_corpus_directory(
     // Build lookup map for disk inodes
     let disk_inodes: HashSet<i64> = disk_state.iter().map(|(inode, _, _, _)| *inode).collect();
 
-    // Get indexed inodes from scan_state for comparison
+    // Get indexed inodes from files table for comparison (mtime info)
+    let file_source = FileSource::from_str(source).unwrap_or(FileSource::Corpus);
     let inode_vec: Vec<i64> = disk_inodes.iter().copied().collect();
-    let indexed_by_inode = read_only_db.get_scan_state_batch(source, &inode_vec).unwrap_or_default();
+    let indexed_by_inode = read_only_db.get_file_mtime_batch(file_source, &inode_vec).unwrap_or_default();
 
     let mut spawn: Vec<Computation> = Vec::new();
     let resolver = paths::get_resolver();
@@ -196,58 +197,47 @@ pub fn execute_scan_corpus_directory(
         ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &relative_path_str, witness);
 
         // Check if file is indexed and needs verification
-        if let Some(entry) = indexed_by_inode.get(inode) {
+        // indexed_by_inode returns HashMap<inode, (mtime_secs, mtime_nanos)>
+        if let Some((db_mtime_secs, db_mtime_nanos)) = indexed_by_inode.get(inode) {
             // File is indexed by inode
-            let mtime_changed = entry.mtime_secs != *disk_mtime_s || entry.mtime_nanos != *disk_mtime_ns;
+            let mtime_changed = *db_mtime_secs != *disk_mtime_s || *db_mtime_nanos != *disk_mtime_ns;
 
             if force_check {
                 // Force-check mode: skip mtime optimization, verify all indexed files directly
-                let track = match read_only_db.get_track_by_path(&relative_path_str) {
-                    Ok(Some(t)) => t,
-                    _ => continue,
-                };
-                let Some(track_id) = track.id else { continue };
-
                 // Verify tags (metadata)
                 spawn.push(Computation::VerifyTags {
-                    track_id,
+                    inode: *inode,
                     path: path.clone(),
                 });
 
                 // Also verify audio integrity (decode entire file)
                 // This catches truncated/corrupt files that tag verification misses
                 spawn.push(Computation::VerifyAudio {
-                    track_id,
+                    inode: *inode,
                     path: path.clone(),
                 });
             } else if mtime_changed {
                 // Normal mode: only verify if mtime changed
-                let track = match read_only_db.get_track_by_path(&relative_path_str) {
-                    Ok(Some(t)) => t,
-                    _ => continue,
-                };
-                let Some(track_id) = track.id else { continue };
-
                 // Mtime mismatched - verify tags via VerifyMtime
                 // Note: path in Computation is still absolute for filesystem operations
                 spawn.push(Computation::VerifyMtime {
-                    track_id,
+                    inode: *inode,
                     path: path.clone(),
-                    expected_mtime_secs: entry.mtime_secs,
-                    expected_mtime_nanos: entry.mtime_nanos,
+                    expected_mtime_secs: *db_mtime_secs,
+                    expected_mtime_nanos: *db_mtime_nanos,
                 });
             }
         } else {
-            // Inode not in scan_state - check if path is indexed with different inode
+            // Inode not in files table - check if path is indexed with different inode
             // This detects file replacement (same path, new inode)
-            if let Ok(Some(track)) = read_only_db.get_track_by_path(&relative_path_str) {
-                if track.inode != *inode {
+            if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(&relative_path_str) {
+                if audio_file.inode() != *inode {
                     // Inode changed! File was replaced.
-                    let Some(track_id) = track.id else { continue };
+                    let old_inode = audio_file.inode();
 
                     // Emit InodeChanged signal with old/new inode metadata
                     let metadata = serde_json::json!({
-                        "old_inode": track.inode,
+                        "old_inode": old_inode,
                         "new_inode": inode,
                     });
                     ensure_file_signal_with_metadata_if_missing(
@@ -262,7 +252,7 @@ pub fn execute_scan_corpus_directory(
                     // Spawn VerifyTags to check for tag differences
                     // (tags may differ between old and new file)
                     spawn.push(Computation::VerifyTags {
-                        track_id,
+                        inode: *inode,
                         path: path.clone(),
                     });
                 }
@@ -314,14 +304,14 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
 /// Phase 3: Verify single file mtime.
 pub fn execute_verify_mtime(
     _read_only_db: &Database,
-    track_id: i64,
+    inode: i64,
     path: &Path,
     expected_mtime_secs: i64,
     expected_mtime_nanos: i64,
     start: Instant,
 ) -> Result {
     let computation = Computation::VerifyMtime {
-        track_id,
+        inode,
         path: path.to_path_buf(),
         expected_mtime_secs,
         expected_mtime_nanos,
@@ -344,7 +334,7 @@ pub fn execute_verify_mtime(
     // If mtime differs from expected, spawn VerifyTags to check actual content
     let spawn = if current_secs != expected_mtime_secs || current_nanos != expected_mtime_nanos {
         vec![Computation::VerifyTags {
-            track_id,
+            inode,
             path: path.to_path_buf(),
         }]
     } else {
@@ -358,22 +348,16 @@ pub fn execute_verify_mtime(
     )
 }
 
-/// Check if a file's disk mtime differs from what's stored in scan_state.
+/// Check if a file's disk mtime differs from what's stored in files table.
 ///
 /// Uses the portable API (extract_mtime) for consistency with ScanCorpusDirectory.
 /// Returns true if mtime differs or if we can't determine (fail-safe to emit signal).
-fn check_mtime_differs(read_only_db: &Database, track_id: i64, path: &Path) -> bool {
-    // Get track to find source and inode
-    let track = match read_only_db.get_track_by_id(track_id) {
-        Ok(Some(t)) => t,
-        _ => return true, // Can't verify, assume differs (fail-safe)
-    };
-
-    // Get scan_state entry for this track
-    let scan_state = match read_only_db.get_scan_state_batch(&track.source, &[track.inode]) {
-        Ok(map) => match map.get(&track.inode) {
-            Some(entry) => entry.clone(),
-            None => return true, // Not in scan_state, assume differs
+fn check_mtime_differs(read_only_db: &Database, inode: i64, path: &Path) -> bool {
+    // Get mtime info from files table for this inode
+    let mtime_info = match read_only_db.get_file_mtime_batch(FileSource::Corpus, &[inode]) {
+        Ok(map) => match map.get(&inode) {
+            Some((db_secs, db_nanos)) => (*db_secs, *db_nanos),
+            None => return true, // Not in files table, assume differs
         },
         Err(_) => return true, // Query failed, assume differs
     };
@@ -386,7 +370,7 @@ fn check_mtime_differs(read_only_db: &Database, track_id: i64, path: &Path) -> b
     let (disk_secs, disk_nanos) = extract_mtime(&metadata);
 
     // Compare
-    scan_state.mtime_secs != disk_secs || scan_state.mtime_nanos != disk_nanos
+    mtime_info.0 != disk_secs || mtime_info.1 != disk_nanos
 }
 
 // ============================================================================
@@ -403,7 +387,7 @@ fn check_mtime_differs(read_only_db: &Database, track_id: i64, path: &Path) -> b
 /// These three signal types are mutually exclusive - emitting one clears the others.
 pub fn execute_verify_tags(
     read_only_db: &Database,
-    track_id: i64,
+    inode: i64,
     path: &Path,
     witness: &ComputationWitness,
     start: Instant,
@@ -411,7 +395,7 @@ pub fn execute_verify_tags(
     use crate::corpus::mutations::indexing;
 
     let computation = Computation::VerifyTags {
-        track_id,
+        inode,
         path: path.to_path_buf(),
     };
 
@@ -441,19 +425,19 @@ pub fn execute_verify_tags(
     };
     let rel_str = rel_path.to_string_lossy().to_string();
 
-    match indexing::execute_verify_tags(read_only_db, track_id, path, &sender, witness) {
+    match indexing::execute_verify_tags(read_only_db, inode, path, &sender, witness) {
         Ok(verify_result) => {
             // Full classification based on TagVerifyResult
             if verify_result.is_clean() {
                 // Tags match exactly - but we need to check if mtime actually differs
                 // (in force_check mode, VerifyTags runs even when mtime matches)
-                let mtime_actually_differs = check_mtime_differs(read_only_db, track_id, path);
+                let mtime_actually_differs = check_mtime_differs(read_only_db, inode, path);
 
                 if mtime_actually_differs {
                     // Mtime changed but tags are identical - requires operator acknowledgement
                     log_general(format!(
-                        "[COMPUTE] VerifyTags: mtime-only change for track {} ({})",
-                        track_id, path.display()
+                        "[COMPUTE] VerifyTags: mtime-only change for inode {} ({})",
+                        inode, path.display()
                     ));
                     ensure_file_signal_if_missing(
                         read_only_db,
@@ -480,8 +464,8 @@ pub fn execute_verify_tags(
                 } else {
                     // Tags match AND mtime matches - file is healthy, clear all OOB signals
                     log_general(format!(
-                        "[COMPUTE] VerifyTags: file healthy for track {} ({})",
-                        track_id, path.display()
+                        "[COMPUTE] VerifyTags: file healthy for inode {} ({})",
+                        inode, path.display()
                     ));
                     drop_stale_file_signal(
                         read_only_db,
@@ -508,8 +492,8 @@ pub fn execute_verify_tags(
             } else if verify_result.is_conflict() {
                 // Value conflicts or mixed-direction extras - requires operator decision
                 log_general(format!(
-                    "[COMPUTE] VerifyTags: tag conflict for track {} ({})",
-                    track_id, path.display()
+                    "[COMPUTE] VerifyTags: tag conflict for inode {} ({})",
+                    inode, path.display()
                 ));
                 ensure_file_signal_if_missing(
                     read_only_db,
@@ -536,8 +520,8 @@ pub fn execute_verify_tags(
             } else {
                 // One-direction extras only - can be synced without conflict
                 log_general(format!(
-                    "[COMPUTE] VerifyTags: syncable tag diff for track {} ({})",
-                    track_id, path.display()
+                    "[COMPUTE] VerifyTags: syncable tag diff for inode {} ({})",
+                    inode, path.display()
                 ));
                 ensure_file_signal_if_missing(
                     read_only_db,
@@ -572,8 +556,8 @@ pub fn execute_verify_tags(
         Err(e) => {
             // Emit CorruptFile signal so the issue is tracked in the DB (actionable)
             log_general(format!(
-                "[COMPUTE] VerifyTags: tag parse error for track {} ({}): {}",
-                track_id, path.display(), e
+                "[COMPUTE] VerifyTags: tag parse error for inode {} ({}): {}",
+                inode, path.display(), e
             ));
             ensure_file_signal_if_missing(
                 read_only_db,
@@ -624,13 +608,13 @@ pub fn execute_verify_tags(
 /// tag verification wouldn't detect. Emits CorruptFile if decode fails.
 pub fn execute_verify_audio(
     read_only_db: &Database,
-    track_id: i64,
+    inode: i64,
     path: &Path,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = Computation::VerifyAudio {
-        track_id,
+        inode,
         path: path.to_path_buf(),
     };
 
@@ -680,8 +664,8 @@ pub fn execute_verify_audio(
         Err(e) => {
             // Audio verification failed - file is corrupt
             log_general(format!(
-                "[COMPUTE] VerifyAudio: corruption detected for track {} ({}): {}",
-                track_id, path.display(), e
+                "[COMPUTE] VerifyAudio: corruption detected for inode {} ({}): {}",
+                inode, path.display(), e
             ));
             ensure_file_signal_if_missing(
                 read_only_db,

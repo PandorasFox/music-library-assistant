@@ -1,17 +1,17 @@
 //! Database operations and queries.
 //!
 //! All SQLite operations are organized into domain-specific submodules:
-//! - `tracks`: Track CRUD and queries by source/path/fingerprint/metadata
-//! - `scan_state`: Incremental scan state tracking
-//! - `deployment`: Deployment logging and library track queries
-//! - `health`: Health issues, summaries, known variants
-//! - `metadata`: App metadata, tag canonicalization, tag mismatches
+//! - `files`: Low-level inode-based queries for files/audio_info/corpus_tags tables
+//! - `tracks`: Compatibility layer returning Track/TrackTag types (queries new schema)
+//! - `health`: Health issues, summaries
+//! - `metadata`: App metadata, tag canonicalization
+//! - `library_scan`: Library scanning state
 
 mod deployment;
+pub mod files;
 mod health;
 mod library_scan;
 mod metadata;
-mod scan_state;
 pub mod tracks;
 
 use anyhow::{Context, Result};
@@ -174,75 +174,98 @@ impl Database {
     fn initialize_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
-            -- Tracks table: file and audio waveform metadata ONLY
-            -- Tag metadata is stored in track_tags table
-            CREATE TABLE IF NOT EXISTS tracks (
-                id INTEGER PRIMARY KEY,
-                path TEXT NOT NULL UNIQUE,
-                source TEXT NOT NULL,
+            -- =================================================================
+            -- Files Table (all paths - files AND directories)
+            -- =================================================================
+            -- Unified table for all path manifestations across corpus, inbox, and library.
+            -- Multiple rows can share the same inode (hard links across corpus + library).
+            -- Directories are tracked for scan optimization (skip unchanged dirs).
+            CREATE TABLE IF NOT EXISTS files (
                 inode INTEGER NOT NULL,
-                file_size INTEGER NOT NULL,
-                file_type TEXT NOT NULL,
+                source TEXT NOT NULL,           -- 'inbox', 'corpus', 'library'
+                path TEXT NOT NULL,             -- relative path (library paths include library name prefix)
+                is_dir INTEGER NOT NULL,        -- 1 = directory, 0 = file
+                mtime_secs INTEGER NOT NULL,    -- filesystem mtime (same across hard links)
+                mtime_nanos INTEGER NOT NULL,
+                file_size INTEGER NOT NULL,     -- (same across hard links)
+                scanned_at INTEGER NOT NULL,
+                PRIMARY KEY (inode, source, path)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_files_source ON files(source);
+            CREATE INDEX IF NOT EXISTS idx_files_inode ON files(inode);
+            CREATE INDEX IF NOT EXISTS idx_files_is_dir ON files(is_dir);
+            CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
+
+            -- =================================================================
+            -- Audio Info Table (audio files ONLY - not directories)
+            -- =================================================================
+            -- Audio-specific metadata for audio files. Only audio file inodes
+            -- have entries here. Directories do not.
+            CREATE TABLE IF NOT EXISTS audio_info (
+                inode INTEGER PRIMARY KEY,
+                file_type TEXT NOT NULL,        -- flac, mp3, opus, etc.
                 duration_ms INTEGER,
                 bitrate_kbps INTEGER,
                 sample_rate INTEGER,
-                fingerprint TEXT,
-                scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                fingerprint BLOB,
+                needs_tag_flush INTEGER NOT NULL DEFAULT 0
             );
 
-            CREATE INDEX IF NOT EXISTS idx_source ON tracks(source);
-            CREATE INDEX IF NOT EXISTS idx_inode ON tracks(inode);
-            CREATE INDEX IF NOT EXISTS idx_duration ON tracks(duration_ms);
-            CREATE INDEX IF NOT EXISTS idx_fingerprint ON tracks(fingerprint);
+            CREATE INDEX IF NOT EXISTS idx_audio_info_fingerprint ON audio_info(fingerprint);
+            CREATE INDEX IF NOT EXISTS idx_audio_info_duration ON audio_info(duration_ms);
 
-            -- Track tags table: all tag metadata
-            -- Supports multi-value tags (same tag_name can have multiple values)
-            CREATE TABLE IF NOT EXISTS track_tags (
-                track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            -- =================================================================
+            -- Corpus Tags Table
+            -- =================================================================
+            -- Tags for corpus audio files. Supports multi-value tags.
+            CREATE TABLE IF NOT EXISTS corpus_tags (
+                inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
                 tag_name TEXT NOT NULL,
                 tag_value TEXT NOT NULL,
-                PRIMARY KEY (track_id, tag_name, tag_value)
+                PRIMARY KEY (inode, tag_name, tag_value)
             );
-            CREATE INDEX IF NOT EXISTS idx_track_tags_track ON track_tags(track_id);
-            CREATE INDEX IF NOT EXISTS idx_track_tags_name ON track_tags(tag_name);
-            CREATE INDEX IF NOT EXISTS idx_track_tags_name_value ON track_tags(tag_name, tag_value);
 
-            CREATE TABLE IF NOT EXISTS scan_history (
+            CREATE INDEX IF NOT EXISTS idx_corpus_tags_inode ON corpus_tags(inode);
+            CREATE INDEX IF NOT EXISTS idx_corpus_tags_name ON corpus_tags(tag_name);
+            CREATE INDEX IF NOT EXISTS idx_corpus_tags_name_value ON corpus_tags(tag_name, tag_value);
+            CREATE INDEX IF NOT EXISTS idx_corpus_tags_name_value_lower ON corpus_tags(tag_name, LOWER(tag_value));
+
+            -- =================================================================
+            -- Inbox Tags Table (future use)
+            -- =================================================================
+            -- Tags for inbox audio files. Completely separate from corpus_tags.
+            -- Assimilation = move rows from inbox_tags → corpus_tags.
+            CREATE TABLE IF NOT EXISTS inbox_tags (
+                inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
+                tag_name TEXT NOT NULL,
+                tag_value TEXT NOT NULL,
+                PRIMARY KEY (inode, tag_name, tag_value)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_inbox_tags_inode ON inbox_tags(inode);
+            CREATE INDEX IF NOT EXISTS idx_inbox_tags_name ON inbox_tags(tag_name);
+
+            -- =================================================================
+            -- Tag Edit History
+            -- =================================================================
+            -- Uses inode as the audio file identifier (not synthetic track_id).
+            -- session_id should be decision timestamp + source label for grouping.
+            CREATE TABLE IF NOT EXISTS tag_edit_history (
                 id INTEGER PRIMARY KEY,
-                source TEXT NOT NULL,
-                file_count INTEGER NOT NULL,
-                started_at DATETIME NOT NULL,
-                completed_at DATETIME NOT NULL
+                inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
+                field_name TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                edited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                session_id TEXT
             );
+            CREATE INDEX IF NOT EXISTS idx_tag_history_inode ON tag_edit_history(inode);
+            CREATE INDEX IF NOT EXISTS idx_tag_history_session ON tag_edit_history(session_id);
 
-            CREATE TABLE IF NOT EXISTS scan_state (
-                id INTEGER PRIMARY KEY,
-                source TEXT NOT NULL,
-                inode INTEGER NOT NULL,
-                path TEXT NOT NULL,
-                mtime_secs INTEGER NOT NULL,
-                mtime_nanos INTEGER NOT NULL,
-                file_size INTEGER NOT NULL,
-                scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(source, inode)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_scan_state_source ON scan_state(source);
-            CREATE INDEX IF NOT EXISTS idx_scan_state_inode ON scan_state(inode);
-            CREATE INDEX IF NOT EXISTS idx_scan_state_path ON scan_state(path);
-
-            CREATE TABLE IF NOT EXISTS deployment_log (
-                id INTEGER PRIMARY KEY,
-                library_name TEXT NOT NULL,
-                corpus_path TEXT NOT NULL,
-                deployed_path TEXT NOT NULL,
-                inode INTEGER NOT NULL,
-                deployed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_deployment_library ON deployment_log(library_name);
-            CREATE INDEX IF NOT EXISTS idx_deployment_inode ON deployment_log(inode);
-
+            -- =================================================================
+            -- Corpus Health Stats (cached aggregates)
+            -- =================================================================
             CREATE TABLE IF NOT EXISTS corpus_health_stats (
                 id INTEGER PRIMARY KEY,
                 stat_type TEXT NOT NULL,
@@ -251,29 +274,11 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_corpus_health_type ON corpus_health_stats(stat_type);
 
-            -- Legacy tables (duplicate_groups, duplicate_group_members) removed in migration v3->v4
-            -- Replaced by DeployConflict health issues
-
-            CREATE TABLE IF NOT EXISTS tag_edit_history (
-                id INTEGER PRIMARY KEY,
-                track_id INTEGER NOT NULL,
-                field_name TEXT NOT NULL,
-                old_value TEXT,
-                new_value TEXT,
-                edited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                session_id TEXT,
-                FOREIGN KEY(track_id) REFERENCES tracks(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_tag_history_track ON tag_edit_history(track_id);
-            CREATE INDEX IF NOT EXISTS idx_tag_history_session ON tag_edit_history(session_id);
-
             -- =================================================================
-            -- Corpus Signal Tables
-            -- =================================================================
-
             -- Signals (facts about corpus state)
-            -- Signals are created by computations and deleted when stale
-            -- Note: column names kept as issue_type/issue_key for backwards compat
+            -- =================================================================
+            -- Signals are created by computations and deleted when stale.
+            -- Note: column names kept as issue_type/issue_key for backwards compat.
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY,
                 issue_type TEXT NOT NULL,
@@ -285,58 +290,14 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(issue_type);
             CREATE INDEX IF NOT EXISTS idx_signals_discovered ON signals(discovered_at);
 
-            -- Known variants (legitimate re-releases, remixes, etc.)
-            CREATE TABLE IF NOT EXISTS known_variants (
-                id INTEGER PRIMARY KEY,
-                variant_type TEXT NOT NULL,
-                canonical_fingerprint TEXT NOT NULL,
-                variant_fingerprint TEXT,
-                canonical_track_id INTEGER,
-                variant_track_id INTEGER,
-                marked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                notes TEXT,
-                FOREIGN KEY(canonical_track_id) REFERENCES tracks(id) ON DELETE SET NULL,
-                FOREIGN KEY(variant_track_id) REFERENCES tracks(id) ON DELETE SET NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_known_variants_fingerprint ON known_variants(canonical_fingerprint);
-            CREATE INDEX IF NOT EXISTS idx_known_variants_type ON known_variants(variant_type);
-
-            -- Tag mismatches: tracks where DB tags differ from on-disk tags
-            -- Records pending tag flushes (DB updated but disk not yet written)
-            CREATE TABLE IF NOT EXISTS tag_mismatches (
-                id INTEGER PRIMARY KEY,
-                track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-                field TEXT NOT NULL,
-                db_value TEXT,
-                disk_value TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(track_id, field)
-            );
-            CREATE INDEX IF NOT EXISTS idx_tag_mismatches_track ON tag_mismatches(track_id);
-
-            -- Performance indexes for tag queries (case-insensitive grouping)
-            CREATE INDEX IF NOT EXISTS idx_track_tags_name_value_lower ON track_tags(tag_name, LOWER(tag_value));
-
-            -- Application metadata (version tracking, etc.)
+            -- =================================================================
+            -- Application Metadata (version tracking)
+            -- =================================================================
             CREATE TABLE IF NOT EXISTS app_metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
-
-            -- Library scan state: stores library file scan results between phases
-            -- Written by ScanLibraryDirectory (Awakening), read by DeriveDeployHealthSignals (Awake)
-            CREATE TABLE IF NOT EXISTS library_scan_state (
-                id INTEGER PRIMARY KEY,
-                library_name TEXT NOT NULL,
-                library_root TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                inode INTEGER NOT NULL,
-                scanned_at INTEGER NOT NULL,
-                UNIQUE(library_name, file_path)
-            );
-            CREATE INDEX IF NOT EXISTS idx_library_scan_library ON library_scan_state(library_name);
-            CREATE INDEX IF NOT EXISTS idx_library_scan_root ON library_scan_state(library_root);
             "#
         ).context("Failed to initialize database schema")?;
 

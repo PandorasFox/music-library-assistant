@@ -151,7 +151,7 @@ fn execute_transcode(
 
     // Delete old scan_state entry if inode changed (which it will, since it's a new file)
     if existing_track.inode != new_inode {
-        sender.delete_scan_state_by_inode(&existing_track.source, existing_track.inode, witness);
+        sender.drop_file_index_by_inode(&existing_track.source, existing_track.inode, witness);
     }
 
     Ok(())

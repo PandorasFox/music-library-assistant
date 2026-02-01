@@ -484,12 +484,16 @@ impl Database {
     // Directory-Level Queries (for chunked computations)
     // ========================================================================
 
-    /// Get distinct parent directories from tracks table.
+    /// Get distinct parent directories from corpus audio files (files + audio_info).
     pub fn get_distinct_track_directories(&self) -> Result<Vec<std::path::PathBuf>> {
         use std::path::PathBuf;
 
-        // Fetch all paths and compute parent directories in Rust
-        let mut stmt = self.conn.prepare("SELECT DISTINCT path FROM tracks")?;
+        // Fetch all corpus audio file paths and compute parent directories in Rust
+        let mut stmt = self.conn.prepare(
+            r#"SELECT DISTINCT f.path FROM files f
+               JOIN audio_info a ON f.inode = a.inode
+               WHERE f.is_dir = 0 AND f.source = 'corpus'"#
+        )?;
         let rows = stmt.query_map(params![], |row| {
             let path: String = row.get(0)?;
             Ok(path)
@@ -565,8 +569,6 @@ impl Database {
         }
         Ok(issues)
     }
-
-    // Note: get_tracks_in_directory_with_fingerprint is defined in tracks.rs
 
     /// Get health summary statistics.
     pub fn get_signal_summary(&self) -> Result<SignalSummary> {
@@ -802,11 +804,15 @@ impl Database {
         Ok(count as usize)
     }
 
-    /// Get file type breakdown from tracks table.
+    /// Get file type breakdown from audio files (files + audio_info).
     fn get_file_type_breakdown(&self) -> Result<Vec<(String, usize)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT file_type, COUNT(*) as cnt FROM tracks WHERE source = 'corpus'
-             GROUP BY file_type ORDER BY cnt DESC"
+            r#"SELECT a.file_type, COUNT(*) as cnt
+               FROM files f
+               JOIN audio_info a ON f.inode = a.inode
+               WHERE f.source = 'corpus' AND f.is_dir = 0
+               GROUP BY a.file_type
+               ORDER BY cnt DESC"#
         )?;
 
         let results = stmt.query_map(params![], |row| {
@@ -881,13 +887,14 @@ impl Database {
         use crate::corpus::db::types::DeploySignalFile;
 
         // deploy_ready signals: issue_key = corpus_path, metadata_json contains deploy_path
+        // Join with files table to get inode (used as track_id for mutations)
         let mut stmt = self.conn.prepare(
             r#"SELECT
                  h.issue_key as corpus_path,
                  json_extract(h.metadata_json, '$.deploy_path') as deploy_path,
-                 COALESCE(t.id, 0) as track_id
+                 COALESCE(f.inode, 0) as inode
                FROM signals h
-               LEFT JOIN tracks t ON t.path = h.issue_key AND t.source = 'corpus'
+               LEFT JOIN files f ON f.path = h.issue_key AND f.source = 'corpus'
                WHERE h.issue_type = 'deploy_ready'
                ORDER BY h.issue_key"#
         )?;
@@ -896,7 +903,7 @@ impl Database {
             Ok(DeploySignalFile {
                 corpus_path: row.get(0)?,
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                _track_id: row.get(2)?,
+                _track_id: row.get(2)?,  // Now contains inode
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -912,13 +919,14 @@ impl Database {
         use crate::corpus::db::types::DeploySignalFile;
 
         // deployed_healthy signals: issue_key = corpus_path, metadata_json contains library_path
+        // Join with files table to get inode (used as track_id for mutations)
         let mut stmt = self.conn.prepare(
             r#"SELECT
                  h.issue_key as corpus_path,
                  json_extract(h.metadata_json, '$.library_path') as library_path,
-                 COALESCE(t.id, 0) as track_id
+                 COALESCE(f.inode, 0) as inode
                FROM signals h
-               LEFT JOIN tracks t ON t.path = h.issue_key AND t.source = 'corpus'
+               LEFT JOIN files f ON f.path = h.issue_key AND f.source = 'corpus'
                WHERE h.issue_type = 'deployed_healthy'
                ORDER BY h.issue_key"#
         )?;
@@ -927,7 +935,7 @@ impl Database {
             Ok(DeploySignalFile {
                 corpus_path: row.get(0)?,
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                _track_id: row.get(2)?,
+                _track_id: row.get(2)?,  // Now contains inode
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

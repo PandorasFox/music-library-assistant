@@ -10,7 +10,7 @@ Do not try to "refresh" signals. MLA is designed around precisely recomputing re
 
 We use 0-byte Witness objects as guarantees for some compile-time guarantees about correctness and operational intents. Do not ever instantiate a Witness object - do a todo!() instead so that a panic happens and *I* can decide if a Witness is appropriately instantiable there, or not.
 
-DO NOT EVER REMOVE FILES FROM THE *CORPUS FILESYSTEM*. YOU ARE NOT ALLOWED TO IMPLEMENT FILE DELETION/UNLINKING, EVER. THIS TOOL DOES NOT DESTROY DATA. Cleaning up source code files via deletion is perfectly acceptable development practice, however.
+fs::remove_file (and similar logic that can potentially unlink inodes or free up block device storage) shall not be introduced to MLA's codebase. Unlinking corpus files is solely operator privilege and is not to be conceptually introduced to MLA, ever. [obsolete and empty source code files themselves can be deleted]
 
 ### Database Access Patterns
 
@@ -39,6 +39,37 @@ MLA enforces strict separation between read-only UI queries and write mutations:
 - Never create Database connections in rendering/display code
 
 This pattern ensures all mutations are properly witnessed and attributable to operator decisions, enforcing the "operator-driven" principle from PHILOSOPHY.md.
+
+### Corpus vs Library File Queries
+
+**CRITICAL: The `files` table contains BOTH corpus files AND library files.** They are distinguished by the `source` column (`'corpus'` vs `'library'`). The `audio_info` table contains audio metadata for files from BOTH sources.
+
+**Health detection queries MUST filter by `source = 'corpus'`.** Computations like duplicate detection, missing tag detection, and overlap analysis should only operate on corpus files. Library files are deployment targets, not sources of truth.
+
+**Correct pattern for corpus-only queries:**
+```sql
+-- When joining files with audio_info for health detection:
+SELECT ... FROM files f
+JOIN audio_info a ON f.inode = a.inode
+WHERE f.source = 'corpus' AND ...
+
+-- When querying audio_info directly, JOIN with files to filter:
+SELECT a.fingerprint, GROUP_CONCAT(a.inode)
+FROM audio_info a
+JOIN files f ON a.inode = f.inode
+WHERE a.fingerprint IS NOT NULL AND f.source = 'corpus'
+GROUP BY a.fingerprint
+```
+
+**Anti-patterns:**
+- Querying `audio_info` without joining `files` for source filtering
+- Assuming all files in `files` table are corpus files
+- Using `files` queries without `WHERE source = 'corpus'` in health detection
+
+**When library files ARE needed:**
+- `get_library_files()` - for deploy health checking
+- `get_all_library_inodes()` - for checking what's deployed
+- Queries explicitly about library state (leftovers, stale deployments)
 
 ### UI Caching Strategies
 

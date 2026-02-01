@@ -338,13 +338,16 @@ impl Database {
         Ok(count)
     }
 
-    /// Get duplicate fingerprint groups.
+    /// Get duplicate fingerprint groups (corpus files only).
     /// Returns: Vec<(fingerprint_blob, comma_separated_inodes)>
     pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
-        let query = "SELECT fingerprint, GROUP_CONCAT(inode) as inodes
-                     FROM audio_info
-                     WHERE fingerprint IS NOT NULL
-                     GROUP BY fingerprint
+        // Join with files table to filter by source = 'corpus'
+        // Library files should not be included in fingerprint overlap detection
+        let query = "SELECT a.fingerprint, GROUP_CONCAT(a.inode) as inodes
+                     FROM audio_info a
+                     JOIN files f ON a.inode = f.inode
+                     WHERE a.fingerprint IS NOT NULL AND f.source = 'corpus'
+                     GROUP BY a.fingerprint
                      HAVING COUNT(*) > 1";
 
         let mut stmt = self.conn.prepare(query)?;
@@ -361,12 +364,13 @@ impl Database {
         Ok(results)
     }
 
-    /// Get inode groups with duplicates (multiple paths for same inode).
+    /// Get inode groups with duplicates (multiple paths for same inode, corpus only).
     /// Returns: Vec<(inode, comma_separated_paths)>
     pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {
+        // Only detect duplicate inodes within corpus files
         let query = r#"SELECT inode, GROUP_CONCAT(path) as paths
                        FROM files
-                       WHERE is_dir = 0
+                       WHERE is_dir = 0 AND source = 'corpus'
                        GROUP BY inode
                        HAVING COUNT(*) > 1"#;
 
@@ -384,9 +388,10 @@ impl Database {
         Ok(results)
     }
 
-    /// Get audio files with their present tag names (for missing tag detection).
+    /// Get audio files with their present tag names (for missing tag detection, corpus only).
     /// Returns: Vec<(inode, path, album_or_none, comma_separated_lowercase_tags)>
     pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
+        // Only check missing tags for corpus files
         let query = r#"
             SELECT f.inode, f.path,
                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND LOWER(tag_name) = 'album' LIMIT 1) as album,
@@ -394,7 +399,7 @@ impl Database {
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags ct ON f.inode = ct.inode
-            WHERE f.is_dir = 0
+            WHERE f.is_dir = 0 AND f.source = 'corpus'
             GROUP BY f.inode
         "#;
 
@@ -463,15 +468,16 @@ impl Database {
         Ok(result)
     }
 
-    /// Get all tags ordered by inode and tag name (for metadata duplicate detection).
+    /// Get all tags ordered by inode and tag name (for metadata duplicate detection, corpus only).
     /// Returns: Vec<(inode, tag_name, tag_value)>
     pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
+        // Only detect metadata duplicates within corpus files
         let query = r#"
             SELECT f.inode, ct.tag_name, ct.tag_value
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             JOIN corpus_tags ct ON f.inode = ct.inode
-            WHERE f.is_dir = 0
+            WHERE f.is_dir = 0 AND f.source = 'corpus'
             ORDER BY f.inode, LOWER(ct.tag_name)
         "#;
 
@@ -491,9 +497,10 @@ impl Database {
         Ok(results)
     }
 
-    /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection).
+    /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection, corpus only).
     /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc)>
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
+        // Only detect inconsistent album artist within corpus files
         let sql = r#"
             SELECT
                 f.inode,
@@ -514,7 +521,7 @@ impl Database {
                 ON f.inode = catalog.inode AND LOWER(catalog.tag_name) = 'catalognumber'
             LEFT JOIN corpus_tags isrc
                 ON f.inode = isrc.inode AND LOWER(isrc.tag_name) = 'isrc'
-            WHERE f.is_dir = 0 AND album.tag_value IS NOT NULL AND album.tag_value != ''
+            WHERE f.is_dir = 0 AND f.source = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
         "#;
 
         let mut stmt = self.conn.prepare(sql)?;

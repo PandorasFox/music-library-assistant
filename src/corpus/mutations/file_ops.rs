@@ -121,7 +121,37 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
 ///
 /// Moves a file within a library (e.g., stale file to correct location).
 /// Unlike corpus moves, this does not update any database records.
+///
+/// IMPORTANT: MLA never unlinks/destroys data. If destination exists:
+/// - Same inode: File already correctly deployed, nothing to do (caller should
+///   handle stale source path via separate MoveToStash if cleanup needed)
+/// - Different inode: Conflict - fails so caller can stash the conflicting file first
 fn execute_library_move(source: &Path, destination: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    // Check if destination already exists
+    if destination.exists() {
+        let src_inode = source.metadata()?.ino();
+        let dst_inode = destination.metadata()?.ino();
+
+        if src_inode == dst_inode {
+            // Same file already at destination - nothing to do
+            // The source is a stale hard link; if cleanup is desired,
+            // caller should issue a separate MoveToStash for the source path
+            return Ok(());
+        } else {
+            // Different file at destination - refuse to clobber
+            // Caller must stash the conflicting destination file first
+            return Err(anyhow::anyhow!(
+                "Destination already exists with different inode: {} (source inode: {}, dest inode: {}). \
+                 Stash the conflicting file first, then retry.",
+                destination.display(),
+                src_inode,
+                dst_inode
+            ));
+        }
+    }
+
     // Create parent directories if needed
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)

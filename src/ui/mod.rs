@@ -631,7 +631,7 @@ impl App {
     /// Returns a `ReadOnlyDb` wrapper with common query methods:
     /// ```ignore
     /// let read_db = app.read_db();
-    /// let tracks = read_db.get_all_tracks(None)?;
+    /// let audio_files = read_db.get_all_audio_files(FileSource::Corpus)?;
     /// let signals = read_db.get_signals(None)?;
     /// ```
     pub(super) fn read_db(&mut self) -> crate::corpus::db::ReadOnlyDb<'_> {

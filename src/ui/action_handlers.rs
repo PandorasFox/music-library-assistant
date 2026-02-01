@@ -433,37 +433,73 @@ impl App {
             return 0;
         };
         let resolver = paths::get_resolver();
+        let config = crate::config::load_config().ok();
         let mut mutations = Vec::new();
 
-        // New files: create hard links
-        for file in &data.new {
-            // Skip files with empty deploy_path (data integrity check)
-            if file.deploy_path.is_empty() {
-                continue;
-            }
-            // Resolve relative paths to absolute
-            let source = resolver.resolve(std::path::Path::new(&file.corpus_path));
-            let destination = resolver.resolve(std::path::Path::new(&file.deploy_path));
-            mutations.push(Mutation::HardLink { source, destination });
-        }
+        // ORDERING IS CRITICAL:
+        // 1. Leftovers FIRST - stash orphan files to clear destination paths
+        // 2. Stale files - move existing deployments to correct paths
+        // 3. New files - deploy new hard links (destinations now clear)
+        // 4. Conflicts - deploy conflict resolutions
 
-        // Stale files: move from wrong path to correct path
-        for file in &data.stale {
-            let source = resolver.resolve(std::path::Path::new(&file.library_path));
-            let destination = resolver.resolve(std::path::Path::new(&file.expected_path));
-            mutations.push(Mutation::LibraryMove { source, destination });
-        }
-
-        // Leftover files: move to stash (preserve data, never destroy)
+        // 1. Leftover files: move to stash (preserve data, never destroy)
+        // library_path is stored as "{library_name}/path/..." in files table
+        // Needs "libraries/" prefix for filesystem resolution
         for file in &data.leftover {
-            let path = resolver.resolve(std::path::Path::new(&file.library_path));
+            let path_rel = std::path::Path::new("libraries").join(&file.library_path);
+            let path = resolver.resolve(&path_rel);
             mutations.push(Mutation::MoveToStash {
                 path,
                 stash_name: "library_leftovers".to_string(),
             });
         }
 
-        // Conflicts: pick first alphabetical corpus path and deploy it
+        // 2. Stale files: move from wrong path to correct path
+        // Both library_path and expected_path are stored as "{library_name}/path/..."
+        // Just need to prepend "libraries/" for filesystem resolution
+        for file in &data.stale {
+            let source_rel = std::path::Path::new("libraries").join(&file.library_path);
+            let source = resolver.resolve(&source_rel);
+
+            let dest_rel = std::path::Path::new("libraries").join(&file.expected_path);
+            let destination = resolver.resolve(&dest_rel);
+
+            mutations.push(Mutation::LibraryMove { source, destination });
+        }
+
+        // 3. New files: create hard links
+        // corpus_path is "corpus/..." and deploy_path is "Artist/Album/..."
+        // We need to determine target library from config and build full path
+        for file in &data.new {
+            // Skip files with empty deploy_path (data integrity check)
+            if file.deploy_path.is_empty() {
+                continue;
+            }
+
+            // Source: corpus path resolves directly
+            let source = resolver.resolve(std::path::Path::new(&file.corpus_path));
+
+            // Destination: look up target library from config, build full path
+            let corpus_path = std::path::Path::new(&file.corpus_path);
+            let library_name = config
+                .as_ref()
+                .and_then(|c| c.get_library_for_corpus_path(corpus_path));
+
+            let dest_rel = if let Some(lib) = library_name {
+                std::path::Path::new("libraries")
+                    .join(&lib)
+                    .join(&file.deploy_path)
+            } else {
+                // Fallback: use first configured library or skip
+                // This shouldn't happen if signals are correctly generated
+                continue;
+            };
+            let destination = resolver.resolve(&dest_rel);
+            mutations.push(Mutation::HardLink { source, destination });
+        }
+
+        // 4. Conflicts: pick first alphabetical corpus path and deploy it
+        // Same path resolution as new files - need target library from config
         for group in &data.conflicts {
             if let Some((corpus_path, _track_id)) = group
                 .conflicting_files
@@ -471,7 +507,21 @@ impl App {
                 .min_by(|a, b| a.0.cmp(&b.0))
             {
                 let source = resolver.resolve(std::path::Path::new(corpus_path));
-                let destination = resolver.resolve(std::path::Path::new(&group.deploy_path));
+
+                // Look up target library from config
+                let corpus_path_obj = std::path::Path::new(corpus_path);
+                let library_name = config
+                    .as_ref()
+                    .and_then(|c| c.get_library_for_corpus_path(corpus_path_obj));
+
+                let dest_rel = if let Some(lib) = library_name {
+                    std::path::Path::new("libraries")
+                        .join(&lib)
+                        .join(&group.deploy_path)
+                } else {
+                    continue; // Skip if no library mapping
+                };
+                let destination = resolver.resolve(&dest_rel);
                 mutations.push(Mutation::HardLink { source, destination });
             }
         }

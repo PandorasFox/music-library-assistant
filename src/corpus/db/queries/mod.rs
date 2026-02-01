@@ -366,7 +366,7 @@ impl Database {
 ///
 /// ```ignore
 /// let read_db = witch.read_db();
-/// let tracks = read_db.get_all_tracks(None)?;
+/// let audio_files = read_db.get_all_audio_files(FileSource::Corpus)?;
 /// let signals = read_db.get_signals(None)?;
 /// ```
 ///

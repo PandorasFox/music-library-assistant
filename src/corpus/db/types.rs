@@ -931,7 +931,7 @@ pub struct TagMismatchEntry {
 #[derive(Debug, Clone)]
 pub struct OobSyncFile {
     pub track_id: i64,
-    /// Relative path (as stored in signals/tracks)
+    /// Relative path (as stored in signals/files)
     pub path: String,
     pub direction: OobSyncDirection,
     pub mismatches: Vec<TagMismatchEntry>,

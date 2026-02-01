@@ -896,21 +896,21 @@ pub fn execute_derive_deploy_health_signals(
                 // Compute expected relative path within the library
                 let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
 
-                // library_path is domain-prefixed relative to archive root,
-                // e.g., "libraries/music/Artist/Album/track.mp3"
+                // library_path is library-name-prefixed (e.g., "soundtracks/Artist/Album/track.mp3")
                 // expected_relative is just "Artist/Album/track.mp3" (no library prefix)
-                // So we strip the "libraries/{name}" prefix for comparison
-                let library_domain_prefix = std::path::Path::new("libraries").join(library_name);
+                // Strip the library name prefix for comparison
                 let library_path_suffix = library_path
-                    .strip_prefix(&library_domain_prefix)
+                    .strip_prefix(library_name)
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|_| library_path.clone());
 
                 if library_path_suffix != expected_relative {
-                    // Stale: store relative paths in metadata
+                    // Stale: store paths with consistent library prefix for display and mutations
+                    // Both paths stored as "{library_name}/path/..." for consistency
+                    let expected_with_prefix = std::path::Path::new(library_name).join(&expected_relative);
                     Some(serde_json::json!({
                         "library_path": library_path.to_string_lossy(),
-                        "expected_path": expected_relative.to_string_lossy(),
+                        "expected_path": expected_with_prefix.to_string_lossy(),
                         "corpus_path": corpus_path,
                         "inode": inode
                     }))

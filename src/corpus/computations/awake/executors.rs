@@ -84,7 +84,7 @@ pub fn execute_detect_fingerprint_overlaps(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::db::queries::tracks::fingerprint_to_text;
+    use crate::corpus::db::queries::files::fingerprint_to_text;
 
     let computation = Computation::DetectFingerprintOverlaps;
 
@@ -758,24 +758,23 @@ pub fn execute_detect_deploy_conflicts(
     let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
 
     for signal in &healthy_signals {
-        let path = &signal.issue_key;
-        if let Ok(Some(track)) = read_only_db.get_track_by_path(path) {
-            if let Some(track_id) = track.id {
-                let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
-                let tag_map: HashMap<String, String> = tags
-                    .into_iter()
-                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-                    .collect();
+        let corpus_path = &signal.issue_key;
+        if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
+            let inode = audio_file.inode();
+            let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+            let tag_map: HashMap<String, String> = tags
+                .into_iter()
+                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                .collect();
 
-                let deploy_path = compute_deployment_path_with_tags(&track, &tag_map)
-                    .to_string_lossy()
-                    .to_string();
+            let deploy_path = compute_deployment_path_with_tags(corpus_path, &tag_map)
+                .to_string_lossy()
+                .to_string();
 
-                deploy_path_to_tracks
-                    .entry(deploy_path)
-                    .or_default()
-                    .push(track_id);
-            }
+            deploy_path_to_tracks
+                .entry(deploy_path)
+                .or_default()
+                .push(inode);
         }
     }
 
@@ -886,38 +885,35 @@ pub fn execute_derive_deploy_health_signals(
             drop_stale_file_signal(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
 
             // Check if stale and capture metadata for the signal
-            let stale_metadata = if let Ok(Some(track)) = read_only_db.get_track_by_path(corpus_path) {
-                if let Some(track_id) = track.id {
-                    let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
-                    let tag_map: std::collections::HashMap<String, String> = tags
-                        .into_iter()
-                        .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-                        .collect();
+            let stale_metadata = if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
+                let inode = audio_file.inode();
+                let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+                let tag_map: std::collections::HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                    .collect();
 
-                    // Compute expected relative path within the library
-                    let expected_relative = compute_deployment_path_with_tags(&track, &tag_map);
+                // Compute expected relative path within the library
+                let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
 
-                    // library_path is domain-prefixed relative to archive root,
-                    // e.g., "libraries/music/Artist/Album/track.mp3"
-                    // expected_relative is just "Artist/Album/track.mp3" (no library prefix)
-                    // So we strip the "libraries/{name}" prefix for comparison
-                    let library_domain_prefix = std::path::Path::new("libraries").join(library_name);
-                    let library_path_suffix = library_path
-                        .strip_prefix(&library_domain_prefix)
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|_| library_path.clone());
+                // library_path is domain-prefixed relative to archive root,
+                // e.g., "libraries/music/Artist/Album/track.mp3"
+                // expected_relative is just "Artist/Album/track.mp3" (no library prefix)
+                // So we strip the "libraries/{name}" prefix for comparison
+                let library_domain_prefix = std::path::Path::new("libraries").join(library_name);
+                let library_path_suffix = library_path
+                    .strip_prefix(&library_domain_prefix)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| library_path.clone());
 
-                    if library_path_suffix != expected_relative {
-                        // Stale: store relative paths in metadata
-                        Some(serde_json::json!({
-                            "library_path": library_path.to_string_lossy(),
-                            "expected_path": expected_relative.to_string_lossy(),
-                            "corpus_path": corpus_path,
-                            "track_id": track_id
-                        }))
-                    } else {
-                        None
-                    }
+                if library_path_suffix != expected_relative {
+                    // Stale: store relative paths in metadata
+                    Some(serde_json::json!({
+                        "library_path": library_path.to_string_lossy(),
+                        "expected_path": expected_relative.to_string_lossy(),
+                        "corpus_path": corpus_path,
+                        "inode": inode
+                    }))
                 } else {
                     None
                 }
@@ -1062,12 +1058,12 @@ pub fn execute_derive_corpus_deploy_status(
             continue;
         }
 
-        // Get the track (we need inode and track_id for tags lookup)
-        let track = match read_only_db.get_track_by_path(corpus_path) {
-            Ok(Some(t)) => t,
-            _ => continue, // Skip if track not found
+        // Get the audio file (we need inode for tags lookup)
+        let audio_file = match read_only_db.get_audio_file_by_path(corpus_path) {
+            Ok(Some(af)) => af,
+            _ => continue, // Skip if file not found
         };
-        let inode = track.inode;
+        let inode = audio_file.inode();
 
         // Check if this inode is deployed anywhere and not stale
         let is_deployed = deployed_inodes.contains(&inode);
@@ -1094,20 +1090,14 @@ pub fn execute_derive_corpus_deploy_status(
             // File is not deployed (or deployed but stale)
             deploy_ready_count += 1;
 
-            // Compute the deploy path for this track (relative)
-            let deploy_path = if let Some(track_id) = track.id {
-                // Get track tags and build tag_map
-                let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
-                let tag_map: HashMap<String, String> = tags
-                    .into_iter()
-                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-                    .collect();
-                // Compute relative deploy path (relative to library root)
-                compute_deployment_path_with_tags(&track, &tag_map)
-            } else {
-                // Fallback: no track_id, use empty path (shouldn't happen)
-                std::path::PathBuf::new()
-            };
+            // Compute the deploy path for this file (relative)
+            let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+            let tag_map: HashMap<String, String> = tags
+                .into_iter()
+                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                .collect();
+            // Compute relative deploy path (relative to library root)
+            let deploy_path = compute_deployment_path_with_tags(corpus_path, &tag_map);
 
             // Store relative path in metadata
             let metadata = serde_json::json!({
@@ -1532,37 +1522,37 @@ pub fn execute_analyze_fingerprint_overlaps(
 
         total_groups += 1;
 
-        // Get tracks for this group
-        let tracks = match read_only_db.get_tracks_by_ids(&track_ids) {
-            Ok(t) => t,
+        // Get audio files for this group (track_ids in signals are actually inodes)
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids) {
+            Ok(af) => af,
             Err(_) => continue,
         };
 
-        if tracks.len() < 2 {
+        if audio_files.len() < 2 {
             continue;
         }
 
-        // Cluster by duration (tracks with similar duration are more likely true duplicates)
-        let duration_clusters = cluster_by_duration(&tracks, duration_tolerance_ms);
+        // Cluster by duration (files with similar duration are more likely true duplicates)
+        let duration_clusters = cluster_by_duration(&audio_files, duration_tolerance_ms);
 
         for cluster in duration_clusters {
             if cluster.len() < 2 {
                 continue;
             }
 
-            // Get release identity info for each track
+            // Get release identity info for each audio file
             let mut identities: Vec<TrackReleaseIdentity> = Vec::new();
-            for track in &cluster {
-                let track_id = track.id.unwrap_or(0);
-                let tags = read_only_db.get_track_tags(track_id).unwrap_or_default();
+            for audio_file in &cluster {
+                let inode = audio_file.inode();
+                let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
                 let tag_map: HashMap<String, String> = tags
                     .into_iter()
                     .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
                     .collect();
 
                 identities.push(TrackReleaseIdentity {
-                    track_id,
-                    path: track.path.clone(),
+                    track_id: inode,
+                    path: audio_file.path().to_string(),
                     album: tag_map.get("album").cloned().unwrap_or_default(),
                     title: tag_map.get("title").cloned().unwrap_or_default(),
                     isrc: tag_map.get("isrc").cloned().unwrap_or_default(),
@@ -1592,8 +1582,8 @@ pub fn execute_analyze_fingerprint_overlaps(
                     }
 
                     // Check fingerprint similarity
-                    let fp_i = cluster[i].fingerprint.as_ref();
-                    let fp_j = cluster[j].fingerprint.as_ref();
+                    let fp_i = cluster[i].audio.fingerprint.as_ref();
+                    let fp_j = cluster[j].audio.fingerprint.as_ref();
 
                     if let (Some(fp1), Some(fp2)) = (fp_i, fp_j) {
                         let similarity = fingerprint_similarity(fp1, fp2);
@@ -1624,11 +1614,11 @@ pub fn execute_analyze_fingerprint_overlaps(
                 let mut scored: Vec<(usize, u32)> = group
                     .iter()
                     .map(|&idx| {
-                        let track = &cluster[idx];
+                        let audio_file = &cluster[idx];
                         let score = compute_quality_score(
-                            &track.file_type,
-                            track.bitrate_kbps,
-                            track.sample_rate,
+                            &audio_file.audio.file_type,
+                            audio_file.audio.bitrate_kbps,
+                            audio_file.audio.sample_rate,
                         );
                         (idx, score)
                     })
@@ -1637,17 +1627,17 @@ pub fn execute_analyze_fingerprint_overlaps(
                 // Sort by score descending (best first)
                 scored.sort_by(|a, b| b.1.cmp(&a.1));
 
-                // Best track is the first one
+                // Best audio file is the first one
                 let (best_idx, best_score) = scored[0];
-                let best_track = &cluster[best_idx];
+                let best_audio_file = &cluster[best_idx];
                 let best_identity = &identities[best_idx];
 
                 // Emit SubparDuplicate for all others
                 for &(idx, score) in scored.iter().skip(1) {
-                    let track = &cluster[idx];
+                    let audio_file = &cluster[idx];
 
                     // Determine reason: format difference or bitrate/quality difference
-                    let reason = if classify_format(&track.file_type) < classify_format(&best_track.file_type) {
+                    let reason = if classify_format(&audio_file.audio.file_type) < classify_format(&best_audio_file.audio.file_type) {
                         SubparReason::SubparFormat
                     } else {
                         SubparReason::SubparBitrate
@@ -1655,7 +1645,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 
                     let metadata = serde_json::json!({
                         "reason": reason.as_str(),
-                        "superior_track_id": best_identity.track_id,
+                        "superior_inode": best_identity.track_id,
                         "superior_path": best_identity.path,
                         "dupe_group_fingerprint": signal.key.clone(),
                         "quality_score": score,
@@ -1664,7 +1654,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 
                     sender.ensure_file_signal_with_metadata(
                         CorpusFileSignalType::SubparDuplicate.into(),
-                        &track.path,
+                        audio_file.path(),
                         Some(&metadata.to_string()),
                         witness,
                     );
@@ -1683,35 +1673,35 @@ pub fn execute_analyze_fingerprint_overlaps(
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
-/// Cluster tracks by duration within tolerance.
+/// Cluster audio files by duration within tolerance.
 fn cluster_by_duration<'a>(
-    tracks: &'a [crate::corpus::db::types::Track],
+    audio_files: &'a [crate::corpus::db::types::AudioFile],
     tolerance_ms: i64,
-) -> Vec<Vec<&'a crate::corpus::db::types::Track>> {
-    if tracks.is_empty() {
+) -> Vec<Vec<&'a crate::corpus::db::types::AudioFile>> {
+    if audio_files.is_empty() {
         return Vec::new();
     }
 
     // Sort by duration
-    let mut sorted: Vec<_> = tracks.iter().collect();
-    sorted.sort_by_key(|t| t.duration_ms.unwrap_or(0));
+    let mut sorted: Vec<_> = audio_files.iter().collect();
+    sorted.sort_by_key(|af| af.audio.duration_ms.unwrap_or(0));
 
-    let mut clusters: Vec<Vec<&crate::corpus::db::types::Track>> = Vec::new();
-    let mut current_cluster: Vec<&crate::corpus::db::types::Track> = vec![sorted[0]];
-    let mut cluster_start_duration = sorted[0].duration_ms.unwrap_or(0);
+    let mut clusters: Vec<Vec<&crate::corpus::db::types::AudioFile>> = Vec::new();
+    let mut current_cluster: Vec<&crate::corpus::db::types::AudioFile> = vec![sorted[0]];
+    let mut cluster_start_duration = sorted[0].audio.duration_ms.unwrap_or(0);
 
-    for track in sorted.iter().skip(1) {
-        let duration = track.duration_ms.unwrap_or(0);
+    for audio_file in sorted.iter().skip(1) {
+        let duration = audio_file.audio.duration_ms.unwrap_or(0);
 
         // If within tolerance of cluster start, add to cluster
         if (duration - cluster_start_duration).abs() <= tolerance_ms {
-            current_cluster.push(track);
+            current_cluster.push(audio_file);
         } else {
             // Start new cluster
             if !current_cluster.is_empty() {
                 clusters.push(current_cluster);
             }
-            current_cluster = vec![track];
+            current_cluster = vec![audio_file];
             cluster_start_duration = duration;
         }
     }

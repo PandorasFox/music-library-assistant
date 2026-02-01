@@ -2,7 +2,7 @@
 //!
 //! These functions implement the actual logic for Awakening computations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -124,15 +124,15 @@ pub fn execute_derive_directory_signals(
         }
     };
 
-    // Get indexed tracks for this directory
+    // Get indexed audio files for this directory
     let dir_str = directory.to_string_lossy();
-    let tracks = match read_only_db.get_tracks_by_corpus_path_prefix(&dir_str) {
-        Ok(t) => t,
+    let audio_files = match read_only_db.get_audio_files_by_path_prefix(&dir_str) {
+        Ok(af) => af,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to get tracks: {}", e),
+                format!("Failed to get audio files: {}", e),
             );
         }
     };
@@ -143,9 +143,9 @@ pub fn execute_derive_directory_signals(
         .map(|s| s.issue_key.clone())
         .collect();
 
-    let indexed_paths: HashMap<String, &crate::corpus::db::types::Track> = tracks
+    let indexed_paths: HashSet<String> = audio_files
         .iter()
-        .map(|t| (t.path.clone(), t))
+        .map(|af| af.path().to_string())
         .collect();
 
     // Prune stale UnindexedFile signals
@@ -161,15 +161,15 @@ pub fn execute_derive_directory_signals(
 
     // Process files in corpus
     for corpus_path in &corpus_paths {
-        if indexed_paths.contains_key(corpus_path) {
+        if indexed_paths.contains(corpus_path) {
             drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), corpus_path, witness);
         } else {
             ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), corpus_path, witness);
         }
     }
 
-    // Process indexed tracks
-    for (path, _track) in &indexed_paths {
+    // Process indexed audio files
+    for path in &indexed_paths {
         if corpus_paths.contains(path) {
             drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), path, witness);
 

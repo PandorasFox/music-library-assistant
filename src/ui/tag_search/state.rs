@@ -4,21 +4,22 @@
 
 use std::collections::HashMap;
 
-use crate::corpus::db::{ReadOnlyDb, Track};
+use crate::corpus::db::queries::ReadOnlyDb;
+use crate::corpus::db::types::{AudioFile, FileSource};
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 
 use super::types::{ConditionType, LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS};
 use super::QueryFieldFocus;
 
-/// A track with its associated tags (for display and filtering).
+/// An audio file with its associated tags (for display and filtering).
 #[derive(Debug, Clone)]
-pub struct TrackWithTags {
-    pub track: Track,
+pub struct AudioFileWithTags {
+    pub audio_file: AudioFile,
     pub tags: HashMap<String, String>,
 }
 
-impl TrackWithTags {
+impl AudioFileWithTags {
     /// Get a tag value by name (case-insensitive).
     pub fn get_tag(&self, name: &str) -> Option<&str> {
         self.tags.get(name).map(|s| s.as_str())
@@ -40,8 +41,8 @@ pub struct TagSearchState {
     /// Currently focused field within condition.
     pub field_focus: QueryFieldFocus,
 
-    /// Search results (tracks with tags matching query).
-    pub results: Vec<TrackWithTags>,
+    /// Search results (audio files with tags matching query).
+    pub results: Vec<AudioFileWithTags>,
 
     /// Selected result index.
     pub results_selected: usize,
@@ -52,8 +53,8 @@ pub struct TagSearchState {
     /// Active modal dialog (if any).
     pub modal: Option<TagSearchModal>,
 
-    /// Pending bulk edit tracks (set when showing "gathering" modal).
-    pub pending_bulk_edit: Option<Vec<Track>>,
+    /// Pending bulk edit audio files (set when showing "gathering" modal).
+    pub pending_bulk_edit: Option<Vec<AudioFile>>,
 }
 
 impl Default for TagSearchState {
@@ -320,8 +321,8 @@ impl TagSearchState {
     }
 
     /// Check if there's a pending bulk edit and take it.
-    /// Returns the tracks if pending, clearing the pending state.
-    pub fn take_pending_bulk_edit(&mut self) -> Option<Vec<Track>> {
+    /// Returns the audio files if pending, clearing the pending state.
+    pub fn take_pending_bulk_edit(&mut self) -> Option<Vec<AudioFile>> {
         if self.pending_bulk_edit.is_some() {
             self.modal = None;
             self.pending_bulk_edit.take()
@@ -337,7 +338,7 @@ impl TagSearchState {
 
         // Sort by corpus path (deployment path sorting disabled)
         // TODO: Re-enable deployment path sorting when corpus::deploy is available
-        results.sort_by(|a, b| a.track.path.cmp(&b.track.path));
+        results.sort_by(|a, b| a.audio_file.path().cmp(b.audio_file.path()));
 
         self.results = results;
         self.results_selected = 0;
@@ -352,30 +353,30 @@ impl TagSearchState {
     }
 
     /// Query the database based on conditions.
-    fn query_database(&self, read_db: &ReadOnlyDb<'_>) -> Vec<TrackWithTags> {
-        // Get all tracks with tags
-        let all_tracks = read_db.get_all_tracks_with_tags().unwrap_or_default();
+    fn query_database(&self, read_db: &ReadOnlyDb<'_>) -> Vec<AudioFileWithTags> {
+        // Get all audio files with tags
+        let all_files = read_db.get_all_audio_files_with_tags(FileSource::Corpus).unwrap_or_default();
 
-        // Convert to TrackWithTags and filter by conditions
-        all_tracks
+        // Convert to AudioFileWithTags and filter by conditions
+        all_files
             .into_iter()
-            .map(|(track, tags)| TrackWithTags { track, tags })
-            .filter(|twt| self.evaluate_conditions(twt))
+            .map(|(audio_file, tags)| AudioFileWithTags { audio_file, tags })
+            .filter(|aft| self.evaluate_conditions(aft))
             .collect()
     }
 
     /// Evaluate all conditions against a track with tags.
-    fn evaluate_conditions(&self, twt: &TrackWithTags) -> bool {
+    fn evaluate_conditions(&self, aft: &AudioFileWithTags) -> bool {
         if self.conditions.is_empty() {
             return true;
         }
 
         // Start with first condition (operator ignored)
-        let mut result = self.evaluate_single_condition(twt, &self.conditions[0]);
+        let mut result = self.evaluate_single_condition(aft, &self.conditions[0]);
 
         // Apply subsequent conditions with their operators
         for condition in self.conditions.iter().skip(1) {
-            let cond_result = self.evaluate_single_condition(twt, condition);
+            let cond_result = self.evaluate_single_condition(aft, condition);
 
             result = match condition.operator {
                 LogicalOperator::And => result && cond_result,
@@ -388,18 +389,18 @@ impl TagSearchState {
     }
 
     /// Evaluate a single condition against a track with tags.
-    fn evaluate_single_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+    fn evaluate_single_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         match condition.condition_type {
-            ConditionType::Tag => self.evaluate_tag_condition(twt, condition),
-            ConditionType::FileType => self.evaluate_file_type_condition(twt, condition),
-            ConditionType::SampleRate => self.evaluate_sample_rate_condition(twt, condition),
-            ConditionType::Bitrate => self.evaluate_bitrate_condition(twt, condition),
-            ConditionType::Duration => self.evaluate_duration_condition(twt, condition),
+            ConditionType::Tag => self.evaluate_tag_condition(aft, condition),
+            ConditionType::FileType => self.evaluate_file_type_condition(aft, condition),
+            ConditionType::SampleRate => self.evaluate_sample_rate_condition(aft, condition),
+            ConditionType::Bitrate => self.evaluate_bitrate_condition(aft, condition),
+            ConditionType::Duration => self.evaluate_duration_condition(aft, condition),
         }
     }
 
     /// Evaluate a tag-based condition.
-    fn evaluate_tag_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+    fn evaluate_tag_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         use super::types::ComparisonOperator;
 
         if condition.tag_name.is_empty() || condition.value.is_empty() {
@@ -410,7 +411,7 @@ impl TagSearchState {
         let tag_name = condition.tag_name.to_lowercase();
 
         // Get the tag value from the track's tags
-        let field_value = twt.tags.get(&tag_name).map(|s| s.as_str());
+        let field_value = aft.tags.get(&tag_name).map(|s| s.as_str());
 
         match condition.comparison {
             ComparisonOperator::Is => {
@@ -444,26 +445,26 @@ impl TagSearchState {
     }
 
     /// Evaluate a file type condition.
-    fn evaluate_file_type_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
-        condition.file_type_category.matches(&twt.track.file_type)
+    fn evaluate_file_type_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
+        condition.file_type_category.matches(&aft.audio_file.audio.file_type)
     }
 
     /// Evaluate a sample rate range condition.
-    fn evaluate_sample_rate_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
-        let sample_rate = twt.track.sample_rate.unwrap_or(0);
+    fn evaluate_sample_rate_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
+        let sample_rate = aft.audio_file.audio.sample_rate.unwrap_or(0);
         self.evaluate_range(sample_rate as i64, &condition.range_min, &condition.range_max)
     }
 
     /// Evaluate a bitrate range condition (kbps).
-    fn evaluate_bitrate_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
-        let bitrate = twt.track.bitrate_kbps.unwrap_or(0);
+    fn evaluate_bitrate_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
+        let bitrate = aft.audio_file.audio.bitrate_kbps.unwrap_or(0);
         self.evaluate_range(bitrate as i64, &condition.range_min, &condition.range_max)
     }
 
     /// Evaluate a duration range condition (seconds).
-    fn evaluate_duration_condition(&self, twt: &TrackWithTags, condition: &SearchCondition) -> bool {
+    fn evaluate_duration_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         // duration_ms is in milliseconds, convert to seconds for user-friendly input
-        let duration_secs = twt.track.duration_ms.unwrap_or(0) / 1000;
+        let duration_secs = aft.audio_file.audio.duration_ms.unwrap_or(0) / 1000;
         self.evaluate_range(duration_secs, &condition.range_min, &condition.range_max)
     }
 
@@ -540,12 +541,12 @@ impl TagSearchState {
     }
 
     /// Get the currently selected result.
-    pub fn selected_result(&self) -> Option<&TrackWithTags> {
+    pub fn selected_result(&self) -> Option<&AudioFileWithTags> {
         self.results.get(self.results_selected)
     }
 
-    /// Get all result tracks (without tags, for passing to tag editor).
-    pub fn all_result_tracks(&self) -> Vec<Track> {
-        self.results.iter().map(|twt| twt.track.clone()).collect()
+    /// Get all result audio files (without tags, for passing to tag editor).
+    pub fn all_result_audio_files(&self) -> Vec<AudioFile> {
+        self.results.iter().map(|aft| aft.audio_file.clone()).collect()
     }
 }

@@ -168,21 +168,21 @@ impl TagSearchState {
 
             // B = bulk edit all results (show gathering modal first)
             KeyCode::Char('b') | KeyCode::Char('B') => {
-                let tracks = self.all_result_tracks();
-                if !tracks.is_empty() {
-                    // Show gathering modal and store pending tracks
+                let audio_files = self.all_result_audio_files();
+                if !audio_files.is_empty() {
+                    // Show gathering modal and store pending audio files
                     self.modal = Some(types::TagSearchModal::GatheringTags);
-                    self.pending_bulk_edit = Some(tracks);
+                    self.pending_bulk_edit = Some(audio_files);
                     TagSearchAction::None
                 } else {
                     TagSearchAction::None
                 }
             }
 
-            // Enter = edit single track
+            // Enter = edit single audio file
             KeyCode::Enter => {
-                if let Some(twt) = self.selected_result() {
-                    TagSearchAction::EditTrack(twt.track.clone())
+                if let Some(aft) = self.selected_result() {
+                    TagSearchAction::EditAudioFile(aft.audio_file.clone())
                 } else {
                     TagSearchAction::None
                 }
@@ -479,7 +479,7 @@ impl TagSearchState {
             .take(visible_height)
             .map(|(idx, twt)| {
                 // Use corpus path directly (deployment path display disabled)
-                let path_str = &twt.track.path;
+                let path_str = twt.audio_file.path();
                 let is_selected = idx == self.results_selected;
 
                 let indicator = if is_selected { "▶ " } else { "  " };
@@ -526,11 +526,11 @@ impl TagSearchState {
                 Line::raw(""),
                 Line::from(vec![
                     Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(&twt.track.path),
+                    Span::raw(twt.audio_file.path()),
                 ]),
                 Line::raw(""),
                 Line::styled(
-                    "Enter: Edit track | B: Bulk edit all",
+                    "Enter: Edit | B: Bulk edit all",
                     Style::default().fg(Color::DarkGray),
                 ),
             ]

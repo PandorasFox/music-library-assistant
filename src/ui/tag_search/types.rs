@@ -4,7 +4,7 @@
 //!
 //! Supports both tag-based conditions and file metadata conditions.
 
-use crate::corpus::db::Track;
+use crate::corpus::db::types::AudioFile;
 
 // ============================================================================
 // Condition Type
@@ -324,8 +324,8 @@ pub enum TagSearchAction {
     CyclePrev,
     /// Execute the search query (requires db access).
     ExecuteSearch,
-    /// Open tag editor for a single track.
-    EditTrack(Track),
+    /// Open tag editor for a single audio file.
+    EditAudioFile(AudioFile),
 }
 
 /// Modal dialogs for tag search.

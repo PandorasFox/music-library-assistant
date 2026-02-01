@@ -96,24 +96,14 @@ pub fn execute_index_file_from_path(_db: &Database, path: &Path, source: &str, w
     use crate::corpus::metadata;
     use crate::corpus::tags::TagSet;
 
-    // Extract audio properties
-    let track = metadata::extract_metadata(path, source)
+    // Extract audio properties (returns ExtractedMetadata with empty tags)
+    let mut extracted = metadata::extract_metadata(path, source)
         .with_context(|| format!("Failed to extract metadata from {:?}", path))?;
 
-    // Read tags using TagSet
+    // Read tags using TagSet and populate the extracted metadata
     let tag_set = TagSet::from_file(path)
         .with_context(|| format!("Failed to read tags from {:?}", path))?;
-
-    let extracted = ExtractedMetadata {
-        inode: track.inode,
-        file_size: track.file_size,
-        file_type: track.file_type,
-        duration_ms: track.duration_ms,
-        bitrate_kbps: track.bitrate_kbps,
-        sample_rate: track.sample_rate,
-        fingerprint: track.fingerprint,
-        tags: tag_set.into_vec(),
-    };
+    extracted.tags = tag_set.into_vec();
 
     // Note: _db is unused - execute_index_track routes through signal_sender
     execute_index_track(_db, path, source, &extracted, witness)
@@ -201,10 +191,10 @@ pub fn execute_update_track_path(db: &Database, track_id: i64, new_path: &Path, 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get old path from DB (read-only)
-    let track = db.get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
-    let old_path = track.path;
+    // Get old path from DB (read-only) - track_id is actually inode
+    let audio_file = db.get_audio_file_by_inode(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    let old_path = audio_file.path().to_string();
 
     // Convert absolute path to relative for storage
     let relative_path = resolver
@@ -269,12 +259,12 @@ pub fn execute_drop_from_index(
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get track path from DB (read-only)
-    let track = db.get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+    // Get file path from DB (read-only) - track_id is actually inode
+    let audio_file = db.get_audio_file_by_inode(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
 
-    // Delete the track via signal_sender
-    sender.drop_from_index(&track.path, witness);
+    // Delete the file entry via signal_sender
+    sender.drop_from_index(audio_file.path(), witness);
 
     // Also delete files table entry if inode/source provided
     if let (Some(inode), Some(source)) = (inode, source) {
@@ -505,11 +495,11 @@ pub fn execute_acknowledge_mtime_only(
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
-    for (track_id, abs_path) in tracks {
-        // Get track info (need relative path for DB operations)
-        let track = match db.get_track_by_id(*track_id)? {
-            Some(t) => t,
-            None => continue, // Skip missing tracks
+    for (inode, abs_path) in tracks {
+        // Get audio file info (need relative path for DB operations) - track_id is actually inode
+        let audio_file = match db.get_audio_file_by_inode(*inode)? {
+            Some(af) => af,
+            None => continue, // Skip missing files
         };
 
         // Read current disk mtime using portable API (consistent with comparison code)
@@ -524,8 +514,8 @@ pub fn execute_acknowledge_mtime_only(
 
         // Update file mtime via db_thread using (source, inode) key
         sender.update_file_mtime(
-            &track.source,
-            track.inode,
+            audio_file.entry.source.as_str(),
+            audio_file.inode(),
             mtime_secs,
             mtime_nanos,
             witness,
@@ -534,7 +524,7 @@ pub fn execute_acknowledge_mtime_only(
         // Clear MtimeOnlyMismatch signal via db_thread
         sender.clear_file_signal(
             CorpusFileSignalType::MtimeOnlyMismatch.into(),
-            &track.path,
+            audio_file.path(),
             witness,
         );
 
@@ -562,12 +552,14 @@ pub fn execute_acknowledge_inode_changed(
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
-    for (track_id, abs_path) in tracks {
-        // Get track info (need relative path and old inode for DB operations)
-        let track = match db.get_track_by_id(*track_id)? {
-            Some(t) => t,
-            None => continue, // Skip missing tracks
+    for (old_inode, abs_path) in tracks {
+        // Get audio file info (need relative path and old inode for DB operations) - track_id is actually inode
+        let audio_file = match db.get_audio_file_by_inode(*old_inode)? {
+            Some(af) => af,
+            None => continue, // Skip missing files
         };
+        let file_path = audio_file.path();
+        let source_str = audio_file.entry.source.as_str();
 
         // Read current disk metadata
         let metadata = std::fs::metadata(abs_path)
@@ -577,16 +569,16 @@ pub fn execute_acknowledge_inode_changed(
         let mtime_nanos = metadata.mtime_nsec() as i64;
         let file_size = metadata.len() as i64;
 
-        // Update track.inode to the new value via db_thread
-        sender.update_track_inode(&track.path, new_inode, witness);
+        // Update audio_info.inode to the new value via db_thread
+        sender.update_track_inode(file_path, new_inode, witness);
 
         // Delete old files table entry (keyed by old inode) via db_thread
-        sender.drop_file_index_by_inode(&track.source, track.inode, witness);
+        sender.drop_file_index_by_inode(source_str, *old_inode, witness);
 
         // Insert new file entry with new inode and current mtime via db_thread
         sender.upsert_file_entry(
-            &track.path,
-            &track.source,
+            file_path,
+            source_str,
             FileEntryData {
                 inode: new_inode,
                 mtime_secs,
@@ -599,7 +591,7 @@ pub fn execute_acknowledge_inode_changed(
         // Clear InodeChanged signal via db_thread
         sender.clear_file_signal(
             CorpusFileSignalType::InodeChanged.into(),
-            &track.path,
+            file_path,
             witness,
         );
 
@@ -699,11 +691,11 @@ pub fn execute_assimilate_disk_tags_to_db(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Get track source (needed for files table key).
+    // Get audio file source (needed for files table key) - track_id is actually inode.
     // Source doesn't change during transcode, so this read is safe.
-    let track = db.get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
-    let source = track.source;
+    let audio_file = db.get_audio_file_by_inode(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    let source = audio_file.entry.source.as_str();
 
     // Read disk tags using TagSet
     let disk_tagset = TagSet::from_file(abs_path)
@@ -729,7 +721,7 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     // Update file mtime via db_thread using (source, inode) key
     sender.update_file_mtime(
-        &source,
+        source,
         current_inode,
         mtime_secs,
         mtime_nanos,

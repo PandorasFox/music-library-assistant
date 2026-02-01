@@ -30,7 +30,7 @@ impl Database {
 
     /// Get aggregated corpus summary for UI display.
     pub fn get_corpus_summary(&self) -> Result<CorpusSummary> {
-        let track_count = self.get_track_count(Some("corpus")).unwrap_or(0);
+        let track_count = self.get_audio_file_count(Some("corpus")).unwrap_or(0);
 
         // Count deploy conflict signals
         let deploy_conflicts: usize = self.conn.query_row(
@@ -647,7 +647,7 @@ impl Database {
 
         // Standard corpus file signals
         let files_in_corpus = self.count_signal_type("file_in_corpus")?;
-        let files_indexed = self.get_track_count(Some("corpus")).unwrap_or(0);
+        let files_indexed = self.get_audio_file_count(Some("corpus")).unwrap_or(0);
         let files_unindexed = self.count_signal_type("unindexed_file")?;
         let files_missing = self.count_signal_type("missing_file")?;
         let files_relocated = self.count_signal_type("moved_file")?;
@@ -1033,11 +1033,11 @@ impl Database {
                 .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
                 .unwrap_or_default();
 
-            // Get corpus paths for each track
+            // Get corpus paths for each file (track_id is actually inode)
             let mut conflicting_files = Vec::new();
-            for track_id in track_ids {
-                if let Ok(Some(track)) = self.get_track_by_id(track_id) {
-                    conflicting_files.push((track.path, track_id));
+            for inode in track_ids {
+                if let Ok(Some(audio_file)) = self.get_audio_file_by_inode(inode) {
+                    conflicting_files.push((audio_file.path().to_string(), inode));
                 }
             }
 

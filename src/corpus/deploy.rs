@@ -19,8 +19,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::Track;
-
 // ============================================================================
 // Path Computation (enabled for health signal computation)
 // ============================================================================
@@ -36,7 +34,7 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
-/// Compute deployment path from track and tags.
+/// Compute deployment path from file path and tags.
 ///
 /// Returns: `{album_artist}/{album}/{track}. {title}.{ext}`
 /// Or: `{album_artist}/{title}.{ext}` for singles (no album)
@@ -44,9 +42,9 @@ fn sanitize_path_component(s: &str) -> String {
 ///
 /// Tags should be provided as a HashMap with lowercase keys.
 /// Recognized tags: `album_artist`, `artist`, `album`, `title`, `track_number`
-pub fn compute_deployment_path_with_tags(track: &Track, tags: &HashMap<String, String>) -> PathBuf {
+pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String, String>) -> PathBuf {
     // Get extension from original path
-    let ext = Path::new(&track.path)
+    let ext = Path::new(file_path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("unknown");
@@ -81,7 +79,7 @@ pub fn compute_deployment_path_with_tags(track: &Track, tags: &HashMap<String, S
             }
         } else {
             // Fallback to original filename
-            Path::new(&track.path)
+            Path::new(file_path)
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
@@ -97,7 +95,7 @@ pub fn compute_deployment_path_with_tags(track: &Track, tags: &HashMap<String, S
         let filename = if let Some(title) = tags.get("title") {
             format!("{}.{}", sanitize_path_component(title), ext)
         } else {
-            Path::new(&track.path)
+            Path::new(file_path)
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
@@ -116,22 +114,6 @@ pub fn compute_deployment_path_with_tags(track: &Track, tags: &HashMap<String, S
 mod tests {
     use super::*;
 
-    fn make_track(path: &str) -> Track {
-        Track {
-            id: None,
-            path: path.to_string(),
-            source: "corpus".to_string(),
-            inode: 123,
-            file_size: 1000,
-            file_type: "flac".to_string(),
-            duration_ms: Some(180000),
-            bitrate_kbps: None,
-            sample_rate: None,
-            fingerprint: None,
-            needs_disk_flush: false,
-        }
-    }
-
     #[test]
     fn test_sanitize_path_component() {
         assert_eq!(sanitize_path_component("Hello/World"), "Hello_World");
@@ -141,7 +123,6 @@ mod tests {
 
     #[test]
     fn test_compute_deployment_path_full() {
-        let track = make_track("/corpus/test.flac");
         let tags: HashMap<String, String> = [
             ("artist".to_string(), "Artist Name".to_string()),
             ("album".to_string(), "Album Name".to_string()),
@@ -152,7 +133,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let path = compute_deployment_path_with_tags(&track, &tags);
+        let path = compute_deployment_path_with_tags("/corpus/test.flac", &tags);
         assert_eq!(
             path,
             PathBuf::from("Album Artist/Album Name/01. Track Title.flac")
@@ -161,8 +142,6 @@ mod tests {
 
     #[test]
     fn test_compute_deployment_path_single() {
-        let mut track = make_track("/corpus/test.mp3");
-        track.file_type = "mp3".to_string();
         let tags: HashMap<String, String> = [
             ("artist".to_string(), "Artist Name".to_string()),
             ("title".to_string(), "Single Track".to_string()),
@@ -170,13 +149,12 @@ mod tests {
         .into_iter()
         .collect();
 
-        let path = compute_deployment_path_with_tags(&track, &tags);
+        let path = compute_deployment_path_with_tags("/corpus/test.mp3", &tags);
         assert_eq!(path, PathBuf::from("Artist Name/Single Track.mp3"));
     }
 
     #[test]
     fn test_compute_deployment_path_no_album_artist() {
-        let track = make_track("/corpus/test.flac");
         let tags: HashMap<String, String> = [
             ("album".to_string(), "Album".to_string()),
             ("title".to_string(), "Title".to_string()),
@@ -185,7 +163,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let path = compute_deployment_path_with_tags(&track, &tags);
+        let path = compute_deployment_path_with_tags("/corpus/test.flac", &tags);
         assert_eq!(
             path,
             PathBuf::from("[no album artist]/Album/05. Title.flac")

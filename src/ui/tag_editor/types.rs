@@ -2,7 +2,7 @@
 //!
 //! Core type definitions for the tag editor workflow.
 
-use crate::corpus::db::Track;
+use crate::corpus::db::types::AudioFile;
 use crate::corpus::mutations::Mutation;
 
 // ============================================================================
@@ -36,13 +36,13 @@ pub enum TagEditorMode {
 pub enum TagEditContext {
     /// Single file editing with signals display
     SingleFile {
-        track: Track,
+        audio_file: AudioFile,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
     },
     /// Bulk editing with aggregated values
     BulkEdit {
-        tracks: Vec<Track>,
+        audio_files: Vec<AudioFile>,
         source: TagEditorSource,
     },
 }

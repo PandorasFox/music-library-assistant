@@ -562,11 +562,13 @@ impl Mutation {
                 tracks.iter().map(|(_, path)| path.clone()).collect()
             }
 
+            // Path update (for moved files) - return new path for signal clearing
+            Mutation::UpdateFilePath { new_path, .. } => vec![new_path.clone()],
+
             // Operations without specific file paths that need signal updates
             Mutation::SetTrackTagsDb { .. }
             | Mutation::CleanupStaleFiles { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => Vec::new(),
@@ -607,11 +609,13 @@ impl Mutation {
             | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::UpdateFileEntry { .. } => SignalClearScope::MutableOnly,
 
+            // Clear mutable signals for path updates (clears MovedFile)
+            Mutation::UpdateFilePath { .. } => SignalClearScope::MutableOnly,
+
             // No signal clearing (DB-only or no file impact)
             Mutation::SetTrackTagsDb { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleFiles { .. }
-            | Mutation::UpdateFilePath { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => SignalClearScope::None,

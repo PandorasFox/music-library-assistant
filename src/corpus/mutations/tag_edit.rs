@@ -36,19 +36,20 @@ fn execute_set_track_tags_db(
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get track info from DB (read-only)
-    let track = db.get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track not found: {}", track_id))?;
+    // Get audio file info from DB (read-only) - track_id is actually inode
+    let audio_file = db.get_audio_file_by_inode(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    let file_path = audio_file.path();
 
     // Write tags to DB (full replacement)
-    sender.set_track_tags(&track.path, tags.to_vec(), witness);
+    sender.set_track_tags(file_path, tags.to_vec(), witness);
 
     // Mark as needing disk flush
-    sender.set_needs_disk_flush(&track.path, true, witness);
+    sender.set_needs_disk_flush(file_path, true, witness);
 
     // Resolve relative DB path to absolute for ApplyDbTagsToDisk
     let resolver = paths::get_resolver();
-    let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+    let abs_path = resolver.resolve(std::path::Path::new(file_path));
 
     // Create authorized spawned mutation via witness factory
     Ok(Some(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk {

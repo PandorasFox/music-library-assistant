@@ -100,9 +100,9 @@ fn execute_transcode(
     let new_file_size = fs_metadata.len() as i64;
     let new_file_type = target_format.extension().to_string();
 
-    // Get the existing track to preserve fields we don't want to change
-    let existing_track = db.get_track_by_id(track_id)?
-        .ok_or_else(|| anyhow::anyhow!("Track {} not found in database", track_id))?;
+    // Get the existing audio file to preserve fields we don't want to change - track_id is actually inode
+    let existing_file = db.get_audio_file_by_inode(track_id)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
 
     // Convert new absolute path to relative for storage
     let resolver = paths::get_resolver();
@@ -121,10 +121,14 @@ fn execute_transcode(
 
     let relative_path_str = relative_new_path.to_string_lossy().to_string();
 
-    // Update track record: path, inode, file_size, file_type
+    let old_path = existing_file.path();
+    let old_inode = existing_file.inode();
+    let source_str = existing_file.entry.source.as_str();
+
+    // Update audio_info record: path, inode, file_size, file_type
     // Use old path for lookup, update to new path
     sender.update_track_path_with_metadata(
-        &existing_track.path,  // Old path (already relative in DB)
+        old_path,              // Old path (already relative in DB)
         &relative_path_str,    // New path
         new_inode,
         new_file_size,
@@ -144,14 +148,14 @@ fn execute_transcode(
     };
     sender.upsert_file_entry(
         &relative_path_str,
-        &existing_track.source,
+        source_str,
         file_entry,
         witness,
     );
 
     // Delete old files table entry if inode changed (which it will, since it's a new file)
-    if existing_track.inode != new_inode {
-        sender.drop_file_index_by_inode(&existing_track.source, existing_track.inode, witness);
+    if old_inode != new_inode {
+        sender.drop_file_index_by_inode(source_str, old_inode, witness);
     }
 
     Ok(())

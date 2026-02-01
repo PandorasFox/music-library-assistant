@@ -177,6 +177,9 @@ pub fn execute_scan_corpus_directory(
     let inode_vec: Vec<i64> = disk_inodes.iter().copied().collect();
     let indexed_by_inode = read_only_db.get_file_mtime_batch(file_source, &inode_vec).unwrap_or_default();
 
+    // Get indexed paths for move detection (same inode, different path)
+    let indexed_paths = read_only_db.get_file_paths_batch(file_source, &inode_vec).unwrap_or_default();
+
     let mut spawn: Vec<Computation> = Vec::new();
     let resolver = paths::get_resolver();
 
@@ -199,7 +202,26 @@ pub fn execute_scan_corpus_directory(
         // Check if file is indexed and needs verification
         // indexed_by_inode returns HashMap<inode, (mtime_secs, mtime_nanos)>
         if let Some((db_mtime_secs, db_mtime_nanos)) = indexed_by_inode.get(inode) {
-            // File is indexed by inode
+            // File is indexed by inode - check if path changed (file was moved/renamed)
+            if let Some(db_path) = indexed_paths.get(inode) {
+                if db_path != &relative_path_str {
+                    // Same inode but different path - file was moved
+                    let metadata = serde_json::json!({
+                        "inode": inode,
+                        "old_path": db_path,
+                        "new_path": relative_path_str,
+                    });
+                    ensure_file_signal_with_metadata_if_missing(
+                        read_only_db,
+                        &sender,
+                        CorpusFileSignalType::MovedFile.into(),
+                        &relative_path_str,
+                        &metadata.to_string(),
+                        witness,
+                    );
+                }
+            }
+
             let mtime_changed = *db_mtime_secs != *disk_mtime_s || *db_mtime_nanos != *disk_mtime_ns;
 
             if force_check {

@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::corpus::paths;
-use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -82,6 +82,9 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchInodeChangedAcknowledge) => {
                         self.start_inode_changed_acknowledge();
+                    }
+                    Some(insights_view::InsightAction::LaunchMovedFileAcknowledge) => {
+                        self.start_moved_file_acknowledge();
                     }
                     Some(insights_view::InsightAction::LaunchCorruptFileResolution) => {
                         self.start_corrupt_file_resolution();
@@ -169,10 +172,10 @@ impl App {
                     self.tag_search = Some(search);
                 }
             }
-            tag_search::TagSearchAction::EditTrack(track) => {
-                // Open unified tag editor for single track
+            tag_search::TagSearchAction::EditAudioFile(audio_file) => {
+                // Open unified tag editor for single audio file
                 self.tag_search = None;
-                self.start_unified_tag_editor_for_track(track);
+                self.start_unified_tag_editor_for_audio_file(audio_file);
             }
         }
     }
@@ -342,11 +345,11 @@ impl App {
 
             UnifiedTagEditorAction::RequestFillFromDb { track_id } => {
                 match track_id {
-                    Some(id) => {
+                    Some(inode) => {
                         let read_db = self.read_db();
-                        match read_db.get_track_tags(id) {
+                        match read_db.get_corpus_tags(inode) {
                             Ok(tags) => {
-                                // Convert TrackTag to (name, value) pairs
+                                // Convert AudioTag to (name, value) pairs
                                 let tag_pairs: Vec<(String, String)> = tags
                                     .into_iter()
                                     .map(|t| (t.tag_name, t.tag_value))
@@ -1233,6 +1236,100 @@ impl App {
         }
     }
 
+    /// Start moved file acknowledgement flow.
+    fn start_moved_file_acknowledge(&mut self) {
+        let Some(ref mut witch) = self.witch else {
+            self.status_message = Some("No database connection".to_string());
+            return;
+        };
+
+        // Query files with moved_file signals
+        let files = {
+            let read_db = witch.read_db();
+            match read_db.get_moved_files() {
+                Ok(f) => f,
+                Err(e) => {
+                    self.status_message = Some(format!("Failed to query moved files: {}", e));
+                    return;
+                }
+            }
+        };
+
+        if files.is_empty() {
+            self.status_message = Some("No moved files to acknowledge".to_string());
+            return;
+        }
+
+        crate::logging::log_general(format!(
+            "Starting moved file acknowledgement: {} files",
+            files.len()
+        ));
+
+        // Start transaction for the acknowledgement
+        let _ = witch.start_transaction("Moved file acknowledgement");
+
+        self.moved_file_state = Some(moved_file_flow::MovedFileState::new(files));
+        self.mode = UiMode::MovedFileAcknowledge;
+    }
+
+    /// Handle moved file acknowledgement actions.
+    pub(super) fn handle_moved_file_action(&mut self, action: moved_file_flow::MovedFileAction) {
+        match action {
+            moved_file_flow::MovedFileAction::None => {}
+            moved_file_flow::MovedFileAction::Acknowledge => {
+                self.stage_moved_file_acknowledge();
+                // Transition to review
+                self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
+            }
+            moved_file_flow::MovedFileAction::Cancel => {
+                crate::logging::log_general("Moved file acknowledgement cancelled");
+                // Discard any active transaction
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.moved_file_state = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Stage mutations for moved file acknowledgement.
+    fn stage_moved_file_acknowledge(&mut self) {
+        use crate::corpus::mutations::Mutation;
+        use std::path::PathBuf;
+
+        let Some(ref state) = self.moved_file_state else {
+            return;
+        };
+
+        if state.files.is_empty() {
+            return;
+        }
+
+        // Create UpdateFilePath mutations for each moved file
+        let mut mutations = Vec::new();
+        for (inode, new_path) in state.files_for_mutation() {
+            mutations.push(Mutation::UpdateFilePath {
+                source: "corpus".to_string(),
+                inode,
+                new_path: PathBuf::from(&new_path),
+            });
+        }
+
+        let label = format!(
+            "Acknowledge {} moved file{}",
+            mutations.len(),
+            if mutations.len() == 1 { "" } else { "s" }
+        );
+
+        // Stage the UpdateFilePath mutations
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::operator_decisions::stage_decision(witch, 0, &label, mutations);
+        }
+    }
+
     /// Handle OOB sync resolution actions.
     pub(super) fn handle_oob_sync_action(&mut self, action: oob_sync_flow::OobSyncAction) {
         match action {
@@ -1675,14 +1772,14 @@ impl App {
                 let read_db = w.read_db();
                 let resolver = paths::get_resolver();
                 let mut info = std::collections::HashMap::new();
-                for &track_id in &state.data.track_ids {
-                    if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
+                for &inode in &state.data.track_ids {
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
                         // Resolve relative DB path to absolute for filesystem operations
-                        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+                        let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
                         // Load complete TagSet from disk for building new tag set
                         let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
                             .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
-                        info.insert(track_id, (abs_path, tagset));
+                        info.insert(inode, (abs_path, tagset));
                     }
                 }
                 info
@@ -1762,12 +1859,12 @@ impl App {
 
                 // Build track info: path and current TagSet
                 let mut track_info = std::collections::HashMap::new();
-                for &track_id in &data.track_ids {
-                    if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
-                        let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+                for &inode in &data.track_ids {
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
+                        let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
                         let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
                             .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
-                        track_info.insert(track_id, (abs_path, tagset));
+                        track_info.insert(inode, (abs_path, tagset));
                     }
                 }
 
@@ -2221,18 +2318,18 @@ impl App {
             return;
         };
 
-        // Get track paths and current TagSets from disk
+        // Get file paths and current TagSets from disk
         let read_db = witch.read_db();
         let resolver = paths::get_resolver();
         let mut track_info = std::collections::HashMap::new();
-        for &track_id in &state.data.track_ids {
-            if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
+        for &inode in &state.data.track_ids {
+            if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
                 // Resolve relative DB path to absolute for filesystem operations
-                let abs_path = resolver.resolve(std::path::Path::new(&track.path));
+                let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
                 // Load complete TagSet from disk for building new tag set
                 let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
                     .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
-                track_info.insert(track_id, (abs_path, tagset));
+                track_info.insert(inode, (abs_path, tagset));
             }
         }
 
@@ -2313,20 +2410,20 @@ impl App {
         let read_db = witch.read_db();
         let resolver = paths::get_resolver();
 
-        let tracks = read_db.get_tracks_by_file_types(file_types).unwrap_or_default();
-        if tracks.is_empty() {
-            self.status_message = Some("No matching tracks found".to_string());
+        let audio_files = read_db.get_audio_files_by_types(file_types).unwrap_or_default();
+        if audio_files.is_empty() {
+            self.status_message = Some("No matching files found".to_string());
             return;
         }
 
-        let mutations: Vec<Mutation> = tracks
+        let mutations: Vec<Mutation> = audio_files
             .iter()
-            .map(|(track_id, rel_path, _file_type)| {
+            .map(|(inode, rel_path, _file_type)| {
                 let abs_path = resolver.resolve(
                     std::path::Path::new(rel_path),
                 );
                 Mutation::Transcode {
-                    track_id: *track_id,
+                    track_id: *inode,
                     source_path: abs_path,
                     target_format: target,
                     stash_name: "remux-input".to_string(),

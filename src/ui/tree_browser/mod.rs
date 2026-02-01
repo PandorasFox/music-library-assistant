@@ -88,36 +88,36 @@ impl TreeBrowserState {
             return;
         }
 
-        // Query all tracks from database
-        let tracks = match read_db.get_all_tracks(None) {
-            Ok(t) => t,
+        // Query all audio files from database
+        let audio_files = match read_db.get_all_audio_files(crate::corpus::db::types::FileSource::Corpus) {
+            Ok(af) => af,
             Err(_) => {
                 self.clear_filter();
                 return;
             }
         };
 
-        // Get tags for each track and filter
+        // Get tags for each file and filter
         let mut matching_paths: Vec<PathBuf> = Vec::new();
-        for track in tracks {
-            // Get tags for this track and convert to HashMap
+        for audio_file in audio_files {
+            // Get tags for this file and convert to HashMap
             let tags: HashMap<String, String> = read_db
-                .get_track_tags(track.id.unwrap_or(0))
+                .get_corpus_tags(audio_file.inode())
                 .unwrap_or_default()
                 .into_iter()
-                .map(|tt| (tt.tag_name, tt.tag_value))
+                .map(|t| (t.tag_name, t.tag_value))
                 .collect();
 
-            // Check if track matches filter
+            // Check if file matches filter
             if condition.matches(
-                &track.path,
-                &track.file_type,
-                track.sample_rate,
-                track.bitrate_kbps,
-                track.duration_ms,
+                audio_file.path(),
+                &audio_file.audio.file_type,
+                audio_file.audio.sample_rate,
+                audio_file.audio.bitrate_kbps,
+                audio_file.audio.duration_ms,
                 &tags,
             ) {
-                matching_paths.push(PathBuf::from(&track.path));
+                matching_paths.push(PathBuf::from(audio_file.path()));
             }
         }
 

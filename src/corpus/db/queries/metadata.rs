@@ -308,4 +308,29 @@ impl Database {
 
         Ok(files)
     }
+
+    /// Get files with MovedFile signals (same inode, different path).
+    pub fn get_moved_files(&self) -> Result<Vec<crate::corpus::db::types::MovedFileInfo>> {
+        use crate::corpus::db::types::MovedFileInfo;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                json_extract(s.metadata_json, '$.inode') as inode,
+                json_extract(s.metadata_json, '$.old_path') as old_path,
+                json_extract(s.metadata_json, '$.new_path') as new_path
+             FROM signals s
+             WHERE s.issue_type = 'moved_file'
+             ORDER BY s.issue_key"
+        )?;
+
+        let files: Vec<MovedFileInfo> = stmt.query_map(params![], |row| {
+            Ok(MovedFileInfo {
+                inode: row.get(0)?,
+                old_path: row.get(1)?,
+                new_path: row.get(2)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        Ok(files)
+    }
 }

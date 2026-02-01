@@ -392,57 +392,73 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
-    // Track Queries
+    // =========================================================================
+    // Count Queries
     // =========================================================================
 
-    /// Get all tracks, optionally filtered by source.
-    pub fn get_all_tracks(&self, source: Option<&str>) -> Result<Vec<super::types::Track>> {
-        self.db.get_all_tracks(source)
+    /// Get audio file count, optionally filtered by source.
+    pub fn get_audio_file_count(&self, source: Option<&str>) -> Result<usize> {
+        self.db.get_audio_file_count(source)
     }
 
-    /// Get track count, optionally filtered by source.
-    pub fn get_track_count(&self, source: Option<&str>) -> Result<usize> {
-        self.db.get_track_count(source)
+    /// Get count of audio files that have fingerprints.
+    pub fn get_fingerprinted_audio_file_count(&self) -> Result<i64> {
+        self.db.get_fingerprinted_audio_file_count()
     }
 
-    /// Get count of tracks that have fingerprints.
-    pub fn get_fingerprinted_track_count(&self) -> Result<i64> {
-        self.db.get_fingerprinted_track_count()
+    // =========================================================================
+    // AudioFile Queries
+    // =========================================================================
+
+    /// Get all audio files for a source.
+    pub fn get_all_audio_files(&self, source: super::types::FileSource) -> Result<Vec<super::types::AudioFile>> {
+        self.db.get_all_audio_files(source)
     }
 
-    /// Get a track by its ID.
-    pub fn get_track_by_id(&self, track_id: i64) -> Result<Option<super::types::Track>> {
-        self.db.get_track_by_id(track_id)
+    /// Get an audio file by path.
+    pub fn get_audio_file_by_path(&self, path: &str) -> Result<Option<super::types::AudioFile>> {
+        self.db.get_audio_file_by_path(path)
     }
 
-    /// Get a track by its path.
-    pub fn get_track_by_path(&self, path: &str) -> Result<Option<super::types::Track>> {
-        self.db.get_track_by_path(path)
+    /// Get an audio file by inode.
+    pub fn get_audio_file_by_inode(&self, inode: i64) -> Result<Option<super::types::AudioFile>> {
+        self.db.get_audio_file_by_inode(inode)
     }
 
-    /// Get tracks in a directory for tag editing.
-    pub fn get_tracks_for_tag_editing(&self, dir_path: &std::path::Path) -> Result<Vec<super::types::Track>> {
-        self.db.get_tracks_for_tag_editing(dir_path)
+    /// Get multiple audio files by their inodes.
+    pub fn get_audio_files_by_inodes(&self, inodes: &[i64]) -> Result<Vec<super::types::AudioFile>> {
+        self.db.get_audio_files_by_inodes(inodes)
     }
 
-    /// Get tracks by file types.
-    pub fn get_tracks_by_file_types(&self, file_types: &[&str]) -> Result<Vec<(i64, String, String)>> {
-        self.db.get_tracks_by_file_types(file_types)
+    /// Get audio files by path prefix (directory query).
+    pub fn get_audio_files_by_path_prefix(&self, path_prefix: &str) -> Result<Vec<super::types::AudioFile>> {
+        self.db.get_audio_files_by_path_prefix(path_prefix)
     }
 
-    /// Get tags for a track.
-    pub fn get_track_tags(&self, track_id: i64) -> Result<Vec<super::types::TrackTag>> {
-        self.db.get_track_tags(track_id)
+    /// Get audio files in a directory for tag editing.
+    pub fn get_audio_files_for_tag_editing(&self, dir_path: &std::path::Path) -> Result<Vec<super::types::AudioFile>> {
+        self.db.get_audio_files_for_tag_editing(dir_path)
     }
 
-    /// Get all tracks with their tags (for search functionality).
-    pub fn get_all_tracks_with_tags(&self) -> Result<Vec<(super::types::Track, std::collections::HashMap<String, String>)>> {
-        self.db.get_all_tracks_with_tags()
+    /// Get all audio files with their tags (for search functionality).
+    pub fn get_all_audio_files_with_tags(&self, source: super::types::FileSource) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, String>)>> {
+        self.db.get_all_audio_files_with_tags(source)
     }
 
-    /// Get track counts grouped by file type.
-    pub fn get_track_counts_by_file_type(&self) -> Result<std::collections::HashMap<String, i64>> {
-        self.db.get_track_counts_by_file_type()
+    /// Get tags for an audio file by inode.
+    pub fn get_corpus_tags(&self, inode: i64) -> Result<Vec<super::types::AudioTag>> {
+        self.db.get_corpus_tags(inode)
+    }
+
+    /// Get audio file counts grouped by file type.
+    pub fn get_audio_type_counts(&self) -> Result<std::collections::HashMap<String, i64>> {
+        self.db.get_audio_type_counts()
+    }
+
+    /// Get audio files by file types.
+    /// Returns (inode, path, file_type) tuples.
+    pub fn get_audio_files_by_types(&self, file_types: &[&str]) -> Result<Vec<(i64, String, String)>> {
+        self.db.get_audio_files_by_types(file_types)
     }
 
     // =========================================================================
@@ -481,6 +497,11 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get files with changed inodes.
     pub fn get_inode_changed_files(&self) -> Result<Vec<crate::corpus::db::types::InodeChangedFile>> {
         self.db.get_inode_changed_files()
+    }
+
+    /// Get files that have been moved (same inode, different path).
+    pub fn get_moved_files(&self) -> Result<Vec<crate::corpus::db::types::MovedFileInfo>> {
+        self.db.get_moved_files()
     }
 
     // =========================================================================

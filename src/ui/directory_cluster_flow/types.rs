@@ -130,19 +130,20 @@ impl DirectoryClusterModalData {
                     .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
                     .unwrap_or_default();
 
-                // Load track details for format/size info
+                // Load audio file details for format/size info
+                // Note: track_ids in signal metadata are actually inodes
                 let mut inodes = Vec::new();
                 let mut paths = Vec::new();
                 let mut total_size: i64 = 0;
                 let mut format_counts: std::collections::HashMap<String, usize> =
                     std::collections::HashMap::new();
 
-                for &track_id in &track_ids {
-                    if let Ok(Some(track)) = read_db.get_track_by_id(track_id) {
-                        inodes.push(track.inode);
-                        paths.push(track.path.clone());
-                        total_size += track.file_size;
-                        *format_counts.entry(track.file_type.to_uppercase()).or_insert(0) += 1;
+                for &inode in &track_ids {
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
+                        inodes.push(audio_file.inode());
+                        paths.push(audio_file.path().to_string());
+                        total_size += audio_file.entry.file_size;
+                        *format_counts.entry(audio_file.audio.file_type.to_uppercase()).or_insert(0) += 1;
                     }
                 }
 

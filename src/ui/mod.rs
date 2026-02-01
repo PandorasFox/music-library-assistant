@@ -41,6 +41,7 @@ pub mod helpers;
 pub mod insights_view;
 pub mod missing_file_flow;
 pub mod inode_changed_flow;
+pub mod moved_file_flow;
 pub mod oob_conflict_flow;
 pub mod oob_sync_flow;
 pub mod progress_screen;
@@ -164,6 +165,8 @@ pub(crate) struct App {
     pub(super) oob_conflict_state: Option<oob_conflict_flow::OobConflictState>,
     // Inode changed acknowledgement
     pub(super) inode_changed_state: Option<inode_changed_flow::InodeChangedState>,
+    // Moved file acknowledgement
+    pub(super) moved_file_state: Option<moved_file_flow::MovedFileState>,
     // Standardized transaction review modal
     pub(super) transaction_review: Option<transaction_review::TransactionReviewState>,
     // Unified tag editor (transaction-based)
@@ -230,6 +233,7 @@ impl App {
             oob_sync_state: None,
             oob_conflict_state: None,
             inode_changed_state: None,
+            moved_file_state: None,
             transaction_review: None,
             unified_tag_editor: None,
             exit_confirm_modal_state: None,
@@ -457,6 +461,12 @@ impl App {
                     self.handle_inode_changed_action(action);
                 }
             }
+            UiMode::MovedFileAcknowledge => {
+                if let Some(ref mut state) = self.moved_file_state {
+                    let action = state.handle_key(key);
+                    self.handle_moved_file_action(action);
+                }
+            }
             UiMode::FormatStandardization => {
                 if let Some(ref mut state) = self.format_std {
                     let action = state.handle_key(key);
@@ -563,10 +573,10 @@ impl App {
 
     pub(super) fn start_debug_view(&mut self) {
         let read_db = self.read_db();
-        // Query track counts for stats display
-        let track_count = read_db.get_track_count(None).unwrap_or(0) as i64;
-        let fingerprinted_count = read_db.get_fingerprinted_track_count().unwrap_or(0);
-        self.debug_view = Some(debug_view::DebugViewState::new(track_count, fingerprinted_count));
+        // Query audio file counts for stats display
+        let file_count = read_db.get_audio_file_count(None).unwrap_or(0) as i64;
+        let fingerprinted_count = read_db.get_fingerprinted_audio_file_count().unwrap_or(0);
+        self.debug_view = Some(debug_view::DebugViewState::new(file_count, fingerprinted_count));
         self.mode = UiMode::Debug;
     }
 
@@ -677,6 +687,7 @@ fn render(f: &mut Frame, app: &mut App) {
         oob_sync_state: app.oob_sync_state.as_mut(),
         oob_conflict_state: app.oob_conflict_state.as_mut(),
         inode_changed_state: app.inode_changed_state.as_mut(),
+        moved_file_state: app.moved_file_state.as_mut(),
         transaction_review: app.transaction_review.as_ref(),
         transaction_review_decisions,
         exit_confirm_modal_state: app.exit_confirm_modal_state.as_ref(),

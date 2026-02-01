@@ -10,7 +10,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use crate::config::is_audio_extension;
-use crate::corpus::db::Track;
+use crate::corpus::mutations::ExtractedMetadata;
 
 pub struct AudioMetadata {
     pub duration_ms: Option<i64>,
@@ -25,7 +25,11 @@ pub struct AudioMetadata {
     pub _isrc: Option<String>,
 }
 
-pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
+/// Extract audio metadata from a file.
+///
+/// Returns `ExtractedMetadata` with audio properties but empty tags.
+/// The caller should populate tags using `TagSet::from_file()` if needed.
+pub fn extract_metadata(path: &Path, _source: &str) -> Result<ExtractedMetadata> {
     // Get file system metadata
     let fs_metadata = fs::metadata(path)
         .with_context(|| format!("Failed to read file metadata: {}", path.display()))?;
@@ -63,12 +67,8 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
         }
     };
 
-    // Note: Tag fields (artist, album, title, etc.) are stored separately in corpus_tags table.
-    // Use corpus::tags::TagSet::from_file() to get tags from the file if needed.
-    Ok(Track {
-        id: None,
-        path: path.to_string_lossy().to_string(),
-        source: source.to_string(),
+    // Note: Tags are returned empty - caller should use TagSet::from_file() to populate
+    Ok(ExtractedMetadata {
         inode,
         file_size,
         file_type,
@@ -76,7 +76,7 @@ pub fn extract_metadata(path: &Path, source: &str) -> Result<Track> {
         bitrate_kbps: audio_meta.bitrate_kbps,
         sample_rate: audio_meta.sample_rate,
         fingerprint,
-        needs_disk_flush: false, // Fresh from disk, no pending writes
+        tags: Vec::new(), // Empty - caller fills in via TagSet::from_file()
     })
 }
 

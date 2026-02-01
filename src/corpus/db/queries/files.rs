@@ -142,6 +142,44 @@ impl Database {
         Ok(result)
     }
 
+    /// Get paths for files by inode (for move detection).
+    pub fn get_file_paths_batch(
+        &self,
+        source: FileSource,
+        inodes: &[i64],
+    ) -> Result<HashMap<i64, String>> {
+        if inodes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT inode, path FROM files
+             WHERE source = ? AND inode IN ({})",
+            placeholders
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+
+        let source_str = source.as_str();
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&source_str];
+        for inode in inodes {
+            params_vec.push(inode);
+        }
+
+        let mut result = HashMap::new();
+        let rows = stmt.query_map(&params_vec[..], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (inode, path) = row?;
+            result.insert(inode, path);
+        }
+
+        Ok(result)
+    }
+
     // ========================================================================
     // Audio Info Queries
     // ========================================================================
@@ -196,6 +234,98 @@ impl Database {
 
         let files = stmt.query_map(params![source.as_str()], Self::row_to_audio_file)?;
         files.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get an audio file by inode.
+    pub fn get_audio_file_by_inode(&self, inode: i64) -> Result<Option<AudioFile>> {
+        let result = self.conn.query_row(
+            r#"SELECT
+                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            WHERE f.inode = ?1 AND f.is_dir = 0
+            LIMIT 1"#,
+            params![inode],
+            Self::row_to_audio_file,
+        );
+
+        match result {
+            Ok(af) => Ok(Some(af)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get multiple audio files by their inodes.
+    pub fn get_audio_files_by_inodes(&self, inodes: &[i64]) -> Result<Vec<AudioFile>> {
+        if inodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders: Vec<String> = (1..=inodes.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            r#"SELECT
+                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            WHERE f.inode IN ({}) AND f.is_dir = 0
+            ORDER BY f.path"#,
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let params: Vec<&dyn rusqlite::types::ToSql> = inodes
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let files = stmt
+            .query_map(params.as_slice(), Self::row_to_audio_file)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(files)
+    }
+
+    /// Get all corpus audio files matching a path prefix (directory query).
+    pub fn get_audio_files_by_path_prefix(&self, path_prefix: &str) -> Result<Vec<AudioFile>> {
+        let pattern = super::dir_like_pattern_str(path_prefix);
+
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            WHERE f.source = 'corpus' AND f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0
+            ORDER BY f.path"#,
+        )?;
+
+        let files = stmt.query_map(params![pattern], Self::row_to_audio_file)?;
+        files.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get all audio files in a directory tree for tag editing.
+    pub fn get_audio_files_for_tag_editing(&self, dir_path: &std::path::Path) -> Result<Vec<AudioFile>> {
+        let pattern = super::dir_like_pattern(dir_path);
+
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            WHERE f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0
+            ORDER BY f.path"#,
+        )?;
+
+        let files = stmt
+            .query_map(params![pattern], Self::row_to_audio_file)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(files)
     }
 
     /// Get count of audio files with fingerprints.
@@ -271,6 +401,21 @@ impl Database {
         Ok(tags)
     }
 
+    /// Get all audio files with their tags (for search functionality).
+    pub fn get_all_audio_files_with_tags(&self, source: FileSource) -> Result<Vec<(AudioFile, HashMap<String, String>)>> {
+        let files = self.get_all_audio_files(source)?;
+        let mut results = Vec::new();
+        for file in files {
+            let tags = self.get_corpus_tags(file.inode())?;
+            let tag_map: HashMap<String, String> = tags
+                .into_iter()
+                .map(|t| (t.tag_name, t.tag_value))
+                .collect();
+            results.push((file, tag_map));
+        }
+        Ok(results)
+    }
+
     /// Get audio files by file types.
     /// Returns (inode, path, file_type) tuples.
     pub fn get_audio_files_by_types(&self, file_types: &[&str]) -> Result<Vec<(i64, String, String)>> {
@@ -327,6 +472,34 @@ impl Database {
             counts.insert(file_type, count);
         }
         Ok(counts)
+    }
+
+    /// Get audio file count, optionally filtered by source.
+    pub fn get_audio_file_count(&self, source: Option<&str>) -> Result<usize> {
+        let count: i64 = if let Some(src) = source {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.source = ?1 AND f.is_dir = 0",
+                params![src],
+                |row| row.get(0),
+            )?
+        } else {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.is_dir = 0",
+                params![],
+                |row| row.get(0),
+            )?
+        };
+        Ok(count as usize)
+    }
+
+    /// Get count of audio files that have fingerprints.
+    pub fn get_fingerprinted_audio_file_count(&self) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM audio_info WHERE fingerprint IS NOT NULL",
+            params![],
+            |row| row.get(0),
+        )?;
+        Ok(count)
     }
 
     // ========================================================================

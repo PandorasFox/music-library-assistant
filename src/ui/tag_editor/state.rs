@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::corpus::db::Track;
+use crate::corpus::db::types::AudioFile;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths;
 
@@ -122,38 +122,38 @@ impl UnifiedTagEditorState {
     ///
     /// This is the primary constructor that handles both Individual and Aggregated modes.
     ///
-    /// - **Individual mode**: Edit tracks one at a time (Tab navigates between tracks)
-    /// - **Aggregated mode**: Edit unified view (changes apply to all tracks)
+    /// - **Individual mode**: Edit audio files one at a time (Tab navigates between files)
+    /// - **Aggregated mode**: Edit unified view (changes apply to all files)
     pub fn new(
         mode: TagEditorMode,
-        tracks: Vec<Track>,
+        audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
     ) -> Self {
-        let total_items = tracks.len();
+        let total_items = audio_files.len();
 
-        // Load per-track tag fields from disk
-        let tag_fields: Vec<Vec<TagField>> = tracks.iter().map(track_to_tag_fields).collect();
+        // Load per-file tag fields from disk
+        let tag_fields: Vec<Vec<TagField>> = audio_files.iter().map(audio_file_to_tag_fields).collect();
         let original_tag_fields = tag_fields.clone();
 
         // For Aggregated mode, also build aggregated view
         let aggregated_fields = if mode == TagEditorMode::Aggregated {
-            Some(aggregate_tags_across_tracks(&tracks))
+            Some(aggregate_tags_across_audio_files(&audio_files))
         } else {
             None
         };
 
-        // Build context based on track count
-        let context = if tracks.len() == 1 {
-            let track = tracks.into_iter().next().unwrap();
+        // Build context based on file count
+        let context = if audio_files.len() == 1 {
+            let audio_file = audio_files.into_iter().next().unwrap();
             TagEditContext::SingleFile {
-                track,
+                audio_file,
                 source,
                 group_context,
             }
         } else {
             TagEditContext::BulkEdit {
-                tracks,
+                audio_files,
                 source,
             }
         };
@@ -182,38 +182,38 @@ impl UnifiedTagEditorState {
     }
 
     /// Create a new unified state for single-file editing (convenience wrapper).
-    pub fn single_file(track: Track, source: TagEditorSource, group_context: Option<GroupContext>) -> Self {
-        Self::new(TagEditorMode::Individual, vec![track], source, group_context)
+    pub fn single_file(audio_file: AudioFile, source: TagEditorSource, group_context: Option<GroupContext>) -> Self {
+        Self::new(TagEditorMode::Individual, vec![audio_file], source, group_context)
     }
 
-    /// Create a new unified state for bulk editing from pre-loaded tracks (convenience wrapper).
+    /// Create a new unified state for bulk editing from pre-loaded audio files (convenience wrapper).
     ///
-    /// Uses Individual mode - each track is edited separately, Tab navigates between them.
-    pub fn bulk_from_tracks(
-        tracks: Vec<Track>,
+    /// Uses Individual mode - each file is edited separately, Tab navigates between them.
+    pub fn bulk_from_audio_files(
+        audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
     ) -> Self {
-        Self::new(TagEditorMode::Individual, tracks, source, group_context)
+        Self::new(TagEditorMode::Individual, audio_files, source, group_context)
     }
 
     /// Create a new unified state for aggregated bulk editing (convenience wrapper).
     ///
-    /// Uses Aggregated mode - shows unified view, changes apply to all tracks at once.
+    /// Uses Aggregated mode - shows unified view, changes apply to all files at once.
     pub fn aggregated_bulk(
-        tracks: Vec<Track>,
+        audio_files: Vec<AudioFile>,
         source: TagEditorSource,
     ) -> Self {
-        Self::new(TagEditorMode::Aggregated, tracks, source, None)
+        Self::new(TagEditorMode::Aggregated, audio_files, source, None)
     }
 
     /// Create a new unified state for directory editing with aggregated tags (convenience wrapper).
     ///
-    /// Uses Aggregated mode - shows unified view, changes apply to all tracks.
+    /// Uses Aggregated mode - shows unified view, changes apply to all files.
     pub fn directory_aggregated(
-        tracks: Vec<Track>,
+        audio_files: Vec<AudioFile>,
     ) -> Self {
-        Self::new(TagEditorMode::Aggregated, tracks, TagEditorSource::DirectoryEdit, None)
+        Self::new(TagEditorMode::Aggregated, audio_files, TagEditorSource::DirectoryEdit, None)
     }
 
     /// Check if using Aggregated mode (unified view across all tracks)
@@ -233,15 +233,15 @@ impl UnifiedTagEditorState {
     /// Get a label for the current item (for transaction decision labels)
     pub fn current_item_label(&self) -> String {
         match &self.context {
-            TagEditContext::SingleFile { track, .. } => {
-                Path::new(&track.path)
+            TagEditContext::SingleFile { audio_file, .. } => {
+                Path::new(audio_file.path())
                     .file_name()
                     .map(|f| f.to_string_lossy().to_string())
                     .unwrap_or_else(|| "Unknown".to_string())
             }
-            TagEditContext::BulkEdit { tracks, .. } => {
-                if let Some(track) = tracks.get(self.current_item_idx) {
-                    Path::new(&track.path)
+            TagEditContext::BulkEdit { audio_files, .. } => {
+                if let Some(audio_file) = audio_files.get(self.current_item_idx) {
+                    Path::new(audio_file.path())
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| "Unknown".to_string())
@@ -338,19 +338,19 @@ impl UnifiedTagEditorState {
             compute_changes(&self.original_tag_fields, &self.tag_fields)
         };
 
-        let tracks = match &self.context {
-            TagEditContext::SingleFile { track, .. } => vec![track.clone()],
-            TagEditContext::BulkEdit { tracks, .. } => tracks.clone(),
+        let audio_files = match &self.context {
+            TagEditContext::SingleFile { audio_file, .. } => vec![audio_file.clone()],
+            TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
         };
 
-        changes_to_mutations(&changes, &tracks, &self.tag_fields)
+        changes_to_mutations(&changes, &audio_files, &self.tag_fields)
     }
 
     /// Generate mutations for the current item only.
-    /// This is what should be used when staging a decision for one track.
+    /// This is what should be used when staging a decision for one file.
     pub fn generate_mutations_for_current_item(&self) -> Vec<Mutation> {
         if self.is_aggregated_mode() {
-            // In aggregated mode, all changes apply to all tracks
+            // In aggregated mode, all changes apply to all files
             return self.generate_mutations();
         }
 
@@ -362,12 +362,12 @@ impl UnifiedTagEditorState {
             .filter(|c| c.track_idx == self.current_item_idx)
             .collect();
 
-        let tracks = match &self.context {
-            TagEditContext::SingleFile { track, .. } => vec![track.clone()],
-            TagEditContext::BulkEdit { tracks, .. } => tracks.clone(),
+        let audio_files = match &self.context {
+            TagEditContext::SingleFile { audio_file, .. } => vec![audio_file.clone()],
+            TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
         };
 
-        changes_to_mutations(&current_changes, &tracks, &self.tag_fields)
+        changes_to_mutations(&current_changes, &audio_files, &self.tag_fields)
     }
 
     /// Revert to original state for current item only
@@ -427,28 +427,28 @@ impl UnifiedTagEditorState {
         buttons
     }
 
-    /// Get the current track being edited
-    pub fn get_current_track(&self) -> Option<&Track> {
+    /// Get the current audio file being edited
+    pub fn get_current_audio_file(&self) -> Option<&AudioFile> {
         match &self.context {
-            TagEditContext::SingleFile { track, .. } => Some(track),
-            TagEditContext::BulkEdit { tracks, .. } => tracks.get(self.current_item_idx),
+            TagEditContext::SingleFile { audio_file, .. } => Some(audio_file),
+            TagEditContext::BulkEdit { audio_files, .. } => audio_files.get(self.current_item_idx),
         }
     }
 
-    /// Re-read tags from disk for the current track
+    /// Re-read tags from disk for the current audio file
     pub fn fill_from_disk(&mut self) {
-        let track = match &self.context {
-            TagEditContext::SingleFile { track, .. } => track.clone(),
-            TagEditContext::BulkEdit { tracks, .. } => {
-                match tracks.get(self.current_item_idx) {
-                    Some(t) => t.clone(),
+        let audio_file = match &self.context {
+            TagEditContext::SingleFile { audio_file, .. } => audio_file.clone(),
+            TagEditContext::BulkEdit { audio_files, .. } => {
+                match audio_files.get(self.current_item_idx) {
+                    Some(af) => af.clone(),
                     None => return,
                 }
             }
         };
 
         // Re-read tags from disk
-        let new_fields = track_to_tag_fields(&track);
+        let new_fields = audio_file_to_tag_fields(&audio_file);
 
         // Update current item's tag fields
         if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
@@ -892,7 +892,7 @@ impl UnifiedTagEditorState {
                     }
                     TagEditorButton::FillFromDb => {
                         // Return action for UI layer to handle (requires DB access)
-                        let track_id = self.get_current_track().and_then(|t| t.id);
+                        let track_id = self.get_current_audio_file().map(|af| af.inode());
                         UnifiedTagEditorAction::RequestFillFromDb { track_id }
                     }
                 }
@@ -1196,23 +1196,23 @@ impl UnifiedTagEditorState {
 
     fn render_info_pane(&self, f: &mut Frame, area: Rect) {
         let (path, file_type, file_size, duration_ms, bitrate, sample_rate) = match &self.context {
-            TagEditContext::SingleFile { track, .. } => (
-                track.path.clone(),
-                track.file_type.clone(),
-                track.file_size,
-                track.duration_ms,
-                track.bitrate_kbps,
-                track.sample_rate,
+            TagEditContext::SingleFile { audio_file, .. } => (
+                audio_file.path().to_string(),
+                audio_file.audio.file_type.clone(),
+                audio_file.entry.file_size,
+                audio_file.audio.duration_ms,
+                audio_file.audio.bitrate_kbps,
+                audio_file.audio.sample_rate,
             ),
-            TagEditContext::BulkEdit { tracks, .. } => {
-                if let Some(track) = tracks.get(self.current_item_idx) {
+            TagEditContext::BulkEdit { audio_files, .. } => {
+                if let Some(audio_file) = audio_files.get(self.current_item_idx) {
                     (
-                        track.path.clone(),
-                        track.file_type.clone(),
-                        track.file_size,
-                        track.duration_ms,
-                        track.bitrate_kbps,
-                        track.sample_rate,
+                        audio_file.path().to_string(),
+                        audio_file.audio.file_type.clone(),
+                        audio_file.entry.file_size,
+                        audio_file.audio.duration_ms,
+                        audio_file.audio.bitrate_kbps,
+                        audio_file.audio.sample_rate,
                     )
                 } else {
                     return;
@@ -1303,12 +1303,11 @@ impl UnifiedTagEditorState {
             ];
             (lines, "Selection")
         } else {
-            // Standard track-based rendering (Individual mode)
-            // Note: Track no longer has artist/title - use filename from path
+            // Standard file-based rendering (Individual mode)
             let items: Vec<Line> = match &self.context {
-                TagEditContext::SingleFile { track, group_context, .. } => {
-                    // Single file mode - show the track filename
-                    let filename = std::path::Path::new(&track.path)
+                TagEditContext::SingleFile { audio_file, group_context, .. } => {
+                    // Single file mode - show the filename
+                    let filename = std::path::Path::new(audio_file.path())
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("Unknown");
@@ -1328,14 +1327,14 @@ impl UnifiedTagEditorState {
 
                     lines
                 }
-                TagEditContext::BulkEdit { tracks, .. } => {
-                    // Bulk mode with Individual editing - show all tracks by filename
-                    tracks
+                TagEditContext::BulkEdit { audio_files, .. } => {
+                    // Bulk mode with Individual editing - show all files by filename
+                    audio_files
                         .iter()
                         .enumerate()
-                        .map(|(idx, track)| {
+                        .map(|(idx, audio_file)| {
                             let prefix = if idx == self.current_item_idx { ">> " } else { "   " };
-                            let filename = std::path::Path::new(&track.path)
+                            let filename = std::path::Path::new(audio_file.path())
                                 .file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("Unknown");
@@ -1354,7 +1353,7 @@ impl UnifiedTagEditorState {
 
             let title = match &self.context {
                 TagEditContext::SingleFile { source, .. } => match source {
-                    TagEditorSource::CorpusBrowser => "Track",
+                    TagEditorSource::CorpusBrowser => "File",
                     TagEditorSource::DirectoryEdit => "File",
                     TagEditorSource::TagSearch => "Search Result",
                 },
@@ -2045,28 +2044,25 @@ fn tag_fields_to_tags(fields: &[TagField]) -> Vec<(String, String)> {
 
 /// Convert changes to mutations for the daemon.
 ///
-/// Uses the DB-first pattern with spawn chaining: for each track with changes, generates
+/// Uses the DB-first pattern with spawn chaining: for each file with changes, generates
 /// SetTrackTagsDb which writes tags to DB, sets needs_disk_flush=true, and spawns
 /// ApplyDbTagsToDisk to sync to disk and clear the flag.
 ///
 /// This pattern ensures DB is always ahead of or in sync with disk, enabling
 /// recovery via OOB flow if disk write fails/is interrupted.
-fn changes_to_mutations(changes: &[TagChange], tracks: &[Track], all_tag_fields: &[Vec<TagField>]) -> Vec<Mutation> {
-    // Get unique track indices that have changes
-    let mut changed_tracks: HashSet<usize> = HashSet::new();
+fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], all_tag_fields: &[Vec<TagField>]) -> Vec<Mutation> {
+    // Get unique file indices that have changes
+    let mut changed_files: HashSet<usize> = HashSet::new();
     for change in changes {
-        changed_tracks.insert(change.track_idx);
+        changed_files.insert(change.track_idx);
     }
 
-    // Generate one mutation per track: SetTrackTagsDb (spawns ApplyDbTagsToDisk)
+    // Generate one mutation per file: SetTrackTagsDb (spawns ApplyDbTagsToDisk)
     let mut mutations = Vec::new();
-    for track_idx in changed_tracks {
-        if let (Some(track), Some(current_fields)) = (tracks.get(track_idx), all_tag_fields.get(track_idx)) {
-            // Skip tracks without ID (not yet indexed)
-            let track_id = match track.id {
-                Some(id) => id,
-                None => continue,
-            };
+    for file_idx in changed_files {
+        if let (Some(audio_file), Some(current_fields)) = (audio_files.get(file_idx), all_tag_fields.get(file_idx)) {
+            // Use inode as track_id for the mutation
+            let track_id = audio_file.inode();
 
             // Get complete desired tag set from current UI state
             let tags = tag_fields_to_tags(current_fields);
@@ -2087,15 +2083,15 @@ fn changes_to_mutations(changes: &[TagChange], tracks: &[Track], all_tag_fields:
 // Conversion Functions
 // ============================================================================
 
-/// Load tag fields from disk for a track.
+/// Load tag fields from disk for an audio file.
 ///
 /// All tags are loaded from the audio file and sorted alphabetically.
 /// Multi-value tags (e.g., multiple genres) are loaded as separate entries.
-pub fn track_to_tag_fields(track: &Track) -> Vec<TagField> {
+pub fn audio_file_to_tag_fields(audio_file: &AudioFile) -> Vec<TagField> {
     use crate::corpus::tags::TagSet;
 
     let resolver = paths::get_resolver();
-    let disk_path = resolver.resolve(Path::new(&track.path));
+    let disk_path = resolver.resolve(Path::new(audio_file.path()));
 
     let tag_set = match TagSet::from_file(&disk_path) {
         Ok(tags) => tags,
@@ -2281,31 +2277,31 @@ pub fn group_common_changes(changes: &[TagChange]) -> (Vec<GroupedChange>, Vec<T
 }
 
 // ============================================================================
-// Directory-Level Tag Aggregation (across all tracks)
+// Directory-Level Tag Aggregation (across all audio files)
 // ============================================================================
 
-/// Aggregate tags across all tracks in a directory.
+/// Aggregate tags across all audio files in a directory.
 ///
 /// For each tag name (case-insensitive):
-/// - If all tracks have the same value → `AggregatedValue::Consistent(value)`
-/// - If values differ across tracks → `AggregatedValue::Various`
+/// - If all files have the same value → `AggregatedValue::Consistent(value)`
+/// - If values differ across files → `AggregatedValue::Various`
 ///
 /// Empty values are filtered out. Tags are sorted alphabetically.
 /// This provides a unified view for directory-level tag editing where the user
 /// can see which tags are consistent and which need attention.
-pub fn aggregate_tags_across_tracks(tracks: &[Track]) -> Vec<AggregatedTagField> {
+pub fn aggregate_tags_across_audio_files(audio_files: &[AudioFile]) -> Vec<AggregatedTagField> {
     use std::collections::HashMap;
 
-    if tracks.is_empty() {
+    if audio_files.is_empty() {
         return Vec::new();
     }
 
-    // Collect all tag values per tag name across all tracks
+    // Collect all tag values per tag name across all files
     // Key: normalized tag name, Value: (display name, set of unique non-empty values)
     let mut tag_values: HashMap<String, (String, HashSet<String>)> = HashMap::new();
 
-    for track in tracks {
-        let fields = track_to_tag_fields(track);
+    for audio_file in audio_files {
+        let fields = audio_file_to_tag_fields(audio_file);
         for field in fields {
             if field.name == "New Tag" {
                 continue;
@@ -2331,10 +2327,10 @@ pub fn aggregate_tags_across_tracks(tracks: &[Track]) -> Vec<AggregatedTagField>
         .into_iter()
         .map(|(_normalized, (display_name, values))| {
             let value = if values.len() == 1 {
-                // All tracks have the same value
+                // All files have the same value
                 AggregatedValue::Consistent(values.into_iter().next().unwrap_or_default())
             } else {
-                // Tracks have different values
+                // Files have different values
                 AggregatedValue::Various
             };
 

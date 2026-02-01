@@ -167,6 +167,8 @@ pub enum InsightAction {
     LaunchOobTagConflict,
     /// Launch inode changed acknowledgement flow
     LaunchInodeChangedAcknowledge,
+    /// Launch moved file acknowledgement flow
+    LaunchMovedFileAcknowledge,
     /// Launch corrupt file resolution flow (stash + drop)
     LaunchCorruptFileResolution,
     /// Launch shit format transcode flow
@@ -402,11 +404,11 @@ impl CachedBucketEntries {
             ),
             BucketEntry::corpus(
                 InsightType::CorpusFilesRelocated,
-                "Files relocated",
+                "Files relocated (moved)",
                 corpus.files_relocated,
-                1,
-                if corpus.files_relocated > 0 { Color::Yellow } else { Color::Green },
-                InsightAction::Informational,
+                if corpus.files_relocated > 0 { 0 } else { 2 },
+                if corpus.files_relocated > 0 { Color::Yellow } else { Color::DarkGray },
+                InsightAction::LaunchMovedFileAcknowledge,
             ),
             BucketEntry::corpus(
                 InsightType::CorpusCorruptFiles,

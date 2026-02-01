@@ -73,7 +73,7 @@ impl FormatStdState {
     /// Create a new state, querying the database for file counts.
     pub fn new(read_db: &ReadOnlyDb<'_>) -> Self {
         let file_counts = read_db
-            .get_track_counts_by_file_type()
+            .get_audio_type_counts()
             .unwrap_or_default();
 
         Self {

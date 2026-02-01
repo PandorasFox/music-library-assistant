@@ -348,14 +348,14 @@ impl OobConflictState {
 /// Properly handles multi-value tags by comparing value sets per key.
 pub fn compute_tag_diff(
     read_db: &crate::corpus::db::ReadOnlyDb<'_>,
-    track_id: i64,
+    inode: i64,
     abs_path: &std::path::Path,
 ) -> Vec<TagMismatchEntry> {
     use crate::corpus::tags::TagSet;
     use std::collections::HashSet;
 
-    // Get DB tags as TagSet
-    let db_tags = match read_db.get_track_tags(track_id) {
+    // Get DB tags as TagSet (track_id is actually inode)
+    let db_tags = match read_db.get_corpus_tags(inode) {
         Ok(tags) => tags,
         Err(_) => return Vec::new(),
     };

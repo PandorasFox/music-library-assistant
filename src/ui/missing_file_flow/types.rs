@@ -75,26 +75,25 @@ impl MissingFileModalData {
         let mut non_restorable = Vec::new();
 
         for corpus_path in missing_paths {
-            // Get track info for this path
-            let track = match read_db.get_track_by_path(&corpus_path)? {
-                Some(t) => t,
-                None => continue, // Signal refers to non-existent track, skip
+            // Get audio file info for this path
+            let audio_file = match read_db.get_audio_file_by_path(&corpus_path)? {
+                Some(af) => af,
+                None => continue, // Signal refers to non-existent file, skip
             };
 
-            let track_id = track.id.unwrap_or(0);
-            let inode = track.inode;
+            let inode = audio_file.inode();
 
             if let Some(library_path) = inode_to_library.get(&inode) {
                 restorable.push(RestorableMissingFile {
                     corpus_path,
-                    _track_id: track_id,
+                    _track_id: inode,
                     _inode: inode,
                     library_path: library_path.clone(),
                 });
             } else {
                 non_restorable.push(NonRestorableMissingFile {
                     corpus_path,
-                    track_id,
+                    track_id: inode,
                     inode,
                 });
             }

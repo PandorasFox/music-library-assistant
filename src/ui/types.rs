@@ -66,6 +66,8 @@ pub(crate) enum UiMode {
     OobConflictInspection,
     /// Inode changed acknowledgement modal
     InodeChangedAcknowledge,
+    /// Moved file acknowledgement modal (same inode, different path)
+    MovedFileAcknowledge,
     /// Standardized transaction review modal - all mutation flows pass through here
     TransactionReview,
     /// Format standardization view (part of lateral view ring)

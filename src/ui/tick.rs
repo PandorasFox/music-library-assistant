@@ -90,9 +90,9 @@ impl App {
     /// Tick tag search - checks for pending bulk edit after modal has rendered.
     pub(super) fn tick_tag_search(&mut self) {
         if let Some(ref mut search) = self.tag_search {
-            if let Some(tracks) = search.take_pending_bulk_edit() {
+            if let Some(audio_files) = search.take_pending_bulk_edit() {
                 self.tag_search = None;
-                self.start_unified_tag_editor_for_tracks(tracks);
+                self.start_unified_tag_editor_for_audio_files(audio_files);
             }
         }
     }

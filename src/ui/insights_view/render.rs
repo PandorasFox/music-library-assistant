@@ -425,17 +425,26 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         }
         InsightType::CorpusFilesRelocated => {
             lines.push(Line::from(Span::styled(
-                "Files Relocated",
+                "Files Relocated (Moved)",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Files moved within corpus.",
+                "Files moved within corpus (same inode,",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "Database paths need updating.",
+                "different path). Database paths need",
                 Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "updating to match new locations.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to acknowledge and update paths.",
+                Style::default().fg(Color::Cyan),
             )));
         }
 

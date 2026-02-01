@@ -256,9 +256,8 @@ pub enum SignalType {
     UnindexedFile,
     /// File in corpus + index with matching inode/mtime (healthy state)
     HealthyFile,
-    /// File in index but mtime differs from disk (modified outside MLA)
-    CorpusFileModifiedOutOfBand,
     /// File in index with different path but same inode (file was moved)
+    /// issue_key: new path, metadata: {"old_path": "...", "inode": i64}
     MovedFile,
     /// File in index but no longer exists in corpus
     MissingFile,
@@ -309,10 +308,6 @@ pub enum SignalType {
     // =========================================================================
     // Error signals (discovery-time parse/read failures)
     // =========================================================================
-    /// File's tags could not be parsed (corrupt/unsupported tag format)
-    TagParseError,
-    /// File's audio waveform could not be decoded for fingerprinting
-    WaveformReadError,
     /// File is corrupt (unreadable tags or waveform decode failure)
     /// Actionable signal with resolution flow (stash + drop)
     CorruptFile,
@@ -333,7 +328,6 @@ impl SignalType {
             // Second-level signals
             Self::UnindexedFile => "unindexed_file",
             Self::HealthyFile => "healthy_file",
-            Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
             Self::MovedFile => "moved_file",
             Self::MissingFile => "missing_file",
 
@@ -358,8 +352,6 @@ impl SignalType {
             Self::CompoundTagValue => "compound_tag_value",
 
             // Error signals
-            Self::TagParseError => "tag_parse_error",
-            Self::WaveformReadError => "waveform_read_error",
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
             Self::SubparDuplicate => "subpar_duplicate",
@@ -374,7 +366,6 @@ impl SignalType {
             // Second-level signals
             "unindexed_file" => Some(Self::UnindexedFile),
             "healthy_file" => Some(Self::HealthyFile),
-            "corpus_file_modified_oob" => Some(Self::CorpusFileModifiedOutOfBand),
             "moved_file" => Some(Self::MovedFile),
             "missing_file" => Some(Self::MissingFile),
 
@@ -399,8 +390,9 @@ impl SignalType {
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
-            "tag_parse_error" => Some(Self::TagParseError),
-            "waveform_read_error" => Some(Self::WaveformReadError),
+            // Legacy: map old error signal types to CorruptFile
+            "tag_parse_error" => Some(Self::CorruptFile),
+            "waveform_read_error" => Some(Self::CorruptFile),
             "corrupt_file" => Some(Self::CorruptFile),
             "shit_format" => Some(Self::ShitFormat),
             "subpar_duplicate" => Some(Self::SubparDuplicate),
@@ -409,7 +401,9 @@ impl SignalType {
             "missing_from_disk" => Some(Self::MissingFile),
             "missing_from_index" => Some(Self::FileInCorpus),
             "file_relocated" => Some(Self::MovedFile),
-            "oob_file_change" => Some(Self::CorpusFileModifiedOutOfBand),
+            // Legacy: oob_file_change was split into OOB trio
+            "oob_file_change" => Some(Self::OutOfBandTagConflict),
+            "corpus_file_modified_oob" => Some(Self::OutOfBandTagConflict),
 
             _ => None,
         }
@@ -423,13 +417,10 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::UnindexedFile => Self::UnindexedFile,
             CorpusFileSignalType::HealthyFile => Self::HealthyFile,
             CorpusFileSignalType::MissingFile => Self::MissingFile,
-            CorpusFileSignalType::CorpusFileModifiedOutOfBand => Self::CorpusFileModifiedOutOfBand,
             CorpusFileSignalType::MovedFile => Self::MovedFile,
             CorpusFileSignalType::OutOfBandTagSync => Self::OutOfBandTagSync,
             CorpusFileSignalType::OutOfBandTagConflict => Self::OutOfBandTagConflict,
             CorpusFileSignalType::MtimeOnlyMismatch => Self::MtimeOnlyMismatch,
-            CorpusFileSignalType::TagParseError => Self::TagParseError,
-            CorpusFileSignalType::WaveformReadError => Self::WaveformReadError,
             CorpusFileSignalType::InodeChanged => Self::InodeChanged,
             CorpusFileSignalType::CorruptFile => Self::CorruptFile,
             CorpusFileSignalType::ShitFormat => Self::ShitFormat,
@@ -481,9 +472,8 @@ pub enum CorpusFileSignalType {
     HealthyFile,
     /// File in index but missing from corpus
     MissingFile,
-    /// File mtime differs from indexed mtime
-    CorpusFileModifiedOutOfBand,
-    /// File moved (same inode, different path)
+    /// File moved (same inode, different path than indexed)
+    /// issue_key: new path, metadata: {"old_path": "...", "inode": i64}
     MovedFile,
     /// Tags on disk have extras in one direction only (syncable)
     OutOfBandTagSync,
@@ -491,10 +481,6 @@ pub enum CorpusFileSignalType {
     OutOfBandTagConflict,
     /// File mtime changed but tags are identical (requires operator acknowledgement)
     MtimeOnlyMismatch,
-    /// File's tags could not be parsed
-    TagParseError,
-    /// File's audio waveform could not be decoded for fingerprinting
-    WaveformReadError,
     /// File at path was replaced (different inode than indexed)
     InodeChanged,
     /// File is corrupt (unreadable tags or waveform decode failure)
@@ -512,13 +498,10 @@ impl CorpusFileSignalType {
             Self::UnindexedFile => "unindexed_file",
             Self::HealthyFile => "healthy_file",
             Self::MissingFile => "missing_file",
-            Self::CorpusFileModifiedOutOfBand => "corpus_file_modified_oob",
             Self::MovedFile => "moved_file",
             Self::OutOfBandTagSync => "oob_tag_sync",
             Self::OutOfBandTagConflict => "oob_tag_conflict",
             Self::MtimeOnlyMismatch => "mtime_only_mismatch",
-            Self::TagParseError => "tag_parse_error",
-            Self::WaveformReadError => "waveform_read_error",
             Self::InodeChanged => "inode_changed",
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
@@ -532,13 +515,10 @@ impl CorpusFileSignalType {
             Self::UnindexedFile => SignalType::UnindexedFile,
             Self::HealthyFile => SignalType::HealthyFile,
             Self::MissingFile => SignalType::MissingFile,
-            Self::CorpusFileModifiedOutOfBand => SignalType::CorpusFileModifiedOutOfBand,
             Self::MovedFile => SignalType::MovedFile,
             Self::OutOfBandTagSync => SignalType::OutOfBandTagSync,
             Self::OutOfBandTagConflict => SignalType::OutOfBandTagConflict,
             Self::MtimeOnlyMismatch => SignalType::MtimeOnlyMismatch,
-            Self::TagParseError => SignalType::TagParseError,
-            Self::WaveformReadError => SignalType::WaveformReadError,
             Self::InodeChanged => SignalType::InodeChanged,
             Self::CorruptFile => SignalType::CorruptFile,
             Self::ShitFormat => SignalType::ShitFormat,
@@ -1141,5 +1121,13 @@ pub struct InodeChangedFile {
     pub path: String,
     pub old_inode: i64,
     pub new_inode: i64,
+}
+
+/// A file with a MovedFile signal (same inode, different path).
+#[derive(Debug, Clone)]
+pub struct MovedFileInfo {
+    pub inode: i64,
+    pub old_path: String,
+    pub new_path: String,
 }
 

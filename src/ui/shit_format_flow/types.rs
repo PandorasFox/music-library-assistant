@@ -96,13 +96,13 @@ impl ShitFormatModalData {
         let mut lossy_files = Vec::new();
 
         for (corpus_path, file_type) in shit_format_files {
-            // Get track info for this path
-            let track = match read_db.get_track_by_path(&corpus_path)? {
-                Some(t) => t,
-                None => continue, // Signal refers to non-existent track, skip
+            // Get audio file info for this path
+            let audio_file = match read_db.get_audio_file_by_path(&corpus_path)? {
+                Some(af) => af,
+                None => continue, // Signal refers to non-existent file, skip
             };
 
-            let track_id = track.id.unwrap_or(0);
+            let track_id = audio_file.inode();
 
             let entry = ShitFormatEntry {
                 corpus_path,

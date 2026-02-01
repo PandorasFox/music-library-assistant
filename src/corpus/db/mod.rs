@@ -3,7 +3,7 @@
 //! Core of MLA's toolkit architecture. Common data layer for all operations.
 //!
 //! This module is organized into:
-//! - `types`: Core data structures (Track, FileEntry, AudioInfo, DeploymentStats, Health types)
+//! - `types`: Core data structures (AudioFile, FileEntry, AudioInfo, DeploymentStats, Health types)
 //! - `queries`: All database operations
 //!
 //! ## Database Access Patterns
@@ -19,4 +19,3 @@ pub mod types;
 
 // Re-export core types
 pub use queries::{Database, ReadOnlyDb};
-pub use types::Track;

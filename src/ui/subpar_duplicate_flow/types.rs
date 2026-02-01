@@ -45,17 +45,16 @@ impl SubparDuplicateModalData {
             return Ok(Self::default());
         }
 
-        // Get track info for each path
+        // Get audio file info for each path
         let mut files = Vec::new();
         for entry in subpar_entries {
-            // Get track info for this path
-            let track = match read_db.get_track_by_path(&entry.corpus_path)? {
-                Some(t) => t,
-                None => continue, // Signal refers to non-existent track, skip
+            // Get audio file info for this path
+            let audio_file = match read_db.get_audio_file_by_path(&entry.corpus_path)? {
+                Some(af) => af,
+                None => continue, // Signal refers to non-existent file, skip
             };
 
-            let track_id = track.id.unwrap_or(0);
-            let inode = track.inode;
+            let inode = audio_file.inode();
 
             // Convert reason to human-readable
             let reason = match entry.reason.as_str() {
@@ -66,7 +65,7 @@ impl SubparDuplicateModalData {
 
             files.push(SubparFileEntry {
                 corpus_path: entry.corpus_path,
-                track_id,
+                track_id: inode,
                 inode,
                 reason,
                 superior_path: entry.superior_path,

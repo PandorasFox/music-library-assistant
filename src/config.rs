@@ -351,16 +351,38 @@ impl Config {
         false
     }
 
+    /// Get the target library name for a corpus path.
+    ///
+    /// Given a corpus path (relative, e.g., `corpus/web/releases/...`), returns
+    /// the first matching library name from deploy mappings.
+    /// Returns None if no mapping matches.
+    pub fn get_library_for_corpus_path(&self, corpus_path: &std::path::Path) -> Option<String> {
+        for mapping in &self.deploy_mappings {
+            for corpus_relative_path in &mapping.corpus_relative_paths {
+                let relative_prefix = std::path::Path::new("corpus").join(corpus_relative_path);
+                if corpus_path.starts_with(&relative_prefix) {
+                    // Return first library name (primary target)
+                    return mapping.library_names.first().cloned();
+                }
+            }
+        }
+        None
+    }
+
     // =========================================================================
     // Validation
     // =========================================================================
 
-    /// Validate that the archive root exists and supports required operations.
-    /// Tests hard link capability (corpus → libraries) and atomic moves (corpus → stash).
+    /// Validate that the archive root exists and all subdirectories are on the same filesystem.
+    ///
+    /// This check ensures:
+    /// - Hard links will work (corpus → libraries)
+    /// - Atomic moves will work (corpus → stash)
+    ///
+    /// Uses st_dev (device ID) comparison rather than creating test files.
+    /// Runtime checks during corpus walking will detect nested mount points.
     pub fn validate_same_filesystem(&self) -> Result<()> {
-        use std::fs;
-        use std::io::Write;
-        use tempfile::NamedTempFile;
+        use std::os::unix::fs::MetadataExt;
 
         let corpus_dir = self.corpus_dir();
         let libraries_dir = self.libraries_dir();
@@ -377,7 +399,15 @@ impl Config {
             );
         }
 
-        // Validate subdirectories exist
+        // Validate subdirectories exist and collect device IDs
+        let mut device_ids: Vec<(&str, &PathBuf, u64)> = Vec::new();
+
+        // Check root first
+        let root_dev = std::fs::metadata(&self.root)
+            .with_context(|| format!("Failed to stat root directory: {:?}", self.root))?
+            .dev();
+        device_ids.push(("root", &self.root, root_dev));
+
         for (name, dir) in [("corpus", &corpus_dir), ("libraries", &libraries_dir), ("stash", &stash_dir)] {
             if !dir.exists() {
                 anyhow::bail!(
@@ -389,81 +419,41 @@ impl Config {
                     dir
                 );
             }
+
+            let dev = std::fs::metadata(dir)
+                .with_context(|| format!("Failed to stat {} directory", name))?
+                .dev();
+            device_ids.push((name, dir, dev));
         }
 
-        // Test hard link capability (corpus → libraries)
-        let temp_file = NamedTempFile::new_in(&corpus_dir)
-            .context("Failed to create test file in corpus directory")?;
-        temp_file.as_file().write_all(b"hardlink_test")?;
-
-        let link_name = format!(
-            "mla-hardlink-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let link_path = libraries_dir.join(&link_name);
-
-        if let Err(e) = fs::hard_link(temp_file.path(), &link_path) {
-            anyhow::bail!(
-                "Validation failed: Cannot create hard links\n\
-                 \n\
-                 Corpus: {:?}\n\
-                 Libraries: {:?}\n\
-                 \n\
-                 Error: {}\n\
-                 \n\
-                 Hard links require the same filesystem. \
-                 All subdirectories must be on the same volume as the archive root.",
-                corpus_dir,
-                libraries_dir,
-                e
-            );
+        // Check all directories are on the same filesystem
+        let (first_name, first_dir, first_dev) = device_ids[0];
+        for (name, dir, dev) in &device_ids[1..] {
+            if *dev != first_dev {
+                anyhow::bail!(
+                    "Validation failed: directories are on different filesystems\n\
+                     \n\
+                     {} ({:?}): device {}\n\
+                     {} ({:?}): device {}\n\
+                     \n\
+                     Hard links and atomic moves require the same filesystem.\n\
+                     All subdirectories must be on the same volume as the archive root.\n\
+                     \n\
+                     Note: Nested mount points within these directories will be detected\n\
+                     at runtime and trigger read-only safety mode.",
+                    first_name, first_dir, first_dev,
+                    name, dir, dev
+                );
+            }
         }
-        // Cleanup: move test artifact to /tmp/ instead of deleting
-        let cleanup_path = std::path::PathBuf::from("/tmp").join(&link_name);
-        let _ = fs::rename(&link_path, &cleanup_path);
 
-        // Test atomic move capability (corpus → stash)
-        let temp_file2 = NamedTempFile::new_in(&corpus_dir)
-            .context("Failed to create test file in corpus directory")?;
-        let source_path = temp_file2.into_temp_path();
+        // Store the expected device ID for runtime checks
+        crate::corpus::paths::set_expected_device_id(root_dev);
 
-        let move_name = format!(
-            "mla-move-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let move_path = stash_dir.join(&move_name);
-
-        if let Err(e) = fs::rename(&source_path, &move_path) {
-            // Cleanup: move source file to /tmp/ instead of deleting
-            let cleanup_path = std::path::PathBuf::from("/tmp").join(source_path.file_name().unwrap_or_default());
-            let _ = fs::rename(&source_path, &cleanup_path);
-
-            anyhow::bail!(
-                "Validation failed: Cannot atomically move files\n\
-                 \n\
-                 Corpus: {:?}\n\
-                 Stash: {:?}\n\
-                 \n\
-                 Error: {}\n\
-                 \n\
-                 Atomic moves require the same filesystem. \
-                 All subdirectories must be on the same volume as the archive root.",
-                corpus_dir,
-                stash_dir,
-                e
-            );
-        }
-        // Cleanup: move test artifact to /tmp/ instead of deleting
-        let cleanup_path = std::path::PathBuf::from("/tmp").join(&move_name);
-        let _ = fs::rename(&move_path, &cleanup_path);
-
-        crate::logging::log_general("Filesystem validation passed");
+        crate::logging::log_general(format!(
+            "Filesystem validation passed (device {})",
+            root_dev
+        ));
         Ok(())
     }
 

@@ -21,6 +21,28 @@ use crate::config::{self, Config};
 /// Initialized lazily on first use from config.
 static GLOBAL_RESOLVER: OnceLock<PathResolver> = OnceLock::new();
 
+/// Expected filesystem device ID (st_dev) for all paths in the archive.
+///
+/// Set during config validation after checking that root, corpus, libraries,
+/// and stash are all on the same filesystem. Used at runtime to detect if
+/// any path crosses a mount boundary (nested mount point).
+static EXPECTED_DEVICE_ID: OnceLock<u64> = OnceLock::new();
+
+/// Set the expected device ID for filesystem boundary checks.
+///
+/// Called from config validation after confirming all directories share the same device.
+/// Should only be called once at startup.
+pub fn set_expected_device_id(dev: u64) {
+    let _ = EXPECTED_DEVICE_ID.set(dev);
+}
+
+/// Get the expected device ID for filesystem boundary checks.
+///
+/// Returns None if not yet set (config validation hasn't run).
+pub fn get_expected_device_id() -> Option<u64> {
+    EXPECTED_DEVICE_ID.get().copied()
+}
+
 /// Get the global PathResolver, initializing from config if needed.
 ///
 /// This is a convenience function for code that doesn't have direct access

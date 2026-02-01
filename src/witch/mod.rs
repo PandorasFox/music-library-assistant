@@ -55,6 +55,38 @@ use types::{ContentAnalysisWitness, TaskResult};
 use worker_stats::SharedWorkerStats;
 
 // ============================================================================
+// Global Mount Violation Flag
+// ============================================================================
+
+use std::sync::OnceLock;
+
+/// Global flag for mount boundary violations detected by worker threads.
+///
+/// When a computation detects that a path crosses a filesystem mount boundary
+/// (different st_dev than expected), it sets this flag. The Witch checks this
+/// on each tick() and latches into read-only mode if set.
+///
+/// This is a OnceLock because once a violation is detected, it's permanent
+/// for this process lifetime.
+static MOUNT_VIOLATION: OnceLock<String> = OnceLock::new();
+
+/// Report a mount boundary violation from a worker thread.
+///
+/// Called by computations when they detect a path with a different st_dev
+/// than the expected root filesystem. The Witch will pick this up on next
+/// tick() and latch into read-only mode.
+pub fn report_mount_violation(reason: String) {
+    let _ = MOUNT_VIOLATION.set(reason);
+}
+
+/// Check if a mount violation has been reported.
+///
+/// Returns the violation reason if one has been reported.
+fn check_mount_violation() -> Option<&'static str> {
+    MOUNT_VIOLATION.get().map(|s| s.as_str())
+}
+
+// ============================================================================
 // The Witch
 // ============================================================================
 
@@ -79,7 +111,13 @@ pub struct Witch {
     legacy_enabled: bool,
 
     /// When true, mutations are permanently disabled (read-only debug mode).
+    /// Set from config at startup.
     read_only_mode: bool,
+
+    /// Runtime safety latch: if Some, mutations are permanently disabled for this session.
+    /// Contains the reason why the safety latch was triggered (e.g., mount boundary violation).
+    /// Once set, cannot be unset - operator must fix the issue and restart MLA.
+    safety_latch_reason: Option<String>,
 
     /// Whether mutations have run this session.
     /// Used to auto-trigger content analysis after mutations + awakening drain.
@@ -186,6 +224,7 @@ impl Witch {
             observation_state: CorpusObservationState::Unseen,
             legacy_enabled: cfg.legacy_enabled,
             read_only_mode: false,
+            safety_latch_reason: None,
             mutations_ran_this_session: false,
             freshen_last_stage_at_startup: false, // Set via with_opinions()
             force_check_all_files_at_startup: false, // Set via with_opinions()
@@ -274,12 +313,54 @@ impl Witch {
     ///
     /// Mutations are only accepted when:
     /// - Eye state is Awake (observing and awakening complete)
-    /// - Not in read-only mode
+    /// - Not in read-only mode (config setting)
+    /// - Safety latch not triggered (runtime invariant violation)
     ///
     /// This is derived state - mutations are automatically blocked during
     /// re-awakening cycles after mutations drain.
     fn accepting_mutations(&self) -> bool {
-        self.eye_state == EyeState::Awake && !self.read_only_mode
+        self.eye_state == EyeState::Awake
+            && !self.read_only_mode
+            && self.safety_latch_reason.is_none()
+    }
+
+    /// Check if the Witch is in read-only mode (for any reason).
+    ///
+    /// Returns true if:
+    /// - Config-based read-only mode is enabled, OR
+    /// - Safety latch was triggered at runtime
+    pub fn is_read_only(&self) -> bool {
+        self.read_only_mode || self.safety_latch_reason.is_some()
+    }
+
+    /// Get the reason for read-only mode, if any.
+    ///
+    /// Returns:
+    /// - Some("config") if read-only mode was set via config
+    /// - Some(reason) if safety latch was triggered
+    /// - None if mutations are allowed
+    pub fn read_only_reason(&self) -> Option<&str> {
+        if self.read_only_mode {
+            Some("Read-only mode enabled in config")
+        } else {
+            self.safety_latch_reason.as_deref()
+        }
+    }
+
+    /// Trigger the safety latch, permanently disabling mutations for this session.
+    ///
+    /// This is a one-way operation - once latched, cannot be unlatched.
+    /// The operator must fix the underlying issue and restart MLA.
+    ///
+    /// Called when a runtime invariant is violated (e.g., mount boundary crossed).
+    pub fn latch_read_only_for_safety(&mut self, reason: String) {
+        if self.safety_latch_reason.is_none() {
+            crate::logging::log_error(format!(
+                "[WITCH] SAFETY LATCH TRIGGERED: {}",
+                reason
+            ));
+            self.safety_latch_reason = Some(reason);
+        }
     }
 
     /// Start observing. Returns false if observing already in progress.
@@ -340,6 +421,11 @@ impl Witch {
     /// - Updates state machine transitions
     /// - Aggregates worker performance stats (when timing enabled)
     pub fn tick(&mut self) -> DaemonStatus {
+        // Check for mount boundary violations reported by worker threads
+        if let Some(reason) = check_mount_violation() {
+            self.latch_read_only_for_safety(reason.to_string());
+        }
+
         // DEBUG: Log first tick state (only when timing enabled)
         if let Some(ref stats) = self.worker_stats_shared {
             let (_, total_qw_before, _) = stats.debug_values();
@@ -993,7 +1079,7 @@ impl Witch {
     ///
     /// ```ignore
     /// let read_db = witch.read_db();
-    /// let tracks = read_db.get_all_tracks(None)?;
+    /// let audio_files = read_db.get_all_audio_files(FileSource::Corpus)?;
     /// ```
     ///
     /// # Panics

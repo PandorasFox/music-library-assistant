@@ -125,6 +125,30 @@ pub fn signal_sender() -> Option<&'static SignalWriteSender> {
     SIGNAL_SENDER.get()
 }
 
+/// Block until all queued DB operations have been processed.
+///
+/// Computations call this when they need to ensure their writes are visible
+/// to subsequent computations that read those signals. The computation
+/// blocks itself; the sender continues to accept writes.
+///
+/// Returns false if db thread not initialized.
+pub fn wait_for_queue_drain() -> bool {
+    use rand::Rng;
+
+    if let Some(sender) = SIGNAL_SENDER.get() {
+        // Spin with small sleeps to avoid busy-waiting
+        let mut rng = rand::thread_rng();
+        while !sender.stats.queue_empty.load(Ordering::Acquire) {
+            // Roll a d20 and sleep for that many millis
+            let d20: u64 = rng.gen_range(1..=20);
+            std::thread::sleep(std::time::Duration::from_millis(d20));
+        }
+        true
+    } else {
+        false
+    }
+}
+
 /// Signal the DB thread to close its connection and exit.
 ///
 /// Called by `Witch::drop()`. After this, further signal sends will still
@@ -1480,6 +1504,13 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
             params![inode],
         )?;
     }
+
+    // Clear all signals for this path (MissingFile, CorruptFile, etc.)
+    // This is the resolution action - dropping from index resolves file-level signals
+    db.conn().execute(
+        "DELETE FROM signals WHERE issue_key = ?1",
+        params![path],
+    )?;
 
     Ok(())
 }

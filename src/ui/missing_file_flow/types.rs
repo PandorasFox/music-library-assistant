@@ -55,6 +55,8 @@ impl MissingFileModalData {
     /// Load and categorize missing files from the database.
     ///
     /// A file is restorable if its inode exists in the files table (source='library').
+    /// For missing files, the file doesn't exist on disk. We try to get the inode
+    /// from the database (files or audio_info tables).
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
         // Step 1: Get all MissingFile signals (issue_key = corpus path)
         let missing_paths = read_db.get_missing_file_paths()?;
@@ -75,13 +77,17 @@ impl MissingFileModalData {
         let mut non_restorable = Vec::new();
 
         for corpus_path in missing_paths {
-            // Get audio file info for this path
-            let audio_file = match read_db.get_audio_file_by_path(&corpus_path)? {
-                Some(af) => af,
-                None => continue, // Signal refers to non-existent file, skip
+            // Try to get file info - first try audio_file (files+audio_info join)
+            let inode = if let Some(af) = read_db.get_audio_file_by_path(&corpus_path)? {
+                af.inode()
+            } else if let Some(fe) = read_db.get_file_entry_by_path(&corpus_path, "corpus")? {
+                // Fallback: files table entry without audio_info (rare but possible)
+                fe.inode
+            } else {
+                // No database entry found - file is completely lost from the system
+                // The signal is stale and will be cleared on next scan
+                continue;
             };
-
-            let inode = audio_file.inode();
 
             if let Some(library_path) = inode_to_library.get(&inode) {
                 restorable.push(RestorableMissingFile {

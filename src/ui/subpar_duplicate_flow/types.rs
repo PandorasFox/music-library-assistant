@@ -3,6 +3,7 @@
 //! Data structures for the subpar duplicate resolution modal, including
 //! file entries and button state.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -37,6 +38,9 @@ pub struct SubparDuplicateModalData {
 
 impl SubparDuplicateModalData {
     /// Load subpar duplicate files from the database.
+    ///
+    /// Subpar duplicate files exist on disk but are lower quality versions of other files.
+    /// We try to get the inode from the database first, then fall back to filesystem lookup.
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
         // Get all SubparDuplicate signals with metadata
         let subpar_entries = read_db.get_subpar_duplicate_files()?;
@@ -45,16 +49,25 @@ impl SubparDuplicateModalData {
             return Ok(Self::default());
         }
 
-        // Get audio file info for each path
+        let resolver = paths::get_resolver();
         let mut files = Vec::new();
-        for entry in subpar_entries {
-            // Get audio file info for this path
-            let audio_file = match read_db.get_audio_file_by_path(&entry.corpus_path)? {
-                Some(af) => af,
-                None => continue, // Signal refers to non-existent file, skip
-            };
 
-            let inode = audio_file.inode();
+        for entry in subpar_entries {
+            // Try to get inode from database first
+            let inode = if let Some(af) = read_db.get_audio_file_by_path(&entry.corpus_path)? {
+                af.inode()
+            } else if let Some(fe) = read_db.get_file_entry_by_path(&entry.corpus_path, "corpus")? {
+                fe.inode
+            } else {
+                // Fall back to filesystem lookup (subpar files should exist on disk)
+                let abs_path = resolver.resolve(std::path::Path::new(&entry.corpus_path));
+                if let Ok(metadata) = std::fs::metadata(&abs_path) {
+                    metadata.ino() as i64
+                } else {
+                    // File doesn't exist on disk - skip it
+                    continue;
+                }
+            };
 
             // Convert reason to human-readable
             let reason = match entry.reason.as_str() {

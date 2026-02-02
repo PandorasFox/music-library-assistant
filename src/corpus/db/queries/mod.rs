@@ -574,6 +574,13 @@ impl<'a> ReadOnlyDb<'a> {
     // File Entry Queries
     // =========================================================================
 
+    /// Get a file entry by path for a specific source (without requiring audio_info).
+    ///
+    /// Use this for files that may not have been successfully indexed.
+    pub fn get_file_entry_by_path(&self, path: &str, source: &str) -> Result<Option<super::types::FileEntry>> {
+        self.db.get_file_entry_by_path(path, source)
+    }
+
     /// Get mtime info for files by inode (for incremental scanning).
     pub fn get_file_mtime_batch(
         &self,

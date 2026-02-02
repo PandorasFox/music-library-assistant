@@ -67,6 +67,25 @@ impl Database {
         }
     }
 
+    /// Get a file entry by path for a specific source.
+    ///
+    /// Unlike `get_audio_file_by_path()`, this does NOT require audio_info.
+    /// Use this for files that may not have been successfully indexed (e.g., corrupt files).
+    pub fn get_file_entry_by_path(&self, path: &str, source: &str) -> Result<Option<FileEntry>> {
+        let result = self.conn.query_row(
+            "SELECT inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at
+             FROM files WHERE path = ?1 AND source = ?2",
+            params![path, source],
+            Self::row_to_file_entry,
+        );
+
+        match result {
+            Ok(entry) => Ok(Some(entry)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Get file count by source.
     pub fn get_file_count(&self, source: Option<FileSource>) -> Result<usize> {
         let count: i64 = if let Some(src) = source {

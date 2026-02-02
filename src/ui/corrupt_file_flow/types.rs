@@ -3,6 +3,7 @@
 //! Data structures for the corrupt file resolution modal, including
 //! file entries and button state.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -33,6 +34,10 @@ pub struct CorruptFileModalData {
 
 impl CorruptFileModalData {
     /// Load corrupt files from the database.
+    ///
+    /// Corrupt files exist on disk but failed indexing (tag parse error or audio decode failure).
+    /// They may not have audio_info entries since indexing failed.
+    /// We get the inode from the filesystem directly since the file exists on disk.
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
         // Get all CorruptFile signals (issue_key = corpus path)
         let corrupt_paths = read_db.get_corrupt_file_paths()?;
@@ -41,16 +46,21 @@ impl CorruptFileModalData {
             return Ok(Self::default());
         }
 
-        // Get audio file info for each path
+        let resolver = paths::get_resolver();
         let mut files = Vec::new();
-        for corpus_path in corrupt_paths {
-            // Get audio file info for this path
-            let audio_file = match read_db.get_audio_file_by_path(&corpus_path)? {
-                Some(af) => af,
-                None => continue, // Signal refers to non-existent file, skip
-            };
 
-            let inode = audio_file.inode();
+        for corpus_path in corrupt_paths {
+            // Resolve to absolute path
+            let abs_path = resolver.resolve(std::path::Path::new(&corpus_path));
+
+            // Get inode from filesystem (corrupt files exist on disk)
+            let inode = if let Ok(metadata) = std::fs::metadata(&abs_path) {
+                metadata.ino() as i64
+            } else {
+                // File doesn't exist on disk anymore - skip it
+                // The signal will be cleared on next scan
+                continue;
+            };
 
             files.push(CorruptFileEntry {
                 corpus_path,

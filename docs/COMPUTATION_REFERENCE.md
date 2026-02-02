@@ -55,7 +55,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagValues | Find separators needing splits |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality |
-| ClusterDirectoryOverlaps | Cluster FingerprintOverlap signals by directory for UI resolution |
+| ClusterDirectoryOverlaps | Cluster FingerprintOverlap signals by directory for UI resolution. Uses sibling-aware aggregation. |
 | DetectDeployConflicts | Detect path collisions in deployment |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
 | DeriveCorpusDeployStatus | Derive corpus deploy status |
@@ -70,7 +70,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 |-------------|--------|-----------------|-----------------|
 | ClearExistingObservationState | — | — | FileInCorpus (all) |
 | WalkCorpus | ScanCorpusDirectory × N (propagates `force_check`) | — | — |
-| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus | — |
+| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus | — | Also indexes directory hierarchy (is_dir=1 entries with parent_inode) for sibling counting |
 | VerifyMtime | VerifyTags (if mtime differs) | — | — |
 | VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) |
 | VerifyAudio | — | CorruptFile | CorruptFile (if audio valid) |
@@ -101,7 +101,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
-| ClusterDirectoryOverlaps | — | DirectoryOverlapCluster (cross-directory only, ≤ max_keys) | DirectoryOverlapCluster (all, then recreate) |
+| ClusterDirectoryOverlaps | — | DirectoryOverlapCluster (sibling-aware: aggregated if many_siblings > threshold, or component-pair keyed if few) | DirectoryOverlapCluster (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |

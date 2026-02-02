@@ -39,7 +39,7 @@ impl MigrationRegistry {
             migrations: Vec::new(),
         };
 
-        // Schema v1: inode-based files/audio_info/corpus_tags
+        // Schema v1: inode-based files/audio_info/corpus_tags (includes parent_inode)
         // This is the baseline - no migrations needed yet.
         // Future migrations will be added here as:
         //

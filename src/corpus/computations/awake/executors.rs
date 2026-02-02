@@ -1735,14 +1735,16 @@ fn cluster_by_duration<'a>(
 
 /// Execute ClusterDirectoryOverlaps - cluster fingerprint overlaps by directory.
 ///
-/// Two-pass clustering approach:
-/// 1. Build divergence map WITHOUT release identity filtering (catch cross-directory duplicates)
-/// 2. Classify by diverging key count:
-///    - Few keys (≤ cross_directory_max_keys): Cross-directory overlap, emit signal
-///    - Many keys (≥ within_directory_min_keys): Within-directory variants, skip entirely
+/// Sibling-aware two-pass clustering:
+/// 1. Group overlaps by common_root (not by component-pair key)
+/// 2. For each common_root, count sibling directories at divergence point:
+///    - Many siblings (> many_siblings_threshold): Aggregate into ONE cluster keyed by
+///      common_root's last component (e.g., "monstercat")
+///    - Few siblings (≤ threshold): Use traditional component-pair keying (e.g., "bandcamp|indie")
 ///
-/// This catches cross-directory duplicates like bandcamp|indie that have different
-/// catalog numbers (which would be filtered out by is_same_release).
+/// This prevents explosion of clusters when a common_root like "monstercat" has 1500+
+/// subdirectories (one per catalog number) while preserving fine-grained clustering for
+/// directories with few siblings.
 pub fn execute_cluster_directory_overlaps(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -1775,6 +1777,7 @@ pub fn execute_cluster_directory_overlaps(
 
     let cross_directory_max_keys = config.opinions.duplicate_analysis.cross_directory_max_keys;
     let within_directory_min_keys = config.opinions.duplicate_analysis.within_directory_min_keys;
+    let many_siblings_threshold = config.opinions.duplicate_analysis.many_siblings_threshold;
 
     // Clear all existing DirectoryOverlapCluster signals
     sender.clear_signals_by_type(SignalType::DirectoryOverlapCluster, witness);
@@ -1790,10 +1793,10 @@ pub fn execute_cluster_directory_overlaps(
     }
 
     // =========================================================================
-    // Pass 1: Build divergence map (NO release identity filtering)
+    // Pass 1: Group by common_root (not by component-pair key)
     // =========================================================================
-    // cluster_key -> DirectoryClusterBuilder
-    let mut cluster_map: HashMap<String, DirectoryClusterBuilder> = HashMap::new();
+    // common_root -> RootBuilder (accumulates all overlaps under that root)
+    let mut root_map: HashMap<String, RootBuilder> = HashMap::new();
 
     for signal in &fp_overlap_signals {
         let track_ids = signal.track_ids();
@@ -1811,7 +1814,7 @@ pub fn execute_cluster_directory_overlaps(
             continue;
         }
 
-        // Build (path, track_id) pairs - NO release identity filtering
+        // Build (path, track_id) pairs
         let path_track_pairs: Vec<(&str, i64)> = audio_files
             .iter()
             .map(|af| (af.path(), af.inode()))
@@ -1820,39 +1823,22 @@ pub fn execute_cluster_directory_overlaps(
         // Find directory divergence point
         let (common_root, divergence) = find_directory_divergence_with_root(&path_track_pairs);
         if divergence.is_empty() || divergence.len() < 2 {
-            // All in same directory or couldn't find divergence
             continue;
         }
 
-        // Extract first component of each divergent suffix for higher-level clustering
-        let unique_comps: std::collections::HashSet<&str> = divergence
-            .iter()
-            .map(|(suffix, _)| extract_first_component(suffix))
-            .collect();
-
-        if unique_comps.len() < 2 {
-            // All paths diverge within same top-level dir
-            continue;
-        }
-
-        // Build cluster key from sorted & deduped first components
-        let mut sorted_comps: Vec<_> = unique_comps.into_iter().collect();
-        sorted_comps.sort();
-        let cluster_key = sorted_comps.join("|");
-
-        // Add to cluster map
-        let builder = cluster_map.entry(cluster_key.clone()).or_insert_with(|| {
-            DirectoryClusterBuilder {
+        // Group by common_root
+        let builder = root_map.entry(common_root.clone()).or_insert_with(|| {
+            RootBuilder {
                 common_root: common_root.clone(),
+                // Map: first_component -> track_ids
                 directories: HashMap::new(),
                 fingerprint_keys: Vec::new(),
             }
         });
 
-        // Add fingerprint key
         builder.fingerprint_keys.push(signal.key.clone());
 
-        // Add track IDs to their respective directories
+        // Add track IDs to their respective directories (by first component)
         for (suffix, track_ids_for_suffix) in divergence {
             let first_comp = extract_first_component(&suffix).to_string();
             let dir_entry = builder.directories.entry(first_comp).or_default();
@@ -1865,79 +1851,138 @@ pub fn execute_cluster_directory_overlaps(
     }
 
     // =========================================================================
-    // Pass 2: Classify clusters and emit signals
+    // Pass 2: Decide clustering strategy per common_root based on sibling count
     // =========================================================================
     let mut cluster_count = 0;
+    let mut aggregated_count = 0;
     let mut skipped_within_dir = 0;
 
-    for (cluster_key, builder) in cluster_map {
+    for (common_root, builder) in root_map {
         let num_diverging_keys = builder.directories.len();
 
-        // Skip if only one directory (shouldn't happen but safety check)
+        // Skip if only one directory
         if num_diverging_keys < 2 {
             continue;
         }
 
-        // Classification by diverging key count:
-        // - Many keys (≥ within_directory_min_keys): Within-directory variants, skip
-        // - Few keys (≤ cross_directory_max_keys): Cross-directory overlap, emit
-        if num_diverging_keys >= within_directory_min_keys {
-            skipped_within_dir += 1;
-            continue;
-        }
+        // Count sibling directories at this divergence point
+        let sibling_count = read_only_db
+            .count_child_directories(&common_root, FileSource::Corpus)
+            .unwrap_or(0);
 
-        if num_diverging_keys > cross_directory_max_keys {
-            // In the gap between thresholds - skip for now
-            continue;
-        }
+        if sibling_count > many_siblings_threshold {
+            // MANY SIBLINGS: Aggregate all into ONE cluster keyed by last component of common_root
+            // e.g., "corpus/web/releases/monstercat" -> key = "monstercat"
+            let cluster_key = common_root
+                .rsplit('/')
+                .next()
+                .unwrap_or(&common_root)
+                .to_string();
 
-        // Build directories array with path_suffix and track_ids (what modal expects)
-        let mut directories: Vec<serde_json::Value> = builder.directories
-            .iter()
-            .map(|(key, track_ids)| {
-                serde_json::json!({
-                    "path_suffix": key,
-                    "track_ids": track_ids,
+            // Build directories array with all divergent subdirectories
+            let mut directories: Vec<serde_json::Value> = builder.directories
+                .iter()
+                .map(|(key, track_ids)| {
+                    serde_json::json!({
+                        "path_suffix": key,
+                        "track_ids": track_ids,
+                    })
                 })
-            })
-            .collect();
-        // Sort by path_suffix for consistent ordering
-        directories.sort_by(|a, b| {
-            let a_suffix = a.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
-            let b_suffix = b.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
-            a_suffix.cmp(b_suffix)
-        });
+                .collect();
+            directories.sort_by(|a, b| {
+                let a_suffix = a.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
+                let b_suffix = b.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
+                a_suffix.cmp(b_suffix)
+            });
 
-        let metadata = serde_json::json!({
-            "common_root": builder.common_root,
-            "directories": directories,
-            "fingerprint_count": builder.fingerprint_keys.len(),
-            "fingerprint_overlap_keys": builder.fingerprint_keys,
-        });
+            let metadata = serde_json::json!({
+                "common_root": builder.common_root,
+                "directories": directories,
+                "fingerprint_count": builder.fingerprint_keys.len(),
+                "fingerprint_overlap_keys": builder.fingerprint_keys,
+                "aggregated": true,
+                "sibling_count": sibling_count,
+            });
 
-        sender.ensure_aggregate_signal(
-            AggregateSignalType::DirectoryOverlapCluster,
-            &cluster_key,
-            Some(&metadata.to_string()),
-            witness,
-        );
+            sender.ensure_aggregate_signal(
+                AggregateSignalType::DirectoryOverlapCluster,
+                &cluster_key,
+                Some(&metadata.to_string()),
+                witness,
+            );
 
-        cluster_count += 1;
+            aggregated_count += 1;
+        } else {
+            // FEW SIBLINGS: Use traditional component-pair keying
+            // Skip if too many diverging keys (within-directory variants)
+            if num_diverging_keys >= within_directory_min_keys {
+                skipped_within_dir += 1;
+                continue;
+            }
+
+            if num_diverging_keys > cross_directory_max_keys {
+                // In the gap between thresholds - skip
+                continue;
+            }
+
+            // Build cluster key from sorted component pairs
+            let mut sorted_comps: Vec<_> = builder.directories.keys().collect();
+            sorted_comps.sort();
+            let cluster_key = sorted_comps
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("|");
+
+            let mut directories: Vec<serde_json::Value> = builder.directories
+                .iter()
+                .map(|(key, track_ids)| {
+                    serde_json::json!({
+                        "path_suffix": key,
+                        "track_ids": track_ids,
+                    })
+                })
+                .collect();
+            directories.sort_by(|a, b| {
+                let a_suffix = a.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
+                let b_suffix = b.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
+                a_suffix.cmp(b_suffix)
+            });
+
+            let metadata = serde_json::json!({
+                "common_root": builder.common_root,
+                "directories": directories,
+                "fingerprint_count": builder.fingerprint_keys.len(),
+                "fingerprint_overlap_keys": builder.fingerprint_keys,
+            });
+
+            sender.ensure_aggregate_signal(
+                AggregateSignalType::DirectoryOverlapCluster,
+                &cluster_key,
+                Some(&metadata.to_string()),
+                witness,
+            );
+
+            cluster_count += 1;
+        }
     }
 
     log_general(format!(
-        "[COMPUTE] ClusterDirectoryOverlaps: emitted {} DirectoryOverlapCluster signals, skipped {} within-directory (from {} fingerprint overlaps)",
-        cluster_count, skipped_within_dir, fp_overlap_signals.len()
+        "[COMPUTE] ClusterDirectoryOverlaps: emitted {} clusters ({} aggregated, {} fine-grained), skipped {} within-directory (from {} fingerprint overlaps)",
+        aggregated_count + cluster_count, aggregated_count, cluster_count, skipped_within_dir, fp_overlap_signals.len()
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
-/// Builder for accumulating directory cluster data.
-struct DirectoryClusterBuilder {
+/// Builder for accumulating overlaps under a common root directory.
+///
+/// Used in sibling-aware clustering to group all overlaps that share the same
+/// common_root before deciding on clustering strategy based on sibling count.
+struct RootBuilder {
     /// Common path root before divergence point
     common_root: String,
-    /// Map of diverging_key (first path component after divergence) -> track_ids
+    /// Map of first diverging path component -> track_ids
     directories: HashMap<String, Vec<i64>>,
     /// Source fingerprint overlap keys
     fingerprint_keys: Vec<String>,

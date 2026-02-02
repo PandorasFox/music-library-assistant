@@ -717,6 +717,64 @@ impl Database {
     }
 
     // ========================================================================
+    // Directory Hierarchy Queries
+    // ========================================================================
+
+    /// Count child directories (direct children only) under a parent directory path.
+    ///
+    /// This is used by ClusterDirectoryOverlaps to determine clustering strategy:
+    /// - Many siblings (>threshold): aggregate into one cluster
+    /// - Few siblings (<=threshold): keep per-directory clustering
+    ///
+    /// Uses path-based counting which works whether or not parent_inode is populated.
+    pub fn count_child_directories(&self, parent_path: &str, source: FileSource) -> Result<usize> {
+        // Build LIKE pattern for direct children (exactly one path component after parent)
+        // Pattern: "parent/%" but NOT "parent/%/%" (no nested)
+        // We count directories where:
+        // 1. path starts with parent_path/
+        // 2. path has exactly one more component (no further slashes after the child name)
+
+        let pattern = super::dir_like_pattern_str(parent_path);
+
+        // Count directories that are direct children:
+        // - Match parent_path/child (where child has no slashes)
+        // - is_dir = 1
+        let count: i64 = self.conn.query_row(
+            r#"SELECT COUNT(DISTINCT path) FROM files
+               WHERE source = ?1
+                 AND is_dir = 1
+                 AND path LIKE ?2 ESCAPE '\'
+                 AND path NOT LIKE ?3 ESCAPE '\'"#,
+            params![
+                source.as_str(),
+                &pattern,
+                // Exclude paths with additional subdirectories
+                format!("{}/%/%", parent_path.trim_end_matches('/'))
+            ],
+            |row| row.get(0),
+        )?;
+
+        Ok(count as usize)
+    }
+
+    /// Get directory inode by path.
+    ///
+    /// Used to look up parent directory inodes during scanning.
+    pub fn get_directory_inode(&self, path: &str, source: FileSource) -> Result<Option<i64>> {
+        let result = self.conn.query_row(
+            "SELECT inode FROM files WHERE path = ?1 AND source = ?2 AND is_dir = 1",
+            params![path, source.as_str()],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(inode) => Ok(Some(inode)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    // ========================================================================
     // Row Conversion Helpers
     // ========================================================================
 

@@ -337,6 +337,17 @@ enum SignalWriteOp {
         valid_inodes: Vec<i64>,
     },
 
+    /// Index a directory entry in the files table.
+    /// Used during corpus/library scanning to track directory hierarchy.
+    IndexDirectory {
+        path: String,
+        source: String,
+        inode: i64,
+        parent_inode: Option<i64>,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+    },
+
     /// Clear tag mismatches for a track (after resolution).
     ClearTagMismatchesForTrack {
         path: String,
@@ -877,6 +888,30 @@ impl SignalWriteSender {
         });
     }
 
+    /// Index a directory entry in the files table.
+    ///
+    /// Used during corpus scanning to track directory hierarchy for sibling counting.
+    pub fn index_directory(
+        &self,
+        path: &str,
+        source: &str,
+        inode: i64,
+        parent_inode: Option<i64>,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::IndexDirectory {
+            path: path.to_string(),
+            source: source.to_string(),
+            inode,
+            parent_inode,
+            mtime_secs,
+            mtime_nanos,
+        });
+    }
+
     /// Clear all tag mismatches for a track.
     pub fn clear_tag_mismatches_for_track(
         &self,
@@ -1331,6 +1366,19 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             with_retry("cleanup_stale_files", source, || {
                 let valid_set: std::collections::HashSet<i64> = valid_inodes.iter().copied().collect();
                 db.cleanup_stale_files(source, &valid_set, &witness).map(|_| ())
+            });
+        }
+
+        SignalWriteOp::IndexDirectory {
+            path,
+            source,
+            inode,
+            parent_inode,
+            mtime_secs,
+            mtime_nanos,
+        } => {
+            with_retry("index_directory", path, || {
+                execute_index_directory(db, path, source, *inode, *parent_inode, *mtime_secs, *mtime_nanos)
             });
         }
 
@@ -1790,6 +1838,46 @@ fn execute_upsert_file_entry(
 /// This is a no-op placeholder until callers are updated.
 fn execute_clear_tag_mismatches_for_track(_db: &Database, _path: &str) -> anyhow::Result<()> {
     // TODO: Clear OOB signals for this path when tag conflicts are fully signal-based
+    Ok(())
+}
+
+/// Execute IndexDirectory: insert directory entry in files table.
+/// Used during corpus scanning to track directory hierarchy for sibling counting.
+fn execute_index_directory(
+    db: &Database,
+    path: &str,
+    source: &str,
+    inode: i64,
+    parent_inode: Option<i64>,
+    mtime_secs: i64,
+    mtime_nanos: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let scanned_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // Insert or replace directory entry
+    db.conn().execute(
+        r#"
+        INSERT OR REPLACE INTO files
+        (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at, parent_inode)
+        VALUES (?1, ?2, ?3, 1, ?4, ?5, 0, ?6, ?7)
+        "#,
+        params![
+            inode,
+            source,
+            path,
+            mtime_secs,
+            mtime_nanos,
+            scanned_at,
+            parent_inode,
+        ],
+    )?;
+
     Ok(())
 }
 

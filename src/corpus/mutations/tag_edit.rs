@@ -12,6 +12,7 @@
 
 use anyhow::Result;
 
+use crate::corpus::db::types::FileSource;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
@@ -37,7 +38,8 @@ fn execute_set_track_tags_db(
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Get audio file info from DB (read-only) - track_id is actually inode
-    let audio_file = db.get_audio_file_by_inode(track_id)?
+    // Tag edits only operate on corpus files
+    let audio_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
     let file_path = audio_file.path();
 

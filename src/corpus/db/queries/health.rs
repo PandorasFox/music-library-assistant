@@ -19,7 +19,7 @@ use rusqlite::{params, OptionalExtension};
 use super::Database;
 use crate::db_thread::SignalWitness;
 use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, Signal,
+    AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, FileSource, Signal,
     SignalType, SignalSummary,
 };
 
@@ -1035,9 +1035,10 @@ impl Database {
                 .unwrap_or_default();
 
             // Get corpus paths for each file (track_id is actually inode)
+            // Deploy conflicts are between corpus files
             let mut conflicting_files = Vec::new();
             for inode in track_ids {
-                if let Ok(Some(audio_file)) = self.get_audio_file_by_inode(inode) {
+                if let Ok(Some(audio_file)) = self.get_audio_file_by_inode(inode, FileSource::Corpus) {
                     conflicting_files.push((audio_file.path().to_string(), inode));
                 }
             }

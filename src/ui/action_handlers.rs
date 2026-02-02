@@ -4,6 +4,7 @@
 //! Actions that are handled here. These handlers coordinate state transitions,
 //! Witch interactions, and modal displays.
 
+use crate::corpus::db::types::FileSource;
 use crate::corpus::paths;
 use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
@@ -1823,7 +1824,7 @@ impl App {
                 let resolver = paths::get_resolver();
                 let mut info = std::collections::HashMap::new();
                 for &inode in &state.data.track_ids {
-                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
                         // Resolve relative DB path to absolute for filesystem operations
                         let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
                         // Load complete TagSet from disk for building new tag set
@@ -1910,7 +1911,7 @@ impl App {
                 // Build track info: path and current TagSet
                 let mut track_info = std::collections::HashMap::new();
                 for &inode in &data.track_ids {
-                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
                         let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
                         let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
                             .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
@@ -2373,7 +2374,7 @@ impl App {
         let resolver = paths::get_resolver();
         let mut track_info = std::collections::HashMap::new();
         for &inode in &state.data.track_ids {
-            if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
+            if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
                 // Resolve relative DB path to absolute for filesystem operations
                 let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
                 // Load complete TagSet from disk for building new tag set

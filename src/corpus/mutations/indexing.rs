@@ -8,6 +8,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+use crate::corpus::db::types::FileSource;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::witch::MutationExecutionWitness;
@@ -192,7 +193,8 @@ pub fn execute_update_track_path(db: &ReadOnlyDb<'_>, track_id: i64, new_path: &
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Get old path from DB (read-only) - track_id is actually inode
-    let audio_file = db.get_audio_file_by_inode(track_id)?
+    // UpdateTrackPath only operates on corpus files
+    let audio_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
     let old_path = audio_file.path().to_string();
 
@@ -259,8 +261,13 @@ pub fn execute_drop_from_index(
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
+    // Determine file source - default to Corpus if not specified
+    let file_source = source
+        .and_then(FileSource::from_str)
+        .unwrap_or(FileSource::Corpus);
+
     // Get file path from DB (read-only) - track_id is actually inode
-    let audio_file = db.get_audio_file_by_inode(track_id)?
+    let audio_file = db.get_audio_file_by_inode(track_id, file_source)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
 
     // Delete the file entry via signal_sender
@@ -497,7 +504,8 @@ pub fn execute_acknowledge_mtime_only(
 
     for (inode, abs_path) in tracks {
         // Get audio file info (need relative path for DB operations) - track_id is actually inode
-        let audio_file = match db.get_audio_file_by_inode(*inode)? {
+        // OOB mtime resolution only operates on corpus files
+        let audio_file = match db.get_audio_file_by_inode(*inode, FileSource::Corpus)? {
             Some(af) => af,
             None => continue, // Skip missing files
         };
@@ -554,7 +562,8 @@ pub fn execute_acknowledge_inode_changed(
 
     for (old_inode, abs_path) in tracks {
         // Get audio file info (need relative path and old inode for DB operations) - track_id is actually inode
-        let audio_file = match db.get_audio_file_by_inode(*old_inode)? {
+        // OOB inode changed resolution only operates on corpus files
+        let audio_file = match db.get_audio_file_by_inode(*old_inode, FileSource::Corpus)? {
             Some(af) => af,
             None => continue, // Skip missing files
         };
@@ -693,7 +702,8 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     // Get audio file source (needed for files table key) - track_id is actually inode.
     // Source doesn't change during transcode, so this read is safe.
-    let audio_file = db.get_audio_file_by_inode(track_id)?
+    // Tag updates only operate on corpus files.
+    let audio_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
     let source = audio_file.entry.source.as_str();
 

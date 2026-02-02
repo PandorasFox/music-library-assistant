@@ -34,6 +34,10 @@ pub fn execute_schedule_content_analysis(
     log_general("[COMPUTE] ScheduleContentAnalysis: spawning all detection computations");
 
     // Note: OOB tag change classification is now handled in Asleep phase by VerifyTags
+    //
+    // AnalyzeFingerprintOverlaps and ClusterDirectoryOverlaps are NOT spawned here.
+    // They depend on FingerprintOverlap signals written by DetectFingerprintOverlaps,
+    // so DetectFingerprintOverlaps spawns them after calling wait_for_queue_drain().
     let mut spawn = vec![
         Computation::DetectFingerprintOverlaps,
         Computation::DetectDuplicateInodes,
@@ -43,8 +47,6 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectInconsistentAlbumArtist,
         Computation::DetectCompoundTagValues,
         Computation::DetectShitFormats,
-        Computation::AnalyzeFingerprintOverlaps,
-        Computation::ClusterDirectoryOverlaps,
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
     ];
@@ -154,7 +156,20 @@ pub fn execute_detect_fingerprint_overlaps(
         total_groups, total_tracks, cleared, new_count, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    // Wait for all FingerprintOverlap signals to be written before spawning
+    // dependent computations. This ensures AnalyzeFingerprintOverlaps and
+    // ClusterDirectoryOverlaps see the fresh signal data.
+    db_thread::wait_for_queue_drain();
+
+    // Spawn dependent computations that read FingerprintOverlap signals
+    Result::success(
+        computation,
+        start.elapsed().as_millis() as u64,
+        vec![
+            Computation::AnalyzeFingerprintOverlaps,
+            Computation::ClusterDirectoryOverlaps,
+        ],
+    )
 }
 
 // ============================================================================
@@ -1522,8 +1537,8 @@ pub fn execute_analyze_fingerprint_overlaps(
 
         total_groups += 1;
 
-        // Get audio files for this group (track_ids in signals are actually inodes)
-        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids) {
+        // Get corpus audio files for this group (track_ids in signals are actually inodes)
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids, FileSource::Corpus) {
             Ok(af) => af,
             Err(_) => continue,
         };
@@ -1720,9 +1735,14 @@ fn cluster_by_duration<'a>(
 
 /// Execute ClusterDirectoryOverlaps - cluster fingerprint overlaps by directory.
 ///
-/// Reads FingerprintOverlap signals, filters out tracks with distinguishing metadata
-/// (different ISRC, catalog#, variant keywords), finds directory divergence points,
-/// and emits DirectoryOverlapCluster signals for UI-based resolution.
+/// Two-pass clustering approach:
+/// 1. Build divergence map WITHOUT release identity filtering (catch cross-directory duplicates)
+/// 2. Classify by diverging key count:
+///    - Few keys (≤ cross_directory_max_keys): Cross-directory overlap, emit signal
+///    - Many keys (≥ within_directory_min_keys): Within-directory variants, skip entirely
+///
+/// This catches cross-directory duplicates like bandcamp|indie that have different
+/// catalog numbers (which would be filtered out by is_same_release).
 pub fn execute_cluster_directory_overlaps(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -1741,8 +1761,23 @@ pub fn execute_cluster_directory_overlaps(
         }
     };
 
+    // Load config for threshold values
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to load config: {}", e),
+            );
+        }
+    };
+
+    let cross_directory_max_keys = config.opinions.duplicate_analysis.cross_directory_max_keys;
+    let within_directory_min_keys = config.opinions.duplicate_analysis.within_directory_min_keys;
+
     // Clear all existing DirectoryOverlapCluster signals
-    sender.clear_signals_by_type(SignalType::from_str("directory_overlap_cluster").unwrap_or(SignalType::FingerprintOverlap), witness);
+    sender.clear_signals_by_type(SignalType::DirectoryOverlapCluster, witness);
 
     // Get all FingerprintOverlap signals
     let fp_overlap_signals = read_only_db
@@ -1754,8 +1789,10 @@ pub fn execute_cluster_directory_overlaps(
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
-    // Build map of cluster_key -> (directories, fingerprint_keys)
-    // cluster_key is sorted path suffixes joined by |
+    // =========================================================================
+    // Pass 1: Build divergence map (NO release identity filtering)
+    // =========================================================================
+    // cluster_key -> DirectoryClusterBuilder
     let mut cluster_map: HashMap<String, DirectoryClusterBuilder> = HashMap::new();
 
     for signal in &fp_overlap_signals {
@@ -1764,8 +1801,8 @@ pub fn execute_cluster_directory_overlaps(
             continue;
         }
 
-        // Get audio files for this overlap group
-        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids) {
+        // Get corpus audio files for this overlap group
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids, FileSource::Corpus) {
             Ok(f) => f,
             Err(_) => continue,
         };
@@ -1774,70 +1811,27 @@ pub fn execute_cluster_directory_overlaps(
             continue;
         }
 
-        // Get release identity info for filtering
-        let mut identities: Vec<TrackReleaseIdentity> = Vec::new();
-        for audio_file in &audio_files {
-            let inode = audio_file.inode();
-            let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
-            let tag_map: HashMap<String, String> = tags
-                .into_iter()
-                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-                .collect();
-
-            identities.push(TrackReleaseIdentity {
-                track_id: inode,
-                path: audio_file.path().to_string(),
-                album: tag_map.get("album").cloned().unwrap_or_default(),
-                title: tag_map.get("title").cloned().unwrap_or_default(),
-                isrc: tag_map.get("isrc").cloned().unwrap_or_default(),
-                // Use fuzzy lookup for catalog number - handles "catalog_number" vs "catalognumber"
-                catalog_number: find_tag_in_map(&tag_map, "catalognumber")
-                    .map(|s| s.to_string())
-                    .unwrap_or_default(),
-            });
-        }
-
-        // Filter to tracks that look like the same release (not variants)
-        // Use the first track as reference and keep tracks that match
-        let filtered_indices: Vec<usize> = if identities.is_empty() {
-            Vec::new()
-        } else {
-            let mut indices = vec![0usize]; // Always include first
-            for i in 1..identities.len() {
-                if is_same_release(&identities[0], &identities[i]) {
-                    indices.push(i);
-                }
-            }
-            indices
-        };
-
-        // Need at least 2 tracks after filtering
-        if filtered_indices.len() < 2 {
-            continue;
-        }
-
-        // Find directory divergence point
-        // Build (path, track_id) pairs for the filtered tracks
-        let path_track_pairs: Vec<(&str, i64)> = filtered_indices.iter()
-            .map(|&i| (identities[i].path.as_str(), identities[i].track_id))
+        // Build (path, track_id) pairs - NO release identity filtering
+        let path_track_pairs: Vec<(&str, i64)> = audio_files
+            .iter()
+            .map(|af| (af.path(), af.inode()))
             .collect();
 
-        let divergence = find_directory_divergence_with_tracks(&path_track_pairs);
+        // Find directory divergence point
+        let (common_root, divergence) = find_directory_divergence_with_root(&path_track_pairs);
         if divergence.is_empty() || divergence.len() < 2 {
             // All in same directory or couldn't find divergence
             continue;
         }
 
         // Extract first component of each divergent suffix for higher-level clustering
-        let first_comps: Vec<&str> = divergence
+        let unique_comps: std::collections::HashSet<&str> = divergence
             .iter()
             .map(|(suffix, _)| extract_first_component(suffix))
             .collect();
 
-        // Only emit for cross-directory patterns (multiple distinct first components)
-        let unique_comps: std::collections::HashSet<_> = first_comps.iter().copied().collect();
         if unique_comps.len() < 2 {
-            // All paths diverge within same top-level dir - skip (future: emit different signal)
+            // All paths diverge within same top-level dir
             continue;
         }
 
@@ -1849,6 +1843,7 @@ pub fn execute_cluster_directory_overlaps(
         // Add to cluster map
         let builder = cluster_map.entry(cluster_key.clone()).or_insert_with(|| {
             DirectoryClusterBuilder {
+                common_root: common_root.clone(),
                 directories: HashMap::new(),
                 fingerprint_keys: Vec::new(),
             }
@@ -1857,10 +1852,10 @@ pub fn execute_cluster_directory_overlaps(
         // Add fingerprint key
         builder.fingerprint_keys.push(signal.key.clone());
 
-        // Add track IDs to their respective directories, aggregated under first component
+        // Add track IDs to their respective directories
         for (suffix, track_ids_for_suffix) in divergence {
             let first_comp = extract_first_component(&suffix).to_string();
-            let dir_entry = builder.directories.entry(first_comp).or_insert_with(Vec::new);
+            let dir_entry = builder.directories.entry(first_comp).or_default();
             for tid in track_ids_for_suffix {
                 if !dir_entry.contains(&tid) {
                     dir_entry.push(tid);
@@ -1869,29 +1864,54 @@ pub fn execute_cluster_directory_overlaps(
         }
     }
 
-    // Emit DirectoryOverlapCluster signals
+    // =========================================================================
+    // Pass 2: Classify clusters and emit signals
+    // =========================================================================
     let mut cluster_count = 0;
+    let mut skipped_within_dir = 0;
 
     for (cluster_key, builder) in cluster_map {
+        let num_diverging_keys = builder.directories.len();
+
         // Skip if only one directory (shouldn't happen but safety check)
-        if builder.directories.len() < 2 {
+        if num_diverging_keys < 2 {
             continue;
         }
 
-        // Build directory entries for metadata
-        let directories: Vec<serde_json::Value> = builder.directories
+        // Classification by diverging key count:
+        // - Many keys (≥ within_directory_min_keys): Within-directory variants, skip
+        // - Few keys (≤ cross_directory_max_keys): Cross-directory overlap, emit
+        if num_diverging_keys >= within_directory_min_keys {
+            skipped_within_dir += 1;
+            continue;
+        }
+
+        if num_diverging_keys > cross_directory_max_keys {
+            // In the gap between thresholds - skip for now
+            continue;
+        }
+
+        // Build directories array with path_suffix and track_ids (what modal expects)
+        let mut directories: Vec<serde_json::Value> = builder.directories
             .iter()
-            .map(|(suffix, track_ids)| {
+            .map(|(key, track_ids)| {
                 serde_json::json!({
-                    "path_suffix": suffix,
+                    "path_suffix": key,
                     "track_ids": track_ids,
                 })
             })
             .collect();
+        // Sort by path_suffix for consistent ordering
+        directories.sort_by(|a, b| {
+            let a_suffix = a.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
+            let b_suffix = b.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("");
+            a_suffix.cmp(b_suffix)
+        });
 
         let metadata = serde_json::json!({
-            "cluster_key": cluster_key,
+            "common_root": builder.common_root,
             "directories": directories,
+            "fingerprint_count": builder.fingerprint_keys.len(),
             "fingerprint_overlap_keys": builder.fingerprint_keys,
         });
 
@@ -1906,8 +1926,8 @@ pub fn execute_cluster_directory_overlaps(
     }
 
     log_general(format!(
-        "[COMPUTE] ClusterDirectoryOverlaps: emitted {} DirectoryOverlapCluster signals from {} fingerprint overlaps",
-        cluster_count, fp_overlap_signals.len()
+        "[COMPUTE] ClusterDirectoryOverlaps: emitted {} DirectoryOverlapCluster signals, skipped {} within-directory (from {} fingerprint overlaps)",
+        cluster_count, skipped_within_dir, fp_overlap_signals.len()
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -1915,7 +1935,9 @@ pub fn execute_cluster_directory_overlaps(
 
 /// Builder for accumulating directory cluster data.
 struct DirectoryClusterBuilder {
-    /// Map of path_suffix -> track_ids
+    /// Common path root before divergence point
+    common_root: String,
+    /// Map of diverging_key (first path component after divergence) -> track_ids
     directories: HashMap<String, Vec<i64>>,
     /// Source fingerprint overlap keys
     fingerprint_keys: Vec<String>,
@@ -1923,11 +1945,14 @@ struct DirectoryClusterBuilder {
 
 /// Find directory divergence point for a set of (path, track_id) pairs.
 ///
-/// Returns a map of divergent_suffix -> track_ids for that suffix.
-/// Empty if paths don't diverge or are invalid.
-fn find_directory_divergence_with_tracks(path_track_pairs: &[(&str, i64)]) -> Vec<(String, Vec<i64>)> {
+/// Returns (common_root, divergence_map) where:
+/// - common_root: The shared path prefix before divergence
+/// - divergence_map: divergent_suffix -> track_ids for that suffix
+///
+/// Empty divergence_map if paths don't diverge or are invalid.
+fn find_directory_divergence_with_root(path_track_pairs: &[(&str, i64)]) -> (String, Vec<(String, Vec<i64>)>) {
     if path_track_pairs.len() < 2 {
-        return Vec::new();
+        return (String::new(), Vec::new());
     }
 
     // Split paths into components
@@ -1951,8 +1976,11 @@ fn find_directory_divergence_with_tracks(path_track_pairs: &[(&str, i64)]) -> Ve
 
     // If no divergence found (all identical paths), return empty
     if common_prefix_len >= min_len {
-        return Vec::new();
+        return (String::new(), Vec::new());
     }
+
+    // Build common root from prefix
+    let common_root = components[0][..common_prefix_len].join("/");
 
     // Group paths by their divergent suffix (from divergence point to one level up from file)
     let mut suffix_map: HashMap<String, Vec<i64>> = HashMap::new();
@@ -1972,12 +2000,12 @@ fn find_directory_divergence_with_tracks(path_track_pairs: &[(&str, i64)]) -> Ve
         let track_id = path_track_pairs[idx].1;
         suffix_map
             .entry(suffix)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(track_id);
     }
 
     // Convert to vec and return
-    suffix_map.into_iter().collect()
+    (common_root, suffix_map.into_iter().collect())
 }
 
 /// Extract the first path component from a suffix.

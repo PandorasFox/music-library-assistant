@@ -209,6 +209,8 @@ pub enum SignalType {
     InconsistentAlbumArtist,
     /// Tag value contains separators that should be split into multiple values
     CompoundTagValue,
+    /// Directory-level overlap cluster (derived from FingerprintOverlap signals)
+    DirectoryOverlapCluster,
 
     // =========================================================================
     // Error signals (discovery-time parse/read failures)
@@ -255,6 +257,7 @@ impl SignalType {
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
+            Self::DirectoryOverlapCluster => "directory_overlap_cluster",
 
             // Error signals
             Self::CorruptFile => "corrupt_file",
@@ -295,6 +298,7 @@ impl SignalType {
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
+            "directory_overlap_cluster" => Some(Self::DirectoryOverlapCluster),
             // Legacy: map old error signal types to CorruptFile
             "tag_parse_error" => Some(Self::CorruptFile),
             "waveform_read_error" => Some(Self::CorruptFile),

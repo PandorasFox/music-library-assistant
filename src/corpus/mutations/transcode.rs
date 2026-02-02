@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+use crate::corpus::db::types::FileSource;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::transcode::{self, TranscodeTarget};
@@ -101,7 +102,8 @@ fn execute_transcode(
     let new_file_type = target_format.extension().to_string();
 
     // Get the existing audio file to preserve fields we don't want to change - track_id is actually inode
-    let existing_file = db.get_audio_file_by_inode(track_id)?
+    // Transcode only operates on corpus files
+    let existing_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
 
     // Convert new absolute path to relative for storage

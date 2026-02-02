@@ -418,14 +418,14 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_audio_file_by_path(path)
     }
 
-    /// Get an audio file by inode.
-    pub fn get_audio_file_by_inode(&self, inode: i64) -> Result<Option<super::types::AudioFile>> {
-        self.db.get_audio_file_by_inode(inode)
+    /// Get an audio file by inode from a specific source.
+    pub fn get_audio_file_by_inode(&self, inode: i64, source: super::types::FileSource) -> Result<Option<super::types::AudioFile>> {
+        self.db.get_audio_file_by_inode(inode, source)
     }
 
-    /// Get multiple audio files by their inodes.
-    pub fn get_audio_files_by_inodes(&self, inodes: &[i64]) -> Result<Vec<super::types::AudioFile>> {
-        self.db.get_audio_files_by_inodes(inodes)
+    /// Get multiple audio files by their inodes from a specific source.
+    pub fn get_audio_files_by_inodes(&self, inodes: &[i64], source: super::types::FileSource) -> Result<Vec<super::types::AudioFile>> {
+        self.db.get_audio_files_by_inodes(inodes, source)
     }
 
     /// Get audio files by path prefix (directory query).

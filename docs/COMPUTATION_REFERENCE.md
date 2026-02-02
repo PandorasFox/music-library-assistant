@@ -91,8 +91,8 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
-| ScheduleContentAnalysis | All detection computations | — | — |
-| DetectFingerprintOverlaps | — | FingerprintOverlap | FingerprintOverlap (stale) |
+| ScheduleContentAnalysis | All detection computations (except fingerprint-dependent) | — | — |
+| DetectFingerprintOverlaps | AnalyzeFingerprintOverlaps, ClusterDirectoryOverlaps (after wait_for_queue_drain) | FingerprintOverlap | FingerprintOverlap (stale) |
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
 | DetectMissingTags | — | MissingTag | MissingTag (all, then recreate) |
 | DetectMetadataDuplicates | — | MetadataDuplicate | MetadataDuplicate (all, then recreate) |
@@ -101,7 +101,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
-| ClusterDirectoryOverlaps | — | DirectoryOverlapCluster | DirectoryOverlapCluster (all, then recreate) |
+| ClusterDirectoryOverlaps | — | DirectoryOverlapCluster (cross-directory only, ≤ max_keys) | DirectoryOverlapCluster (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |

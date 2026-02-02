@@ -68,7 +68,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
 | FingerprintOverlap | DetectFingerprintOverlaps | DetectFingerprintOverlaps | Tracks with identical fingerprints (internal signal) |
-| DirectoryOverlapCluster | ClusterDirectoryOverlaps | ClusterDirectoryOverlaps | Directory-level overlap cluster for resolution UI |
+| DirectoryOverlapCluster | ClusterDirectoryOverlaps | ClusterDirectoryOverlaps | Cross-directory overlap cluster for resolution UI. Metadata: `common_root`, `diverging_keys`, `fingerprint_count`, `track_counts`, `fingerprint_overlap_keys` |
 | DuplicateInode | DetectDuplicateInodes | DetectDuplicateInodes | Tracks sharing same inode |
 | MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags |
 | MetadataDuplicate | DetectMetadataDuplicates | DetectMetadataDuplicates | Tracks with identical tag sets |

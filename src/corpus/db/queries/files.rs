@@ -255,17 +255,20 @@ impl Database {
         files.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Get an audio file by inode.
-    pub fn get_audio_file_by_inode(&self, inode: i64) -> Result<Option<AudioFile>> {
+    /// Get an audio file by inode from a specific source.
+    ///
+    /// Source is REQUIRED - querying by inode alone is incorrect because
+    /// the primary key is (path, source, inode). The same inode can exist
+    /// in multiple sources (corpus and library for hard-linked files).
+    pub fn get_audio_file_by_inode(&self, inode: i64, source: FileSource) -> Result<Option<AudioFile>> {
         let result = self.conn.query_row(
             r#"SELECT
                 f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.inode = ?1 AND f.is_dir = 0
-            LIMIT 1"#,
-            params![inode],
+            WHERE f.inode = ?1 AND f.source = ?2 AND f.is_dir = 0"#,
+            params![inode, source.as_str()],
             Self::row_to_audio_file,
         );
 
@@ -276,22 +279,32 @@ impl Database {
         }
     }
 
-    /// Get multiple audio files by their inodes.
-    pub fn get_audio_files_by_inodes(&self, inodes: &[i64]) -> Result<Vec<AudioFile>> {
+    /// Get multiple audio files by their inodes from a specific source.
+    ///
+    /// Source is REQUIRED - querying by inode alone is incorrect because
+    /// the primary key is (path, source, inode). The same inode can exist
+    /// in multiple sources (corpus and library for hard-linked files).
+    pub fn get_audio_files_by_inodes(
+        &self,
+        inodes: &[i64],
+        source: FileSource,
+    ) -> Result<Vec<AudioFile>> {
         if inodes.is_empty() {
             return Ok(Vec::new());
         }
 
         let placeholders: Vec<String> = (1..=inodes.len()).map(|i| format!("?{}", i)).collect();
+
         let sql = format!(
             r#"SELECT
                 f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.inode IN ({}) AND f.is_dir = 0
+            WHERE f.inode IN ({}) AND f.source = '{}' AND f.is_dir = 0
             ORDER BY f.path"#,
-            placeholders.join(", ")
+            placeholders.join(", "),
+            source.as_str()
         );
 
         let mut stmt = self.conn.prepare(&sql)?;

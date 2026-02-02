@@ -196,6 +196,14 @@ pub struct DuplicateAnalysisOpinions {
     /// Duration tolerance in milliseconds. Tracks with duration difference above this
     /// are clustered separately. Default: 2000 (2 seconds)
     pub duration_tolerance_ms: i64,
+    /// Max diverging directory keys to consider as cross-directory overlap (emit signal).
+    /// e.g., bandcamp|indie = 2 keys, emit DirectoryOverlapCluster signal.
+    /// Default: 2
+    pub cross_directory_max_keys: usize,
+    /// Min diverging directory keys to skip entirely (likely legitimate variants).
+    /// e.g., 3+ keys in monstercat = skip (don't emit signal).
+    /// Default: 3
+    pub within_directory_min_keys: usize,
 }
 
 impl Default for DuplicateAnalysisOpinions {
@@ -203,6 +211,8 @@ impl Default for DuplicateAnalysisOpinions {
         Self {
             fingerprint_similarity_threshold: 85.0,
             duration_tolerance_ms: 2000,
+            cross_directory_max_keys: 2,
+            within_directory_min_keys: 3,
         }
     }
 }
@@ -706,6 +716,24 @@ fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut Duplica
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             opinions.duration_tolerance_ms = val;
+                        }
+                    }
+                }
+                "cross-directory-max-keys" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.cross_directory_max_keys = val as usize;
+                            }
+                        }
+                    }
+                }
+                "within-directory-min-keys" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.within_directory_min_keys = val as usize;
+                            }
                         }
                     }
                 }

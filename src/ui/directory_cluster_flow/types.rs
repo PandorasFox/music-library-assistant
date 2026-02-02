@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::corpus::db::types::AggregateSignalType;
+use crate::corpus::db::types::{AggregateSignalType, FileSource};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths;
@@ -136,7 +136,8 @@ impl DirectoryClusterModalData {
                     std::collections::HashMap::new();
 
                 for &inode in &track_ids {
-                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode) {
+                    // Directory overlap clusters are always between corpus files
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
                         inodes.push(audio_file.inode());
                         paths.push(audio_file.path().to_string());
                         total_size += audio_file.entry.file_size;

@@ -187,7 +187,6 @@ impl Database {
                 mtime_nanos INTEGER NOT NULL,
                 file_size INTEGER NOT NULL,     -- (same across hard links)
                 scanned_at INTEGER NOT NULL,
-                parent_inode INTEGER,           -- inode of parent directory (NULL for root dirs)
                 PRIMARY KEY (inode, source, path)
             );
 
@@ -195,7 +194,6 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_files_inode ON files(inode);
             CREATE INDEX IF NOT EXISTS idx_files_is_dir ON files(is_dir);
             CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
-            CREATE INDEX IF NOT EXISTS idx_files_parent_inode ON files(parent_inode);
 
             -- =================================================================
             -- Audio Info Table (audio files ONLY - not directories)
@@ -678,15 +676,5 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get album artist data for inconsistency detection.
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
         self.db.get_album_artist_data()
-    }
-
-    /// Get directory inode by path.
-    pub fn get_directory_inode(&self, path: &str, source: super::types::FileSource) -> Result<Option<i64>> {
-        self.db.get_directory_inode(path, source)
-    }
-
-    /// Check if a directory is already indexed.
-    pub fn directory_is_indexed(&self, path: &str, source: super::types::FileSource) -> bool {
-        self.db.directory_is_indexed(path, source)
     }
 }

@@ -338,12 +338,11 @@ enum SignalWriteOp {
     },
 
     /// Index a directory entry in the files table.
-    /// Used during corpus/library scanning to track directory hierarchy.
+    /// Used during corpus/library scanning to track directory entries.
     IndexDirectory {
         path: String,
         source: String,
         inode: i64,
-        parent_inode: Option<i64>,
         mtime_secs: i64,
         mtime_nanos: i64,
     },
@@ -890,13 +889,12 @@ impl SignalWriteSender {
 
     /// Index a directory entry in the files table.
     ///
-    /// Used during corpus scanning to track directory hierarchy for sibling counting.
+    /// Used during corpus scanning to track directory entries.
     pub fn index_directory(
         &self,
         path: &str,
         source: &str,
         inode: i64,
-        parent_inode: Option<i64>,
         mtime_secs: i64,
         mtime_nanos: i64,
         _witness: &impl SignalWitness,
@@ -906,7 +904,6 @@ impl SignalWriteSender {
             path: path.to_string(),
             source: source.to_string(),
             inode,
-            parent_inode,
             mtime_secs,
             mtime_nanos,
         });
@@ -1373,12 +1370,11 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             path,
             source,
             inode,
-            parent_inode,
             mtime_secs,
             mtime_nanos,
         } => {
             with_retry("index_directory", path, || {
-                execute_index_directory(db, path, source, *inode, *parent_inode, *mtime_secs, *mtime_nanos)
+                execute_index_directory(db, path, source, *inode, *mtime_secs, *mtime_nanos)
             });
         }
 
@@ -1841,13 +1837,12 @@ fn execute_clear_tag_mismatches_for_track(_db: &Database, _path: &str) -> anyhow
 }
 
 /// Execute IndexDirectory: insert directory entry in files table.
-/// Used during corpus scanning to track directory hierarchy for sibling counting.
+/// Used during corpus scanning to track directory entries.
 fn execute_index_directory(
     db: &Database,
     path: &str,
     source: &str,
     inode: i64,
-    parent_inode: Option<i64>,
     mtime_secs: i64,
     mtime_nanos: i64,
 ) -> anyhow::Result<()> {
@@ -1863,8 +1858,8 @@ fn execute_index_directory(
     db.conn().execute(
         r#"
         INSERT OR REPLACE INTO files
-        (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at, parent_inode)
-        VALUES (?1, ?2, ?3, 1, ?4, ?5, 0, ?6, ?7)
+        (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, ?2, ?3, 1, ?4, ?5, 0, ?6)
         "#,
         params![
             inode,
@@ -1873,7 +1868,6 @@ fn execute_index_directory(
             mtime_secs,
             mtime_nanos,
             scanned_at,
-            parent_inode,
         ],
     )?;
 

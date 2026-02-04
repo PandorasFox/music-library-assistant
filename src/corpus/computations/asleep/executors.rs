@@ -160,8 +160,8 @@ pub fn execute_scan_corpus_directory(
     let resolver = paths::get_resolver();
     let file_source = FileSource::from_str(source).unwrap_or(FileSource::Corpus);
 
-    // Index this directory and its immediate child directories for sibling counting
-    index_directory_hierarchy(&sender, read_only_db, directory, source, &resolver, file_source, witness);
+    // Index this directory in the files table
+    index_directory(&sender, directory, source, &resolver, witness);
 
     // Collect disk state for files DIRECTLY in this directory (not recursive)
     let disk_state = collect_directory_files(directory);
@@ -323,17 +323,14 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
     disk_state
 }
 
-/// Index the current directory and its immediate child directories in the files table.
+/// Index the current directory in the files table.
 ///
-/// This is called during corpus scanning to build directory hierarchy for sibling counting.
-/// The parent_inode is looked up from DB or computed from the parent path.
-fn index_directory_hierarchy(
+/// This is called during corpus scanning to track directory entries.
+fn index_directory(
     sender: &db_thread::SignalWriteSender,
-    read_only_db: &ReadOnlyDb<'_>,
     directory: &Path,
     source: &str,
     resolver: &crate::corpus::paths::PathResolver,
-    file_source: FileSource,
     witness: &ComputationWitness,
 ) {
     // Get directory metadata
@@ -352,66 +349,14 @@ fn index_directory_hierarchy(
     };
     let relative_dir_str = relative_dir.to_string_lossy().to_string();
 
-    // Look up parent directory inode
-    let parent_inode = if let Some(parent) = directory.parent() {
-        if let Some(parent_rel) = resolver.to_relative(parent) {
-            let parent_str = parent_rel.to_string_lossy().to_string();
-            read_only_db.get_directory_inode(&parent_str, file_source).ok().flatten()
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Index this directory (only if not already indexed)
-    if !read_only_db.directory_is_indexed(&relative_dir_str, file_source) {
-        sender.index_directory(
-            &relative_dir_str,
-            source,
-            dir_inode,
-            parent_inode,
-            mtime_secs,
-            mtime_nanos,
-            witness,
-        );
-    }
-
-    // Index immediate child directories (only if not already indexed)
-    if let Ok(entries) = std::fs::read_dir(directory) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            // Only process directories, skip symlinks
-            if path.is_symlink() || !path.is_dir() {
-                continue;
-            }
-
-            if let Some(child_rel) = resolver.to_relative(&path) {
-                let child_rel_str = child_rel.to_string_lossy().to_string();
-
-                // Skip if already indexed
-                if read_only_db.directory_is_indexed(&child_rel_str, file_source) {
-                    continue;
-                }
-
-                if let Ok(child_metadata) = std::fs::metadata(&path) {
-                    let child_inode = child_metadata.ino() as i64;
-                    let (child_mtime_secs, child_mtime_nanos) = extract_mtime(&child_metadata);
-
-                    sender.index_directory(
-                        &child_rel_str,
-                        source,
-                        child_inode,
-                        Some(dir_inode), // This directory is the parent
-                        child_mtime_secs,
-                        child_mtime_nanos,
-                        witness,
-                    );
-                }
-            }
-        }
-    }
+    sender.index_directory(
+        &relative_dir_str,
+        source,
+        dir_inode,
+        mtime_secs,
+        mtime_nanos,
+        witness,
+    );
 }
 
 // ============================================================================

@@ -204,11 +204,6 @@ pub struct DuplicateAnalysisOpinions {
     /// e.g., 3+ keys in monstercat = skip (don't emit signal).
     /// Default: 3
     pub within_directory_min_keys: usize,
-    /// Sibling directory count threshold for aggregating clusters.
-    /// If divergence point has more siblings than this, aggregate all overlaps
-    /// under that root into one cluster (e.g., monstercat with 1500+ subdirs).
-    /// Default: 20
-    pub many_siblings_threshold: usize,
 }
 
 impl Default for DuplicateAnalysisOpinions {
@@ -218,7 +213,6 @@ impl Default for DuplicateAnalysisOpinions {
             duration_tolerance_ms: 2000,
             cross_directory_max_keys: 2,
             within_directory_min_keys: 3,
-            many_siblings_threshold: 20,
         }
     }
 }
@@ -755,15 +749,6 @@ fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut Duplica
                         if let Some(val) = entry.value().as_i64() {
                             if val > 0 {
                                 opinions.within_directory_min_keys = val as usize;
-                            }
-                        }
-                    }
-                }
-                "many-siblings-threshold" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_i64() {
-                            if val > 0 {
-                                opinions.many_siblings_threshold = val as usize;
                             }
                         }
                     }

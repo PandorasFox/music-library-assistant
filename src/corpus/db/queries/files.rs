@@ -622,36 +622,6 @@ impl Database {
         Ok(count)
     }
 
-    /// Get directory inode by path.
-    ///
-    /// Used to look up parent directory inodes during scanning.
-    pub fn get_directory_inode(&self, path: &str, source: FileSource) -> Result<Option<i64>> {
-        let result = self.conn.query_row(
-            "SELECT inode FROM files WHERE path = ?1 AND source = ?2 AND is_dir = 1",
-            params![path, source.as_str()],
-            |row| row.get(0),
-        );
-
-        match result {
-            Ok(inode) => Ok(Some(inode)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Check if a directory is already indexed.
-    ///
-    /// Used for freshness checks before queueing index_directory writes.
-    pub fn directory_is_indexed(&self, path: &str, source: FileSource) -> bool {
-        self.conn
-            .query_row(
-                "SELECT 1 FROM files WHERE path = ?1 AND source = ?2 AND is_dir = 1 LIMIT 1",
-                params![path, source.as_str()],
-                |_| Ok(()),
-            )
-            .is_ok()
-    }
-
     // ========================================================================
     // Row Conversion Helpers
     // ========================================================================

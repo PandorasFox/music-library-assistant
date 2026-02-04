@@ -636,8 +636,6 @@ impl Mutation {
             Mutation::IndexTrack { path, .. }
             | Mutation::IndexFileFromPath { path, .. }
             | Mutation::UpdateFileEntry { path, .. }
-            | Mutation::MoveToStash { path, .. }
-            | Mutation::DropFromIndex { path, .. }
             | Mutation::UpdateTrack { path, .. }
             | Mutation::ApplyDbTagsToDisk { path, .. }
             | Mutation::AssimilateDiskTagsToDb { path, .. } => vec![path.clone()],
@@ -658,11 +656,14 @@ impl Mutation {
                 tracks.iter().map(|(_, path)| path.clone()).collect()
             }
 
-            // No signal updates needed
+            // No signal updates needed (file is gone or DB-only)
+            // MoveToStash/DropFromIndex: file removed, signal updates would race with index drop
             Mutation::SetTrackTagsDb { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateFilePath { .. }
+            | Mutation::MoveToStash { .. }
+            | Mutation::DropFromIndex { .. }
             | Mutation::ClearAllFingerprints
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => Vec::new(),

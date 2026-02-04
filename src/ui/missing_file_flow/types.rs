@@ -79,28 +79,40 @@ impl MissingFileModalData {
         for corpus_path in missing_paths {
             // Try to get file info - first try audio_file (files+audio_info join)
             let inode = if let Some(af) = read_db.get_audio_file_by_path(&corpus_path)? {
-                af.inode()
+                Some(af.inode())
             } else if let Some(fe) = read_db.get_file_entry_by_path(&corpus_path, "corpus")? {
                 // Fallback: files table entry without audio_info (rare but possible)
-                fe.inode
+                Some(fe.inode)
             } else {
-                // No database entry found - file is completely lost from the system
-                // The signal is stale and will be cleared on next scan
-                continue;
+                // No database entry found - this is an orphaned signal
+                // (e.g., file was stashed/dropped, signal not cleared yet)
+                // Still show it so user can clear the stale signal
+                None
             };
 
-            if let Some(library_path) = inode_to_library.get(&inode) {
-                restorable.push(RestorableMissingFile {
-                    corpus_path,
-                    _track_id: inode,
-                    _inode: inode,
-                    library_path: library_path.clone(),
-                });
+            if let Some(inode) = inode {
+                // We have an inode - check if restorable from library
+                if let Some(library_path) = inode_to_library.get(&inode) {
+                    restorable.push(RestorableMissingFile {
+                        corpus_path,
+                        _track_id: inode,
+                        _inode: inode,
+                        library_path: library_path.clone(),
+                    });
+                } else {
+                    non_restorable.push(NonRestorableMissingFile {
+                        corpus_path,
+                        track_id: inode,
+                        inode,
+                    });
+                }
             } else {
+                // Orphaned signal - no DB entry, just needs signal cleared
+                // Use inode=-1 as sentinel for "clear signal only"
                 non_restorable.push(NonRestorableMissingFile {
                     corpus_path,
-                    track_id: inode,
-                    inode,
+                    track_id: -1,
+                    inode: -1,
                 });
             }
         }

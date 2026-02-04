@@ -7,7 +7,8 @@
 //! - `corpus/Artist/Album/track.flac` — corpus file
 //! - `libraries/music/Artist/Album/track.mp3` — deployed library file
 //! - `libraries/legacy/old/track.mp3` — legacy library file
-//! - `stash/action_name/track.flac` — stashed file
+//! - `stash/action_name/Artist/Album/track.flac` — stashed corpus file (preserves structure)
+//! - `stash/action_name/music/Artist/Album/track.mp3` — stashed library file (preserves structure)
 //!
 //! This self-classifying path scheme means no external routing is needed —
 //! the path's first component IS the type tag.

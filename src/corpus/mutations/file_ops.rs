@@ -18,7 +18,6 @@ use super::types::{Mutation, MutationResult};
 /// Execute a Move mutation.
 ///
 /// Moves a file from source to destination, creating parent directories if needed.
-/// Optionally updates the database if track_id is provided.
 pub fn execute_move(
     source: &Path,
     destination: &Path,
@@ -170,15 +169,25 @@ fn execute_library_move(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Move a file to the stash directory, organized by stash action name.
+/// Move a file to the stash directory, preserving corpus/library directory structure.
 ///
-/// Destination: `{stash_root}/{stash_name}/{filename}`
-/// Creates the stash subdirectory if it doesn't exist.
+/// Destination: `{stash_root}/{stash_name}/{relative_path}`
+/// where `relative_path` is the path within corpus/ or libraries/, preserving structure.
+///
+/// If the destination already exists, appends underscores to the filename stem until
+/// a unique path is found (e.g., `track.flac` → `track_.flac` → `track__.flac`).
+///
+/// Examples:
+/// - `/archive/corpus/Artist/Album/track.flac` → `stash/overlaps/Artist/Album/track.flac`
+/// - `/archive/libraries/music/Artist/track.mp3` → `stash/leftovers/music/Artist/track.mp3`
 pub fn execute_move_to_stash(
     path: &Path,
     stash_name: &str,
     stash_root: &Path,
 ) -> Result<()> {
+    use crate::corpus::paths;
+    use std::path::PathBuf;
+
     if !path.exists() {
         return Err(anyhow::anyhow!(
             "Source file does not exist: {}",
@@ -186,22 +195,54 @@ pub fn execute_move_to_stash(
         ));
     }
 
-    let filename = path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("Path has no filename: {}", path.display()))?;
+    let resolver = paths::get_resolver();
 
-    let stash_dir = stash_root.join(stash_name);
-    fs::create_dir_all(&stash_dir)
-        .with_context(|| format!("Failed to create stash directory: {}", stash_dir.display()))?;
+    // Convert absolute path to root-relative (e.g., "corpus/Artist/Album/track.flac")
+    let root_relative = resolver
+        .to_relative(path)
+        .ok_or_else(|| anyhow::anyhow!("Path not within archive root: {}", path.display()))?;
 
-    let dest = stash_dir.join(filename);
+    // Strip the domain prefix (corpus/ or libraries/) to get the preservable structure
+    let preserved_path = root_relative
+        .strip_prefix("corpus")
+        .or_else(|_| root_relative.strip_prefix("libraries"))
+        .unwrap_or(&root_relative);
 
-    // Don't overwrite existing stashed files
+    // Build destination: stash_root/stash_name/preserved_path
+    let stash_base = stash_root.join(stash_name);
+    let mut dest = stash_base.join(preserved_path);
+
+    // Create destination directory if needed
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create stash directory: {}", parent.display()))?;
+    }
+
+    // If destination exists, append underscores to stem until unique
     if dest.exists() {
-        return Err(anyhow::anyhow!(
-            "Stash destination already exists: {}",
-            dest.display()
-        ));
+        let parent = dest.parent().map(PathBuf::from);
+        let stem = dest
+            .file_stem()
+            .map(|s| s.to_os_string())
+            .unwrap_or_default();
+        let extension = dest.extension().map(|e| e.to_os_string());
+
+        let mut new_stem = stem;
+        loop {
+            new_stem.push("_");
+            let mut new_filename = new_stem.clone();
+            if let Some(ref ext) = extension {
+                new_filename.push(".");
+                new_filename.push(ext);
+            }
+            dest = match &parent {
+                Some(p) => p.join(&new_filename),
+                None => PathBuf::from(&new_filename),
+            };
+            if !dest.exists() {
+                break;
+            }
+        }
     }
 
     fs::rename(path, &dest).with_context(|| {

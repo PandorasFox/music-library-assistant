@@ -18,7 +18,7 @@ pub use mla_utils::{
 pub struct Config {
     pub root: PathBuf,
     pub legacy_enabled: bool,
-    pub deploy_mappings: Vec<DeployMapping>,
+    pub source_dirs: Vec<SourceDir>,
     pub opinions: Opinions,
 }
 
@@ -197,7 +197,7 @@ pub struct DuplicateAnalysisOpinions {
     /// are clustered separately. Default: 2000 (2 seconds)
     pub duration_tolerance_ms: i64,
     /// Max diverging directory keys to consider as cross-directory overlap (emit signal).
-    /// e.g., bandcamp|indie = 2 keys, emit DirectoryOverlapCluster signal.
+    /// e.g., bandcamp|indie = 2 keys, emit CrossSourceOverlap signal.
     /// Default: 2
     pub cross_directory_max_keys: usize,
     /// Min diverging directory keys to skip entirely (likely legitimate variants).
@@ -268,10 +268,21 @@ pub fn is_timing_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// A configured source directory within the corpus.
+///
+/// Source directories are the logical "collections" that files belong to.
+/// They define where files deploy to and how duplicates between sources
+/// should be resolved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeployMapping {
-    pub corpus_relative_paths: Vec<PathBuf>, // Multiple paths, relative to corpus-root
-    pub library_names: Vec<String>,          // Target library names
+pub struct SourceDir {
+    /// Path relative to corpus root (e.g., "web/releases/bandcamp")
+    pub path: PathBuf,
+    /// Target library name for deployment (e.g., "music")
+    pub library: Option<String>,
+    /// Whether duplicates from this source can be stashed when another source wins
+    pub can_stash_dupes: bool,
+    /// Priority for conflict resolution (higher wins). None = no automatic resolution.
+    pub priority: Option<i32>,
 }
 
 impl Config {
@@ -301,7 +312,7 @@ impl Config {
     }
 
     // =========================================================================
-    // Deploy mapping queries
+    // Source directory queries
     // =========================================================================
 
     /// Get all corpus paths that deploy to a specific library.
@@ -310,49 +321,62 @@ impl Config {
     /// to deploy to the given library name.
     pub fn get_corpus_paths_for_library(&self, library_name: &str) -> Vec<PathBuf> {
         let corpus_dir = self.corpus_dir();
-        let mut paths = Vec::new();
-        for mapping in &self.deploy_mappings {
-            if mapping.library_names.contains(&library_name.to_string()) {
-                for corpus_relative_path in &mapping.corpus_relative_paths {
-                    paths.push(corpus_dir.join(corpus_relative_path));
-                }
-            }
-        }
-        paths
+        self.source_dirs
+            .iter()
+            .filter(|sd| sd.library.as_deref() == Some(library_name))
+            .map(|sd| corpus_dir.join(&sd.path))
+            .collect()
     }
 
-    /// Check if a file path is configured for deployment.
+    /// Check if a file path is under a configured source directory.
     ///
-    /// Returns true if the path starts with any configured deploy corpus path.
+    /// Returns true if the path starts with any configured source directory.
     /// Paths are expected in relative format: `corpus/<relative-path>`.
-    pub fn is_path_configured_for_deploy(&self, path: &std::path::Path) -> bool {
-        for mapping in &self.deploy_mappings {
-            for corpus_relative_path in &mapping.corpus_relative_paths {
-                let relative_prefix = std::path::Path::new("corpus").join(corpus_relative_path);
-                if path.starts_with(&relative_prefix) {
-                    return true;
-                }
-            }
-        }
-        false
+    pub fn is_path_in_source(&self, path: &std::path::Path) -> bool {
+        self.source_dirs.iter().any(|sd| {
+            let prefix = std::path::Path::new("corpus").join(&sd.path);
+            path.starts_with(&prefix)
+        })
+    }
+
+    /// Get the source directory for a corpus path.
+    ///
+    /// Given a corpus path (relative, e.g., `corpus/web/releases/bandcamp/...`),
+    /// returns the matching SourceDir. Returns None if not under any source.
+    pub fn get_source_for_path(&self, corpus_path: &std::path::Path) -> Option<&SourceDir> {
+        // Find the most specific (longest) matching source
+        self.source_dirs
+            .iter()
+            .filter(|sd| {
+                let prefix = std::path::Path::new("corpus").join(&sd.path);
+                corpus_path.starts_with(&prefix)
+            })
+            .max_by_key(|sd| sd.path.as_os_str().len())
     }
 
     /// Get the target library name for a corpus path.
     ///
     /// Given a corpus path (relative, e.g., `corpus/web/releases/...`), returns
-    /// the first matching library name from deploy mappings.
-    /// Returns None if no mapping matches.
+    /// the library name from the matching source directory.
+    /// Returns None if no source matches or source has no library configured.
     pub fn get_library_for_corpus_path(&self, corpus_path: &std::path::Path) -> Option<String> {
-        for mapping in &self.deploy_mappings {
-            for corpus_relative_path in &mapping.corpus_relative_paths {
-                let relative_prefix = std::path::Path::new("corpus").join(corpus_relative_path);
-                if corpus_path.starts_with(&relative_prefix) {
-                    // Return first library name (primary target)
-                    return mapping.library_names.first().cloned();
-                }
-            }
-        }
-        None
+        self.get_source_for_path(corpus_path)
+            .and_then(|sd| sd.library.clone())
+    }
+
+    /// Get the source directory config for a relative corpus path.
+    ///
+    /// Given a path relative to corpus root (WITHOUT the "corpus/" prefix),
+    /// e.g., `web/releases/bandcamp/Artist/Album/track.flac`, returns the
+    /// matching SourceDir. Returns None if not under any configured source.
+    ///
+    /// This is used by cross-source overlap detection to classify files by source.
+    pub fn get_source_for_relative_path(&self, relative_path: &std::path::Path) -> Option<&SourceDir> {
+        // Find the most specific (longest) matching source
+        self.source_dirs
+            .iter()
+            .filter(|sd| relative_path.starts_with(&sd.path))
+            .max_by_key(|sd| sd.path.as_os_str().len())
     }
 
     // =========================================================================
@@ -443,19 +467,17 @@ impl Config {
         Ok(())
     }
 
-    /// Validate deployment configuration.
+    /// Validate configuration.
     pub fn validate(&self) -> Result<()> {
         self.validate_same_filesystem()
             .context("Filesystem validation failed")?;
 
-        // Validate deploy paths don't escape corpus
+        // Validate source paths don't escape corpus
         let corpus_dir = self.corpus_dir();
-        for mapping in &self.deploy_mappings {
-            for corpus_path in &mapping.corpus_relative_paths {
-                let full_path = corpus_dir.join(corpus_path);
-                if !full_path.starts_with(&corpus_dir) {
-                    anyhow::bail!("Deploy path escapes corpus directory: {:?}", corpus_path);
-                }
+        for source in &self.source_dirs {
+            let full_path = corpus_dir.join(&source.path);
+            if !full_path.starts_with(&corpus_dir) {
+                anyhow::bail!("Source path escapes corpus directory: {:?}", source.path);
             }
         }
 
@@ -764,7 +786,7 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
     let mut config = Config {
         root: PathBuf::new(),
         legacy_enabled: false,
-        deploy_mappings: Vec::new(),
+        source_dirs: Vec::new(),
         opinions: Opinions::default(),
     };
 
@@ -785,35 +807,44 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                     }
                 }
             }
-            "deploy" => {
-                let mut corpus_paths = Vec::new();
+            "dir" => {
+                // dir "web/releases/bandcamp" { library "music"; can-stash-dupes true; priority 10 }
+                let path = node.entries().first()
+                    .and_then(|e| e.value().as_string())
+                    .map(PathBuf::from);
 
-                // Collect all path arguments (multiple corpus paths supported)
-                for entry in node.entries() {
-                    if let Some(path_str) = entry.value().as_string() {
-                        corpus_paths.push(PathBuf::from(path_str));
-                    }
-                }
+                if let Some(path) = path {
+                    let mut source = SourceDir {
+                        path,
+                        library: None,
+                        can_stash_dupes: false,
+                        priority: None,
+                    };
 
-                // Parse library names from children
-                let mut library_names = Vec::new();
-                if let Some(children) = node.children() {
-                    for child in children.nodes() {
-                        if child.name().value() == "library" {
-                            if let Some(lib_entry) = child.entries().first() {
-                                if let Some(lib_name) = lib_entry.value().as_string() {
-                                    library_names.push(lib_name.to_string());
+                    if let Some(children) = node.children() {
+                        for child in children.nodes() {
+                            match child.name().value() {
+                                "library" => {
+                                    if let Some(entry) = child.entries().first() {
+                                        source.library = entry.value().as_string().map(|s| s.to_string());
+                                    }
                                 }
+                                "can-stash-dupes" => {
+                                    if let Some(entry) = child.entries().first() {
+                                        source.can_stash_dupes = entry.value().as_bool().unwrap_or(false);
+                                    }
+                                }
+                                "priority" => {
+                                    if let Some(entry) = child.entries().first() {
+                                        source.priority = entry.value().as_i64().map(|v| v as i32);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
-                }
 
-                if !corpus_paths.is_empty() {
-                    config.deploy_mappings.push(DeployMapping {
-                        corpus_relative_paths: corpus_paths,
-                        library_names,
-                    });
+                    config.source_dirs.push(source);
                 }
             }
             "opinions" => {
@@ -872,8 +903,14 @@ mod tests {
         let kdl = r#"
 root "/Volumes/cerberus/archive"
 
-deploy "web/releases/bandcamp" "web/releases/itunes" {
-    library "main"
+dir "web/releases/bandcamp" {
+    library "music"
+    can-stash-dupes true
+    priority 10
+}
+
+dir "web/releases/indie" {
+    library "music"
 }
 
 legacy-library true
@@ -886,9 +923,14 @@ legacy-library true
         assert_eq!(config.stash_dir(), PathBuf::from("/Volumes/cerberus/archive/stash"));
         assert_eq!(config.legacy_dir(), PathBuf::from("/Volumes/cerberus/archive/libraries/legacy"));
         assert!(config.legacy_enabled);
-        assert_eq!(config.deploy_mappings.len(), 1);
-        assert_eq!(config.deploy_mappings[0].corpus_relative_paths.len(), 2);
-        assert_eq!(config.deploy_mappings[0].library_names[0], "main");
+        assert_eq!(config.source_dirs.len(), 2);
+        assert_eq!(config.source_dirs[0].path, PathBuf::from("web/releases/bandcamp"));
+        assert_eq!(config.source_dirs[0].library, Some("music".to_string()));
+        assert!(config.source_dirs[0].can_stash_dupes);
+        assert_eq!(config.source_dirs[0].priority, Some(10));
+        assert_eq!(config.source_dirs[1].path, PathBuf::from("web/releases/indie"));
+        assert!(!config.source_dirs[1].can_stash_dupes);
+        assert_eq!(config.source_dirs[1].priority, None);
     }
 
     #[test]
@@ -977,15 +1019,15 @@ root "/archive"
     }
 
     #[test]
-    fn test_is_path_configured_for_deploy() {
+    fn test_is_path_in_source() {
         let kdl = r#"
 root "/archive"
 
-deploy "web/releases/bandcamp" {
+dir "web/releases/bandcamp" {
     library "music"
 }
 
-deploy "web/releases/steam" {
+dir "web/releases/steam" {
     library "soundtracks"
 }
 "#;
@@ -993,23 +1035,23 @@ deploy "web/releases/steam" {
         let config = parse_kdl_config(kdl).unwrap();
 
         // Relative paths (as stored in DB) should match
-        assert!(config.is_path_configured_for_deploy(std::path::Path::new(
+        assert!(config.is_path_in_source(std::path::Path::new(
             "corpus/web/releases/bandcamp/Artist/Album/track.flac"
         )));
-        assert!(config.is_path_configured_for_deploy(std::path::Path::new(
+        assert!(config.is_path_in_source(std::path::Path::new(
             "corpus/web/releases/steam/Game/Soundtrack/01.mp3"
         )));
 
         // Non-configured paths should not match
-        assert!(!config.is_path_configured_for_deploy(std::path::Path::new(
+        assert!(!config.is_path_in_source(std::path::Path::new(
             "corpus/web/releases/itunes/Artist/Album/track.flac"
         )));
-        assert!(!config.is_path_configured_for_deploy(std::path::Path::new(
+        assert!(!config.is_path_in_source(std::path::Path::new(
             "corpus/physical/cd/Artist/Album/track.flac"
         )));
 
         // Exact prefix match (not substring)
-        assert!(!config.is_path_configured_for_deploy(std::path::Path::new(
+        assert!(!config.is_path_in_source(std::path::Path::new(
             "corpus/web/releases/bandcamp-extra/Artist/track.flac"
         )));
     }

@@ -209,8 +209,10 @@ pub enum SignalType {
     InconsistentAlbumArtist,
     /// Tag value contains separators that should be split into multiple values
     CompoundTagValue,
-    /// Directory-level overlap cluster (derived from FingerprintOverlap signals)
-    DirectoryOverlapCluster,
+    /// Cross-source fingerprint overlap cluster (derived from FingerprintOverlap signals)
+    /// Key: sorted source pair, e.g., "web/releases/bandcamp|web/releases/indie"
+    /// Metadata: { source_a, source_b, overlap_count, track_pairs: [...] }
+    CrossSourceOverlap,
 
     // =========================================================================
     // Error signals (discovery-time parse/read failures)
@@ -257,7 +259,7 @@ impl SignalType {
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
-            Self::DirectoryOverlapCluster => "directory_overlap_cluster",
+            Self::CrossSourceOverlap => "cross_source_overlap",
 
             // Error signals
             Self::CorruptFile => "corrupt_file",
@@ -298,7 +300,7 @@ impl SignalType {
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
-            "directory_overlap_cluster" => Some(Self::DirectoryOverlapCluster),
+            "cross_source_overlap" => Some(Self::CrossSourceOverlap),
             // Legacy: map old error signal types to CorruptFile
             "tag_parse_error" => Some(Self::CorruptFile),
             "waveform_read_error" => Some(Self::CorruptFile),
@@ -596,10 +598,10 @@ pub enum AggregateSignalType {
     /// Key: "{tag_name}:{compound_value_hash}" (e.g., "genre:abc123")
     /// Metadata: { "tag_name", "compound_value", "split_parts": [...], "separator", "track_ids": [...] }
     CompoundTagValue,
-    /// Directory-level overlap cluster (derived from FingerprintOverlap signals)
-    /// Key: sorted|path|suffixes (e.g., "bandcamp|indie/msx")
-    /// Metadata: { "cluster_key", "directories": [...], "fingerprint_overlap_keys": [...] }
-    DirectoryOverlapCluster,
+    /// Cross-source fingerprint overlap cluster (derived from FingerprintOverlap signals)
+    /// Key: sorted source pair, e.g., "web/releases/bandcamp|web/releases/indie"
+    /// Metadata: { "source_a", "source_b", "overlap_count", "fingerprint_keys": [...], "track_pairs": [...] }
+    CrossSourceOverlap,
 }
 
 impl AggregateSignalType {
@@ -613,7 +615,7 @@ impl AggregateSignalType {
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
-            Self::DirectoryOverlapCluster => "directory_overlap_cluster",
+            Self::CrossSourceOverlap => "cross_source_overlap",
         }
     }
 
@@ -627,7 +629,7 @@ impl AggregateSignalType {
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
-            "directory_overlap_cluster" => Some(Self::DirectoryOverlapCluster),
+            "cross_source_overlap" => Some(Self::CrossSourceOverlap),
             _ => None,
         }
     }

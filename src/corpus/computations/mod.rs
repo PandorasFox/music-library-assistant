@@ -260,8 +260,8 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awake::Computation::AnalyzeFingerprintOverlaps => {
                         awake::execute_analyze_fingerprint_overlaps(read_only_db, &witness, start)
                     }
-                    awake::Computation::ClusterDirectoryOverlaps => {
-                        awake::execute_cluster_directory_overlaps(read_only_db, &witness, start)
+                    awake::Computation::DetectCrossSourceOverlaps => {
+                        awake::execute_detect_cross_source_overlaps(read_only_db, &witness, start)
                     }
                     awake::Computation::DetectDeployConflicts => {
                         awake::execute_detect_deploy_conflicts(read_only_db, &witness, start)

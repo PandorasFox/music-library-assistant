@@ -136,7 +136,7 @@ mod tests {
         Config {
             root: PathBuf::from("/archive"),
             legacy_enabled: true,
-            deploy_mappings: vec![],
+            source_dirs: vec![],
             opinions: Default::default(),
         }
     }

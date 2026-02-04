@@ -68,7 +68,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
 | FingerprintOverlap | DetectFingerprintOverlaps | DetectFingerprintOverlaps | Tracks with identical fingerprints (internal signal) |
-| DirectoryOverlapCluster | ClusterDirectoryOverlaps | ClusterDirectoryOverlaps | Cross-directory overlap cluster for resolution UI. Uses sibling-aware aggregation: if common_root has many siblings (>threshold), aggregates into ONE cluster keyed by last component; otherwise uses component-pair keying. Metadata: `common_root`, `directories[]`, `fingerprint_count`, `fingerprint_overlap_keys`, `aggregated?`, `sibling_count?` |
+| CrossSourceOverlap | DetectCrossSourceOverlaps | DetectCrossSourceOverlaps | Fingerprint overlaps spanning different source directories (from config `dir` stanzas). Key: sorted source pair, e.g., "web/releases/bandcamp\|web/releases/indie". Within-source overlaps are ignored. Metadata: `source_a`, `source_b`, `*_priority`, `*_can_stash`, `overlap_count`, `fingerprint_keys[]`, `track_pairs[]` |
 | DuplicateInode | DetectDuplicateInodes | DetectDuplicateInodes | Tracks sharing same inode |
 | MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags |
 | MetadataDuplicate | DetectMetadataDuplicates | DetectMetadataDuplicates | Tracks with identical tag sets |
@@ -119,7 +119,7 @@ From `CLAUDE.md`:
 ### Good Signals
 - `UnindexedFile` for path X (one file)
 - `FingerprintOverlap` for fingerprint Z (one group of tracks)
-- `DirectoryOverlapCluster` for directory overlap (groups tracks by directory)
+- `CrossSourceOverlap` for source pair (groups tracks by configured source directory)
 
 ### Bad Signals (DO NOT CREATE)
 - `LibraryHealthSummary` (aggregate counts)

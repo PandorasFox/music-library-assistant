@@ -55,7 +55,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagValues | Find separators needing splits |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality |
-| ClusterDirectoryOverlaps | Cluster FingerprintOverlap signals by directory for UI resolution. Uses sibling-aware aggregation. |
+| DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
 | DetectDeployConflicts | Detect path collisions in deployment |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
 | DeriveCorpusDeployStatus | Derive corpus deploy status |
@@ -92,7 +92,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
 | ScheduleContentAnalysis | All detection computations (except fingerprint-dependent) | — | — |
-| DetectFingerprintOverlaps | AnalyzeFingerprintOverlaps, ClusterDirectoryOverlaps (after wait_for_queue_drain) | FingerprintOverlap | FingerprintOverlap (stale) |
+| DetectFingerprintOverlaps | AnalyzeFingerprintOverlaps, DetectCrossSourceOverlaps (after wait_for_queue_drain) | FingerprintOverlap | FingerprintOverlap (stale) |
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
 | DetectMissingTags | — | MissingTag | MissingTag (all, then recreate) |
 | DetectMetadataDuplicates | — | MetadataDuplicate | MetadataDuplicate (all, then recreate) |
@@ -101,7 +101,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
-| ClusterDirectoryOverlaps | — | DirectoryOverlapCluster (sibling-aware: aggregated if many_siblings > threshold, or component-pair keyed if few) | DirectoryOverlapCluster (all, then recreate) |
+| DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |

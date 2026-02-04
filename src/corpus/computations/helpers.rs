@@ -144,13 +144,13 @@ pub(super) fn enumerate_directories_recursive(dir: &Path, directories: &mut Vec<
 // Configuration Access
 // ============================================================================
 
-/// Extract unique library names from deploy mappings.
+/// Extract unique library names from source directories.
 pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Vec<String> {
     use std::collections::HashSet;
     let mut names = HashSet::new();
-    for mapping in &config.deploy_mappings {
-        for name in &mapping.library_names {
-            names.insert(name.clone());
+    for source in &config.source_dirs {
+        if let Some(ref lib) = source.library {
+            names.insert(lib.clone());
         }
     }
     names.into_iter().collect()

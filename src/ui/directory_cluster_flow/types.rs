@@ -1,6 +1,6 @@
-//! Directory Overlap Cluster Resolution Types
+//! Cross-Source Overlap Resolution Types
 //!
-//! Data structures for the directory cluster resolution modal, including
+//! Data structures for the cross-source overlap resolution modal, including
 //! cluster entries, resolution options, and button state.
 
 use std::path::PathBuf;
@@ -12,12 +12,12 @@ use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::mutations::Mutation;
 use crate::corpus::paths;
 
-/// A directory within an overlap cluster.
+/// A source directory within an overlap cluster.
 #[derive(Debug, Clone)]
 pub struct DirectoryGroupEntry {
-    /// Path suffix identifying this directory (e.g., "bandcamp" or "indie/msx")
+    /// Source directory path (e.g., "web/releases/bandcamp" or "web/releases/indie")
     pub path_suffix: String,
-    /// Track IDs in this directory
+    /// Track IDs (inodes) in this source
     pub track_ids: Vec<i64>,
     /// Inodes for DropFromIndex cleanup
     pub inodes: Vec<i64>,
@@ -27,19 +27,25 @@ pub struct DirectoryGroupEntry {
     pub format_summary: String,
     /// Total file size in MB
     pub total_size_mb: f64,
+    /// Whether this source can have duplicates stashed (from config)
+    pub can_stash_dupes: bool,
+    /// Priority from config (higher wins)
+    pub priority: Option<i32>,
 }
 
-/// A single directory overlap cluster ready for resolution.
+/// A single cross-source overlap cluster ready for resolution.
 #[derive(Debug, Clone)]
 pub struct DirectoryClusterEntry {
-    /// Cluster key (sorted path suffixes joined by |)
+    /// Cluster key (sorted source paths joined by |)
     pub cluster_key: String,
     /// Signal ID for this cluster
     pub signal_id: i64,
-    /// Directories in this cluster
+    /// Source directories in this cluster (usually 2)
     pub directories: Vec<DirectoryGroupEntry>,
     /// Source fingerprint overlap keys
     pub fingerprint_overlap_keys: Vec<String>,
+    /// Number of overlapping track pairs
+    pub overlap_count: usize,
 }
 
 /// Resolution option for a directory cluster.
@@ -62,21 +68,21 @@ impl ClusterResolutionOption {
     }
 }
 
-/// Cached data for the directory cluster resolution modal.
+/// Cached data for the cross-source overlap resolution modal.
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
 #[derive(Debug, Clone, Default)]
 pub struct DirectoryClusterModalData {
-    /// Directory overlap clusters
+    /// Cross-source overlap clusters
     pub clusters: Vec<DirectoryClusterEntry>,
 }
 
 impl DirectoryClusterModalData {
-    /// Load directory overlap clusters from the database.
+    /// Load cross-source overlap clusters from the database.
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        // Get all DirectoryOverlapCluster signals
+        // Get all CrossSourceOverlap signals
         let signals = read_db
-            .get_aggregate_signals(Some(AggregateSignalType::DirectoryOverlapCluster))
+            .get_aggregate_signals(Some(AggregateSignalType::CrossSourceOverlap))
             .unwrap_or_default();
 
         if signals.is_empty() {
@@ -96,8 +102,45 @@ impl DirectoryClusterModalData {
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
 
-            let fingerprint_overlap_keys: Vec<String> = metadata
-                .get("fingerprint_overlap_keys")
+            let source_a = metadata
+                .get("source_a")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let source_b = metadata
+                .get("source_b")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let source_a_priority = metadata
+                .get("source_a_priority")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+
+            let source_b_priority = metadata
+                .get("source_b_priority")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+
+            let source_a_can_stash = metadata
+                .get("source_a_can_stash")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let source_b_can_stash = metadata
+                .get("source_b_can_stash")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let overlap_count = metadata
+                .get("overlap_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as usize;
+
+            let fingerprint_keys: Vec<String> = metadata
+                .get("fingerprint_keys")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
@@ -106,49 +149,58 @@ impl DirectoryClusterModalData {
                 })
                 .unwrap_or_default();
 
-            let directories_json = metadata
-                .get("directories")
+            // track_pairs: Vec<[source_a_inode, source_b_inode]>
+            let track_pairs: Vec<(i64, i64)> = metadata
+                .get("track_pairs")
                 .and_then(|v| v.as_array())
-                .cloned()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|pair| {
+                            let arr = pair.as_array()?;
+                            let a = arr.first()?.as_i64()?;
+                            let b = arr.get(1)?.as_i64()?;
+                            Some((a, b))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
 
+            // Collect all inodes for each source
+            let source_a_inodes: Vec<i64> = track_pairs.iter().map(|(a, _)| *a).collect();
+            let source_b_inodes: Vec<i64> = track_pairs.iter().map(|(_, b)| *b).collect();
+
+            // Build directory entries for each source
             let mut directories = Vec::new();
 
-            for dir_json in directories_json {
-                let path_suffix = dir_json
-                    .get("path_suffix")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+            for (source_path, inodes, can_stash, priority) in [
+                (&source_a, &source_a_inodes, source_a_can_stash, source_a_priority),
+                (&source_b, &source_b_inodes, source_b_can_stash, source_b_priority),
+            ] {
+                // Deduplicate inodes
+                let unique_inodes: Vec<i64> = {
+                    let mut seen = std::collections::HashSet::new();
+                    inodes.iter().copied().filter(|i| seen.insert(*i)).collect()
+                };
 
-                let track_ids: Vec<i64> = dir_json
-                    .get("track_ids")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-                    .unwrap_or_default();
-
-                // Load audio file details for format/size info
-                // Note: track_ids in signal metadata are actually inodes
-                let mut inodes = Vec::new();
                 let mut paths = Vec::new();
                 let mut total_size: i64 = 0;
                 let mut format_counts: std::collections::HashMap<String, usize> =
                     std::collections::HashMap::new();
 
-                for &inode in &track_ids {
-                    // Directory overlap clusters are always between corpus files
+                for &inode in &unique_inodes {
                     if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
-                        inodes.push(audio_file.inode());
                         paths.push(audio_file.path().to_string());
                         total_size += audio_file.entry.file_size;
                         *format_counts.entry(audio_file.audio.file_type.to_uppercase()).or_insert(0) += 1;
                     }
                 }
 
-                // Build format summary (e.g., "FLAC (3)" or "MP3 (2), FLAC (1)")
+                // Build format summary
                 let format_summary = if format_counts.len() == 1 {
                     let (fmt, count) = format_counts.iter().next().unwrap();
                     format!("{} ({})", fmt, count)
+                } else if format_counts.is_empty() {
+                    "unknown".to_string()
                 } else {
                     let mut parts: Vec<String> = format_counts
                         .iter()
@@ -161,16 +213,18 @@ impl DirectoryClusterModalData {
                 let total_size_mb = total_size as f64 / (1024.0 * 1024.0);
 
                 directories.push(DirectoryGroupEntry {
-                    path_suffix,
-                    track_ids,
-                    inodes,
+                    path_suffix: source_path.clone(),
+                    track_ids: unique_inodes.clone(),
+                    inodes: unique_inodes,
                     paths,
                     format_summary,
                     total_size_mb,
+                    can_stash_dupes: can_stash,
+                    priority,
                 });
             }
 
-            // Skip clusters with fewer than 2 directories
+            // Skip clusters with fewer than 2 sources (shouldn't happen)
             if directories.len() < 2 {
                 continue;
             }
@@ -179,7 +233,8 @@ impl DirectoryClusterModalData {
                 cluster_key,
                 signal_id,
                 directories,
-                fingerprint_overlap_keys,
+                fingerprint_overlap_keys: fingerprint_keys,
+                overlap_count,
             });
         }
 

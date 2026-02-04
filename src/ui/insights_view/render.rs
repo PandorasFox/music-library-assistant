@@ -449,23 +449,23 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         }
 
         // Tag resolution bucket entries (duplicates at top)
-        InsightType::DirectoryOverlapClusters => {
+        InsightType::CrossSourceOverlaps => {
             lines.push(Line::from(Span::styled(
-                "Directory Overlaps",
+                "Cross-Source Overlaps",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Directories with overlapping content",
+                "Same tracks exist in different source",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "(same tracks in different locations).",
+                "directories (e.g., bandcamp vs indie).",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Press Enter to resolve by directory.",
+                "Press Enter to resolve by source.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
             )));
         }

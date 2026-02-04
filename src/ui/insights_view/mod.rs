@@ -136,7 +136,7 @@ pub enum InsightType {
     CorpusCorruptFiles,
     CorpusShitFormatFiles,
     // Tag resolution bucket entries (duplicates at top for easy resolution)
-    DirectoryOverlapClusters,
+    CrossSourceOverlaps,
     SubparDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
@@ -235,11 +235,11 @@ impl BucketEntry {
         }
     }
 
-    /// Create directory overlap clusters entry
-    fn directory_overlap_clusters(count: usize) -> Self {
+    /// Create cross-source overlaps entry
+    fn cross_source_overlaps(count: usize) -> Self {
         Self {
-            insight_type: InsightType::DirectoryOverlapClusters,
-            label: "Directory overlaps".to_string(),
+            insight_type: InsightType::CrossSourceOverlaps,
+            label: "Cross-source overlaps".to_string(),
             count: Some(count),
             color: if count > 0 { Color::Cyan } else { Color::Green },
             rank: 0,
@@ -469,9 +469,9 @@ impl CachedBucketEntries {
     fn build_placeholder_entries(bucket: &TagSquashBucket) -> Vec<BucketEntry> {
         let mut entries = Vec::new();
 
-        // Fingerprint duplicates at top - easy resolutions
+        // Cross-source overlaps at top - easy resolutions
         if bucket.directory_overlap_cluster_count > 0 {
-            entries.push(BucketEntry::directory_overlap_clusters(bucket.directory_overlap_cluster_count));
+            entries.push(BucketEntry::cross_source_overlaps(bucket.directory_overlap_cluster_count));
         }
 
         // Subpar duplicates - identified low-quality copies ready to stash

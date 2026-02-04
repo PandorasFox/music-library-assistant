@@ -752,7 +752,7 @@ impl Witch {
     /// Queue content analysis computations (internal only).
     ///
     /// This queues `ScheduleContentAnalysis` which will spawn bulk detection
-    /// computations for FingerprintOverlap, DirectoryOverlapCluster, MissingTag, etc.
+    /// computations for FingerprintOverlap, CrossSourceOverlap, MissingTag, etc.
     ///
     /// Only callable from `transition_to_completed` when mutations drain while Awake.
     /// Sealed by requiring `ContentAnalysisWitness` which can only be created in that context.

@@ -693,9 +693,9 @@ impl Database {
     fn compute_tag_resolution_bucket(&self) -> Result<crate::corpus::db::types::TagSquashBucket> {
         use crate::corpus::db::types::*;
 
-        // Directory overlap clusters (easy resolutions - at top of bucket)
-        // These are derived from fingerprint overlaps, clustered by directory
-        let directory_overlap_cluster_count = self.count_signal_type("directory_overlap_cluster")?;
+        // Cross-source overlap clusters (easy resolutions - at top of bucket)
+        // These are derived from fingerprint overlaps, clustered by source directory
+        let directory_overlap_cluster_count = self.count_signal_type("cross_source_overlap")?;
 
         // Subpar duplicates (lower quality versions identified by fingerprint analysis)
         // Note: stored as "subpar_duplicate" in database for backwards compatibility

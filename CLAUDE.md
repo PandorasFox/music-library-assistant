@@ -12,6 +12,8 @@ We use 0-byte Witness objects as guarantees for some compile-time guarantees abo
 
 fs::remove_file (and similar logic that can potentially unlink inodes or free up block device storage) shall not be introduced to MLA's codebase. Unlinking corpus files is solely operator privilege and is not to be conceptually introduced to MLA, ever. [obsolete and empty source code files themselves can be deleted]
 
+This is still alpha~beta software; breaking changes are encouraged - stop focusing on backwards-compatibility and 'legacy' compatibility.
+
 ### Database Access Patterns
 
 MLA enforces strict separation between read-only UI queries and write mutations:

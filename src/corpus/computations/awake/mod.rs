@@ -15,7 +15,7 @@
 //! Content Analysis:
 //! - `ScheduleContentAnalysis` - Orchestrator: spawns all detection computations
 //! - `DetectFingerprintOverlaps` - Find tracks with identical fingerprints (internal)
-//! - `ClusterDirectoryOverlaps` - Cluster fingerprint overlaps by directory (UI-facing)
+//! - `DetectCrossSourceOverlaps` - Cluster fingerprint overlaps by source directory (UI-facing)
 //! - `DetectDuplicateInodes` - Find tracks sharing the same inode
 //! - `DetectMissingTags` - Find tracks missing required tags
 //! - `DetectMetadataDuplicates` - Find tracks with identical tag sets
@@ -100,12 +100,13 @@ pub enum Computation {
     /// by quality, and emits SubparDuplicate signals for non-best tracks.
     AnalyzeFingerprintOverlaps,
 
-    /// Cluster fingerprint overlaps by directory for bulk resolution.
+    /// Detect cross-source fingerprint overlaps for bulk resolution.
     ///
-    /// Reads FingerprintOverlap signals, filters tracks with distinguishing
-    /// metadata (ISRC, catalog#, variant keywords), finds directory divergence
-    /// points, and emits DirectoryOverlapCluster signals.
-    ClusterDirectoryOverlaps,
+    /// Reads FingerprintOverlap signals, classifies files by their configured
+    /// source directory (from config `dir` stanzas), and emits CrossSourceOverlap
+    /// signals for overlaps spanning different sources. Within-source overlaps
+    /// are ignored (they're legitimate variants/releases).
+    DetectCrossSourceOverlaps,
 
     /// Detect deployment conflicts (bulk).
     ///
@@ -143,7 +144,7 @@ impl Computation {
             Computation::DetectCompoundTagValues => "Detecting compound tag values",
             Computation::DetectShitFormats => "Detecting shit format files",
             Computation::AnalyzeFingerprintOverlaps => "Analyzing fingerprint overlaps",
-            Computation::ClusterDirectoryOverlaps => "Clustering directory overlaps",
+            Computation::DetectCrossSourceOverlaps => "Detecting cross-source overlaps",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",

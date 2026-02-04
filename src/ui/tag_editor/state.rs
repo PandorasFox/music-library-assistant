@@ -892,8 +892,8 @@ impl UnifiedTagEditorState {
                     }
                     TagEditorButton::FillFromDb => {
                         // Return action for UI layer to handle (requires DB access)
-                        let track_id = self.get_current_audio_file().map(|af| af.inode());
-                        UnifiedTagEditorAction::RequestFillFromDb { track_id }
+                        let inode = self.get_current_audio_file().map(|af| af.inode());
+                        UnifiedTagEditorAction::RequestFillFromDb { inode }
                     }
                 }
             }
@@ -2061,8 +2061,7 @@ fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], all_ta
     let mut mutations = Vec::new();
     for file_idx in changed_files {
         if let (Some(audio_file), Some(current_fields)) = (audio_files.get(file_idx), all_tag_fields.get(file_idx)) {
-            // Use inode as track_id for the mutation
-            let track_id = audio_file.inode();
+            let inode = audio_file.inode();
 
             // Get complete desired tag set from current UI state
             let tags = tag_fields_to_tags(current_fields);
@@ -2070,7 +2069,7 @@ fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], all_ta
             // DB-first pattern with spawn chaining:
             // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
             mutations.push(Mutation::SetTrackTagsDb {
-                track_id,
+                inode,
                 tags,
             });
         }

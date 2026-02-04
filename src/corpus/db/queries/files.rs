@@ -639,6 +639,19 @@ impl Database {
         }
     }
 
+    /// Check if a directory is already indexed.
+    ///
+    /// Used for freshness checks before queueing index_directory writes.
+    pub fn directory_is_indexed(&self, path: &str, source: FileSource) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1 AND source = ?2 AND is_dir = 1 LIMIT 1",
+                params![path, source.as_str()],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
     // ========================================================================
     // Row Conversion Helpers
     // ========================================================================

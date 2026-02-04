@@ -27,10 +27,10 @@ use super::types::{Mutation, MutationResult};
 /// Execute a Transcode mutation.
 ///
 /// Transcodes the source file to the target format, stashes the original,
-/// and updates the track record in the database.
+/// and updates the audio file record in the database.
 fn execute_transcode(
     db: &ReadOnlyDb<'_>,
-    track_id: i64,
+    inode: i64,
     source_path: &Path,
     target_format: TranscodeTarget,
     stash_name: &str,
@@ -108,10 +108,10 @@ fn execute_transcode(
     let new_file_size = fs_metadata.len() as i64;
     let new_file_type = target_format.extension().to_string();
 
-    // Get the existing audio file to preserve fields we don't want to change - track_id is actually inode
+    // Get the existing audio file to preserve fields we don't want to change
     // Transcode only operates on corpus files
-    let existing_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    let existing_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
 
     // Convert new absolute path to relative for storage
     let resolver = paths::get_resolver();
@@ -183,13 +183,13 @@ pub fn execute_single(
     let start = std::time::Instant::now();
 
     // Extract mutation parameters before execution for spawn_mutations
-    let (track_id, source_path, target_format) = match mutation {
+    let (inode, source_path, target_format) = match mutation {
         Mutation::Transcode {
-            track_id,
+            inode,
             source_path,
             target_format,
             ..
-        } => (*track_id, source_path.clone(), *target_format),
+        } => (*inode, source_path.clone(), *target_format),
         _ => {
             return MutationResult {
                 _mutation: mutation.clone(),
@@ -203,11 +203,11 @@ pub fn execute_single(
 
     let result = match mutation {
         Mutation::Transcode {
-            track_id,
+            inode,
             source_path,
             target_format,
             stash_name,
-        } => execute_transcode(db, *track_id, source_path, *target_format, stash_name, stash_root, witness),
+        } => execute_transcode(db, *inode, source_path, *target_format, stash_name, stash_root, witness),
 
         _ => Err(anyhow::anyhow!("Not a transcode mutation")),
     };
@@ -219,7 +219,7 @@ pub fn execute_single(
             // while preserving the original metadata that ffmpeg copies.
             let new_path = source_path.with_extension(target_format.extension());
             let spawn = vec![witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb {
-                track_id,
+                inode,
                 path: new_path,
             })];
             (true, None, spawn)

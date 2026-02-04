@@ -19,7 +19,7 @@ use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
 use super::types::{Mutation, MutationResult};
 
-/// Execute SetTrackTagsDb: set track tags in database only (DB-first pattern, step 1).
+/// Execute SetTrackTagsDb: set tags in database only (DB-first pattern, step 1).
 ///
 /// - Writes complete tag set to DB via set_track_tags()
 /// - Sets needs_disk_flush = TRUE
@@ -28,7 +28,7 @@ use super::types::{Mutation, MutationResult};
 /// The spawned ApplyDbTagsToDisk will sync DB tags to disk.
 fn execute_set_track_tags_db(
     db: &ReadOnlyDb<'_>,
-    track_id: i64,
+    inode: i64,
     tags: &[(String, String)],
     witness: &MutationExecutionWitness,
 ) -> Result<Option<SpawnedMutation>> {
@@ -37,10 +37,10 @@ fn execute_set_track_tags_db(
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get audio file info from DB (read-only) - track_id is actually inode
+    // Get audio file info from DB (read-only)
     // Tag edits only operate on corpus files
-    let audio_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
     let file_path = audio_file.path();
 
     // Write tags to DB (full replacement)
@@ -55,7 +55,7 @@ fn execute_set_track_tags_db(
 
     // Create authorized spawned mutation via witness factory
     Ok(Some(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk {
-        track_id,
+        inode,
         path: abs_path,
     })))
 }
@@ -73,8 +73,8 @@ pub fn execute_single(
     let start = std::time::Instant::now();
 
     let (result, spawn_mutations) = match mutation {
-        Mutation::SetTrackTagsDb { track_id, tags } => {
-            match execute_set_track_tags_db(db, *track_id, tags, witness) {
+        Mutation::SetTrackTagsDb { inode, tags } => {
+            match execute_set_track_tags_db(db, *inode, tags, witness) {
                 Ok(Some(spawn)) => (Ok(()), vec![spawn]),
                 Ok(None) => (Ok(()), Vec::new()),
                 Err(e) => (Err(e), Vec::new()),

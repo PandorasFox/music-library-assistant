@@ -364,18 +364,20 @@ fn index_directory_hierarchy(
         None
     };
 
-    // Index this directory
-    sender.index_directory(
-        &relative_dir_str,
-        source,
-        dir_inode,
-        parent_inode,
-        mtime_secs,
-        mtime_nanos,
-        witness,
-    );
+    // Index this directory (only if not already indexed)
+    if !read_only_db.directory_is_indexed(&relative_dir_str, file_source) {
+        sender.index_directory(
+            &relative_dir_str,
+            source,
+            dir_inode,
+            parent_inode,
+            mtime_secs,
+            mtime_nanos,
+            witness,
+        );
+    }
 
-    // Index immediate child directories
+    // Index immediate child directories (only if not already indexed)
     if let Ok(entries) = std::fs::read_dir(directory) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -385,12 +387,18 @@ fn index_directory_hierarchy(
                 continue;
             }
 
-            if let Ok(child_metadata) = std::fs::metadata(&path) {
-                let child_inode = child_metadata.ino() as i64;
-                let (child_mtime_secs, child_mtime_nanos) = extract_mtime(&child_metadata);
+            if let Some(child_rel) = resolver.to_relative(&path) {
+                let child_rel_str = child_rel.to_string_lossy().to_string();
 
-                if let Some(child_rel) = resolver.to_relative(&path) {
-                    let child_rel_str = child_rel.to_string_lossy().to_string();
+                // Skip if already indexed
+                if read_only_db.directory_is_indexed(&child_rel_str, file_source) {
+                    continue;
+                }
+
+                if let Ok(child_metadata) = std::fs::metadata(&path) {
+                    let child_inode = child_metadata.ino() as i64;
+                    let (child_mtime_secs, child_mtime_nanos) = extract_mtime(&child_metadata);
+
                     sender.index_directory(
                         &child_rel_str,
                         source,

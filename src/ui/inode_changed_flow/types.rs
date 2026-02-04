@@ -83,7 +83,7 @@ impl InodeChangedState {
             .iter()
             .map(|f| {
                 let abs_path = resolver.resolve(std::path::Path::new(&f.path));
-                (f.track_id, abs_path)
+                (f.inode, abs_path)
             })
             .collect()
     }

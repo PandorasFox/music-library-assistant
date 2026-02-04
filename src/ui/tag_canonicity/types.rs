@@ -38,16 +38,16 @@ pub struct TagCanonicalityModalData {
     pub context_label: Option<String>,
     /// Variants sorted by count DESC, then alphabetically for ties
     pub variants: Vec<TagVariantEntry>,
-    /// Track IDs affected by this canonicalization
-    pub track_ids: Vec<i64>,
+    /// Inodes affected by this canonicalization
+    pub inodes: Vec<i64>,
 }
 
 impl TagCanonicalityModalData {
     /// Create from an AggregateSignal (loaded from database).
     ///
     /// Handles two signal formats:
-    /// - TagCanonicity: { tag_name, variants: {value: count}, track_ids, context? }
-    /// - InconsistentAlbumArtist: { album, album_artist_variants: {value: count}, track_ids }
+    /// - TagCanonicity: { tag_name, variants: {value: count}, inodes, context? }
+    /// - InconsistentAlbumArtist: { album, album_artist_variants: {value: count}, inodes }
     pub fn from_signal(signal: &AggregateSignal) -> Option<Self> {
         use crate::corpus::db::types::AggregateSignalType;
 
@@ -71,8 +71,8 @@ impl TagCanonicalityModalData {
                 b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
             });
 
-            let track_ids = json
-                .get("track_ids")
+            let inodes = json
+                .get("inodes")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
                 .unwrap_or_default();
@@ -83,7 +83,7 @@ impl TagCanonicalityModalData {
                 tag_name: "album_artist".to_string(),
                 context_label: album,
                 variants,
-                track_ids,
+                inodes,
             });
         }
 
@@ -105,8 +105,8 @@ impl TagCanonicalityModalData {
             b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
         });
 
-        let track_ids = json
-            .get("track_ids")
+        let inodes = json
+            .get("inodes")
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
             .unwrap_or_default();
@@ -115,7 +115,7 @@ impl TagCanonicalityModalData {
             tag_name,
             context_label: json.get("context").and_then(|v| v.as_str()).map(String::from),
             variants,
-            track_ids,
+            inodes,
         })
     }
 
@@ -263,7 +263,7 @@ impl TagCanonicalityState {
 
     /// Generate mutations for the selected variants → canonical value using DB-first pattern.
     ///
-    /// Requires track_info: a map from track_id to (path, current_tagset).
+    /// Requires track_info: a map from inode to (path, current_tagset).
     /// Each track's current tag value is checked against selected variants.
     /// Only tracks whose current value is a selected non-canonical variant get edits.
     pub fn mutations_with_paths(
@@ -282,9 +282,9 @@ impl TagCanonicalityState {
 
         let mut mutations = Vec::new();
 
-        // For each track, create a mutation only if its current value is a selected variant
-        for &track_id in &self.data.track_ids {
-            if let Some((_path, current_tagset)) = track_info.get(&track_id) {
+        // For each file, create a mutation only if its current value is a selected variant
+        for &inode in &self.data.inodes {
+            if let Some((_path, current_tagset)) = track_info.get(&inode) {
                 // Get current values for this tag from the TagSet
                 let current_values: Vec<&str> = current_tagset
                     .values_for(&self.data.tag_name)
@@ -332,7 +332,7 @@ impl TagCanonicalityState {
                 // DB-first pattern with spawn chaining:
                 // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
                 mutations.push(Mutation::SetTrackTagsDb {
-                    track_id,
+                    inode,
                     tags: new_tags,
                 });
             }

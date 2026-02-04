@@ -92,7 +92,7 @@ pub enum Mutation {
     /// If interrupted between DB write and disk write, needs_disk_flush=TRUE
     /// enables recovery via OOB sync flow.
     SetTrackTagsDb {
-        track_id: i64,
+        inode: i64,
         /// Complete set of tags to store (replaces all existing tags).
         tags: Vec<(String, String)>,
     },
@@ -161,7 +161,7 @@ pub enum Mutation {
     /// On success: creates new file at same path with different extension,
     /// stashes original under stash_name, and updates the track record.
     Transcode {
-        track_id: i64,
+        inode: i64,
         source_path: PathBuf,
         target_format: TranscodeTarget,
         stash_name: String,
@@ -199,7 +199,7 @@ pub enum Mutation {
     // ========================================================================
     /// Update track path in database (for relocated files).
     UpdateTrackPath {
-        track_id: i64,
+        inode: i64,
         old_path: PathBuf,
         new_path: PathBuf,
     },
@@ -221,7 +221,7 @@ pub enum Mutation {
 
     /// Full track metadata update (for out-of-band file changes).
     UpdateTrack {
-        track_id: i64,
+        inode: i64,
         path: PathBuf,
         metadata: ExtractedMetadata,
     },
@@ -234,17 +234,17 @@ pub enum Mutation {
     /// Used when disk file mtime changed but tags are identical. Updates file mtime
     /// to match current disk mtime so file is considered synced.
     AcknowledgeMtimeOnly {
-        /// Track IDs with their absolute paths: (track_id, abs_path)
+        /// Inodes with their absolute paths: (inode, abs_path)
         tracks: Vec<(i64, PathBuf)>,
     },
 
-    /// Acknowledge inode change - update track.inode and files table, clear InodeChanged signal.
+    /// Acknowledge inode change - update audio_info and files table, clear InodeChanged signal.
     ///
     /// Used when a file was replaced (same path, different inode). Updates the stored
     /// inode to match disk and refreshes file entry. Tag differences are handled separately
     /// through the OOB tag resolution flow.
     AcknowledgeInodeChanged {
-        /// Track IDs with their absolute paths: (track_id, abs_path)
+        /// Inodes with their absolute paths: (inode, abs_path)
         tracks: Vec<(i64, PathBuf)>,
     },
 
@@ -260,7 +260,7 @@ pub enum Mutation {
     /// - OOB sync resolution (reject disk changes)
     /// - Spawned from SetTrackTagsDb (DB-first pattern step 2)
     ApplyDbTagsToDisk {
-        track_id: i64,
+        inode: i64,
         path: PathBuf,
     },
 
@@ -273,7 +273,7 @@ pub enum Mutation {
     ///
     /// Used for OOB sync resolution (accept disk changes).
     AssimilateDiskTagsToDb {
-        track_id: i64,
+        inode: i64,
         path: PathBuf,
     },
 
@@ -303,10 +303,10 @@ pub enum Mutation {
 
     /// Regenerate fingerprint for a single track.
     ///
-    /// Fingerprints the entire audio file (no duration limit) and updates the track.
+    /// Fingerprints the entire audio file (no duration limit) and updates the audio_info.
     /// Emits CorruptFile signal if decoding fails.
     RefillSingleFingerprint {
-        track_id: i64,
+        inode: i64,
         path: String,
     },
     // Note: VerifyTags has been moved to corpus::computations::Computation.
@@ -363,19 +363,19 @@ impl Mutation {
         matches!(self, Mutation::DbMigration { .. })
     }
 
-    /// Get the track ID affected by this mutation, if any.
+    /// Get the inode affected by this mutation, if any.
     ///
     /// Used to trigger health signal refresh after mutations.
     #[cfg(test)]
-    pub fn affected_track_id(&self) -> Option<i64> {
+    pub fn affected_inode(&self) -> Option<i64> {
         match self {
-            Mutation::SetTrackTagsDb { track_id, .. }
-            | Mutation::UpdateTrack { track_id, .. }
-            | Mutation::Transcode { track_id, .. }
-            | Mutation::ApplyDbTagsToDisk { track_id, .. }
-            | Mutation::AssimilateDiskTagsToDb { track_id, .. } => Some(*track_id),
+            Mutation::SetTrackTagsDb { inode, .. }
+            | Mutation::UpdateTrack { inode, .. }
+            | Mutation::Transcode { inode, .. }
+            | Mutation::ApplyDbTagsToDisk { inode, .. }
+            | Mutation::AssimilateDiskTagsToDb { inode, .. } => Some(*inode),
 
-            // These don't have a single track_id directly (batch operations or no track)
+            // These don't have a single inode directly (batch operations or no inode)
             Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateFileEntry { .. }
@@ -852,14 +852,14 @@ mod tests {
     #[test]
     fn test_mutation_labels() {
         let set_tags = Mutation::SetTrackTagsDb {
-            track_id: 1,
+            inode: 1,
             tags: vec![("artist".to_string(), "New".to_string())],
         };
         assert_eq!(set_tags.label(), "Tag edit (DB)");
         assert!(set_tags.is_db_only());
 
         let apply_tags = Mutation::ApplyDbTagsToDisk {
-            track_id: 1,
+            inode: 1,
             path: PathBuf::from("/test/file.flac"),
         };
         assert_eq!(apply_tags.label(), "Tag sync (DB→disk)");

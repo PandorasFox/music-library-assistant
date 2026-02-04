@@ -548,26 +548,26 @@ pub struct AggregateSignal {
 }
 
 impl AggregateSignal {
-    /// Get track IDs from metadata_json.
-    pub fn track_ids(&self) -> Vec<i64> {
+    /// Get inodes from metadata_json.
+    pub fn inodes(&self) -> Vec<i64> {
         self.metadata_json
             .as_ref()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.get("track_ids").cloned())
+            .and_then(|v| v.get("inodes").cloned())
             .and_then(|v| v.as_array().cloned())
             .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
             .unwrap_or_default()
     }
 
-    /// Create a new aggregate signal with track IDs embedded in metadata.
-    pub fn with_track_ids(mut self, ids: &[i64]) -> Self {
+    /// Create a new aggregate signal with inodes embedded in metadata.
+    pub fn with_inodes(mut self, ids: &[i64]) -> Self {
         let mut meta = self
             .metadata_json
             .as_ref()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .unwrap_or_else(|| serde_json::json!({}));
-        meta["track_ids"] = serde_json::json!(ids);
-        meta["track_count"] = serde_json::json!(ids.len());
+        meta["inodes"] = serde_json::json!(ids);
+        meta["inode_count"] = serde_json::json!(ids.len());
         self.metadata_json = Some(meta.to_string());
         self
     }
@@ -588,15 +588,15 @@ pub enum AggregateSignalType {
     DeployConflict,
     /// Tag value collision needing canonicalization
     /// Key: "{tag_name}:{normalized_key}" (e.g., "artist:dragonforce")
-    /// Metadata: { "variants": {"DragonForce": 47, "Dragonforce": 3}, "track_ids": [...] }
+    /// Metadata: { "variants": {"DragonForce": 47, "Dragonforce": 3}, "inodes": [...] }
     TagCanonicity,
     /// Album has tracks with different artists + missing/inconsistent album_artist
     /// Key: "{normalized_album}" (e.g., "clockwork hearts")
-    /// Metadata: { "album": "...", "artist_variants": {...}, "album_artist_variants": {...}, "track_ids": [...] }
+    /// Metadata: { "album": "...", "artist_variants": {...}, "album_artist_variants": {...}, "inodes": [...] }
     InconsistentAlbumArtist,
     /// Tag value contains separator characters needing to be split
     /// Key: "{tag_name}:{compound_value_hash}" (e.g., "genre:abc123")
-    /// Metadata: { "tag_name", "compound_value", "split_parts": [...], "separator", "track_ids": [...] }
+    /// Metadata: { "tag_name", "compound_value", "split_parts": [...], "separator", "inodes": [...] }
     CompoundTagValue,
     /// Cross-source fingerprint overlap cluster (derived from FingerprintOverlap signals)
     /// Key: sorted source pair, e.g., "web/releases/bandcamp|web/releases/indie"
@@ -849,8 +849,6 @@ pub struct DeploySignalFile {
     pub corpus_path: String,
     /// Computed deploy path in library
     pub deploy_path: String,
-    /// Track ID for mutation generation
-    pub _track_id: i64,
 }
 
 /// A stale library file (deployed path differs from expected).
@@ -860,10 +858,6 @@ pub struct StaleSignalFile {
     pub library_path: String,
     /// Expected path (computed from current tags)
     pub expected_path: String,
-    /// Corpus file path (source)
-    pub _corpus_path: String,
-    /// Track ID for mutation generation
-    pub _track_id: i64,
 }
 
 /// A leftover file (in library but no corpus backing).
@@ -878,7 +872,7 @@ pub struct LeftoverSignalFile {
 pub struct ConflictGroup {
     /// The library path they all would deploy to
     pub deploy_path: String,
-    /// List of conflicting corpus files: (corpus_path, track_id)
+    /// List of conflicting corpus files: (corpus_path, inode)
     pub conflicting_files: Vec<(String, i64)>,
 }
 
@@ -935,7 +929,7 @@ pub struct TagMismatchEntry {
 /// A file with purely sync-direction tag mismatches (all extras in one direction).
 #[derive(Debug, Clone)]
 pub struct OobSyncFile {
-    pub track_id: i64,
+    pub inode: i64,
     /// Relative path (as stored in signals/files)
     pub path: String,
     pub direction: OobSyncDirection,
@@ -1019,7 +1013,7 @@ impl ConflictBucket {
 /// A file with an OOB tag signal, classified into a conflict bucket.
 #[derive(Debug, Clone)]
 pub struct BucketedOobFile {
-    pub track_id: i64,
+    pub inode: i64,
     pub path: String,
     pub bucket: ConflictBucket,
 }
@@ -1027,7 +1021,7 @@ pub struct BucketedOobFile {
 /// A file with an InodeChanged signal (file was replaced).
 #[derive(Debug, Clone)]
 pub struct InodeChangedFile {
-    pub track_id: i64,
+    pub inode: i64,
     pub path: String,
     pub old_inode: i64,
     pub new_inode: i64,

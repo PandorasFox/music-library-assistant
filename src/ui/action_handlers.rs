@@ -344,8 +344,8 @@ impl App {
                 self.status_message = Some(msg);
             }
 
-            UnifiedTagEditorAction::RequestFillFromDb { track_id } => {
-                match track_id {
+            UnifiedTagEditorAction::RequestFillFromDb { inode } => {
+                match inode {
                     Some(inode) => {
                         let read_db = self.read_db();
                         match read_db.get_corpus_tags(inode) {
@@ -502,7 +502,7 @@ impl App {
         // 4. Conflicts: pick first alphabetical corpus path and deploy it
         // Same path resolution as new files - need target library from config
         for group in &data.conflicts {
-            if let Some((corpus_path, _track_id)) = group
+            if let Some((corpus_path, _inode)) = group
                 .conflicting_files
                 .iter()
                 .min_by(|a, b| a.0.cmp(&b.0))
@@ -1188,13 +1188,13 @@ impl App {
 
         // Second pass: compute initial diff for first file in the active bucket
         if let Some(file) = state.active_bucket_state().current_file() {
-            let track_id = file.track_id;
+            let inode = file.inode;
             let path = file.path.clone();
             if let Some(w) = self.witch.as_mut() {
                 let read_db = w.read_db();
                 let resolver = paths::get_resolver();
                 let abs_path = resolver.resolve(std::path::Path::new(&path));
-                state.current_diff = oob_conflict_flow::types::compute_tag_diff(&read_db, track_id, &abs_path);
+                state.current_diff = oob_conflict_flow::types::compute_tag_diff(&read_db, inode, &abs_path);
             }
         }
 
@@ -1447,7 +1447,7 @@ impl App {
             .filter(|file| file.direction == direction)
             .map(|file| {
                 let abs_path = resolver.resolve(std::path::Path::new(&file.path));
-                (file.track_id, abs_path)
+                (file.inode, abs_path)
             })
             .collect();
 
@@ -1456,18 +1456,18 @@ impl App {
             return;
         }
 
-        // Generate individual single-track mutations for each track
+        // Generate individual single-file mutations for each file
         let (label, mutations): (&str, Vec<Mutation>) = match direction {
             OobSyncDirection::IndexToDisk => (
                 "Sync index tags → disk",
                 tracks.into_iter()
-                    .map(|(track_id, path)| Mutation::ApplyDbTagsToDisk { track_id, path })
+                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk { inode, path })
                     .collect(),
             ),
             OobSyncDirection::DiskToIndex => (
                 "Sync disk tags → index",
                 tracks.into_iter()
-                    .map(|(track_id, path)| Mutation::AssimilateDiskTagsToDb { track_id, path })
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb { inode, path })
                     .collect(),
             ),
         };
@@ -1515,10 +1515,10 @@ impl App {
 
     /// Compute the tag diff for the currently selected conflict file.
     fn compute_current_conflict_diff(&mut self) -> Vec<crate::corpus::db::types::TagMismatchEntry> {
-        let (track_id, path) = match self.oob_conflict_state.as_ref()
+        let (inode, path) = match self.oob_conflict_state.as_ref()
             .and_then(|s| s.active_bucket_state().current_file())
         {
-            Some(file) => (file.track_id, file.path.clone()),
+            Some(file) => (file.inode, file.path.clone()),
             None => return Vec::new(),
         };
 
@@ -1529,7 +1529,7 @@ impl App {
 
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(&path));
-        oob_conflict_flow::types::compute_tag_diff(&read_db, track_id, &abs_path)
+        oob_conflict_flow::types::compute_tag_diff(&read_db, inode, &abs_path)
     }
 
     /// Stage resolution mutations for files in the active bucket.
@@ -1559,7 +1559,7 @@ impl App {
                 let files: Vec<(i64, String)> = indices
                     .iter()
                     .filter_map(|&idx| bucket_state.files.get(idx))
-                    .map(|f| (f.track_id, f.path.clone()))
+                    .map(|f| (f.inode, f.path.clone()))
                     .collect();
                 (files, state.selected_button)
             }
@@ -1573,27 +1573,27 @@ impl App {
 
         let resolver = paths::get_resolver();
 
-        // Convert to (track_id, abs_path) pairs for individual mutations
+        // Convert to (inode, abs_path) pairs for individual mutations
         let tracks: Vec<(i64, std::path::PathBuf)> = files_data
             .iter()
-            .map(|(track_id, path)| {
+            .map(|(inode, path)| {
                 let abs_path = resolver.resolve(std::path::Path::new(path));
-                (*track_id, abs_path)
+                (*inode, abs_path)
             })
             .collect();
 
-        // Generate individual single-track mutations (batch scheduling at UI layer)
+        // Generate individual single-file mutations (batch scheduling at UI layer)
         let (label, mutations): (&str, Vec<Mutation>) = match button {
             ResolutionButton::ApplyDb => (
                 "Apply DB tags → files",
                 tracks.into_iter()
-                    .map(|(track_id, path)| Mutation::ApplyDbTagsToDisk { track_id, path })
+                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk { inode, path })
                     .collect(),
             ),
             ResolutionButton::AssimilateDisk => (
                 "Assimilate file tags → DB",
                 tracks.into_iter()
-                    .map(|(track_id, path)| Mutation::AssimilateDiskTagsToDb { track_id, path })
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb { inode, path })
                     .collect(),
             ),
         };
@@ -1632,7 +1632,7 @@ impl App {
                     .filter_map(|&idx| bucket_state.files.get(idx))
                     .map(|f| {
                         let abs_path = resolver.resolve(std::path::Path::new(&f.path));
-                        (f.track_id, abs_path)
+                        (f.inode, abs_path)
                     })
                     .collect::<Vec<_>>()
             }
@@ -1644,7 +1644,7 @@ impl App {
             return;
         }
 
-        // Create single mutation with all tracks (id, path)
+        // Create single mutation with all files as (inode, path) pairs
         let mutations = vec![Mutation::AcknowledgeMtimeOnly { tracks }];
 
         if let Some(ref mut witch) = self.witch {
@@ -1823,7 +1823,7 @@ impl App {
                 let read_db = w.read_db();
                 let resolver = paths::get_resolver();
                 let mut info = std::collections::HashMap::new();
-                for &inode in &state.data.track_ids {
+                for &inode in &state.data.inodes {
                     if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
                         // Resolve relative DB path to absolute for filesystem operations
                         let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
@@ -1910,7 +1910,7 @@ impl App {
 
                 // Build track info: path and current TagSet
                 let mut track_info = std::collections::HashMap::new();
-                for &inode in &data.track_ids {
+                for &inode in &data.inodes {
                     if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
                         let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
                         let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
@@ -2373,7 +2373,7 @@ impl App {
         let read_db = witch.read_db();
         let resolver = paths::get_resolver();
         let mut track_info = std::collections::HashMap::new();
-        for &inode in &state.data.track_ids {
+        for &inode in &state.data.inodes {
             if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
                 // Resolve relative DB path to absolute for filesystem operations
                 let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
@@ -2474,7 +2474,7 @@ impl App {
                     std::path::Path::new(rel_path),
                 );
                 Mutation::Transcode {
-                    track_id: *inode,
+                    inode: *inode,
                     source_path: abs_path,
                     target_format: target,
                     stash_name: "remux-input".to_string(),

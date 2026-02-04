@@ -24,8 +24,8 @@ pub struct CompoundSplitData {
     pub _separator: String,
     /// Split parts (e.g., ["Rock", "Metal"])
     pub split_parts: Vec<String>,
-    /// Track IDs affected by this compound value
-    pub track_ids: Vec<i64>,
+    /// Inodes affected by this compound value
+    pub inodes: Vec<i64>,
 }
 
 impl CompoundSplitData {
@@ -45,8 +45,8 @@ impl CompoundSplitData {
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect();
 
-        let track_ids: Vec<i64> = json
-            .get("track_ids")?
+        let inodes: Vec<i64> = json
+            .get("inodes")?
             .as_array()?
             .iter()
             .filter_map(|v| v.as_i64())
@@ -57,7 +57,7 @@ impl CompoundSplitData {
             compound_value,
             _separator: separator,
             split_parts,
-            track_ids,
+            inodes,
         })
     }
 }
@@ -120,14 +120,14 @@ impl CompoundSplitState {
     ) -> Vec<Mutation> {
         let mut mutations = Vec::new();
 
-        for &track_id in &self.data.track_ids {
-            let Some((_path, current_tagset)) = track_info.get(&track_id) else {
+        for &inode in &self.data.inodes {
+            let Some((_path, current_tagset)) = track_info.get(&inode) else {
                 continue;
             };
 
-            // Verify track still has the compound value
+            // Verify file still has the compound value
             if !current_tagset.contains(&self.data.tag_name, &self.data.compound_value) {
-                continue; // Already fixed or changed, skip this track
+                continue; // Already fixed or changed, skip this file
             }
 
             // Build new TagSet: remove compound value, add split parts
@@ -148,7 +148,7 @@ impl CompoundSplitState {
             // DB-first pattern with spawn chaining:
             // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
             mutations.push(Mutation::SetTrackTagsDb {
-                track_id,
+                inode,
                 tags: new_tags,
             });
         }

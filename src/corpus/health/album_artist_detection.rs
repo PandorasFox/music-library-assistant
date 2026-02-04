@@ -22,8 +22,8 @@ pub struct AlbumArtistIssue {
     pub album: String,
     /// Normalized album key for grouping
     pub normalized_album: String,
-    /// Track IDs affected
-    pub track_ids: Vec<i64>,
+    /// Inodes affected
+    pub inodes: Vec<i64>,
     /// Artist variant counts: "Artist A" → 5 tracks, "Artist B" → 3 tracks
     pub artist_variants: HashMap<String, usize>,
     /// Album artist variant counts: "" → 6 (missing), "Various" → 2
@@ -54,7 +54,7 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
         // Count distinct artists
         let mut artist_counts: HashMap<String, usize> = HashMap::new();
         let mut album_artist_counts: HashMap<String, usize> = HashMap::new();
-        let mut track_ids = Vec::new();
+        let mut inodes = Vec::new();
         let mut album_name = String::new();
 
         // Collect distinct catalog numbers and ISRCs (excluding empty values)
@@ -62,7 +62,7 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
         let mut isrcs: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
         for track in &tracks {
-            track_ids.push(track.track_id);
+            inodes.push(track.inode);
             *artist_counts.entry(track.artist.clone()).or_insert(0) += 1;
             *album_artist_counts.entry(track.album_artist.clone()).or_insert(0) += 1;
             if album_name.is_empty() && !track.album.is_empty() {
@@ -102,7 +102,7 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
             issues.push(AlbumArtistIssue {
                 album: album_name,
                 normalized_album,
-                track_ids,
+                inodes,
                 artist_variants: artist_counts,
                 album_artist_variants: album_artist_counts,
             });
@@ -112,9 +112,9 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
     Ok(issues)
 }
 
-/// Track data collected per album for analysis.
+/// File data collected per album for analysis.
 struct TrackAlbumData {
-    track_id: i64,
+    inode: i64,
     artist: String,
     album_artist: String,
     album: String,
@@ -132,9 +132,9 @@ fn query_album_artist_data(
 
     let mut album_data: HashMap<String, Vec<TrackAlbumData>> = HashMap::new();
 
-    for (track_id, album, artist, album_artist, catalog_number, isrc) in rows {
+    for (inode, album, artist, album_artist, catalog_number, isrc) in rows {
         let data = TrackAlbumData {
-            track_id,
+            inode,
             album: album.clone(),
             artist,
             album_artist,

@@ -183,41 +183,37 @@ impl TransactionReviewState {
 // Helpers
 // ============================================================================
 
-/// Count unique tracks affected by a set of mutations.
-fn count_unique_tracks(mutations: &[Mutation]) -> usize {
-    let mut track_ids = std::collections::HashSet::new();
+/// Count unique files affected by a set of mutations.
+fn count_unique_files(mutations: &[Mutation]) -> usize {
+    let mut inodes = std::collections::HashSet::new();
 
     for m in mutations {
         match m {
-            // Mutations with single track_id (inode-based)
-            Mutation::SetTrackTagsDb { track_id, .. }
-            | Mutation::ApplyDbTagsToDisk { track_id, .. }
-            | Mutation::AssimilateDiskTagsToDb { track_id, .. }
-            | Mutation::UpdateTrackPath { track_id, .. }
-            | Mutation::UpdateTrack { track_id, .. }
-            | Mutation::Transcode { track_id, .. } => {
-                track_ids.insert(*track_id);
+            // Mutations with single inode
+            Mutation::SetTrackTagsDb { inode, .. }
+            | Mutation::ApplyDbTagsToDisk { inode, .. }
+            | Mutation::AssimilateDiskTagsToDb { inode, .. }
+            | Mutation::UpdateTrackPath { inode, .. }
+            | Mutation::UpdateTrack { inode, .. }
+            | Mutation::Transcode { inode, .. }
+            | Mutation::RefillSingleFingerprint { inode, .. } => {
+                inodes.insert(*inode);
             }
 
-            // DropFromIndex uses path, not track_id - count via inode if available
+            // DropFromIndex - count via inode if available
             Mutation::DropFromIndex { inode, .. } => {
                 if let Some(i) = inode {
-                    track_ids.insert(*i);
+                    inodes.insert(*i);
                 }
             }
 
-            // OOB resolution mutations with multiple tracks (id, path)
+            // OOB resolution mutations with multiple (inode, path) pairs
             Mutation::AcknowledgeMtimeOnly { tracks }
             | Mutation::AcknowledgeInodeChanged { tracks } => {
-                track_ids.extend(tracks.iter().map(|(id, _)| *id));
+                inodes.extend(tracks.iter().map(|(id, _)| *id));
             }
 
-            // Single-track fingerprint mutation
-            Mutation::RefillSingleFingerprint { track_id, .. } => {
-                track_ids.insert(*track_id);
-            }
-
-            // Mutations without track IDs
+            // Mutations without inodes
             Mutation::MoveToStash { .. }
             | Mutation::Move { .. }
             | Mutation::IndexTrack { .. }
@@ -234,7 +230,7 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
         }
     }
 
-    track_ids.len()
+    inodes.len()
 }
 
 /// Fetch decision summaries from the Witch's active transaction.
@@ -246,7 +242,7 @@ pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
             witch.get_decision(idx).map(|d| DecisionSummary {
                 label: d.label.clone(),
                 mutation_count: d.mutations.len(),
-                track_count: count_unique_tracks(&d.mutations),
+                track_count: count_unique_files(&d.mutations),
             })
         })
         .collect()

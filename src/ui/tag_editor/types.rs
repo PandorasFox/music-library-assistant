@@ -103,8 +103,8 @@ pub enum UnifiedTagEditorAction {
     /// Display a status message
     StatusMessage(String),
     /// Request to fill tags from database (requires DB access from UI layer)
-    /// track_id is None if the track hasn't been indexed yet
-    RequestFillFromDb { track_id: Option<i64> },
+    /// inode is None if the file hasn't been indexed yet
+    RequestFillFromDb { inode: Option<i64> },
     /// Request to show transaction review (requires daemon access to populate decisions)
     RequestTransactionReview,
 }

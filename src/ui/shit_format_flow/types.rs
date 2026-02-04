@@ -35,8 +35,8 @@ const LOSSY_FORMATS: &[&str] = &["mp3", "m4a", "aac", "wma"];
 pub struct ShitFormatEntry {
     /// Corpus path (relative)
     pub corpus_path: String,
-    /// Track ID from tracks table
-    pub track_id: i64,
+    /// Inode of the file
+    pub inode: i64,
     /// File type (mp3, m4a, etc.)
     pub file_type: String,
 }
@@ -102,11 +102,11 @@ impl ShitFormatModalData {
                 None => continue, // Signal refers to non-existent file, skip
             };
 
-            let track_id = audio_file.inode();
+            let inode = audio_file.inode();
 
             let entry = ShitFormatEntry {
                 corpus_path,
-                track_id,
+                inode,
                 file_type,
             };
 
@@ -194,7 +194,7 @@ impl ShitFormatModalData {
                 let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
 
                 Mutation::Transcode {
-                    track_id: file.track_id,
+                    inode: file.inode,
                     source_path: abs_path,
                     target_format: TranscodeTarget::Flac,
                     stash_name: "originals".to_string(),
@@ -213,7 +213,7 @@ impl ShitFormatModalData {
                 let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
 
                 Mutation::Transcode {
-                    track_id: file.track_id,
+                    inode: file.inode,
                     source_path: abs_path,
                     target_format: TranscodeTarget::Opus {
                         bitrate_kbps: self.opus_bitrate_kbps,

@@ -95,9 +95,9 @@ mod tests {
         // Create mutations using the single-mutation pattern (spawns disk sync)
         let mutations: Vec<Mutation> = files
             .iter()
-            .map(|(track_id, _path)| {
+            .map(|(inode, _path)| {
                 Mutation::SetTrackTagsDb {
-                    track_id: *track_id,
+                    inode: *inode,
                     tags: vec![("album_artist".to_string(), "Various Artists".to_string())],
                 }
             })
@@ -107,10 +107,10 @@ mod tests {
         assert_eq!(mutations.len(), 2);
 
         // Verify SetTrackTagsDb mutations
-        assert!(matches!(&mutations[0], Mutation::SetTrackTagsDb { track_id: 1, .. }));
+        assert!(matches!(&mutations[0], Mutation::SetTrackTagsDb { inode: 1, .. }));
         assert_eq!(mutations[0].label(), "Tag edit (DB)");
         assert!(mutations[0].is_db_only());
 
-        assert!(matches!(&mutations[1], Mutation::SetTrackTagsDb { track_id: 2, .. }));
+        assert!(matches!(&mutations[1], Mutation::SetTrackTagsDb { inode: 2, .. }));
     }
 }

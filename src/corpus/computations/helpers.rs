@@ -49,10 +49,10 @@ pub(super) fn is_audio_file(path: &Path) -> bool {
 // Parsing Helpers
 // ============================================================================
 
-/// Parse comma-separated track IDs into Vec<i64>.
+/// Parse comma-separated inodes into Vec<i64>.
 ///
 /// Filters out invalid integers and whitespace.
-pub(super) fn parse_track_ids_csv(s: &str) -> Vec<i64> {
+pub(super) fn parse_inodes_csv(s: &str) -> Vec<i64> {
     s.split(',')
         .filter_map(|s| s.trim().parse::<i64>().ok())
         .collect()
@@ -217,20 +217,20 @@ pub(crate) fn drop_stale_file_signal(
 
 /// A computed aggregate signal ready for reconciliation.
 ///
-/// Contains the key, track_ids, and optional extra metadata for comparison.
+/// Contains the key, inodes, and optional extra metadata for comparison.
 pub(super) struct ComputedAggregateSignal {
     pub key: String,
-    pub track_ids: Vec<i64>,
+    pub inodes: Vec<i64>,
     pub metadata_json: String,
 }
 
-/// Extract track_ids from metadata JSON string.
+/// Extract inodes from metadata JSON string.
 ///
-/// Returns empty vec if parsing fails or track_ids not present.
-fn extract_track_ids_from_metadata(metadata_json: Option<&str>) -> Vec<i64> {
+/// Returns empty vec if parsing fails or inodes not present.
+fn extract_inodes_from_metadata(metadata_json: Option<&str>) -> Vec<i64> {
     metadata_json
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .and_then(|v| v.get("track_ids").cloned())
+        .and_then(|v| v.get("inodes").cloned())
         .and_then(|arr| serde_json::from_value::<Vec<i64>>(arr).ok())
         .unwrap_or_default()
 }
@@ -240,8 +240,8 @@ fn extract_track_ids_from_metadata(metadata_json: Option<&str>) -> Vec<i64> {
 /// Computes set differences and queues appropriate operations:
 /// - Stale signals (exist in DB but not computed): cleared
 /// - New signals (computed but not in DB): ensured
-/// - Changed signals (exist in both but track_ids differ): replaced with new timestamp
-/// - Unchanged signals (exist in both, same track_ids): no-op
+/// - Changed signals (exist in both but inodes differ): replaced with new timestamp
+/// - Unchanged signals (exist in both, same inodes): no-op
 ///
 /// Returns (cleared_count, new_count, updated_count, unchanged_count).
 pub(super) fn reconcile_aggregate_signals(
@@ -291,21 +291,21 @@ pub(super) fn reconcile_aggregate_signals(
         new_count += 1;
     }
 
-    // Existing signals: check if track_ids changed
+    // Existing signals: check if inodes changed
     for key in computed_keys.intersection(&existing_keys) {
         let computed_signal = computed_map[key];
         let existing_metadata = existing_map[key];
 
-        let existing_track_ids = extract_track_ids_from_metadata(existing_metadata);
+        let existing_inodes = extract_inodes_from_metadata(existing_metadata);
 
-        // Compare track_ids (sorted for stable comparison)
-        let mut computed_ids = computed_signal.track_ids.clone();
-        let mut existing_ids = existing_track_ids;
+        // Compare inodes (sorted for stable comparison)
+        let mut computed_ids = computed_signal.inodes.clone();
+        let mut existing_ids = existing_inodes;
         computed_ids.sort();
         existing_ids.sort();
 
         if computed_ids != existing_ids {
-            // Track IDs changed -> replace (updates timestamp)
+            // Inodes changed -> replace (updates timestamp)
             let signal = AggregateSignal {
                 id: None,
                 signal_type,

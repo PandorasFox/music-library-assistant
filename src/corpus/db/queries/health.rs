@@ -714,7 +714,7 @@ impl Database {
             r#"SELECT
                 SUBSTR(issue_key, 1, INSTR(issue_key, ':') - 1) as tag_name,
                 COUNT(*) as cluster_count,
-                COALESCE(SUM(json_array_length(json_extract(metadata_json, '$.track_ids'))), 0) as total_tracks
+                COALESCE(SUM(json_array_length(json_extract(metadata_json, '$.inodes'))), 0) as total_tracks
             FROM signals
             WHERE issue_type = 'tag_canonicity'
             GROUP BY tag_name
@@ -783,11 +783,11 @@ impl Database {
         Ok(count)
     }
 
-    /// Count tracks affected by aggregate signals (sum of track_count in metadata).
+    /// Count tracks affected by aggregate signals (sum of inode_count in metadata).
     fn count_affected_by_signal(&self, signal_type: &str) -> Result<usize> {
         let count: i64 = self.conn.query_row(
             r#"SELECT COALESCE(SUM(
-                 json_extract(metadata_json, '$.track_count')
+                 json_extract(metadata_json, '$.inode_count')
                ), 0)
                FROM signals
                WHERE issue_type = ?1"#,
@@ -880,7 +880,7 @@ impl Database {
         use crate::corpus::db::types::DeploySignalFile;
 
         // deploy_ready signals: issue_key = corpus_path, metadata_json contains deploy_path
-        // Join with files table to get inode (used as track_id for mutations)
+        // Join with files table to get inode (used as identifier for mutations)
         let mut stmt = self.conn.prepare(
             r#"SELECT
                  h.issue_key as corpus_path,
@@ -896,7 +896,6 @@ impl Database {
             Ok(DeploySignalFile {
                 corpus_path: row.get(0)?,
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                _track_id: row.get(2)?,  // Now contains inode
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -912,14 +911,11 @@ impl Database {
         use crate::corpus::db::types::DeploySignalFile;
 
         // deployed_healthy signals: issue_key = corpus_path, metadata_json contains library_path
-        // Join with files table to get inode (used as track_id for mutations)
         let mut stmt = self.conn.prepare(
             r#"SELECT
                  h.issue_key as corpus_path,
-                 json_extract(h.metadata_json, '$.library_path') as library_path,
-                 COALESCE(f.inode, 0) as inode
+                 json_extract(h.metadata_json, '$.library_path') as library_path
                FROM signals h
-               LEFT JOIN files f ON f.path = h.issue_key AND f.source = 'corpus'
                WHERE h.issue_type = 'deployed_healthy'
                ORDER BY h.issue_key"#
         )?;
@@ -928,7 +924,6 @@ impl Database {
             Ok(DeploySignalFile {
                 corpus_path: row.get(0)?,
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                _track_id: row.get(2)?,  // Now contains inode
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -947,9 +942,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT
                  json_extract(h.metadata_json, '$.library_path') as library_path,
-                 json_extract(h.metadata_json, '$.expected_path') as expected_path,
-                 json_extract(h.metadata_json, '$.corpus_path') as corpus_path,
-                 COALESCE(json_extract(h.metadata_json, '$.track_id'), 0) as track_id
+                 json_extract(h.metadata_json, '$.expected_path') as expected_path
                FROM signals h
                WHERE h.issue_type = 'library_stale'
                ORDER BY json_extract(h.metadata_json, '$.library_path')"#
@@ -959,8 +952,6 @@ impl Database {
             Ok(StaleSignalFile {
                 library_path: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 expected_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                _corpus_path: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                _track_id: row.get::<_, i64>(3).unwrap_or(0),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1005,7 +996,7 @@ impl Database {
     pub fn get_deploy_conflict_groups(&self) -> Result<Vec<crate::corpus::db::types::ConflictGroup>> {
         use crate::corpus::db::types::ConflictGroup;
 
-        // deploy_conflict signals: issue_key = deploy_path, metadata_json contains track_ids
+        // deploy_conflict signals: issue_key = deploy_path, metadata_json contains inodes
         let mut stmt = self.conn.prepare(
             r#"SELECT
                  h.issue_key as deploy_path,
@@ -1025,19 +1016,19 @@ impl Database {
         for row in rows {
             let (deploy_path, metadata_json) = row?;
 
-            // Extract track_ids from metadata
-            let track_ids: Vec<i64> = metadata_json
+            // Extract inodes from metadata
+            let inodes: Vec<i64> = metadata_json
                 .as_ref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                .and_then(|v| v.get("track_ids").cloned())
+                .and_then(|v| v.get("inodes").cloned())
                 .and_then(|v| v.as_array().cloned())
                 .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
                 .unwrap_or_default();
 
-            // Get corpus paths for each file (track_id is actually inode)
+            // Get corpus paths for each file
             // Deploy conflicts are between corpus files
             let mut conflicting_files = Vec::new();
-            for inode in track_ids {
+            for inode in inodes {
                 if let Ok(Some(audio_file)) = self.get_audio_file_by_inode(inode, FileSource::Corpus) {
                     conflicting_files.push((audio_file.path().to_string(), inode));
                 }

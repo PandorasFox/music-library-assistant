@@ -240,16 +240,16 @@ enum SignalWriteOp {
     // Tag Mismatch Operations (OOB verification)
     // =========================================================================
 
-    /// Record a tag mismatch for a track (DB differs from disk).
+    /// Record a tag mismatch for an audio file (DB differs from disk).
     RecordTagMismatch {
-        track_id: i64,
+        inode: i64,
         field: String,
         db_value: Option<String>,
         disk_value: Option<String>,
     },
-    /// Clear a specific tag mismatch field for a track.
+    /// Clear a specific tag mismatch field for an audio file.
     ClearTagMismatch {
-        track_id: i64,
+        inode: i64,
         field: String,
     },
 
@@ -684,10 +684,10 @@ impl SignalWriteSender {
     // Tag Mismatch Operations (OOB verification)
     // =========================================================================
 
-    /// Record a tag mismatch for a track (routed through db_thread for write access).
+    /// Record a tag mismatch for an audio file (routed through db_thread for write access).
     pub fn record_tag_mismatch(
         &self,
-        track_id: i64,
+        inode: i64,
         field: &str,
         db_value: Option<&str>,
         disk_value: Option<&str>,
@@ -695,23 +695,23 @@ impl SignalWriteSender {
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::RecordTagMismatch {
-            track_id,
+            inode,
             field: field.to_string(),
             db_value: db_value.map(|s| s.to_string()),
             disk_value: disk_value.map(|s| s.to_string()),
         });
     }
 
-    /// Clear a specific tag mismatch field for a track.
+    /// Clear a specific tag mismatch field for an audio file.
     pub fn clear_tag_mismatch(
         &self,
-        track_id: i64,
+        inode: i64,
         field: &str,
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearTagMismatch {
-            track_id,
+            inode,
             field: field.to_string(),
         });
     }
@@ -1270,18 +1270,18 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
 
         // Tag mismatch operations (OOB verification)
         SignalWriteOp::RecordTagMismatch {
-            track_id,
+            inode,
             field,
             db_value,
             disk_value,
         } => {
             with_retry("record_tag_mismatch", field, || {
-                db.record_tag_mismatch(*track_id, field, db_value.as_deref(), disk_value.as_deref(), &witness)
+                db.record_tag_mismatch(*inode, field, db_value.as_deref(), disk_value.as_deref(), &witness)
             });
         }
-        SignalWriteOp::ClearTagMismatch { track_id, field } => {
+        SignalWriteOp::ClearTagMismatch { inode, field } => {
             with_retry("clear_tag_mismatch", field, || {
-                db.clear_tag_mismatch(*track_id, field, &witness)
+                db.clear_tag_mismatch(*inode, field, &witness)
             });
         }
 
@@ -1420,7 +1420,6 @@ fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
     fp.iter().flat_map(|n| n.to_le_bytes()).collect()
 }
 
-/// Get track_id by path. Returns None if track doesn't exist.
 /// Get inode by path from files table. Returns None if file doesn't exist.
 fn get_inode_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>> {
     use rusqlite::params;

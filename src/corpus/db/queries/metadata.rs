@@ -203,7 +203,7 @@ impl Database {
             };
 
             files.push(OobSyncFile {
-                track_id: inode, // Using inode as track_id for compatibility
+                inode,
                 path,
                 direction,
                 mismatches,
@@ -271,7 +271,7 @@ impl Database {
             };
 
             files.push(BucketedOobFile {
-                track_id: inode, // Using inode as track_id for compatibility
+                inode,
                 path,
                 bucket,
             });
@@ -299,7 +299,7 @@ impl Database {
 
         let files: Vec<InodeChangedFile> = stmt.query_map(params![], |row| {
             Ok(InodeChangedFile {
-                track_id: row.get(0)?, // Using inode as track_id
+                inode: row.get(0)?,
                 path: row.get(1)?,
                 old_inode: row.get(2)?,
                 new_inode: row.get(3)?,

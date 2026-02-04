@@ -354,7 +354,7 @@ pub fn compute_tag_diff(
     use crate::corpus::tags::TagSet;
     use std::collections::HashSet;
 
-    // Get DB tags as TagSet (track_id is actually inode)
+    // Get DB tags as TagSet
     let db_tags = match read_db.get_corpus_tags(inode) {
         Ok(tags) => tags,
         Err(_) => return Vec::new(),

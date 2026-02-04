@@ -73,8 +73,8 @@ fn render_tag_info(f: &mut Frame, area: Rect, state: &CompoundSplitState) {
             Span::styled(
                 format!(
                     "{} track{}",
-                    state.data.track_ids.len(),
-                    if state.data.track_ids.len() == 1 { "" } else { "s" }
+                    state.data.inodes.len(),
+                    if state.data.inodes.len() == 1 { "" } else { "s" }
                 ),
                 Style::default().fg(Color::White),
             ),

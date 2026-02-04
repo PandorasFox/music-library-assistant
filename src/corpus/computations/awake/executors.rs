@@ -12,7 +12,7 @@ use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     drop_stale_file_signal, ensure_file_signal_if_missing,
     ensure_file_signal_with_metadata_if_missing, get_configured_library_names,
-    parse_track_ids_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
+    parse_inodes_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSource, LibraryFileSignalType, SignalType};
@@ -117,7 +117,7 @@ pub fn execute_detect_fingerprint_overlaps(
     let mut computed = Vec::new();
     let mut total_tracks = 0;
 
-    for (fp_blob, track_ids_str) in duplicate_groups {
+    for (fp_blob, inodes_str) in duplicate_groups {
         // Convert BLOB to Vec<u32> then to text for signal key
         let fp_u32: Vec<u32> = fp_blob
             .chunks_exact(4)
@@ -125,18 +125,18 @@ pub fn execute_detect_fingerprint_overlaps(
             .collect();
         let fingerprint_text = fingerprint_to_text(&fp_u32);
 
-        let track_ids = parse_track_ids_csv(&track_ids_str);
-        total_tracks += track_ids.len();
+        let inodes = parse_inodes_csv(&inodes_str);
+        total_tracks += inodes.len();
 
         // Metadata no longer stores fingerprint (it's already the signal key)
         let metadata = serde_json::json!({
-            "track_ids": &track_ids,
+            "inodes": &inodes,
         })
         .to_string();
 
         computed.push(ComputedAggregateSignal {
             key: fingerprint_text,
-            track_ids,
+            inodes,
             metadata_json: metadata,
         });
     }
@@ -209,18 +209,18 @@ pub fn execute_detect_duplicate_inodes(
     // Build computed signals
     let mut computed = Vec::new();
 
-    for (inode, track_ids_str) in duplicate_groups {
-        let track_ids = parse_track_ids_csv(&track_ids_str);
+    for (inode, inodes_str) in duplicate_groups {
+        let inodes = parse_inodes_csv(&inodes_str);
 
         let metadata = serde_json::json!({
             "inode": inode,
-            "track_ids": &track_ids,
+            "inodes": &inodes,
         })
         .to_string();
 
         computed.push(ComputedAggregateSignal {
             key: inode.to_string(),
-            track_ids,
+            inodes,
             metadata_json: metadata,
         });
     }
@@ -303,7 +303,7 @@ pub fn execute_detect_missing_tags(
 
     let mut groups: HashMap<String, (HashSet<String>, Vec<i64>)> = HashMap::new();
 
-    for (track_id, path, album, present_tags_str) in tracks_with_tags {
+    for (inode, path, album, present_tags_str) in tracks_with_tags {
 
         let present_tags: HashSet<String> = present_tags_str
             .unwrap_or_default()
@@ -333,12 +333,12 @@ pub fn execute_detect_missing_tags(
 
         let entry = groups.entry(key).or_insert_with(|| (HashSet::new(), Vec::new()));
         entry.0.extend(missing);
-        entry.1.push(track_id);
+        entry.1.push(inode);
     }
 
     let mut total_groups = 0;
 
-    for (key, (missing_tags, track_ids)) in groups {
+    for (key, (missing_tags, inodes)) in groups {
         total_groups += 1;
 
         let mut missing_list: Vec<String> = missing_tags.into_iter().collect();
@@ -353,7 +353,7 @@ pub fn execute_detect_missing_tags(
                 "missing_tags": missing_list,
             }).to_string()),
         }
-        .with_track_ids(&track_ids);
+        .with_inodes(&inodes);
 
         sender.replace_aggregate_signal(signal, witness);
     }
@@ -403,18 +403,18 @@ pub fn execute_detect_metadata_duplicates(
         }
     };
 
-    let mut track_tags: HashMap<i64, Vec<(String, String)>> = HashMap::new();
+    let mut inode_tags: HashMap<i64, Vec<(String, String)>> = HashMap::new();
 
-    for (track_id, tag_name, tag_value) in all_tags {
-        track_tags
-            .entry(track_id)
+    for (inode, tag_name, tag_value) in all_tags {
+        inode_tags
+            .entry(inode)
             .or_default()
             .push((tag_name.to_lowercase(), tag_value));
     }
 
-    let mut sig_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut sig_to_inodes: HashMap<String, Vec<i64>> = HashMap::new();
 
-    for (track_id, mut tags) in track_tags {
+    for (inode, mut tags) in inode_tags {
         tags.sort_by(|a, b| a.0.cmp(&b.0));
         let signature: String = tags
             .iter()
@@ -422,16 +422,16 @@ pub fn execute_detect_metadata_duplicates(
             .collect::<Vec<_>>()
             .join("|");
 
-        sig_to_tracks
+        sig_to_inodes
             .entry(signature)
             .or_default()
-            .push(track_id);
+            .push(inode);
     }
 
     let mut total_groups = 0;
 
-    for (signature, track_ids) in sig_to_tracks {
-        if track_ids.len() < 2 {
+    for (signature, inodes) in sig_to_inodes {
+        if inodes.len() < 2 {
             continue;
         }
 
@@ -448,7 +448,7 @@ pub fn execute_detect_metadata_duplicates(
                 "tag_signature": signature,
             }).to_string()),
         }
-        .with_track_ids(&track_ids);
+        .with_inodes(&inodes);
 
         sender.replace_aggregate_signal(signal, witness);
     }
@@ -511,9 +511,9 @@ pub fn execute_detect_tag_canonicalizations(
                                    witness: &ComputationWitness,
                                    count: &mut usize| {
         for collision in collisions {
-            // Get track_ids for all variants in this collision
+            // Get inodes for all variants in this collision
             let variant_refs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
-            let track_ids = read_only_db
+            let inodes = read_only_db
                 .get_inodes_for_tag_values(&collision.tag_name, &variant_refs)
                 .unwrap_or_default();
 
@@ -527,7 +527,7 @@ pub fn execute_detect_tag_canonicalizations(
             let metadata = serde_json::json!({
                 "tag_name": collision.tag_name,
                 "variants": variants_json,
-                "track_ids": track_ids,
+                "inodes": inodes,
             });
 
             // Signal key: "{tag_name}:{normalized_key}"
@@ -619,10 +619,10 @@ pub fn execute_detect_compound_tag_values(
 
     for cv in compound_values {
         // Get inodes for this compound value
-        let track_ids = get_inodes_for_compound_value(read_only_db, &cv.tag_name, &cv.compound_value)
+        let inodes = get_inodes_for_compound_value(read_only_db, &cv.tag_name, &cv.compound_value)
             .unwrap_or_default();
 
-        if track_ids.is_empty() {
+        if inodes.is_empty() {
             continue;
         }
 
@@ -632,7 +632,7 @@ pub fn execute_detect_compound_tag_values(
             "compound_value": cv.compound_value,
             "split_parts": cv.split_parts,
             "separator": cv.separator,
-            "track_ids": track_ids,
+            "inodes": inodes,
         });
 
         // Signal key: "{tag_name}:{hash}" - use a simple hash of the compound value
@@ -794,8 +794,8 @@ pub fn execute_detect_deploy_conflicts(
     }
 
     let mut conflict_count = 0;
-    for (deploy_path, track_ids) in deploy_path_to_tracks {
-        if track_ids.len() > 1 {
+    for (deploy_path, inodes) in deploy_path_to_tracks {
+        if inodes.len() > 1 {
             conflict_count += 1;
             let signal = AggregateSignal {
                 id: None,
@@ -809,7 +809,7 @@ pub fn execute_detect_deploy_conflicts(
                     .to_string(),
                 ),
             }
-            .with_track_ids(&track_ids);
+            .with_inodes(&inodes);
 
             sender.replace_aggregate_signal(signal, witness);
         }
@@ -1210,7 +1210,7 @@ pub fn execute_detect_inconsistent_album_artist(
             "album": issue.album,
             "artist_variants": artist_variants_json,
             "album_artist_variants": album_artist_variants_json,
-            "track_ids": issue.track_ids,
+            "inodes": issue.inodes,
         });
 
         // Signal key: normalized album name
@@ -1401,7 +1401,7 @@ fn has_variant_keyword(title: &str) -> Option<&'static str> {
 /// Release identity information for variant detection.
 #[derive(Debug)]
 struct TrackReleaseIdentity {
-    track_id: i64,
+    inode: i64,
     path: String,
     album: String,
     title: String,
@@ -1530,15 +1530,15 @@ pub fn execute_analyze_fingerprint_overlaps(
     let mut variant_skipped = 0;
 
     for signal in &fp_dup_signals {
-        let track_ids = signal.track_ids();
-        if track_ids.len() < 2 {
+        let inodes = signal.inodes();
+        if inodes.len() < 2 {
             continue;
         }
 
         total_groups += 1;
 
-        // Get corpus audio files for this group (track_ids in signals are actually inodes)
-        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids, FileSource::Corpus) {
+        // Get corpus audio files for this group
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus) {
             Ok(af) => af,
             Err(_) => continue,
         };
@@ -1566,7 +1566,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                     .collect();
 
                 identities.push(TrackReleaseIdentity {
-                    track_id: inode,
+                    inode,
                     path: audio_file.path().to_string(),
                     album: tag_map.get("album").cloned().unwrap_or_default(),
                     title: tag_map.get("title").cloned().unwrap_or_default(),
@@ -1660,7 +1660,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 
                     let metadata = serde_json::json!({
                         "reason": reason.as_str(),
-                        "superior_inode": best_identity.track_id,
+                        "superior_inode": best_identity.inode,
                         "superior_path": best_identity.path,
                         "dupe_group_fingerprint": signal.key.clone(),
                         "quality_score": score,
@@ -1799,13 +1799,13 @@ pub fn execute_detect_cross_source_overlaps(
     let mut within_source_skipped = 0;
 
     for signal in &fp_overlap_signals {
-        let track_ids = signal.track_ids();
-        if track_ids.len() < 2 {
+        let inodes = signal.inodes();
+        if inodes.len() < 2 {
             continue;
         }
 
         // Get corpus audio files for this overlap group
-        let audio_files = match read_only_db.get_audio_files_by_inodes(&track_ids, FileSource::Corpus) {
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus) {
             Ok(f) => f,
             Err(_) => continue,
         };

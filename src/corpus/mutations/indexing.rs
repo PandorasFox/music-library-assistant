@@ -182,20 +182,20 @@ pub fn execute_cleanup_stale_files(
 /// Execute UpdateTrackPath mutation - update path for relocated file.
 ///
 /// Note: This function needs the source to determine which root to use for
-/// relative path conversion. It fetches the track's source from the database.
+/// relative path conversion. It fetches the file's source from the database.
 ///
 /// Uses read-only DB for lookup, routes write through signal_sender.
-pub fn execute_update_track_path(db: &ReadOnlyDb<'_>, track_id: i64, new_path: &Path, witness: &MutationExecutionWitness) -> Result<()> {
+pub fn execute_update_track_path(db: &ReadOnlyDb<'_>, inode: i64, new_path: &Path, witness: &MutationExecutionWitness) -> Result<()> {
     use crate::db_thread;
 
     let resolver = paths::get_resolver();
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get old path from DB (read-only) - track_id is actually inode
+    // Get old path from DB (read-only)
     // UpdateTrackPath only operates on corpus files
-    let audio_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
     let old_path = audio_file.path().to_string();
 
     // Convert absolute path to relative for storage
@@ -281,7 +281,7 @@ pub fn execute_drop_from_index(
 /// Uses read-only DB for lookup, routes write through signal_sender.
 pub fn execute_update_track(
     db: &ReadOnlyDb<'_>,
-    _track_id: i64,
+    _inode: i64,
     path: &Path,
     metadata: &ExtractedMetadata,
     witness: &MutationExecutionWitness,
@@ -498,7 +498,7 @@ pub fn execute_acknowledge_mtime_only(
     let mut affected_paths = Vec::new();
 
     for (inode, abs_path) in tracks {
-        // Get audio file info (need relative path for DB operations) - track_id is actually inode
+        // Get audio file info (need relative path for DB operations)
         // OOB mtime resolution only operates on corpus files
         let audio_file = match db.get_audio_file_by_inode(*inode, FileSource::Corpus)? {
             Some(af) => af,
@@ -556,7 +556,7 @@ pub fn execute_acknowledge_inode_changed(
     let mut affected_paths = Vec::new();
 
     for (old_inode, abs_path) in tracks {
-        // Get audio file info (need relative path and old inode for DB operations) - track_id is actually inode
+        // Get audio file info (need relative path and old inode for DB operations)
         // OOB inode changed resolution only operates on corpus files
         let audio_file = match db.get_audio_file_by_inode(*old_inode, FileSource::Corpus)? {
             Some(af) => af,
@@ -618,7 +618,7 @@ pub fn execute_acknowledge_inode_changed(
 /// - Spawned from SetTrackTagsDb (DB-first pattern step 2)
 pub fn execute_apply_db_tags_to_disk(
     db: &ReadOnlyDb<'_>,
-    track_id: i64,
+    inode: i64,
     abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
@@ -630,7 +630,7 @@ pub fn execute_apply_db_tags_to_disk(
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert abs_path to relative for DB operations.
-    // Use mutation's abs_path parameter, not track.path from DB (may be stale).
+    // Use mutation's abs_path parameter, not file's path from DB (may be stale).
     let resolver = paths::get_resolver();
     let relative_path = resolver
         .to_relative(abs_path)
@@ -640,8 +640,8 @@ pub fn execute_apply_db_tags_to_disk(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Get DB tags and convert to TagSet (track_id == inode)
-    let db_tags = db.get_corpus_tags(track_id)?;
+    // Get DB tags and convert to TagSet
+    let db_tags = db.get_corpus_tags(inode)?;
     let tag_set = TagSet::new(
         db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
     );
@@ -668,7 +668,7 @@ pub fn execute_apply_db_tags_to_disk(
 /// Used for OOB sync resolution (accept disk changes, update DB to match disk).
 pub fn execute_assimilate_disk_tags_to_db(
     db: &ReadOnlyDb<'_>,
-    track_id: i64,
+    inode: i64,
     abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
@@ -683,9 +683,9 @@ pub fn execute_assimilate_disk_tags_to_db(
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert abs_path to relative for DB operations.
-    // IMPORTANT: We use the mutation's abs_path parameter, NOT track.path from DB.
+    // IMPORTANT: We use the mutation's abs_path parameter, NOT file's path from DB.
     // When spawned from Transcode, the DB read connection may not have seen the
-    // track path update yet (async write via db_thread), causing stale reads.
+    // path update yet (async write via db_thread), causing stale reads.
     let resolver = paths::get_resolver();
     let relative_path = resolver
         .to_relative(abs_path)
@@ -695,11 +695,11 @@ pub fn execute_assimilate_disk_tags_to_db(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Get audio file source (needed for files table key) - track_id is actually inode.
+    // Get audio file source (needed for files table key).
     // Source doesn't change during transcode, so this read is safe.
     // Tag updates only operate on corpus files.
-    let audio_file = db.get_audio_file_by_inode(track_id, FileSource::Corpus)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
+        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
     let source = audio_file.entry.source.as_str();
 
     // Read disk tags using TagSet
@@ -800,7 +800,7 @@ pub fn execute_schedule_fingerprint_refill(
         .into_iter()
         .map(|audio_file| {
             witness.spawn_mutation(super::types::Mutation::RefillSingleFingerprint {
-                track_id: audio_file.inode(),
+                inode: audio_file.inode(),
                 path: audio_file.entry.path,
             })
         })
@@ -811,11 +811,11 @@ pub fn execute_schedule_fingerprint_refill(
 
 /// Execute RefillSingleFingerprint mutation.
 ///
-/// Fingerprints one track from full audio. Emits CorruptFile signal on failure,
+/// Fingerprints one file from full audio. Emits CorruptFile signal on failure,
 /// clears CorruptFile signal on success.
 pub fn execute_refill_single_fingerprint(
     _db: &ReadOnlyDb<'_>,
-    _track_id: i64,
+    _inode: i64,
     _path: &str,
     _witness: &MutationExecutionWitness,
 ) -> Result<()> {
@@ -866,10 +866,10 @@ pub fn execute_single(
 
         // Signal resolution mutations
         Mutation::UpdateTrackPath {
-            track_id,
+            inode,
             new_path,
             ..
-        } => execute_update_track_path(db, *track_id, new_path, witness),
+        } => execute_update_track_path(db, *inode, new_path, witness),
 
         Mutation::UpdateFilePath {
             source,
@@ -884,10 +884,10 @@ pub fn execute_single(
         } => execute_drop_from_index(db, path, *inode, source.as_deref(), witness),
 
         Mutation::UpdateTrack {
-            track_id,
+            inode,
             path,
             metadata,
-        } => execute_update_track(db, *track_id, path, metadata, witness),
+        } => execute_update_track(db, *inode, path, metadata, witness),
 
         // OOB resolution mutations (batch, for legacy support)
         Mutation::AcknowledgeMtimeOnly { tracks } => {
@@ -898,13 +898,13 @@ pub fn execute_single(
             execute_acknowledge_inode_changed(db, tracks, witness).map(|_| ())
         }
 
-        // Single-track tag sync mutations
-        Mutation::ApplyDbTagsToDisk { track_id, path } => {
-            execute_apply_db_tags_to_disk(db, *track_id, path, witness)
+        // Single-file tag sync mutations
+        Mutation::ApplyDbTagsToDisk { inode, path } => {
+            execute_apply_db_tags_to_disk(db, *inode, path, witness)
         }
 
-        Mutation::AssimilateDiskTagsToDb { track_id, path } => {
-            execute_assimilate_disk_tags_to_db(db, *track_id, path, witness)
+        Mutation::AssimilateDiskTagsToDb { inode, path } => {
+            execute_assimilate_disk_tags_to_db(db, *inode, path, witness)
         }
 
         // Fingerprint rebuild chain (these spawn follow-up mutations)
@@ -946,8 +946,8 @@ pub fn execute_single(
             };
         }
 
-        Mutation::RefillSingleFingerprint { track_id, path } => {
-            execute_refill_single_fingerprint(db, *track_id, path, witness).map(|_| ())
+        Mutation::RefillSingleFingerprint { inode, path } => {
+            execute_refill_single_fingerprint(db, *inode, path, witness).map(|_| ())
         }
 
         // Note: SetTrackTagsDb is now handled by tag_edit.rs (spawns ApplyDbTagsToDisk)

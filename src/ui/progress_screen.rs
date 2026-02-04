@@ -114,8 +114,8 @@ pub struct ProgressScreen {
     tick_count: u32,
     /// Last time the animation ticked (for frame-rate independent animation).
     last_animation_tick: Instant,
-    /// Breakdown of completed tasks by type label (e.g., "Indexing": 42).
-    task_counts: HashMap<String, usize>,
+    /// Breakdown of pending tasks by type label (e.g., "Indexing": 42).
+    pending_counts: HashMap<String, usize>,
 }
 
 impl ProgressScreen {
@@ -136,7 +136,7 @@ impl ProgressScreen {
             consecutive_idle_ticks: 0,
             tick_count: 0,
             last_animation_tick: Instant::now(),
-            task_counts: HashMap::new(),
+            pending_counts: HashMap::new(),
         }
     }
 
@@ -157,7 +157,7 @@ impl ProgressScreen {
             consecutive_idle_ticks: 0,
             tick_count: 0,
             last_animation_tick: Instant::now(),
-            task_counts: HashMap::new(),
+            pending_counts: HashMap::new(),
         };
         screen.wait_state.start();
         screen
@@ -180,7 +180,7 @@ impl ProgressScreen {
             consecutive_idle_ticks: 0,
             tick_count: 0,
             last_animation_tick: Instant::now(),
-            task_counts: HashMap::new(),
+            pending_counts: HashMap::new(),
         };
         screen.wait_state.start();
         screen
@@ -320,29 +320,30 @@ impl ProgressScreen {
             self.progress = Some(completed as f32 / total as f32);
             self.progress_detail = Some(format!("{} / {}", completed, total));
         }
-        // Store task breakdown for display
-        self.task_counts = status.task_counts.clone();
+        // Store pending task breakdown for display (shows remaining work)
+        self.pending_counts = status.pending_by_label.clone();
     }
 
-    /// Format task counts as a compact summary string.
+    /// Format pending task counts as a compact summary string.
     ///
     /// Returns something like "Indexing: 42 | Tag sync: 12 | File move: 3"
     /// Sorted by count (descending), limited to fit reasonable width.
+    /// Shows remaining work (decreasing counts as tasks complete).
     fn format_task_summary(&self) -> Option<String> {
-        if self.task_counts.is_empty() {
+        if self.pending_counts.is_empty() {
             return None;
         }
 
         // Sort by count descending, then alphabetically for ties
-        let mut entries: Vec<_> = self.task_counts.iter().collect();
+        let mut entries: Vec<_> = self.pending_counts.iter().collect();
         entries.sort_by(|a, b| {
             b.1.cmp(a.1).then_with(|| a.0.cmp(b.0))
         });
 
-        // Build summary, limiting to ~60 chars for display
+        // Build summary, limiting to 64 chars for display (matches eye art width)
         let mut parts = Vec::new();
         let mut total_len = 0;
-        const MAX_LEN: usize = 60;
+        const MAX_LEN: usize = 64;
 
         for (label, count) in entries {
             let part = format!("{}: {}", label, count);
@@ -461,8 +462,8 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     // Calculate vertical centering
     let v_margin = area.height.saturating_sub(total_height as u16) / 2;
 
-    // Calculate horizontal centering for the eye (eye is ~60 chars wide)
-    let eye_width = 60u16;
+    // Calculate horizontal centering for the eye (eye art is 64 chars wide)
+    let eye_width = 64u16;
     let h_margin = area.width.saturating_sub(eye_width) / 2;
 
     // Layout vertically
@@ -562,12 +563,9 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
         f.render_widget(progress_widget, centered_progress);
     }
 
-    // Render task summary (breakdown by type) - centered same as progress bar
+    // Render task summary (breakdown by type) - centered to match eye width (64 chars)
     if let Some(summary) = task_summary {
         let summary_area = chunks[6];
-        // Use same centering as progress bar for visual alignment
-        let bar_inner_width = 40u16.min(summary_area.width.saturating_sub(4));
-        let bar_x = (summary_area.width.saturating_sub(bar_inner_width + 2)) / 2 + summary_area.x;
 
         let summary_line = Line::from(Span::styled(
             summary,
@@ -577,9 +575,9 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
             .alignment(Alignment::Center);
 
         let centered_summary = Rect {
-            x: bar_x,
+            x: summary_area.x.saturating_add((summary_area.width.saturating_sub(64)) / 2),
             y: summary_area.y,
-            width: bar_inner_width + 4,
+            width: 64.min(summary_area.width),
             height: summary_area.height,
         };
         f.render_widget(summary_widget, centered_summary);

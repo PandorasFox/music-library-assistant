@@ -145,6 +145,8 @@ pub struct Witch {
     // Status tracking
     recent_errors: VecDeque<String>,
     task_counts: HashMap<String, usize>,
+    /// Pending task counts by label (queued but not yet completed).
+    pending_by_label: HashMap<String, usize>,
     current_label: Option<String>,
 
     // Completed session for lingering display
@@ -235,6 +237,7 @@ impl Witch {
             in_flight: 0,
             recent_errors: VecDeque::with_capacity(5),
             task_counts: HashMap::new(),
+            pending_by_label: HashMap::new(),
             current_label: None,
             completed_session: None,
             completed_at: None,
@@ -452,6 +455,14 @@ impl Witch {
             // Track by task type
             *self.task_counts.entry(result.label.clone()).or_insert(0) += 1;
 
+            // Decrement pending count for this label
+            if let Some(count) = self.pending_by_label.get_mut(&result.label) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    self.pending_by_label.remove(&result.label);
+                }
+            }
+
             // Record stats via thread-safe interface (only when timing enabled)
             if let Some(ref stats) = self.worker_stats_shared {
                 stats.record_result(&result);
@@ -511,6 +522,7 @@ impl Witch {
         let current_total_processed = self.total_processed;
         let current_session_queued = self.session_queued;
         let current_task_counts = self.task_counts.clone();
+        let current_pending_by_label = self.pending_by_label.clone();
         let current_errors = self.recent_errors.iter().cloned().collect();
         let elapsed = self.session_start.map(|start| start.elapsed());
 
@@ -526,6 +538,7 @@ impl Witch {
             session_queued: current_session_queued,
             recent_errors: current_errors,
             task_counts: current_task_counts,
+            pending_by_label: current_pending_by_label,
             elapsed,
             completed_session: self.completed_session.clone(),
         }
@@ -673,6 +686,7 @@ impl Witch {
         self.total_failed = 0;
         self.session_queued = 0;
         self.task_counts.clear();
+        self.pending_by_label.clear();
         self.recent_errors.clear();
         self.current_label = None;
         self.mutations_ran_this_session = false;
@@ -864,6 +878,7 @@ impl Witch {
         for mutation in mutations {
             let task = Task::Mutation(mutation);
             let task_label = self.resolve_label(label.clone(), &task);
+            *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
             self.spawn_task(task, task_label, queue_time);
         }
     }
@@ -888,6 +903,7 @@ impl Witch {
 
         self.session_queued += 1;
         self.in_flight += 1;
+        *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
         self.spawn_task(task, task_label, Instant::now());
     }
 
@@ -942,6 +958,7 @@ impl Witch {
 
         self.session_queued += 1;
         self.in_flight += 1;
+        *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
         self.spawn_task(task, task_label, Instant::now());
     }
 
@@ -961,6 +978,7 @@ impl Witch {
 
         self.session_queued += 1;
         self.in_flight += 1;
+        *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
         self.spawn_task(task, task_label, Instant::now());
     }
 
@@ -1121,6 +1139,7 @@ impl Witch {
             session_queued: self.session_queued,
             recent_errors: self.recent_errors.iter().cloned().collect(),
             task_counts: self.task_counts.clone(),
+            pending_by_label: self.pending_by_label.clone(),
             elapsed: self.session_start.map(|start| start.elapsed()),
             completed_session: self.completed_session.clone(),
         }

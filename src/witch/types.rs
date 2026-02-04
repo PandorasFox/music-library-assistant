@@ -364,6 +364,8 @@ pub struct DaemonStatus {
     pub recent_errors: Vec<String>,
     /// Breakdown of processed tasks by type label
     pub task_counts: HashMap<String, usize>,
+    /// Breakdown of pending tasks by type label
+    pub pending_by_label: HashMap<String, usize>,
     /// Elapsed time since first task was queued (if session active)
     pub elapsed: Option<Duration>,
     /// Completed session summary (for lingering display)

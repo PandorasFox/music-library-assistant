@@ -277,12 +277,11 @@ pub fn is_timing_enabled() -> bool {
 pub struct SourceDir {
     /// Path relative to corpus root (e.g., "web/releases/bandcamp")
     pub path: PathBuf,
-    /// Target library name for deployment (e.g., "music")
-    pub library: Option<String>,
-    /// Whether duplicates from this source can be stashed when another source wins
+    /// Target library names for deployment (e.g., ["music", "soundtracks"])
+    /// A single source can deploy to multiple libraries.
+    pub libraries: Vec<String>,
+    /// Whether duplicates from this source can be stashed when another source wins (default: true)
     pub can_stash_dupes: bool,
-    /// Priority for conflict resolution (higher wins). None = no automatic resolution.
-    pub priority: Option<i32>,
 }
 
 impl Config {
@@ -305,12 +304,6 @@ impl Config {
         self.root.join("stash")
     }
 
-    /// Legacy library directory: `<root>/libraries/legacy/`
-    /// Only meaningful when `legacy_enabled` is true.
-    pub fn legacy_dir(&self) -> PathBuf {
-        self.libraries_dir().join("legacy")
-    }
-
     // =========================================================================
     // Source directory queries
     // =========================================================================
@@ -323,7 +316,7 @@ impl Config {
         let corpus_dir = self.corpus_dir();
         self.source_dirs
             .iter()
-            .filter(|sd| sd.library.as_deref() == Some(library_name))
+            .filter(|sd| sd.libraries.contains(&library_name.to_string()))
             .map(|sd| corpus_dir.join(&sd.path))
             .collect()
     }
@@ -354,14 +347,15 @@ impl Config {
             .max_by_key(|sd| sd.path.as_os_str().len())
     }
 
-    /// Get the target library name for a corpus path.
+    /// Get the target library names for a corpus path.
     ///
     /// Given a corpus path (relative, e.g., `corpus/web/releases/...`), returns
-    /// the library name from the matching source directory.
-    /// Returns None if no source matches or source has no library configured.
-    pub fn get_library_for_corpus_path(&self, corpus_path: &std::path::Path) -> Option<String> {
+    /// the library names from the matching source directory.
+    /// Returns empty vec if no source matches or source has no libraries configured.
+    pub fn get_libraries_for_corpus_path(&self, corpus_path: &std::path::Path) -> Vec<String> {
         self.get_source_for_path(corpus_path)
-            .and_then(|sd| sd.library.clone())
+            .map(|sd| sd.libraries.clone())
+            .unwrap_or_default()
     }
 
     /// Get the source directory config for a relative corpus path.
@@ -808,7 +802,7 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                 }
             }
             "dir" => {
-                // dir "web/releases/bandcamp" { library "music"; can-stash-dupes true; priority 10 }
+                // dir "web/releases/bandcamp" { library "music" "soundtracks"; can-stash-dupes false }
                 let path = node.entries().first()
                     .and_then(|e| e.value().as_string())
                     .map(PathBuf::from);
@@ -816,27 +810,24 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                 if let Some(path) = path {
                     let mut source = SourceDir {
                         path,
-                        library: None,
-                        can_stash_dupes: false,
-                        priority: None,
+                        libraries: Vec::new(),
+                        can_stash_dupes: true, // default true
                     };
 
                     if let Some(children) = node.children() {
                         for child in children.nodes() {
                             match child.name().value() {
                                 "library" => {
-                                    if let Some(entry) = child.entries().first() {
-                                        source.library = entry.value().as_string().map(|s| s.to_string());
+                                    // Collect all string values from this library node
+                                    for entry in child.entries() {
+                                        if let Some(s) = entry.value().as_string() {
+                                            source.libraries.push(s.to_string());
+                                        }
                                     }
                                 }
                                 "can-stash-dupes" => {
                                     if let Some(entry) = child.entries().first() {
-                                        source.can_stash_dupes = entry.value().as_bool().unwrap_or(false);
-                                    }
-                                }
-                                "priority" => {
-                                    if let Some(entry) = child.entries().first() {
-                                        source.priority = entry.value().as_i64().map(|v| v as i32);
+                                        source.can_stash_dupes = entry.value().as_bool().unwrap_or(true);
                                     }
                                 }
                                 _ => {}
@@ -905,12 +896,11 @@ root "/Volumes/cerberus/archive"
 
 dir "web/releases/bandcamp" {
     library "music"
-    can-stash-dupes true
-    priority 10
+    can-stash-dupes false
 }
 
 dir "web/releases/indie" {
-    library "music"
+    library "music" "soundtracks"
 }
 
 legacy-library true
@@ -921,16 +911,14 @@ legacy-library true
         assert_eq!(config.corpus_dir(), PathBuf::from("/Volumes/cerberus/archive/corpus"));
         assert_eq!(config.libraries_dir(), PathBuf::from("/Volumes/cerberus/archive/libraries"));
         assert_eq!(config.stash_dir(), PathBuf::from("/Volumes/cerberus/archive/stash"));
-        assert_eq!(config.legacy_dir(), PathBuf::from("/Volumes/cerberus/archive/libraries/legacy"));
         assert!(config.legacy_enabled);
         assert_eq!(config.source_dirs.len(), 2);
         assert_eq!(config.source_dirs[0].path, PathBuf::from("web/releases/bandcamp"));
-        assert_eq!(config.source_dirs[0].library, Some("music".to_string()));
-        assert!(config.source_dirs[0].can_stash_dupes);
-        assert_eq!(config.source_dirs[0].priority, Some(10));
+        assert_eq!(config.source_dirs[0].libraries, vec!["music".to_string()]);
+        assert!(!config.source_dirs[0].can_stash_dupes); // explicitly false
         assert_eq!(config.source_dirs[1].path, PathBuf::from("web/releases/indie"));
-        assert!(!config.source_dirs[1].can_stash_dupes);
-        assert_eq!(config.source_dirs[1].priority, None);
+        assert_eq!(config.source_dirs[1].libraries, vec!["music".to_string(), "soundtracks".to_string()]);
+        assert!(config.source_dirs[1].can_stash_dupes); // default true
     }
 
     #[test]

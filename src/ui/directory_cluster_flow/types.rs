@@ -27,10 +27,8 @@ pub struct DirectoryGroupEntry {
     pub format_summary: String,
     /// Total file size in MB
     pub total_size_mb: f64,
-    /// Whether this source can have duplicates stashed (from config)
+    /// Whether this source can have duplicates stashed (from config, default: true)
     pub can_stash_dupes: bool,
-    /// Priority from config (higher wins)
-    pub priority: Option<i32>,
 }
 
 /// A single cross-source overlap cluster ready for resolution.
@@ -114,25 +112,15 @@ impl DirectoryClusterModalData {
                 .unwrap_or("")
                 .to_string();
 
-            let source_a_priority = metadata
-                .get("source_a_priority")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32);
-
-            let source_b_priority = metadata
-                .get("source_b_priority")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32);
-
             let source_a_can_stash = metadata
                 .get("source_a_can_stash")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+                .unwrap_or(true);
 
             let source_b_can_stash = metadata
                 .get("source_b_can_stash")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+                .unwrap_or(true);
 
             let overlap_count = metadata
                 .get("overlap_count")
@@ -172,9 +160,9 @@ impl DirectoryClusterModalData {
             // Build directory entries for each source
             let mut directories = Vec::new();
 
-            for (source_path, inodes, can_stash, priority) in [
-                (&source_a, &source_a_inodes, source_a_can_stash, source_a_priority),
-                (&source_b, &source_b_inodes, source_b_can_stash, source_b_priority),
+            for (source_path, inodes, can_stash) in [
+                (&source_a, &source_a_inodes, source_a_can_stash),
+                (&source_b, &source_b_inodes, source_b_can_stash),
             ] {
                 // Deduplicate inodes
                 let unique_inodes: Vec<i64> = {
@@ -220,7 +208,6 @@ impl DirectoryClusterModalData {
                     format_summary,
                     total_size_mb,
                     can_stash_dupes: can_stash,
-                    priority,
                 });
             }
 

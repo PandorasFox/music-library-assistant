@@ -149,7 +149,7 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
     use std::collections::HashSet;
     let mut names = HashSet::new();
     for source in &config.source_dirs {
-        if let Some(ref lib) = source.library {
+        for lib in &source.libraries {
             names.insert(lib.clone());
         }
     }

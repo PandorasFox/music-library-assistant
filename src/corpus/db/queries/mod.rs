@@ -340,14 +340,6 @@ impl Database {
         Ok(())
     }
 
-    /// Execute a batch of SQL statements.
-    ///
-    /// Used by migrations to run multiple statements atomically.
-    pub fn execute_batch(&self, sql: &str) -> Result<()> {
-        self.conn
-            .execute_batch(sql)
-            .context("Failed to execute SQL batch")
-    }
 }
 
 // ============================================================================
@@ -686,15 +678,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get album artist data for inconsistency detection.
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
         self.db.get_album_artist_data()
-    }
-
-    // =========================================================================
-    // Directory Hierarchy Queries
-    // =========================================================================
-
-    /// Count child directories (direct children only) under a parent directory path.
-    pub fn count_child_directories(&self, parent_path: &str, source: super::types::FileSource) -> Result<usize> {
-        self.db.count_child_directories(parent_path, source)
     }
 
     /// Get directory inode by path.

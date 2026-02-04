@@ -38,35 +38,6 @@ impl Database {
     // File Entry Queries
     // ========================================================================
 
-    /// Get all files (not directories) for a given source.
-    pub fn get_files_by_source(&self, source: FileSource) -> Result<Vec<FileEntry>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at
-             FROM files
-             WHERE source = ?1 AND is_dir = 0
-             ORDER BY path"
-        )?;
-
-        let files = stmt.query_map(params![source.as_str()], Self::row_to_file_entry)?;
-        files.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// Get a file entry by path.
-    pub fn get_file_by_path(&self, path: &str) -> Result<Option<FileEntry>> {
-        let result = self.conn.query_row(
-            "SELECT inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at
-             FROM files WHERE path = ?1",
-            params![path],
-            Self::row_to_file_entry,
-        );
-
-        match result {
-            Ok(entry) => Ok(Some(entry)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
     /// Get a file entry by path for a specific source.
     ///
     /// Unlike `get_audio_file_by_path()`, this does NOT require audio_info.
@@ -84,43 +55,6 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
-    }
-
-    /// Get file count by source.
-    pub fn get_file_count(&self, source: Option<FileSource>) -> Result<usize> {
-        let count: i64 = if let Some(src) = source {
-            self.conn.query_row(
-                "SELECT COUNT(*) FROM files WHERE source = ?1 AND is_dir = 0",
-                params![src.as_str()],
-                |row| row.get(0),
-            )?
-        } else {
-            self.conn.query_row(
-                "SELECT COUNT(*) FROM files WHERE is_dir = 0",
-                params![],
-                |row| row.get(0),
-            )?
-        };
-        Ok(count as usize)
-    }
-
-    /// Get all file inodes mapped to their paths for a source.
-    pub fn get_all_file_inodes(&self, source: FileSource) -> Result<HashMap<i64, String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM files WHERE source = ?1 AND is_dir = 0"
-        )?;
-
-        let mut result = HashMap::new();
-        let rows = stmt.query_map(params![source.as_str()], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        for row in rows {
-            let (inode, path) = row?;
-            result.insert(inode, path);
-        }
-
-        Ok(result)
     }
 
     /// Get mtime info for files by inode (for incremental scanning).
@@ -360,16 +294,6 @@ impl Database {
         Ok(files)
     }
 
-    /// Get count of audio files with fingerprints.
-    pub fn get_fingerprinted_audio_count(&self) -> Result<i64> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM audio_info WHERE fingerprint IS NOT NULL",
-            params![],
-            |row| row.get(0),
-        )?;
-        Ok(count)
-    }
-
     /// Get duplicate fingerprint groups (corpus files only).
     /// Returns: Vec<(fingerprint_blob, comma_separated_inodes)>
     pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
@@ -597,24 +521,6 @@ impl Database {
         Ok(tags)
     }
 
-    /// Get all tags for an audio file (inbox).
-    pub fn get_inbox_tags(&self, inode: i64) -> Result<Vec<AudioTag>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, tag_name, tag_value FROM inbox_tags WHERE inode = ?1 ORDER BY tag_name, tag_value"
-        )?;
-
-        let tags = stmt.query_map(params![inode], |row| {
-            Ok(AudioTag {
-                inode: row.get(0)?,
-                tag_name: row.get(1)?,
-                tag_value: row.get(2)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        Ok(tags)
-    }
-
     /// Get all audio files with their tags (for search functionality).
     pub fn get_all_audio_files_with_tags(&self, source: FileSource) -> Result<Vec<(AudioFile, HashMap<String, String>)>> {
         let files = self.get_all_audio_files(source)?;
@@ -714,47 +620,6 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count)
-    }
-
-    // ========================================================================
-    // Directory Hierarchy Queries
-    // ========================================================================
-
-    /// Count child directories (direct children only) under a parent directory path.
-    ///
-    /// This is used by ClusterDirectoryOverlaps to determine clustering strategy:
-    /// - Many siblings (>threshold): aggregate into one cluster
-    /// - Few siblings (<=threshold): keep per-directory clustering
-    ///
-    /// Uses path-based counting which works whether or not parent_inode is populated.
-    pub fn count_child_directories(&self, parent_path: &str, source: FileSource) -> Result<usize> {
-        // Build LIKE pattern for direct children (exactly one path component after parent)
-        // Pattern: "parent/%" but NOT "parent/%/%" (no nested)
-        // We count directories where:
-        // 1. path starts with parent_path/
-        // 2. path has exactly one more component (no further slashes after the child name)
-
-        let pattern = super::dir_like_pattern_str(parent_path);
-
-        // Count directories that are direct children:
-        // - Match parent_path/child (where child has no slashes)
-        // - is_dir = 1
-        let count: i64 = self.conn.query_row(
-            r#"SELECT COUNT(DISTINCT path) FROM files
-               WHERE source = ?1
-                 AND is_dir = 1
-                 AND path LIKE ?2 ESCAPE '\'
-                 AND path NOT LIKE ?3 ESCAPE '\'"#,
-            params![
-                source.as_str(),
-                &pattern,
-                // Exclude paths with additional subdirectories
-                format!("{}/%/%", parent_path.trim_end_matches('/'))
-            ],
-            |row| row.get(0),
-        )?;
-
-        Ok(count as usize)
     }
 
     /// Get directory inode by path.
@@ -915,21 +780,5 @@ impl Database {
         let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
         let affected = self.conn.execute(&sql, params_refs.as_slice())?;
         Ok(affected)
-    }
-
-    /// Update file mtime.
-    pub fn update_file_mtime(
-        &self,
-        source: &str,
-        inode: i64,
-        mtime_secs: i64,
-        mtime_nanos: i64,
-        _witness: &impl crate::db_thread::SignalWitness,
-    ) -> Result<()> {
-        self.conn.execute(
-            "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2 WHERE source = ?3 AND inode = ?4",
-            params![mtime_secs, mtime_nanos, source, inode],
-        )?;
-        Ok(())
     }
 }

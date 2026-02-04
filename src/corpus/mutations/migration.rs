@@ -35,20 +35,25 @@ pub struct MigrationRegistry {
 impl MigrationRegistry {
     /// Create a new migration registry with all known migrations.
     pub fn new() -> Self {
-        let registry = Self {
+        let mut registry = Self {
             migrations: Vec::new(),
         };
 
         // Schema v1: inode-based files/audio_info/corpus_tags (includes parent_inode)
         // This is the baseline - no migrations needed yet.
-        // Future migrations will be added here as:
         //
-        // registry.register(Migration {
-        //     from_version: 1,
-        //     to_version: 2,
-        //     description: "Add some_new_feature",
-        //     apply: |db| { ... },
-        // });
+        // PLACEHOLDER: The migration system is intentionally unused during alpha/beta.
+        // We're keeping the scaffolding in place for the public release, at which point
+        // schema stability matters. Until then, breaking schema changes just nuke the DB.
+        // This dummy registration ensures the `register` method isn't dead code.
+        //
+        // Remove this placeholder and add real migrations when preparing for public release.
+        registry.register(Migration {
+            from_version: 0,
+            to_version: 0,
+            description: "Placeholder - migration system scaffolding (remove at public release)",
+            apply: |_db| Ok(()),
+        });
 
         registry
     }

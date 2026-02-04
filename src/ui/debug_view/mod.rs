@@ -26,26 +26,6 @@ pub enum SelectedOperation {
     RebuildFingerprints,
 }
 
-impl SelectedOperation {
-    /// Display label for this operation.
-    pub fn label(&self) -> &'static str {
-        match self {
-            SelectedOperation::RebuildFingerprints => "Rebuild All Fingerprints",
-        }
-    }
-
-    /// Description of what this operation does.
-    pub fn description(&self) -> &'static str {
-        match self {
-            SelectedOperation::RebuildFingerprints => {
-                "Regenerates fingerprints for all tracks from the complete audio file. \
-                 This will detect corruption in later portions that the previous 120s \
-                 limit would have missed, and update duplicate detection afterward."
-            }
-        }
-    }
-}
-
 /// State for the debug view.
 pub struct DebugViewState {
     /// Currently selected operation.

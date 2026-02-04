@@ -484,7 +484,7 @@ impl App {
             let corpus_path = std::path::Path::new(&file.corpus_path);
             let library_name = config
                 .as_ref()
-                .and_then(|c| c.get_library_for_corpus_path(corpus_path));
+                .and_then(|c| c.get_libraries_for_corpus_path(corpus_path).first().cloned());
 
             let dest_rel = if let Some(lib) = library_name {
                 std::path::Path::new("libraries")
@@ -513,7 +513,7 @@ impl App {
                 let corpus_path_obj = std::path::Path::new(corpus_path);
                 let library_name = config
                     .as_ref()
-                    .and_then(|c| c.get_library_for_corpus_path(corpus_path_obj));
+                    .and_then(|c| c.get_libraries_for_corpus_path(corpus_path_obj).first().cloned());
 
                 let dest_rel = if let Some(lib) = library_name {
                     std::path::Path::new("libraries")

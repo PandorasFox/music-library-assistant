@@ -1907,17 +1907,15 @@ pub fn execute_detect_cross_source_overlaps(
             continue;
         }
 
-        // Look up source configs for priority/can_stash info
+        // Look up source configs for can_stash info
         let source_a_config = config.get_source_for_relative_path(Path::new(&overlap.source_a));
         let source_b_config = config.get_source_for_relative_path(Path::new(&overlap.source_b));
 
         let metadata = serde_json::json!({
             "source_a": overlap.source_a,
             "source_b": overlap.source_b,
-            "source_a_priority": source_a_config.and_then(|s| s.priority),
-            "source_b_priority": source_b_config.and_then(|s| s.priority),
-            "source_a_can_stash": source_a_config.map(|s| s.can_stash_dupes).unwrap_or(false),
-            "source_b_can_stash": source_b_config.map(|s| s.can_stash_dupes).unwrap_or(false),
+            "source_a_can_stash": source_a_config.map(|s| s.can_stash_dupes).unwrap_or(true),
+            "source_b_can_stash": source_b_config.map(|s| s.can_stash_dupes).unwrap_or(true),
             "overlap_count": overlap.track_pairs.len(),
             "fingerprint_count": overlap.fingerprint_keys.len(),
             "fingerprint_keys": overlap.fingerprint_keys,

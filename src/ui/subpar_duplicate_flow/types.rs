@@ -17,8 +17,6 @@ use crate::corpus::paths;
 pub struct SubparFileEntry {
     /// Corpus path (the subpar file)
     pub corpus_path: String,
-    /// Track ID from tracks table
-    pub track_id: i64,
     /// Inode (for DropFromIndex cleanup)
     pub inode: i64,
     /// Reason for being subpar (human-readable)
@@ -78,7 +76,6 @@ impl SubparDuplicateModalData {
 
             files.push(SubparFileEntry {
                 corpus_path: entry.corpus_path,
-                track_id: inode,
                 inode,
                 reason,
                 superior_path: entry.superior_path,
@@ -119,7 +116,6 @@ impl SubparDuplicateModalData {
 
             // DropFromIndex mutation
             mutations.push(Mutation::DropFromIndex {
-                track_id: file.track_id,
                 path: PathBuf::from(&file.corpus_path),
                 inode: Some(file.inode),
                 source: Some("corpus".to_string()),

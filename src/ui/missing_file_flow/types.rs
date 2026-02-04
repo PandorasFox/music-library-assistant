@@ -19,10 +19,6 @@ use crate::corpus::paths;
 pub struct RestorableMissingFile {
     /// Corpus path where file should exist
     pub corpus_path: String,
-    /// Track ID from tracks table
-    pub _track_id: i64,
-    /// Inode of the missing file
-    pub _inode: i64,
     /// Library path where the same inode exists (restore source)
     pub library_path: String,
 }
@@ -34,10 +30,8 @@ pub struct RestorableMissingFile {
 pub struct NonRestorableMissingFile {
     /// Corpus path where file was indexed
     pub corpus_path: String,
-    /// Track ID from tracks table
-    pub track_id: i64,
-    /// Inode (for DropFromIndex cleanup)
-    pub inode: i64,
+    /// Inode for files table cleanup (None for orphaned signals)
+    pub inode: Option<i64>,
 }
 
 /// Cached data for the missing file resolution modal.
@@ -95,24 +89,19 @@ impl MissingFileModalData {
                 if let Some(library_path) = inode_to_library.get(&inode) {
                     restorable.push(RestorableMissingFile {
                         corpus_path,
-                        _track_id: inode,
-                        _inode: inode,
                         library_path: library_path.clone(),
                     });
                 } else {
                     non_restorable.push(NonRestorableMissingFile {
                         corpus_path,
-                        track_id: inode,
-                        inode,
+                        inode: Some(inode),
                     });
                 }
             } else {
                 // Orphaned signal - no DB entry, just needs signal cleared
-                // Use inode=-1 as sentinel for "clear signal only"
                 non_restorable.push(NonRestorableMissingFile {
                     corpus_path,
-                    track_id: -1,
-                    inode: -1,
+                    inode: None,
                 });
             }
         }
@@ -165,9 +154,8 @@ impl MissingFileModalData {
         self.non_restorable
             .iter()
             .map(|f| crate::corpus::mutations::Mutation::DropFromIndex {
-                track_id: f.track_id,
                 path: PathBuf::from(&f.corpus_path),
-                inode: Some(f.inode),
+                inode: f.inode,
                 source: Some("corpus".to_string()),
             })
             .collect()

@@ -362,7 +362,7 @@ impl DirectoryClusterPreviewState {
                         Style::default().fg(Color::White),
                     ),
                     Span::styled(
-                        format!("  {:>3} tracks  ", dir.track_ids.len()),
+                        format!("  {:>3} tracks  ", dir.inodes.len()),
                         Style::default().fg(Color::Yellow),
                     ),
                     Span::styled(

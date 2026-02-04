@@ -211,11 +211,10 @@ pub enum Mutation {
         new_path: PathBuf,
     },
 
-    /// Drop track from index (for missing files).
+    /// Drop file from index (for missing files or orphaned signals).
     DropFromIndex {
-        track_id: i64,
         path: PathBuf,
-        /// Also remove files table entry for this inode
+        /// Inode to also remove from files table (None for orphaned signals)
         inode: Option<i64>,
         source: Option<String>,
     },

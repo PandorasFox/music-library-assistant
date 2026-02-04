@@ -17,9 +17,7 @@ use crate::corpus::paths;
 pub struct DirectoryGroupEntry {
     /// Source directory path (e.g., "web/releases/bandcamp" or "web/releases/indie")
     pub path_suffix: String,
-    /// Track IDs (inodes) in this source
-    pub track_ids: Vec<i64>,
-    /// Inodes for DropFromIndex cleanup
+    /// Inodes for files in this source
     pub inodes: Vec<i64>,
     /// Corpus paths for the tracks
     pub paths: Vec<String>,
@@ -202,7 +200,6 @@ impl DirectoryClusterModalData {
 
                 directories.push(DirectoryGroupEntry {
                     path_suffix: source_path.clone(),
-                    track_ids: unique_inodes.clone(),
                     inodes: unique_inodes,
                     paths,
                     format_summary,
@@ -284,11 +281,9 @@ impl DirectoryClusterModalData {
                 });
 
                 // DropFromIndex mutation
-                let track_id = dir.track_ids.get(idx).copied().unwrap_or(0);
                 let inode = dir.inodes.get(idx).copied();
 
                 mutations.push(Mutation::DropFromIndex {
-                    track_id,
                     path: PathBuf::from(corpus_path),
                     inode,
                     source: Some("corpus".to_string()),

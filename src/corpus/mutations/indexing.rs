@@ -248,10 +248,11 @@ pub fn execute_update_file_path(
 
 /// Execute DropFromIndex mutation - remove track from index.
 ///
-/// Uses read-only DB for lookup, routes writes through signal_sender.
+/// Routes writes through signal_sender. Path is passed directly from mutation.
+/// For orphaned signals (inode=None), just clears audio_info/tags - no files table entry to drop.
 pub fn execute_drop_from_index(
-    db: &ReadOnlyDb<'_>,
-    track_id: i64,
+    _db: &ReadOnlyDb<'_>,
+    path: &Path,
     inode: Option<i64>,
     source: Option<&str>,
     witness: &MutationExecutionWitness,
@@ -261,19 +262,13 @@ pub fn execute_drop_from_index(
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Determine file source - default to Corpus if not specified
-    let file_source = source
-        .and_then(FileSource::from_str)
-        .unwrap_or(FileSource::Corpus);
+    // Convert path to string for DB operations
+    let path_str = path.to_string_lossy();
 
-    // Get file path from DB (read-only) - track_id is actually inode
-    let audio_file = db.get_audio_file_by_inode(track_id, file_source)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", track_id))?;
+    // Delete audio_info and corpus_tags entries via signal_sender
+    sender.drop_from_index(&path_str, witness);
 
-    // Delete the file entry via signal_sender
-    sender.drop_from_index(audio_file.path(), witness);
-
-    // Also delete files table entry if inode/source provided
+    // Also delete files table entry if inode and source are provided
     if let (Some(inode), Some(source)) = (inode, source) {
         sender.drop_file_index_by_inode(source, inode, witness);
     }
@@ -883,11 +878,10 @@ pub fn execute_single(
         } => execute_update_file_path(db, source, *inode, new_path, witness),
 
         Mutation::DropFromIndex {
-            track_id,
+            path,
             inode,
             source,
-            ..
-        } => execute_drop_from_index(db, *track_id, *inode, source.as_deref(), witness),
+        } => execute_drop_from_index(db, path, *inode, source.as_deref(), witness),
 
         Mutation::UpdateTrack {
             track_id,

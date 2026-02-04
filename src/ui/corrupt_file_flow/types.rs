@@ -17,8 +17,6 @@ use crate::corpus::paths;
 pub struct CorruptFileEntry {
     /// Corpus path (relative)
     pub corpus_path: String,
-    /// Track ID from tracks table
-    pub track_id: i64,
     /// Inode (for DropFromIndex cleanup)
     pub inode: i64,
 }
@@ -64,7 +62,6 @@ impl CorruptFileModalData {
 
             files.push(CorruptFileEntry {
                 corpus_path,
-                track_id: inode,
                 inode,
             });
         }
@@ -103,7 +100,6 @@ impl CorruptFileModalData {
 
             // DropFromIndex mutation
             mutations.push(Mutation::DropFromIndex {
-                track_id: file.track_id,
                 path: PathBuf::from(&file.corpus_path),
                 inode: Some(file.inode),
                 source: Some("corpus".to_string()),

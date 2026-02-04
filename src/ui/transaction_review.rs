@@ -189,15 +189,21 @@ fn count_unique_tracks(mutations: &[Mutation]) -> usize {
 
     for m in mutations {
         match m {
-            // Mutations with single track_id
+            // Mutations with single track_id (inode-based)
             Mutation::SetTrackTagsDb { track_id, .. }
             | Mutation::ApplyDbTagsToDisk { track_id, .. }
             | Mutation::AssimilateDiskTagsToDb { track_id, .. }
-            | Mutation::DropFromIndex { track_id, .. }
             | Mutation::UpdateTrackPath { track_id, .. }
             | Mutation::UpdateTrack { track_id, .. }
             | Mutation::Transcode { track_id, .. } => {
                 track_ids.insert(*track_id);
+            }
+
+            // DropFromIndex uses path, not track_id - count via inode if available
+            Mutation::DropFromIndex { inode, .. } => {
+                if let Some(i) = inode {
+                    track_ids.insert(*i);
+                }
             }
 
             // OOB resolution mutations with multiple tracks (id, path)

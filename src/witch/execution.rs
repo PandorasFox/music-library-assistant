@@ -350,6 +350,22 @@ fn apply_post_execution(
         }
     }
 
+    // Phase 1b: Drop files table entry for MoveToStash
+    // When stashing a file, we must also remove it from the files table (not just signals).
+    // Otherwise DeriveDirectorySignals will emit MissingFile for the stashed path.
+    if let Mutation::MoveToStash { path, .. } = mutation {
+        if let Some(sender) = db_thread::signal_sender() {
+            let rel_path = if path.is_absolute() {
+                resolver.to_relative(path)
+            } else {
+                Some(path.clone())
+            };
+            if let Some(rel) = rel_path {
+                sender.drop_from_index(&rel.to_string_lossy(), witness);
+            }
+        }
+    }
+
     // Phase 2: File-inherent signal emission (CorruptFile, ShitFormat)
     // These are emitted for indexing mutations where the file has quality issues.
     emit_file_inherent_signals(mutation, witness);

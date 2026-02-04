@@ -664,10 +664,13 @@ pub fn execute_verify_tags(
         }
         Err(e) => {
             // Emit CorruptFile signal so the issue is tracked in the DB (actionable)
-            log_general(format!(
-                "[COMPUTE] VerifyTags: tag parse error for inode {} ({}): {}",
+            // Log to both general and errors so we can diagnose why this file is flagged
+            let err_msg = format!(
+                "[COMPUTE] VerifyTags FAILED for inode {} ({}): {:#}",
                 inode, path.display(), e
-            ));
+            );
+            log_general(&err_msg);
+            crate::logging::log_error(&err_msg);
             ensure_file_signal_if_missing(
                 read_only_db,
                 &sender,
@@ -772,10 +775,13 @@ pub fn execute_verify_audio(
         }
         Err(e) => {
             // Audio verification failed - file is corrupt
-            log_general(format!(
-                "[COMPUTE] VerifyAudio: corruption detected for inode {} ({}): {}",
+            // Log to both general and errors so we can diagnose why this file is flagged
+            let err_msg = format!(
+                "[COMPUTE] VerifyAudio FAILED for inode {} ({}): {:#}",
                 inode, path.display(), e
-            ));
+            );
+            log_general(&err_msg);
+            crate::logging::log_error(&err_msg);
             ensure_file_signal_if_missing(
                 read_only_db,
                 &sender,

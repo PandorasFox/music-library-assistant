@@ -68,11 +68,18 @@ fn execute_transcode(
     // Compute destination path: same directory, same stem, new extension
     let dest_path = source_path.with_extension(target_format.extension());
 
+    // If target already exists (e.g., from a previous incomplete transcode),
+    // stash it first so we can create a fresh transcode
     if dest_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Target file already exists: {}",
+        crate::logging::log_general(format!(
+            "[TRANSCODE] Target already exists, stashing old file: {}",
             dest_path.display()
         ));
+        file_ops::execute_move_to_stash(&dest_path, stash_name, stash_root)
+            .with_context(|| format!(
+                "Failed to stash existing target file: {}",
+                dest_path.display()
+            ))?;
     }
 
     // Transcode via ffmpeg

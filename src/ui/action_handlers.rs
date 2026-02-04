@@ -917,7 +917,7 @@ impl App {
                             option,
                         );
                         if !mutations.is_empty() {
-                            self.stage_directory_cluster_mutations(mutations, "Resolve directory overlap");
+                            self.stage_directory_cluster_mutations(preview.current_cluster_index, mutations, "Resolve directory overlap");
                         }
                     }
                 }
@@ -958,7 +958,7 @@ impl App {
     }
 
     /// Stage directory cluster mutations for transaction review.
-    fn stage_directory_cluster_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
         let Some(ref mut witch) = self.witch else {
             return;
         };
@@ -969,7 +969,7 @@ impl App {
         }
         let _ = super::operator_decisions::stage_decision(
             witch,
-            0,
+            cluster_index,
             label,
             mutations,
         );

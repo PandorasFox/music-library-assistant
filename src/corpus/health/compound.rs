@@ -26,10 +26,15 @@ pub struct CompoundTagValue {
 
 impl CompoundTagValue {
     /// Split a value on a separator, trimming whitespace from parts.
+    ///
+    /// Also strips leading "& " from parts to handle Oxford comma patterns
+    /// like "Folk, World, & Country" → ["Folk", "World", "Country"].
     fn split_value(value: &str, separator: &str) -> Vec<String> {
         value
             .split(separator)
-            .map(|s| s.trim().to_string())
+            .map(|s| s.trim())
+            .map(|s| s.strip_prefix("& ").unwrap_or(s))
+            .map(|s| s.to_string())
             .filter(|s| !s.is_empty())
             .collect()
     }
@@ -138,6 +143,17 @@ mod tests {
     fn test_split_value_filters_empty() {
         let parts = CompoundTagValue::split_value("Rock;;Metal", ";");
         assert_eq!(parts, vec!["Rock", "Metal"]);
+    }
+
+    #[test]
+    fn test_split_value_strips_oxford_comma_ampersand() {
+        // Common pattern: "Folk, World, & Country" should become ["Folk", "World", "Country"]
+        let parts = CompoundTagValue::split_value("Folk, World, & Country", ",");
+        assert_eq!(parts, vec!["Folk", "World", "Country"]);
+
+        // Works with semicolons too
+        let parts = CompoundTagValue::split_value("Rock; Pop; & Soul", ";");
+        assert_eq!(parts, vec!["Rock", "Pop", "Soul"]);
     }
 
     #[test]

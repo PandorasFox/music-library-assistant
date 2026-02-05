@@ -299,10 +299,15 @@ impl Database {
     pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
         // Join with files table to filter by source = 'corpus'
         // Library files should not be included in fingerprint overlap detection
+        // Empty fingerprints (length 0) occur for very short audio files where
+        // chromaprint can't generate a meaningful fingerprint. These must be
+        // excluded or they'll all be grouped together as "duplicates".
         let query = "SELECT a.fingerprint, GROUP_CONCAT(a.inode) as inodes
                      FROM audio_info a
                      JOIN files f ON a.inode = f.inode
-                     WHERE a.fingerprint IS NOT NULL AND f.source = 'corpus'
+                     WHERE a.fingerprint IS NOT NULL
+                       AND length(a.fingerprint) > 0
+                       AND f.source = 'corpus'
                      GROUP BY a.fingerprint
                      HAVING COUNT(*) > 1";
 

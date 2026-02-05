@@ -264,8 +264,13 @@ pub fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
     // Finish processing
     fingerprinter.finish();
 
-    // Return fingerprint as Vec<u32> (will be stored as BLOB in DB)
-    Ok(fingerprinter.fingerprint().to_vec())
+    // Get fingerprint - chromaprint may return empty for very short audio
+    let fp = fingerprinter.fingerprint().to_vec();
+    if fp.is_empty() {
+        anyhow::bail!("Fingerprint is empty (audio too short for chromaprint)");
+    }
+
+    Ok(fp)
 }
 
 /// Convert Symphonia AudioBuffer to i16 samples for chromaprint

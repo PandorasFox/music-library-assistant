@@ -311,6 +311,7 @@ pub fn execute_single(
         error,
         _duration_ms: start.elapsed().as_millis() as u64,
         spawn_mutations: Vec::new(), // File ops don't spawn
+        pending_signals: Vec::new(),
     }
 }
 

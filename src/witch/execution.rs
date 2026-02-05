@@ -20,14 +20,13 @@
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
 //! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
 
-use std::path::Path;
 use std::time::Instant;
 
 use crate::config;
 use crate::corpus::computations::{Computation, awakening, with_read_only_db};
 use crate::corpus::db::types::CorpusFileSignalType;
 use crate::corpus::db::{Database, ReadOnlyDb};
-use crate::corpus::mutations::{Mutation, SignalClearScope, SignalToClear};
+use crate::corpus::mutations::{Mutation, PendingSignal, SignalClearScope, SignalToClear};
 use crate::corpus::paths;
 use crate::db_thread;
 
@@ -108,7 +107,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     // Execute mutation using thread-local read-only DB connection.
     // All writes go through db_thread::signal_sender() (fire-and-forget).
-    // Result tuple: (success, error, spawn_mutations)
+    // Result tuple: (success, error, spawn_mutations, pending_signals)
     //
     // Route directly by variant to the appropriate executor module.
     let result = with_read_only_db(|read_db| {
@@ -116,7 +115,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             // Tag edit: DB write that spawns disk sync
             Mutation::SetTrackTagsDb { .. } => {
                 let r = tag_edit::execute_single(read_db, &mutation, session_id, &witness);
-                (r.success, r.error, r.spawn_mutations)
+                (r.success, r.error, r.spawn_mutations, r.pending_signals)
             }
 
             // Indexing operations (including OOB tag sync which does disk I/O)
@@ -136,7 +135,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             | Mutation::ScheduleFingerprintRefill
             | Mutation::RefillSingleFingerprint { .. } => {
                 let r = indexing::execute_single(read_db, &mutation, &witness);
-                (r.success, r.error, r.spawn_mutations)
+                (r.success, r.error, r.spawn_mutations, r.pending_signals)
             }
 
             // File operations
@@ -146,7 +145,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. } => {
                 let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
-                (r.success, r.error, r.spawn_mutations)
+                (r.success, r.error, r.spawn_mutations, r.pending_signals)
             }
 
             // Transcode
@@ -154,19 +153,19 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 let r = crate::corpus::mutations::transcode::execute_single(
                     read_db, &mutation, stash_root.as_deref(), &witness,
                 );
-                (r.success, r.error, r.spawn_mutations)
+                (r.success, r.error, r.spawn_mutations, r.pending_signals)
             }
 
             // Migrations are handled separately (require write DB connection)
             Mutation::DbMigration { .. } => {
-                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new())
+                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new(), Vec::new())
             }
         }
     });
 
     // Handle DB access failure
-    let (success, error, spawn_mutations) = match result {
-        Ok((s, e, sm)) => (s, e, sm),
+    let (success, error, spawn_mutations, pending_signals) = match result {
+        Ok((s, e, sm, ps)) => (s, e, sm, ps),
         Err(db_err) => {
             crate::logging::log_error(format!(
                 "[EXECUTION] DB access FAILED: {}",
@@ -222,7 +221,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     }
 
     // Apply structured post-execution pipeline
-    let spawn = apply_post_execution(&mutation, success, &witness);
+    let spawn = apply_post_execution(&mutation, success, &pending_signals, &witness);
 
     TaskResult {
         success,
@@ -311,13 +310,14 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
 /// ## Phases
 ///
 /// 1. **Signal clearing** - Clear signals for affected paths based on `signal_clear_scope()`
-/// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via `checks_corrupt_file()`/`checks_shit_format()`
+/// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals or `checks_*` methods
 /// 3. **Signal update spawning** - Spawn UpdateFileSignals for `paths_for_signal_updates()`
 /// 4. **Additional computations** - Spawn extra computations from `additional_computations()`
 /// 5. **Specific signal clearing** - Clear signals by type+key from `specific_signals_to_clear()`
 fn apply_post_execution(
     mutation: &Mutation,
     success: bool,
+    pending_signals: &[PendingSignal],
     witness: &MutationExecutionWitness,
 ) -> Vec<Computation> {
     if !success {
@@ -367,8 +367,9 @@ fn apply_post_execution(
     }
 
     // Phase 2: File-inherent signal emission (CorruptFile, ShitFormat)
-    // These are emitted for indexing mutations where the file has quality issues.
-    emit_file_inherent_signals(mutation, witness);
+    // For IndexFileFromPath, use pending_signals (avoids race with async DB writes).
+    // For other mutations, use the checks_* methods.
+    emit_file_inherent_signals(mutation, pending_signals, witness);
 
     // Phase 3: Spawn signal update computations
     // Path-aware: corpus paths → UpdateCorpusFileSignals, library paths → UpdateLibraryFileSignals
@@ -439,32 +440,54 @@ fn clear_signals_by_pattern(
     }
 }
 
+/// Emit pending signals carried from mutation execution.
+///
+/// These signals were determined at execution time, before the async DB write,
+/// avoiding the race condition where a post-execution DB read might not see the write.
+fn emit_pending_signals(
+    pending_signals: &[PendingSignal],
+    sender: &db_thread::SignalWriteSender,
+    witness: &MutationExecutionWitness,
+) {
+    for signal in pending_signals {
+        match signal {
+            PendingSignal::FileSignal { signal_type, path } => {
+                sender.ensure_file_signal((*signal_type).into(), path, witness);
+            }
+            PendingSignal::FileSignalWithMetadata { signal_type, path, metadata_json } => {
+                sender.ensure_file_signal_with_metadata(
+                    (*signal_type).into(),
+                    path,
+                    Some(metadata_json),
+                    witness,
+                );
+            }
+        }
+    }
+}
+
 /// Emit CorruptFile/ShitFormat signals based on mutation type.
 ///
-/// Uses the mutation's `checks_corrupt_file()` and `checks_shit_format()` methods
-/// to determine whether and how to emit these file-inherent signals.
-fn emit_file_inherent_signals(mutation: &Mutation, witness: &MutationExecutionWitness) {
+/// For IndexFileFromPath, uses pending_signals (determined at execution time)
+/// to avoid race conditions with async DB writes.
+///
+/// For other mutations, uses the `checks_corrupt_file()` and `checks_shit_format()`
+/// methods to determine whether and how to emit these file-inherent signals.
+fn emit_file_inherent_signals(
+    mutation: &Mutation,
+    pending_signals: &[PendingSignal],
+    witness: &MutationExecutionWitness,
+) {
     let resolver = paths::get_resolver();
     let sender = match db_thread::signal_sender() {
         Some(s) => s,
         None => return,
     };
 
-    // Check for deferred lookup case (IndexFileFromPath)
-    match mutation {
-        Mutation::IndexFileFromPath { path, .. } => {
-            // Deferred: lookup from DB after execution
-            if let Some(rel) = resolver.to_relative(path) {
-                let rel_str = rel.to_string_lossy();
-                let _ = with_read_only_db(|read_db| {
-                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_path(&rel_str) {
-                        emit_signals_for_track(path, &audio_file.audio.fingerprint, &audio_file.audio.file_type, &sender, witness);
-                    }
-                });
-            }
-            return;
-        }
-        _ => {}
+    // IndexFileFromPath: use pending_signals (avoids race with async DB writes)
+    if let Mutation::IndexFileFromPath { .. } = mutation {
+        emit_pending_signals(pending_signals, &sender, witness);
+        return;
     }
 
     // Non-deferred case: check inline metadata
@@ -496,40 +519,6 @@ fn emit_file_inherent_signals(mutation: &Mutation, witness: &MutationExecutionWi
 
         // ShitFormat if non-Vorbis container
         if !file_type.is_empty() && is_shit_format(file_type) {
-            let metadata_json = serde_json::json!({ "file_type": file_type }).to_string();
-            sender.ensure_file_signal_with_metadata(
-                CorpusFileSignalType::ShitFormat.into(),
-                &rel_str,
-                Some(&metadata_json),
-                witness,
-            );
-        }
-    }
-}
-
-/// Emit signals for a track looked up from DB (deferred case).
-fn emit_signals_for_track(
-    path: &Path,
-    fingerprint: &Option<Vec<u32>>,
-    file_type: &str,
-    sender: &db_thread::SignalWriteSender,
-    witness: &MutationExecutionWitness,
-) {
-    let resolver = paths::get_resolver();
-    if let Some(rel) = resolver.to_relative(path) {
-        let rel_str = rel.to_string_lossy();
-
-        // CorruptFile if fingerprint extraction failed
-        if fingerprint.is_none() {
-            sender.ensure_file_signal(
-                CorpusFileSignalType::CorruptFile.into(),
-                &rel_str,
-                witness,
-            );
-        }
-
-        // ShitFormat if non-Vorbis container
-        if is_shit_format(file_type) {
             let metadata_json = serde_json::json!({ "file_type": file_type }).to_string();
             sender.ensure_file_signal_with_metadata(
                 CorpusFileSignalType::ShitFormat.into(),

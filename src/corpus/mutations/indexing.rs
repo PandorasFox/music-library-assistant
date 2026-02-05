@@ -8,12 +8,22 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::{CorpusFileSignalType, FileSource};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
+
+/// File types that should trigger ShitFormat signal (non-Vorbis containers).
+/// Includes lossy formats with poor metadata and lossless needing remux.
+const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
+
+/// Check if a file type is a "shit format" (non-Vorbis container).
+fn is_shit_format(file_type: &str) -> bool {
+    let file_type_lower = file_type.to_lowercase();
+    SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str())
+}
 use crate::witch::MutationExecutionWitness;
 
-use super::types::{ExtractedMetadata, Mutation, MutationResult};
+use super::types::{ExtractedMetadata, Mutation, MutationResult, PendingSignal};
 
 /// Execute an IndexTrack mutation.
 ///
@@ -93,7 +103,11 @@ pub fn execute_index_track(
 /// on the worker thread rather than the UI thread.
 ///
 /// Routes write through signal_sender (fire-and-forget).
-pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<()> {
+///
+/// Returns pending signals to emit post-execution. Signals are determined from
+/// extracted metadata BEFORE the async DB write, avoiding race conditions where
+/// a post-execution DB read might not see the write yet.
+pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<Vec<PendingSignal>> {
     use crate::corpus::metadata;
     use crate::corpus::tags::TagSet;
 
@@ -106,8 +120,37 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
         .with_context(|| format!("Failed to read tags from {:?}", path))?;
     extracted.tags = tag_set.into_vec();
 
+    // Build pending signals from extracted metadata BEFORE the async DB write.
+    // This avoids the race condition where post-execution DB queries don't see
+    // the write yet (fire-and-forget pattern).
+    let mut pending_signals = Vec::new();
+    let resolver = paths::get_resolver();
+    if let Some(rel) = resolver.to_relative(path) {
+        let rel_str = rel.to_string_lossy().to_string();
+
+        // CorruptFile if fingerprint extraction failed
+        if extracted.fingerprint.is_none() {
+            pending_signals.push(PendingSignal::FileSignal {
+                signal_type: CorpusFileSignalType::CorruptFile,
+                path: rel_str.clone(),
+            });
+        }
+
+        // ShitFormat if non-Vorbis container
+        if is_shit_format(&extracted.file_type) {
+            let metadata_json = serde_json::json!({ "file_type": extracted.file_type }).to_string();
+            pending_signals.push(PendingSignal::FileSignalWithMetadata {
+                signal_type: CorpusFileSignalType::ShitFormat,
+                path: rel_str,
+                metadata_json,
+            });
+        }
+    }
+
     // Note: _db is unused - execute_index_track routes through signal_sender
-    execute_index_track(_db, path, source, &extracted, witness)
+    execute_index_track(_db, path, source, &extracted, witness)?;
+
+    Ok(pending_signals)
 }
 
 /// Execute an UpdateFileEntry mutation.
@@ -839,6 +882,29 @@ pub fn execute_single(
 ) -> MutationResult {
     let start = std::time::Instant::now();
 
+    // IndexFileFromPath returns pending signals; other mutations don't.
+    // Handle it specially to capture the signals.
+    if let Mutation::IndexFileFromPath { path, source } = mutation {
+        return match execute_index_file_from_path(db, path, source, witness) {
+            Ok(pending_signals) => MutationResult {
+                _mutation: mutation.clone(),
+                success: true,
+                error: None,
+                _duration_ms: start.elapsed().as_millis() as u64,
+                spawn_mutations: Vec::new(),
+                pending_signals,
+            },
+            Err(e) => MutationResult {
+                _mutation: mutation.clone(),
+                success: false,
+                error: Some(format!("{:#}", e)),
+                _duration_ms: start.elapsed().as_millis() as u64,
+                spawn_mutations: Vec::new(),
+                pending_signals: Vec::new(),
+            },
+        };
+    }
+
     let result = match mutation {
         Mutation::IndexTrack {
             path,
@@ -846,9 +912,8 @@ pub fn execute_single(
             metadata,
         } => execute_index_track(db, path, source, metadata, witness).map(|_| ()),
 
-        Mutation::IndexFileFromPath { path, source } => {
-            execute_index_file_from_path(db, path, source, witness)
-        }
+        // Already handled above with early return
+        Mutation::IndexFileFromPath { .. } => unreachable!(),
 
         Mutation::UpdateFileEntry {
             source,
@@ -916,6 +981,7 @@ pub fn execute_single(
                     error: None,
                     _duration_ms: start.elapsed().as_millis() as u64,
                     spawn_mutations: spawned,
+                    pending_signals: Vec::new(),
                 },
                 Err(e) => MutationResult {
                     _mutation: mutation.clone(),
@@ -923,6 +989,7 @@ pub fn execute_single(
                     error: Some(format!("{:#}", e)),
                     _duration_ms: start.elapsed().as_millis() as u64,
                     spawn_mutations: Vec::new(),
+                    pending_signals: Vec::new(),
                 },
             };
         }
@@ -935,6 +1002,7 @@ pub fn execute_single(
                     error: None,
                     _duration_ms: start.elapsed().as_millis() as u64,
                     spawn_mutations: spawned,
+                    pending_signals: Vec::new(),
                 },
                 Err(e) => MutationResult {
                     _mutation: mutation.clone(),
@@ -942,6 +1010,7 @@ pub fn execute_single(
                     error: Some(format!("{:#}", e)),
                     _duration_ms: start.elapsed().as_millis() as u64,
                     spawn_mutations: Vec::new(),
+                    pending_signals: Vec::new(),
                 },
             };
         }
@@ -967,6 +1036,7 @@ pub fn execute_single(
         error,
         _duration_ms: start.elapsed().as_millis() as u64,
         spawn_mutations: Vec::new(), // Non-spawning indexing mutations
+        pending_signals: Vec::new(), // Only IndexFileFromPath carries pending signals
     }
 }
 

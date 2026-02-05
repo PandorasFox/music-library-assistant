@@ -197,6 +197,7 @@ pub fn execute_single(
                 error: Some("Not a transcode mutation".to_string()),
                 _duration_ms: start.elapsed().as_millis() as u64,
                 spawn_mutations: Vec::new(),
+                pending_signals: Vec::new(),
             };
         }
     };
@@ -233,5 +234,6 @@ pub fn execute_single(
         error,
         _duration_ms: start.elapsed().as_millis() as u64,
         spawn_mutations,
+        pending_signals: Vec::new(),
     }
 }

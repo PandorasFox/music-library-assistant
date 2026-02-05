@@ -24,6 +24,8 @@ crossterm = "0.28"
 
 # Audio metadata
 symphonia = { version = "0.5", features = ["all"] }
+symphonia-core = "0.5"  # For custom codec registry
+symphonia-adapter-libopus = "0.2"  # Opus decoder via libopus
 lofty = "0.21"  # For reading/writing all tags
 
 # Acoustic fingerprinting

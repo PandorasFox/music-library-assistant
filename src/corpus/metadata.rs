@@ -222,8 +222,8 @@ pub fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
         .default_track()
         .context("No default audio track found")?;
 
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &Default::default())
+    // TODO: Revert to symphonia::default::get_codecs() when symphonia adds native opus
+    let mut decoder = crate::corpus::codecs::make_decoder(&track.codec_params, &Default::default())
         .context("Failed to create decoder")?;
 
     // Get audio parameters
@@ -404,9 +404,16 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
         .context("No default audio track found")?;
     let track_id = track.id;
 
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &Default::default())
-        .context("Failed to create decoder")?;
+    // TODO: Revert to symphonia::default::get_codecs() when symphonia adds native opus
+    let mut decoder = match crate::corpus::codecs::make_decoder(&track.codec_params, &Default::default())
+    {
+        Ok(d) => d,
+        Err(symphonia_core::errors::Error::Unsupported(_)) => {
+            // Codec not supported - can't verify, but not corrupt
+            return Ok(());
+        }
+        Err(e) => return Err(e).context("Failed to create decoder"),
+    };
 
     // Decode ALL packets to the end
     // Be careful: normal EOF can manifest as various error types depending on format

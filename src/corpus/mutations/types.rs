@@ -11,8 +11,35 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::corpus::computations::{Computation, awakening, awake};
-use crate::corpus::db::types::{FileSignalType, LibraryFileSignalType};
+use crate::corpus::db::types::{CorpusFileSignalType, FileSignalType, LibraryFileSignalType};
 use crate::corpus::transcode::TranscodeTarget;
+
+// ============================================================================
+// Pending Signal Types
+// ============================================================================
+
+/// Signal to be emitted post-execution.
+///
+/// Avoids race condition with async DB writes by carrying signal data from
+/// execution time rather than querying DB after the write is sent.
+///
+/// When a mutation executes and sends a fire-and-forget write to db_thread,
+/// querying the read-only connection immediately may not see the write yet.
+/// By embedding the signal data in the MutationResult, we avoid this race.
+#[derive(Debug, Clone)]
+pub enum PendingSignal {
+    /// File signal without metadata
+    FileSignal {
+        signal_type: CorpusFileSignalType,
+        path: String,
+    },
+    /// File signal with JSON metadata
+    FileSignalWithMetadata {
+        signal_type: CorpusFileSignalType,
+        path: String,
+        metadata_json: String,
+    },
+}
 
 // ============================================================================
 // Post-Execution Behavior Types
@@ -844,6 +871,9 @@ pub struct MutationResult {
     /// Follow-up mutations to queue (from spawn chaining).
     /// E.g., SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
     pub spawn_mutations: Vec<crate::witch::SpawnedMutation>,
+    /// Signals to emit post-execution.
+    /// Avoids race with async DB writes by carrying signal data from execution time.
+    pub pending_signals: Vec<PendingSignal>,
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@
 //! - `mutations/` - Standardized mutation interface for all corpus changes
 //! - `computations/` - Read-only operations that derive facts (tag verification, etc.)
 
+pub mod codecs;
 pub mod computations;
 pub mod db;
 pub mod deploy;

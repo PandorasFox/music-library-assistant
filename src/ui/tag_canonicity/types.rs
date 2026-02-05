@@ -290,14 +290,21 @@ impl TagCanonicalityState {
                     .values_for(&self.data.tag_name)
                     .collect();
 
-                // Find which values match selected variants
+                // Special case: if tag is MISSING (current_values empty) and "" is selected,
+                // treat this as "missing tag needs to be set to canonical".
+                // Signals represent "no tag" as "" (empty string variant).
+                let tag_is_missing = current_values.is_empty();
+                let missing_is_selected = selected_variants.contains("");
+
+                // Find which existing values match selected variants
                 let matching_variants: Vec<String> = current_values
                     .iter()
                     .filter(|v| selected_variants.contains(*v) && **v != canonical)
                     .map(|v| v.to_string())
                     .collect();
 
-                if matching_variants.is_empty() {
+                // Skip if no matching variants AND we're not handling a missing tag
+                if matching_variants.is_empty() && !(tag_is_missing && missing_is_selected) {
                     continue; // No matching variants to replace
                 }
 
@@ -324,8 +331,12 @@ impl TagCanonicalityState {
                     }
                 }
 
-                // If we replaced variants but didn't add canonical yet (shouldn't happen), add it
-                if !matching_variants.is_empty() && !added_canonical {
+                // Add canonical if:
+                // 1. We replaced variants but didn't add canonical (shouldn't happen normally)
+                // 2. The tag was missing entirely and "" was selected (need to ADD the tag)
+                let needs_canonical = (!matching_variants.is_empty() || (tag_is_missing && missing_is_selected))
+                    && !added_canonical;
+                if needs_canonical {
                     new_tags.push((self.data.tag_name.clone(), canonical.to_string()));
                 }
 

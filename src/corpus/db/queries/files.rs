@@ -612,16 +612,6 @@ impl Database {
         Ok(count as usize)
     }
 
-    /// Get count of audio files that have fingerprints.
-    pub fn get_fingerprinted_audio_file_count(&self) -> Result<i64> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM audio_info WHERE fingerprint IS NOT NULL",
-            params![],
-            |row| row.get(0),
-        )?;
-        Ok(count)
-    }
-
     // ========================================================================
     // Row Conversion Helpers
     // ========================================================================

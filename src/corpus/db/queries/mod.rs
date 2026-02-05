@@ -382,21 +382,6 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
-    // =========================================================================
-    // Count Queries
-    // =========================================================================
-
-    /// Get audio file count, optionally filtered by source.
-    pub fn get_audio_file_count(&self, source: Option<&str>) -> Result<usize> {
-        self.db.get_audio_file_count(source)
-    }
-
-    /// Get count of audio files that have fingerprints.
-    pub fn get_fingerprinted_audio_file_count(&self) -> Result<i64> {
-        self.db.get_fingerprinted_audio_file_count()
-    }
-
-    // =========================================================================
     // AudioFile Queries
     // =========================================================================
 

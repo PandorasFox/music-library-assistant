@@ -195,8 +195,7 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::AssimilateDiskTagsToDb { inode, .. }
             | Mutation::UpdateTrackPath { inode, .. }
             | Mutation::UpdateTrack { inode, .. }
-            | Mutation::Transcode { inode, .. }
-            | Mutation::RefillSingleFingerprint { inode, .. } => {
+            | Mutation::Transcode { inode, .. } => {
                 inodes.insert(*inode);
             }
 
@@ -224,9 +223,7 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. }
-            | Mutation::ClearAllFingerprints
-            | Mutation::ScheduleFingerprintRefill => {}
+            | Mutation::UpdateFilePath { .. } => {}
         }
     }
 

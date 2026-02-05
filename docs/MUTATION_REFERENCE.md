@@ -62,41 +62,6 @@ Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue Ap
 | IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), ShitFormat | (per-file signals wiped) | Index by path |
 | DropFromIndex | UpdateCorpusFileSignals | — | (per-file signals wiped) | Remove from index |
 | UpdateTrack | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update track metadata |
-| ClearAllFingerprints | — | — | — | Clear all fingerprints, spawn ScheduleFingerprintRefill |
-| ScheduleFingerprintRefill | ScheduleContentAnalysis | — | — | Spawn N RefillSingleFingerprint mutations |
-| RefillSingleFingerprint | — | CorruptFile (on failure) | CorruptFile (on success) | Fingerprint one track |
-
-#### Fingerprint Rebuild Chain
-
-Three-mutation chain for fingerprint regeneration. Initiated from Debug view via "Rebuild All Fingerprints".
-
-**Chain:**
-```
-ClearAllFingerprints
-    │
-    ├── 1. UPDATE tracks SET fingerprint = NULL
-    └── 2. Spawn ScheduleFingerprintRefill
-              │
-              ├── 1. Query all tracks
-              ├── 2. Spawn N × RefillSingleFingerprint mutations
-              └── 3. additional_computations → ScheduleContentAnalysis
-                        │
-                        └── RefillSingleFingerprint { track_id, path }
-                                  │
-                                  ├── On success: Update fingerprint, clear CorruptFile
-                                  └── On failure: Emit CorruptFile signal
-```
-
-**Benefits of this architecture:**
-- **Parallelizable**: N individual mutations can run across worker threads
-- **Interruptible**: Can stop/resume without losing progress
-- **Progress visible**: UI can show "Processed X/N tracks"
-- **Fault-tolerant**: Individual failures don't affect other tracks
-
-**Error handling:**
-- Tracks that fail fingerprinting emit `CorruptFile` signals
-- Tracks that succeed clear any existing `CorruptFile` signal
-- Each mutation succeeds regardless of fingerprint outcome (corruption is a result, not an error)
 
 ### File Entry Operations
 

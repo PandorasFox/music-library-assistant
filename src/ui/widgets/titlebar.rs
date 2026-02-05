@@ -35,7 +35,6 @@ pub enum LateralView {
     CorpusBrowser,
     Insights,
     FormatStandardization,
-    Debug,
 }
 
 impl LateralView {
@@ -46,7 +45,6 @@ impl LateralView {
             LateralView::CorpusBrowser => "Corpus Browser",
             LateralView::Insights => "Insights & Operations",
             LateralView::FormatStandardization => "Format Std",
-            LateralView::Debug => "Debug",
         }
     }
 
@@ -56,25 +54,23 @@ impl LateralView {
             LateralView::TagSearch => LateralView::CorpusBrowser,
             LateralView::CorpusBrowser => LateralView::Insights,
             LateralView::Insights => LateralView::FormatStandardization,
-            LateralView::FormatStandardization => LateralView::Debug,
-            LateralView::Debug => LateralView::TagSearch,
+            LateralView::FormatStandardization => LateralView::TagSearch,
         }
     }
 
     /// Get the previous view in the ring (Shift-Tab)
     pub fn prev(&self) -> Self {
         match self {
-            LateralView::TagSearch => LateralView::Debug,
+            LateralView::TagSearch => LateralView::FormatStandardization,
             LateralView::CorpusBrowser => LateralView::TagSearch,
             LateralView::Insights => LateralView::CorpusBrowser,
             LateralView::FormatStandardization => LateralView::Insights,
-            LateralView::Debug => LateralView::FormatStandardization,
         }
     }
 
     /// All views in order
     pub fn all() -> &'static [LateralView] {
-        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::FormatStandardization, LateralView::Debug]
+        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::FormatStandardization]
     }
 }
 
@@ -162,18 +158,17 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling: TagSearch → CorpusBrowser → Insights → FormatStd → Debug → TagSearch
+        // Test forward cycling: TagSearch → CorpusBrowser → Insights → FormatStd → TagSearch
         let view = LateralView::TagSearch;
         assert_eq!(view.next(), LateralView::CorpusBrowser);
         assert_eq!(view.next().next(), LateralView::Insights);
         assert_eq!(view.next().next().next(), LateralView::FormatStandardization);
-        assert_eq!(view.next().next().next().next(), LateralView::Debug);
-        assert_eq!(view.next().next().next().next().next(), LateralView::TagSearch);
+        assert_eq!(view.next().next().next().next(), LateralView::TagSearch);
 
         // Test backward cycling from CorpusBrowser
         let view = LateralView::CorpusBrowser;
         assert_eq!(view.prev(), LateralView::TagSearch);
-        assert_eq!(view.prev().prev(), LateralView::Debug);
+        assert_eq!(view.prev().prev(), LateralView::FormatStandardization);
     }
 
     #[test]
@@ -182,7 +177,6 @@ mod tests {
         assert_eq!(LateralView::CorpusBrowser.label(), "Corpus Browser");
         assert_eq!(LateralView::Insights.label(), "Insights & Operations");
         assert_eq!(LateralView::FormatStandardization.label(), "Format Std");
-        assert_eq!(LateralView::Debug.label(), "Debug");
     }
 
     #[test]

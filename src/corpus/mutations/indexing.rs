@@ -800,74 +800,6 @@ pub fn execute_assimilate_disk_tags_to_db(
 }
 
 // ============================================================================
-// Fingerprint Rebuild Chain
-// ============================================================================
-//
-// Three-mutation chain for fingerprint regeneration:
-// 1. ClearAllFingerprints → spawns ScheduleFingerprintRefill
-// 2. ScheduleFingerprintRefill → spawns N RefillSingleFingerprint mutations
-// 3. RefillSingleFingerprint → fingerprints one track
-
-/// Execute ClearAllFingerprints mutation.
-///
-/// Clears all fingerprints from the database in one SQL UPDATE.
-/// Returns a spawned ScheduleFingerprintRefill mutation to queue the re-fingerprinting.
-pub fn execute_clear_all_fingerprints(
-    _db: &ReadOnlyDb<'_>,
-    _witness: &MutationExecutionWitness,
-) -> Result<Vec<crate::witch::SpawnedMutation>> {
-    // TODO: This operation needs to be routed through signal_sender and use audio_info table.
-    // The old code wrote directly to a non-existent 'tracks' table.
-    todo!("ClearAllFingerprints needs migration to audio_info table and signal_sender pattern")
-}
-
-/// Execute ScheduleFingerprintRefill mutation.
-///
-/// Queries all audio files and spawns a RefillSingleFingerprint mutation for each.
-pub fn execute_schedule_fingerprint_refill(
-    db: &ReadOnlyDb<'_>,
-    witness: &MutationExecutionWitness,
-) -> Result<Vec<crate::witch::SpawnedMutation>> {
-    use crate::logging::log_general;
-    use crate::corpus::db::types::FileSource;
-
-    let audio_files = db.get_all_audio_files(FileSource::Corpus)?;
-    let count = audio_files.len();
-
-    log_general(format!(
-        "[MUTATION] ScheduleFingerprintRefill: spawning {} individual fingerprint mutations",
-        count
-    ));
-
-    let spawned: Vec<_> = audio_files
-        .into_iter()
-        .map(|audio_file| {
-            witness.spawn_mutation(super::types::Mutation::RefillSingleFingerprint {
-                inode: audio_file.inode(),
-                path: audio_file.entry.path,
-            })
-        })
-        .collect();
-
-    Ok(spawned)
-}
-
-/// Execute RefillSingleFingerprint mutation.
-///
-/// Fingerprints one file from full audio. Emits CorruptFile signal on failure,
-/// clears CorruptFile signal on success.
-pub fn execute_refill_single_fingerprint(
-    _db: &ReadOnlyDb<'_>,
-    _inode: i64,
-    _path: &str,
-    _witness: &MutationExecutionWitness,
-) -> Result<()> {
-    // TODO: This operation needs to be routed through signal_sender and use audio_info table.
-    // The old code wrote directly to a non-existent 'tracks' table.
-    todo!("RefillSingleFingerprint needs migration to audio_info table and signal_sender pattern")
-}
-
-// ============================================================================
 // Single Mutation Dispatch
 // ============================================================================
 
@@ -970,53 +902,6 @@ pub fn execute_single(
 
         Mutation::AssimilateDiskTagsToDb { inode, path } => {
             execute_assimilate_disk_tags_to_db(db, *inode, path, witness)
-        }
-
-        // Fingerprint rebuild chain (these spawn follow-up mutations)
-        Mutation::ClearAllFingerprints => {
-            return match execute_clear_all_fingerprints(db, witness) {
-                Ok(spawned) => MutationResult {
-                    _mutation: mutation.clone(),
-                    success: true,
-                    error: None,
-                    _duration_ms: start.elapsed().as_millis() as u64,
-                    spawn_mutations: spawned,
-                    pending_signals: Vec::new(),
-                },
-                Err(e) => MutationResult {
-                    _mutation: mutation.clone(),
-                    success: false,
-                    error: Some(format!("{:#}", e)),
-                    _duration_ms: start.elapsed().as_millis() as u64,
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                },
-            };
-        }
-
-        Mutation::ScheduleFingerprintRefill => {
-            return match execute_schedule_fingerprint_refill(db, witness) {
-                Ok(spawned) => MutationResult {
-                    _mutation: mutation.clone(),
-                    success: true,
-                    error: None,
-                    _duration_ms: start.elapsed().as_millis() as u64,
-                    spawn_mutations: spawned,
-                    pending_signals: Vec::new(),
-                },
-                Err(e) => MutationResult {
-                    _mutation: mutation.clone(),
-                    success: false,
-                    error: Some(format!("{:#}", e)),
-                    _duration_ms: start.elapsed().as_millis() as u64,
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                },
-            };
-        }
-
-        Mutation::RefillSingleFingerprint { inode, path } => {
-            execute_refill_single_fingerprint(db, *inode, path, witness).map(|_| ())
         }
 
         // Note: SetTrackTagsDb is now handled by tag_edit.rs (spawns ApplyDbTagsToDisk)

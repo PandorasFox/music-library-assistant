@@ -72,8 +72,6 @@ pub(crate) enum UiMode {
     TransactionReview,
     /// Format standardization view (part of lateral view ring)
     FormatStandardization,
-    /// Debug/maintenance view (part of lateral view ring)
-    Debug,
     /// Corrupt file resolution modal (stash + drop)
     CorruptFileResolution,
     /// Shit format transcode resolution modal

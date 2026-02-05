@@ -173,14 +173,6 @@ pub mod presets {
             .binding(KeyBinding::new("Esc", "Exit"))
     }
 
-    /// Debug view controls
-    pub fn debug_view() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("Enter", "Execute"))
-            .binding(KeyBinding::new("Tab/Shift+Tab", "Cycle"))
-            .binding(KeyBinding::new("Esc", "Exit"))
-    }
-
     /// Tag search controls
     pub fn tag_search() -> ControlsHint {
         ControlsHint::new()

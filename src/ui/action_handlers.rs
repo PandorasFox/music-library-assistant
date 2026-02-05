@@ -2497,57 +2497,6 @@ impl App {
     }
 
     // =========================================================================
-    // Debug View
-    // =========================================================================
-
-    pub(super) fn handle_debug_action(&mut self, action: super::debug_view::DebugAction) {
-        use super::debug_view::DebugAction;
-        use crate::corpus::mutations::Mutation;
-
-        match action {
-            DebugAction::None => {}
-            DebugAction::RequestQuit => {
-                if self.has_pending_operations() {
-                    self.status_message = Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
-                    self.mode = UiMode::ExitConfirmModal;
-                }
-            }
-            DebugAction::CycleNext => {
-                self.debug_view = None;
-                self.start_lateral_view(widgets::LateralView::Debug.next());
-            }
-            DebugAction::CyclePrev => {
-                self.debug_view = None;
-                self.start_lateral_view(widgets::LateralView::Debug.prev());
-            }
-            DebugAction::RebuildFingerprints => {
-                // This is an operator decision - execute the mutation directly
-                // (no transaction review needed for maintenance operations)
-                //
-                // Chain: ClearAllFingerprints → ScheduleFingerprintRefill → N × RefillSingleFingerprint
-                if let Some(ref mut witch) = self.witch {
-                    let mutation = Mutation::ClearAllFingerprints;
-                    let _ = witch.start_transaction("Rebuild fingerprints");
-                    let _ = super::operator_decisions::stage_decision(
-                        witch,
-                        0,
-                        "Clear and rebuild all fingerprints from full audio",
-                        vec![mutation],
-                    );
-                    let _ = super::operator_decisions::commit_transaction(witch);
-                    self.status_message = Some("Fingerprint rebuild started".to_string());
-                    // Mark witch as busy for UI feedback
-                    if let Some(ref mut state) = self.debug_view {
-                        state.witch_busy = true;
-                    }
-                }
-            }
-        }
-    }
-
-    // =========================================================================
     // Mouse Click Handling
     // =========================================================================
 

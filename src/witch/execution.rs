@@ -130,10 +130,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. }
-            | Mutation::ClearAllFingerprints
-            | Mutation::ScheduleFingerprintRefill
-            | Mutation::RefillSingleFingerprint { .. } => {
+            | Mutation::AssimilateDiskTagsToDb { .. } => {
                 let r = indexing::execute_single(read_db, &mutation, &witness);
                 (r.success, r.error, r.spawn_mutations, r.pending_signals)
             }

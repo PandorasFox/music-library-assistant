@@ -289,6 +289,65 @@ pub fn execute_update_file_path(
     Ok(())
 }
 
+/// Execute DropDirectoryFromIndex mutation - remove directory and contents from index.
+///
+/// Removes:
+/// - Directory entry from files table
+/// - All file entries under the directory from files table
+/// - All audio_info entries for those files
+/// - MissingDirectory signal for the directory
+/// - MissingFile signals for files within
+pub fn execute_drop_directory_from_index(
+    db: &ReadOnlyDb<'_>,
+    directory_path: &Path,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::db_thread;
+    use crate::corpus::db::types::CorpusFileSignalType;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    let dir_str = directory_path.to_string_lossy().to_string();
+
+    // Get all files under this directory from the index
+    let audio_files = db.get_audio_files_by_path_prefix(&dir_str).unwrap_or_default();
+
+    crate::logging::log_general(format!(
+        "[MUTATION] DropDirectoryFromIndex: removing {} files from {}",
+        audio_files.len(),
+        dir_str
+    ));
+
+    // Drop each file from the index
+    for audio_file in &audio_files {
+        let file_path = audio_file.path();
+        sender.drop_from_index(file_path, witness);
+        sender.drop_file_index_by_inode("corpus", audio_file.entry.inode, witness);
+        // Clear MissingFile signal for this file
+        sender.clear_file_signal(
+            CorpusFileSignalType::MissingFile.into(),
+            file_path,
+            witness,
+        );
+    }
+
+    // Drop the directory entry itself from files table
+    // We need to get the directory's inode first
+    if let Ok(Some(dir_entry)) = db.get_file_entry_by_path(&dir_str, "corpus") {
+        sender.drop_file_index_by_inode("corpus", dir_entry.inode, witness);
+    }
+
+    // Clear MissingDirectory signal
+    sender.clear_file_signal(
+        CorpusFileSignalType::MissingDirectory.into(),
+        &dir_str,
+        witness,
+    );
+
+    Ok(())
+}
+
 /// Execute DropFromIndex mutation - remove track from index.
 ///
 /// Routes writes through signal_sender. Path is passed directly from mutation.
@@ -879,6 +938,10 @@ pub fn execute_single(
             inode,
             source,
         } => execute_drop_from_index(db, path, *inode, source.as_deref(), witness),
+
+        Mutation::DropDirectoryFromIndex { directory_path } => {
+            execute_drop_directory_from_index(db, directory_path, witness)
+        }
 
         Mutation::UpdateTrack {
             inode,

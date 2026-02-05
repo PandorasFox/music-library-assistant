@@ -246,6 +246,19 @@ pub enum Mutation {
         source: Option<String>,
     },
 
+    /// Drop a directory and all its contents from the index.
+    ///
+    /// Used when an entire directory is deleted externally and acknowledged.
+    /// - Removes directory entry from files table
+    /// - Removes all file entries under the directory from files table
+    /// - Removes all audio_info entries for those files
+    /// - Clears MissingDirectory signal for the directory
+    /// - Clears MissingFile signals for files within
+    DropDirectoryFromIndex {
+        /// Relative path of the directory
+        directory_path: PathBuf,
+    },
+
     /// Full track metadata update (for out-of-band file changes).
     UpdateTrack {
         inode: i64,
@@ -319,6 +332,7 @@ impl Mutation {
             Mutation::UpdateFileEntry { .. } | Mutation::CleanupStaleFiles { .. } => "File entry",
             Mutation::UpdateTrackPath { .. } | Mutation::UpdateFilePath { .. } => "Path update",
             Mutation::DropFromIndex { .. } => "Drop from index",
+            Mutation::DropDirectoryFromIndex { .. } => "Drop directory from index",
             Mutation::UpdateTrack { .. } => "Track update",
             Mutation::AcknowledgeMtimeOnly { .. } => "Acknowledge mtime",
             Mutation::AcknowledgeInodeChanged { .. } => "Acknowledge inode",
@@ -528,6 +542,9 @@ impl Mutation {
             // Drop: the path being dropped
             Mutation::DropFromIndex { path, .. } => vec![path.clone()],
 
+            // Directory drop: the directory path
+            Mutation::DropDirectoryFromIndex { directory_path } => vec![directory_path.clone()],
+
             // Track update: the path being updated
             Mutation::UpdateTrack { path, .. } => vec![path.clone()],
 
@@ -572,6 +589,7 @@ impl Mutation {
             // Clear ALL signals (file is gone or replaced entirely)
             Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
+            | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::Transcode { .. } => SignalClearScope::All,
 
             // Clear mutable signals only (preserve CorruptFile, ShitFormat)
@@ -641,7 +659,8 @@ impl Mutation {
             | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateFilePath { .. }
             | Mutation::MoveToStash { .. }
-            | Mutation::DropFromIndex { .. } => Vec::new(),
+            | Mutation::DropFromIndex { .. }
+            | Mutation::DropDirectoryFromIndex { .. } => Vec::new(),
         }
     }
 
@@ -662,6 +681,7 @@ impl Mutation {
             // All others: no CorruptFile emission
             Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
+            | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::Transcode { .. }
             | Mutation::Move { .. }
             | Mutation::Copy { .. }
@@ -697,6 +717,7 @@ impl Mutation {
             // All others: no ShitFormat emission (explicit listing)
             Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
+            | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::Transcode { .. }
             | Mutation::Move { .. }
             | Mutation::Copy { .. }
@@ -733,6 +754,7 @@ impl Mutation {
             | Mutation::IndexFileFromPath { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
+            | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::Transcode { .. }
             | Mutation::Move { .. }
             | Mutation::Copy { .. }
@@ -773,6 +795,7 @@ impl Mutation {
             | Mutation::IndexFileFromPath { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
+            | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::Transcode { .. }
             | Mutation::Move { .. }
             | Mutation::Copy { .. }

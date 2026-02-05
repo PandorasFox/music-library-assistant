@@ -61,6 +61,7 @@ Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue Ap
 | IndexTrack | UpdateCorpusFileSignals | CorruptFile (if no fingerprint), ShitFormat | (per-file signals wiped) | Add track to index |
 | IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), ShitFormat | (per-file signals wiped) | Index by path |
 | DropFromIndex | UpdateCorpusFileSignals | — | (per-file signals wiped) | Remove from index |
+| DropDirectoryFromIndex | — | — | MissingFile × N, MissingDirectory | Drop directory and all contained files from index |
 | UpdateTrack | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update track metadata |
 
 ### File Entry Operations

@@ -79,7 +79,7 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
-| ScheduleSecondLevelDerivations | DeriveDirectorySignals × N, WalkLibrary × N | — | — |
+| ScheduleSecondLevelDerivations | DeriveDirectorySignals × N, WalkLibrary × N | MissingDirectory | MissingDirectory (if dir exists again) |
 | DeriveDirectorySignals | — | UnindexedFile, MissingFile, HealthyFile | UnindexedFile, MissingFile, HealthyFile (stale); skips HealthyFile for OOB-flagged files |
 | UpdateCorpusFileSignals | — | FileInCorpus, UnindexedFile, MissingFile, HealthyFile | FileInCorpus, UnindexedFile, MissingFile, HealthyFile |
 | UpdateLibraryFileSignals | — | — | LibraryLeftover, LibraryStale |
@@ -105,6 +105,17 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
 | DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |
+
+### Fingerprinting Limitations
+
+Chromaprint requires a minimum audio duration to generate a usable fingerprint. The algorithm uses 4096-sample frames at 11025 Hz (~0.37 seconds each) with 2/3 overlap, and needs multiple frames to produce meaningful output. In practice, **audio under ~2 seconds cannot be fingerprinted**.
+
+Files that are too short will have empty fingerprints stored in `audio_info`. These files:
+- Are excluded from `DetectFingerprintOverlaps` (empty fingerprints are filtered out)
+- Cannot participate in duplicate detection via fingerprint matching
+- Will emit `CorruptFile` signals during indexing (fingerprint extraction failure)
+
+This primarily affects sound effects, jingles, and very short intros. Such files must be deduplicated manually if needed.
 
 ---
 

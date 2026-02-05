@@ -203,7 +203,7 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             Computation::Awakening(c) => {
                 let result = match c {
                     awakening::Computation::ScheduleSecondLevelDerivations => {
-                        awakening::execute_schedule_second_level_derivations(read_only_db, start)
+                        awakening::execute_schedule_second_level_derivations(read_only_db, &witness, start)
                     }
                     awakening::Computation::DeriveDirectorySignals { directory } => {
                         awakening::execute_derive_directory_signals(read_only_db, directory, &witness, start)

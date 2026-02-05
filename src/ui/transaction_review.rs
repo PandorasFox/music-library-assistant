@@ -33,6 +33,7 @@ pub enum TransactionReviewSource {
     CompoundTagSplit,
     DeployPreview,
     MissingFileResolution,
+    MissingDirectoryResolution,
     IntakeConfirmation,
     FormatStandardization,
     OobSyncResolution,
@@ -223,7 +224,8 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. } => {}
+            | Mutation::UpdateFilePath { .. }
+            | Mutation::DropDirectoryFromIndex { .. } => {}
         }
     }
 

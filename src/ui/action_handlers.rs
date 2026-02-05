@@ -6,7 +6,7 @@
 
 use crate::corpus::db::types::FileSource;
 use crate::corpus::paths;
-use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -101,6 +101,9 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchSubparDuplicateResolution) => {
                         self.start_subpar_duplicate_resolution();
+                    }
+                    Some(insights_view::InsightAction::LaunchMissingDirectoryResolution) => {
+                        self.start_missing_directory_resolution();
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Flow not yet implemented".to_string());
@@ -617,6 +620,79 @@ impl App {
 
     /// Stage missing file mutations for transaction review.
     fn stage_missing_file_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+        let Some(ref mut witch) = self.witch else {
+            return;
+        };
+
+        // Start transaction and stage the decision
+        let _ = witch.start_transaction(label);
+        let _ = super::operator_decisions::stage_decision(
+            witch,
+            0,
+            label,
+            mutations,
+        );
+    }
+
+    // =========================================================================
+    // Missing Directory Resolution
+    // =========================================================================
+
+    /// Start missing directory resolution modal from Insights view.
+    fn start_missing_directory_resolution(&mut self) {
+        // Load missing directory data
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                missing_directory_flow::MissingDirectoryModalData::load(&read_db).ok()
+            })
+            .unwrap_or_default();
+
+        if data.count() == 0 {
+            self.status_message = Some("No missing directories to resolve".to_string());
+            return;
+        }
+
+        // Create preview state with cached data
+        let preview = missing_directory_flow::MissingDirectoryPreviewState::new(data);
+        self.missing_directory_preview = Some(preview);
+        self.mode = UiMode::MissingDirectoryResolution;
+    }
+
+    /// Handle missing directory preview actions.
+    pub(super) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_flow::MissingDirectoryPreviewAction) {
+        match action {
+            missing_directory_flow::MissingDirectoryPreviewAction::None => {}
+            missing_directory_flow::MissingDirectoryPreviewAction::ConfirmDrop => {
+                // Generate drop mutations (DropDirectoryFromIndex) and stage for review
+                if let Some(ref preview) = self.missing_directory_preview {
+                    let mutations = preview.cached_data.drop_mutations();
+                    let count = mutations.len();
+                    if count > 0 {
+                        self.stage_missing_directory_mutations(mutations, "Drop missing directories");
+                        // Note: missing_directory_preview state is NOT cleared - preserved for Cancel return
+                        self.start_transaction_review(transaction_review::TransactionReviewSource::MissingDirectoryResolution);
+                    } else {
+                        self.status_message = Some("No directories to drop".to_string());
+                    }
+                }
+            }
+            missing_directory_flow::MissingDirectoryPreviewAction::Cancel => {
+                crate::logging::log_general("Missing directory resolution cancelled");
+                // Discard any active transaction from review flow
+                if let Some(ref mut witch) = self.witch {
+                    if witch.has_transaction() {
+                        let _ = super::operator_decisions::discard_transaction(witch);
+                    }
+                }
+                self.missing_directory_preview = None;
+                self.start_insights_view();
+            }
+        }
+    }
+
+    /// Stage missing directory mutations for transaction review.
+    fn stage_missing_directory_mutations(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
         let Some(ref mut witch) = self.witch else {
             return;
         };
@@ -2142,6 +2218,10 @@ impl App {
                         // missing_file_preview state was preserved
                         self.mode = UiMode::MissingFileResolution;
                     }
+                    Some(TransactionReviewSource::MissingDirectoryResolution) => {
+                        // missing_directory_preview state was preserved
+                        self.mode = UiMode::MissingDirectoryResolution;
+                    }
                     Some(TransactionReviewSource::IntakeConfirmation) => {
                         // intake_confirmation state was preserved
                         self.mode = UiMode::IntakeConfirmation;
@@ -2251,6 +2331,7 @@ impl App {
         self.compound_split_clusters = None;
         self.deployment_preview = None;
         self.missing_file_preview = None;
+        self.missing_directory_preview = None;
         self.intake_confirmation = None;
         self.format_std = None;
         self.oob_sync_state = None;

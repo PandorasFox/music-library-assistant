@@ -64,6 +64,12 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
 
+        let missing_directories: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM signals WHERE issue_type = 'missing_directory'",
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
         let moved_files: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM signals WHERE issue_type = 'moved_file'",
             params![],
@@ -110,7 +116,7 @@ impl Database {
         // Get total health issue count excluding:
         // - deploy_conflicts (shown separately)
         // - file_in_corpus, healthy_file (benign status signals)
-        // - unindexed_file, missing_file, moved_file (file-level signals shown separately)
+        // - unindexed_file, missing_file, missing_directory, moved_file (file-level signals shown separately)
         let total_signals: usize = self.conn.query_row(
             r#"SELECT COUNT(*) FROM signals
                WHERE issue_type NOT IN (
@@ -119,6 +125,7 @@ impl Database {
                    'healthy_file',
                    'unindexed_file',
                    'missing_file',
+                   'missing_directory',
                    'moved_file'
                )"#,
             params![],
@@ -155,6 +162,7 @@ impl Database {
             healthy_files,
             unindexed_files,
             missing_files,
+            missing_directories,
             moved_files,
             library_stale,
             library_leftover,
@@ -510,6 +518,45 @@ impl Database {
         Ok(directories.into_iter().collect())
     }
 
+    /// Get indexed corpus directories (directories stored in files table).
+    ///
+    /// Returns directory paths from the files table where is_dir=1 and source='corpus'.
+    /// Used to detect missing directories (directories that were indexed but no longer exist).
+    pub fn get_indexed_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+        use std::path::PathBuf;
+
+        let mut stmt = self.conn.prepare(
+            r#"SELECT path FROM files
+               WHERE is_dir = 1 AND source = 'corpus'"#
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            let path: String = row.get(0)?;
+            Ok(PathBuf::from(path))
+        })?;
+
+        let mut directories = Vec::new();
+        for row in rows {
+            directories.push(row?);
+        }
+
+        Ok(directories)
+    }
+
+    /// Get missing directory signal paths (for UI resolution modal).
+    pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT issue_key FROM signals WHERE issue_type = 'missing_directory' ORDER BY issue_key"
+        )?;
+        let rows = stmt.query_map(params![], |row| row.get(0))?;
+
+        let mut paths = Vec::new();
+        for row in rows {
+            paths.push(row?);
+        }
+
+        Ok(paths)
+    }
+
     /// Get distinct parent directories from FileInCorpus signals.
     ///
     /// FileInCorpus signals use the file path as issue_key.
@@ -645,6 +692,7 @@ impl Database {
         let files_indexed = self.get_audio_file_count(Some("corpus")).unwrap_or(0);
         let files_unindexed = self.count_signal_type("unindexed_file")?;
         let files_missing = self.count_signal_type("missing_file")?;
+        let directories_missing = self.count_signal_type("missing_directory")?;
         let files_relocated = self.count_signal_type("moved_file")?;
 
         // Error/format signals
@@ -666,6 +714,7 @@ impl Database {
             files_indexed,
             files_unindexed,
             files_missing,
+            directories_missing,
             files_relocated,
             corrupt_files,
             shit_format_files,

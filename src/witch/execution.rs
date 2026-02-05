@@ -126,6 +126,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             | Mutation::UpdateTrackPath { .. }
             | Mutation::UpdateFilePath { .. }
             | Mutation::DropFromIndex { .. }
+            | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }

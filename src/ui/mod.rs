@@ -39,6 +39,7 @@ pub mod format_standardization;
 pub mod helpers;
 pub mod insights_view;
 pub mod missing_file_flow;
+pub mod missing_directory_flow;
 pub mod inode_changed_flow;
 pub mod moved_file_flow;
 pub mod oob_conflict_flow;
@@ -150,6 +151,8 @@ pub(crate) struct App {
     pub(super) deployment_preview: Option<deploy_flow::DeploymentPreviewState>,
     // Missing file resolution modal
     pub(super) missing_file_preview: Option<missing_file_flow::MissingFilePreviewState>,
+    // Missing directory acknowledgment modal
+    pub(super) missing_directory_preview: Option<missing_directory_flow::MissingDirectoryPreviewState>,
     // Tag canonicity resolution modal
     pub(super) tag_canonicity_state: Option<tag_canonicity::TagCanonicalityState>,
     // Tag canonicity cluster navigation (signal IDs and current index)
@@ -223,6 +226,7 @@ impl App {
             tree_browser: None,
             deployment_preview: None,
             missing_file_preview: None,
+            missing_directory_preview: None,
             tag_canonicity_state: None,
             tag_canonicity_clusters: None,
             compound_split_state: None,
@@ -419,6 +423,12 @@ impl App {
                 if let Some(ref mut preview) = self.missing_file_preview {
                     let action = preview.handle_key(key);
                     self.handle_missing_file_preview_action(action);
+                }
+            }
+            UiMode::MissingDirectoryResolution => {
+                if let Some(ref mut preview) = self.missing_directory_preview {
+                    let action = preview.handle_key(key);
+                    self.handle_missing_directory_preview_action(action);
                 }
             }
             UiMode::TagCanonicityResolution => {
@@ -662,6 +672,7 @@ fn render(f: &mut Frame, app: &mut App) {
         tree_browser: app.tree_browser.as_mut(),
         deployment_preview: app.deployment_preview.as_mut(),
         missing_file_preview: app.missing_file_preview.as_ref(),
+        missing_directory_preview: app.missing_directory_preview.as_ref(),
         tag_canonicity_state: app.tag_canonicity_state.as_ref(),
         compound_split_state: app.compound_split_state.as_ref(),
         oob_sync_state: app.oob_sync_state.as_mut(),

@@ -423,6 +423,30 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 Style::default().fg(text_color),
             )));
         }
+        InsightType::CorpusDirectoriesMissing => {
+            lines.push(Line::from(Span::styled(
+                "Directories Missing",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Indexed directories no longer found",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "on disk. May have been moved or",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "deleted externally.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to drop from index.",
+                Style::default().fg(Color::Cyan),
+            )));
+        }
         InsightType::CorpusFilesRelocated => {
             lines.push(Line::from(Span::styled(
                 "Files Relocated (Moved)",

@@ -26,6 +26,7 @@ pub struct RenderContext<'a> {
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
+    pub missing_directory_preview: Option<&'a super::missing_directory_flow::MissingDirectoryPreviewState>,
     pub tag_canonicity_state: Option<&'a tag_canonicity::TagCanonicalityState>,
     pub compound_split_state: Option<&'a compound_split::CompoundSplitState>,
     pub oob_sync_state: Option<&'a mut oob_sync_flow::OobSyncState>,
@@ -165,6 +166,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::TagSearch => Some("Tag Search"),
         super::UiMode::UnifiedTagEditor => Some("Tag Editor"),
         super::UiMode::MissingFileResolution => Some("Missing File Resolution"),
+        super::UiMode::MissingDirectoryResolution => Some("Missing Directory Acknowledgment"),
         super::UiMode::TagCanonicityResolution => Some("Tag Canonicity"),
         super::UiMode::CompoundTagSplit => Some("Compound Tag Split"),
         super::UiMode::OobSyncResolution => Some("OOB Tag Sync"),
@@ -247,6 +249,12 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::MissingFileResolution => {
             view_name = "missing_file_resolution";
             if let Some(ref preview) = ctx.missing_file_preview {
+                preview.render(f, area);
+            }
+        }
+        super::UiMode::MissingDirectoryResolution => {
+            view_name = "missing_directory_resolution";
+            if let Some(ref preview) = ctx.missing_directory_preview {
                 preview.render(f, area);
             }
         }
@@ -786,6 +794,7 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::IntakeConfirmation => control_presets::empty(), // Modal handles its own hints
         super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
         super::UiMode::MissingFileResolution => control_presets::empty(), // Modal handles its own hints
+        super::UiMode::MissingDirectoryResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TagCanonicityResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::CompoundTagSplit => control_presets::empty(), // Modal handles its own hints
         super::UiMode::OobSyncResolution => control_presets::empty(), // Modal handles its own hints

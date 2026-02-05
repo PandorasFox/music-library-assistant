@@ -132,6 +132,7 @@ pub enum InsightType {
     CorpusFilesIndexed,
     CorpusFilesUnindexed,
     CorpusFilesMissing,
+    CorpusDirectoriesMissing,
     CorpusFilesRelocated,
     CorpusCorruptFiles,
     CorpusShitFormatFiles,
@@ -157,6 +158,8 @@ pub enum InsightAction {
     LaunchDeploymentPreview,
     /// Launch missing file resolution flow
     LaunchMissingFileResolution,
+    /// Launch missing directory acknowledgment flow
+    LaunchMissingDirectoryResolution,
     /// Launch tag canonicity resolution flow
     LaunchTagCanonicityResolution,
     /// Launch compound tag split flow
@@ -401,6 +404,14 @@ impl CachedBucketEntries {
                 1,
                 if corpus.files_missing > 0 { Color::Red } else { Color::Green },
                 InsightAction::LaunchMissingFileResolution,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusDirectoriesMissing,
+                "Directories missing",
+                corpus.directories_missing,
+                if corpus.directories_missing > 0 { 0 } else { 2 },
+                if corpus.directories_missing > 0 { Color::Red } else { Color::DarkGray },
+                InsightAction::LaunchMissingDirectoryResolution,
             ),
             BucketEntry::corpus(
                 InsightType::CorpusFilesRelocated,

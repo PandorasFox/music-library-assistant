@@ -616,6 +616,16 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_distinct_corpus_directories()
     }
 
+    /// Get indexed corpus directories (directories stored in files table).
+    pub fn get_indexed_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+        self.db.get_indexed_corpus_directories()
+    }
+
+    /// Get missing directory signal paths (for UI resolution modal).
+    pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
+        self.db.get_missing_directory_paths()
+    }
+
     /// Get signals in a specific directory.
     pub fn get_signals_in_directory(
         &self,

@@ -166,6 +166,8 @@ pub enum SignalType {
     MovedFile,
     /// File in index but no longer exists in corpus
     MissingFile,
+    /// Directory in index but no longer exists in corpus
+    MissingDirectory,
 
     // =========================================================================
     // Third-level signals (computed for healthy files)
@@ -239,6 +241,7 @@ impl SignalType {
             Self::HealthyFile => "healthy_file",
             Self::MovedFile => "moved_file",
             Self::MissingFile => "missing_file",
+            Self::MissingDirectory => "missing_directory",
 
             // Third-level signals
             Self::DeployConflict => "deploy_conflict",
@@ -278,6 +281,7 @@ impl SignalType {
             "healthy_file" => Some(Self::HealthyFile),
             "moved_file" => Some(Self::MovedFile),
             "missing_file" => Some(Self::MissingFile),
+            "missing_directory" => Some(Self::MissingDirectory),
 
             // Third-level signals
             "deploy_conflict" => Some(Self::DeployConflict),
@@ -328,6 +332,7 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::UnindexedFile => Self::UnindexedFile,
             CorpusFileSignalType::HealthyFile => Self::HealthyFile,
             CorpusFileSignalType::MissingFile => Self::MissingFile,
+            CorpusFileSignalType::MissingDirectory => Self::MissingDirectory,
             CorpusFileSignalType::MovedFile => Self::MovedFile,
             CorpusFileSignalType::OutOfBandTagSync => Self::OutOfBandTagSync,
             CorpusFileSignalType::OutOfBandTagConflict => Self::OutOfBandTagConflict,
@@ -383,6 +388,8 @@ pub enum CorpusFileSignalType {
     HealthyFile,
     /// File in index but missing from corpus
     MissingFile,
+    /// Directory in index but missing from corpus
+    MissingDirectory,
     /// File moved (same inode, different path than indexed)
     /// issue_key: new path, metadata: {"old_path": "...", "inode": i64}
     MovedFile,
@@ -409,6 +416,7 @@ impl CorpusFileSignalType {
             Self::UnindexedFile => "unindexed_file",
             Self::HealthyFile => "healthy_file",
             Self::MissingFile => "missing_file",
+            Self::MissingDirectory => "missing_directory",
             Self::MovedFile => "moved_file",
             Self::OutOfBandTagSync => "oob_tag_sync",
             Self::OutOfBandTagConflict => "oob_tag_conflict",
@@ -426,6 +434,7 @@ impl CorpusFileSignalType {
             Self::UnindexedFile => SignalType::UnindexedFile,
             Self::HealthyFile => SignalType::HealthyFile,
             Self::MissingFile => SignalType::MissingFile,
+            Self::MissingDirectory => SignalType::MissingDirectory,
             Self::MovedFile => SignalType::MovedFile,
             Self::OutOfBandTagSync => SignalType::OutOfBandTagSync,
             Self::OutOfBandTagConflict => SignalType::OutOfBandTagConflict,
@@ -709,6 +718,8 @@ pub struct CorpusSummary {
     pub unindexed_files: usize,
     /// Files in index but no longer exist on disk
     pub missing_files: usize,
+    /// Directories in index but no longer exist on disk
+    pub missing_directories: usize,
     /// Files that were moved (same inode, different path)
     pub moved_files: usize,
 
@@ -756,6 +767,7 @@ pub struct CorpusFilesBucket {
     pub files_indexed: usize,
     pub files_unindexed: usize,
     pub files_missing: usize,
+    pub directories_missing: usize,
     pub files_relocated: usize,
     /// Files that are corrupt (unreadable tags or waveform decode failure)
     pub corrupt_files: usize,

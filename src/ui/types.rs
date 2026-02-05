@@ -56,6 +56,8 @@ pub(crate) enum UiMode {
     UnifiedTagEditor,
     /// Missing file resolution modal
     MissingFileResolution,
+    /// Missing directory acknowledgment modal
+    MissingDirectoryResolution,
     /// Tag canonicity resolution modal (artist/genre/album canonization, album_artist setting)
     TagCanonicityResolution,
     /// Compound tag split resolution modal (split "Rock; Metal" into separate values)

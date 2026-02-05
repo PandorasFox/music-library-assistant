@@ -28,10 +28,72 @@ use super::{Computation, Result};
 /// Schedule second-level signal derivations by spawning per-directory computations.
 pub fn execute_schedule_second_level_derivations(
     read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     log_general("[COMPUTE] ScheduleSecondLevelDerivations: starting");
 
+    // Get signal sender for missing directory signals
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                Computation::ScheduleSecondLevelDerivations,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // ========================================================================
+    // Detect Missing Directories
+    // ========================================================================
+    // Check indexed directories against disk to emit/clear MissingDirectory signals
+    let indexed_dirs = read_only_db.get_indexed_corpus_directories().unwrap_or_default();
+    let resolver = paths::get_resolver();
+
+    let mut missing_dir_count = 0;
+    let mut existing_dir_count = 0;
+
+    for indexed_dir in &indexed_dirs {
+        // Paths in DB are root-relative (e.g., "corpus/physical/cd/...")
+        // Use resolver.resolve() to get absolute path
+        let abs_path = resolver.resolve(indexed_dir);
+        let dir_str = indexed_dir.to_string_lossy().to_string();
+
+        if abs_path.exists() && abs_path.is_dir() {
+            // Directory exists - clear any stale MissingDirectory signal
+            drop_stale_file_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::MissingDirectory.into(),
+                &dir_str,
+                witness,
+            );
+            existing_dir_count += 1;
+        } else {
+            // Directory is missing - emit MissingDirectory signal
+            ensure_file_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::MissingDirectory.into(),
+                &dir_str,
+                witness,
+            );
+            missing_dir_count += 1;
+        }
+    }
+
+    log_general(format!(
+        "[COMPUTE] Directory check: {} indexed, {} existing, {} missing",
+        indexed_dirs.len(),
+        existing_dir_count,
+        missing_dir_count
+    ));
+
+    // ========================================================================
+    // Schedule Per-Directory Signal Derivations
+    // ========================================================================
     // Get all directories that have:
     // 1. FileInCorpus signals (corpus directories with audio files)
     // 2. Indexed tracks (may be missing from corpus now)

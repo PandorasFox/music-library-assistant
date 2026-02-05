@@ -396,7 +396,8 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. } => None,
+            | Mutation::AcknowledgeInodeChanged { .. }
+            | Mutation::DropDirectoryFromIndex { .. } => None,
         }
     }
 
@@ -498,6 +499,11 @@ impl Mutation {
             // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
             Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. } => {}
+
+            // Directory drops: the directory itself is affected
+            Mutation::DropDirectoryFromIndex { directory_path, .. } => {
+                dirs.push(directory_path.clone());
+            }
         }
 
         // Deduplicate directories

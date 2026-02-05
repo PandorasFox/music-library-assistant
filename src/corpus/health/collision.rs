@@ -254,8 +254,8 @@ mod tests {
 
         assert_eq!(collision.tag_name, "artist");
         assert_eq!(collision.variants.len(), 2);
-        assert_eq!(collision.canonical, "Nervous Testpilot"); // More common
-        assert!((collision.confidence - 0.7).abs() < 0.01); // 7 out of 10
+        assert_eq!(collision._canonical, "Nervous Testpilot"); // More common
+        assert!((collision._confidence - 0.7).abs() < 0.01); // 7 out of 10
     }
 
     #[test]
@@ -267,8 +267,8 @@ mod tests {
 
         let collision = TagCollision::from_variants("genre", "hip-hop", &variants);
 
-        assert_eq!(collision.canonical, "Hip Hop");
-        assert!((collision.confidence - 0.5).abs() < 0.01); // 10 out of 20
+        assert_eq!(collision._canonical, "Hip Hop");
+        assert!((collision._confidence - 0.5).abs() < 0.01); // 10 out of 20
     }
 
     #[test]

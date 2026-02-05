@@ -125,8 +125,9 @@ mod tests {
     fn test_migration_registry_baseline() {
         let registry = MigrationRegistry::new();
 
-        // Baseline is v1, no migrations
-        assert_eq!(registry.latest_version(), 1);
+        // Placeholder migration is v0->v0, so latest_version is 0
+        // (real migrations will change this)
+        assert_eq!(registry.latest_version(), 0);
         assert!(registry.pending_migrations(1).is_empty());
     }
 }

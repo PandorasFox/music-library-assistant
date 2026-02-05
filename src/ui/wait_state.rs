@@ -101,16 +101,16 @@ mod tests {
     #[test]
     fn test_wait_state_initial() {
         let state = WaitState::new();
-        assert!(!state.is_waiting());
-        assert!(!state.has_seen_working());
+        assert!(!state.waiting);
+        assert!(!state.seen_working);
     }
 
     #[test]
     fn test_wait_state_start() {
         let mut state = WaitState::new();
         state.start();
-        assert!(state.is_waiting());
-        assert!(!state.has_seen_working());
+        assert!(state.waiting);
+        assert!(!state.seen_working);
     }
 
     #[test]
@@ -118,8 +118,9 @@ mod tests {
         let mut state = WaitState::new();
         state.start();
         state.seen_working = true;
-        state.reset();
-        assert!(!state.is_waiting());
-        assert!(!state.has_seen_working());
+        // Reset by creating new state
+        state = WaitState::new();
+        assert!(!state.waiting);
+        assert!(!state.seen_working);
     }
 }

@@ -749,6 +749,7 @@ mod tests {
                 files_indexed: 90,
                 files_unindexed: 5,
                 files_missing: 3,
+                directories_missing: 0,
                 files_relocated: 2,
                 corrupt_files: 0,
                 shit_format_files: 0,
@@ -856,12 +857,12 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 1);
 
-        // Navigate to end of corpus bucket (11 items: 0-10)
-        for _ in 0..9 {
+        // Navigate to end of corpus bucket (12 items: 0-11)
+        for _ in 0..10 {
             state.navigate_down();
         }
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 10);
+        assert_eq!(state.current_selection().selected, 11);
 
         // Navigate down should move to Placeholder bucket
         state.navigate_down();
@@ -871,7 +872,7 @@ mod tests {
         // Navigate up should return to Corpus bucket at last item
         state.navigate_up();
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 10);
+        assert_eq!(state.current_selection().selected, 11);
     }
 
     #[test]

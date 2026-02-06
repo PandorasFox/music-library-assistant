@@ -611,6 +611,10 @@ pub enum AggregateSignalType {
     /// Key: sorted source pair, e.g., "web/releases/bandcamp|web/releases/indie"
     /// Metadata: { "source_a", "source_b", "overlap_count", "fingerprint_keys": [...], "track_pairs": [...] }
     CrossSourceOverlap,
+    /// Operator-confirmed canonical tag value (whitelist - skip split detection)
+    /// Key: "{tag_name}:{tag_value}" (e.g., "artist:Rinse & Repeat")
+    /// Metadata: { "tag_name", "canonical_value", "created_at" }
+    CanonicalTag,
 }
 
 impl AggregateSignalType {
@@ -625,6 +629,7 @@ impl AggregateSignalType {
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
             Self::CrossSourceOverlap => "cross_source_overlap",
+            Self::CanonicalTag => "canonical_tag",
         }
     }
 
@@ -639,6 +644,7 @@ impl AggregateSignalType {
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
             "cross_source_overlap" => Some(Self::CrossSourceOverlap),
+            "canonical_tag" => Some(Self::CanonicalTag),
             _ => None,
         }
     }

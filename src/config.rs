@@ -180,6 +180,12 @@ impl Default for TagSplittingOpinions {
             "genre".to_string(),
             vec![";".to_string(), ",".to_string(), "/".to_string()],
         );
+        // Artist splitting uses " & " (with spaces) to avoid false positives
+        // like "AC/DC" or "Simon & Garfunkel" (band names, not collaborations)
+        tag_separators.insert(
+            "artist".to_string(),
+            vec![" & ".to_string(), ", ".to_string(), "; ".to_string()],
+        );
         Self { tag_separators }
     }
 }

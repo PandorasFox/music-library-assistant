@@ -672,4 +672,18 @@ impl<'a> ReadOnlyDb<'a> {
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
         self.db.get_album_artist_data()
     }
+
+    // =========================================================================
+    // CanonicalTag Queries
+    // =========================================================================
+
+    /// Check if a CanonicalTag signal exists for this tag_name:tag_value.
+    pub fn is_canonical_tag(&self, tag_name: &str, tag_value: &str) -> Result<bool> {
+        self.db.is_canonical_tag(tag_name, tag_value)
+    }
+
+    /// Check if a tag value exists as a standalone (non-compound) value in corpus.
+    pub fn tag_value_exists_standalone(&self, tag_name: &str, value: &str) -> Result<bool> {
+        self.db.tag_value_exists_standalone(tag_name, value)
+    }
 }

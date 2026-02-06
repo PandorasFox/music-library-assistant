@@ -223,7 +223,8 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
             | Mutation::UpdateFilePath { .. }
-            | Mutation::DropDirectoryFromIndex { .. } => {}
+            | Mutation::DropDirectoryFromIndex { .. }
+            | Mutation::EmitCanonicalTag { .. } => {}
         }
     }
 

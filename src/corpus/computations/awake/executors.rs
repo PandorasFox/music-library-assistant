@@ -572,12 +572,14 @@ pub fn execute_detect_tag_canonicalizations(
 /// Execute DetectCompoundTagValues - detect tag values that should be split.
 ///
 /// Emits CompoundTagValue aggregate signals for each detected compound value.
+/// For artist tags, also queries which split parts exist as standalone values
+/// to help the UI suggest splitting vs. canonicalizing.
 pub fn execute_detect_compound_tag_values(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::health::compound::{detect_all_compound_values, get_inodes_for_compound_value};
+    use crate::corpus::health::compound::{detect_all_compound_values, detect_featuring_compound_values, get_inodes_for_compound_value, find_matching_standalone_parts};
 
     let computation = Computation::DetectCompoundTagValues;
 
@@ -600,24 +602,61 @@ pub fn execute_detect_compound_tag_values(
         .map(|c| c.opinions.tag_splitting.tag_separators.clone())
         .unwrap_or_default();
 
-    if tag_separators.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+    // Collect compound values from both separator-based and featuring pattern detection
+    let mut compound_values = Vec::new();
+    let mut seen_values = std::collections::HashSet::new();
+
+    // 1. Separator-based detection (genre, artist with " & ", etc.)
+    if !tag_separators.is_empty() {
+        match detect_all_compound_values(read_only_db, &tag_separators) {
+            Ok(v) => {
+                for cv in v {
+                    // Track seen values to avoid duplicates
+                    let key = format!("{}:{}", cv.tag_name, cv.compound_value);
+                    if seen_values.insert(key) {
+                        compound_values.push(cv);
+                    }
+                }
+            }
+            Err(e) => {
+                return Result::failure(
+                    computation,
+                    start.elapsed().as_millis() as u64,
+                    format!("Failed to detect compound values: {}", e),
+                );
+            }
+        }
     }
 
-    let compound_values = match detect_all_compound_values(read_only_db, &tag_separators) {
-        Ok(v) => v,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to detect compound values: {}", e),
-            );
+    // 2. Featuring pattern detection (artist feat./ft./featuring/with/vs.)
+    match detect_featuring_compound_values(read_only_db) {
+        Ok(v) => {
+            for cv in v {
+                // Only add if not already detected by separator-based detection
+                let key = format!("{}:{}", cv.tag_name, cv.compound_value);
+                if seen_values.insert(key) {
+                    compound_values.push(cv);
+                }
+            }
         }
-    };
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "Failed to detect featuring patterns: {}", e
+            ));
+            // Continue with separator-based results - don't fail entirely
+        }
+    }
 
     let mut signal_count = 0;
+    let mut skipped_canonical = 0;
 
     for cv in compound_values {
+        // Check if this value is whitelisted as canonical
+        if read_only_db.is_canonical_tag(&cv.tag_name, &cv.compound_value).unwrap_or(false) {
+            skipped_canonical += 1;
+            continue;
+        }
+
         // Get inodes for this compound value
         let inodes = get_inodes_for_compound_value(read_only_db, &cv.tag_name, &cv.compound_value)
             .unwrap_or_default();
@@ -626,14 +665,28 @@ pub fn execute_detect_compound_tag_values(
             continue;
         }
 
+        // For artist tag, find which split parts exist as standalone values
+        // This helps the UI decide whether to suggest splitting vs. canonicalizing
+        let matching_parts = if cv.tag_name.to_lowercase() == "artist" {
+            find_matching_standalone_parts(read_only_db, &cv.tag_name, &cv.split_parts)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         // Build metadata JSON
-        let metadata = serde_json::json!({
+        let mut metadata = serde_json::json!({
             "tag_name": cv.tag_name,
             "compound_value": cv.compound_value,
             "split_parts": cv.split_parts,
             "separator": cv.separator,
             "inodes": inodes,
         });
+
+        // Add matching_parts for artist tag (helps UI suggest split vs canonicalize)
+        if cv.tag_name.to_lowercase() == "artist" {
+            metadata["matching_parts"] = serde_json::json!(matching_parts);
+        }
 
         // Signal key: "{tag_name}:{hash}" - use a simple hash of the compound value
         let hash = {
@@ -656,8 +709,8 @@ pub fn execute_detect_compound_tag_values(
     }
 
     log_general(format!(
-        "[COMPUTE] DetectCompoundTagValues: emitted {} CompoundTagValue signals",
-        signal_count
+        "[COMPUTE] DetectCompoundTagValues: emitted {} CompoundTagValue signals, skipped {} canonical",
+        signal_count, skipped_canonical
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

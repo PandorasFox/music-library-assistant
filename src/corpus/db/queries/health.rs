@@ -1217,4 +1217,49 @@ impl Database {
 
         Ok(results)
     }
+
+    // ========================================================================
+    // CanonicalTag Whitelist Queries
+    // ========================================================================
+
+    /// Check if a CanonicalTag signal exists for this tag_name:tag_value.
+    ///
+    /// Used to skip compound tag detection for operator-confirmed canonical values.
+    /// For example, if "artist:Rinse & Repeat" is marked canonical, we shouldn't
+    /// flag it for splitting even though it contains " & ".
+    pub fn is_canonical_tag(&self, tag_name: &str, tag_value: &str) -> Result<bool> {
+        let key = format!("{}:{}", tag_name, tag_value);
+        let exists: bool = self.conn
+            .query_row(
+                "SELECT 1 FROM signals WHERE issue_type = 'canonical_tag' AND issue_key = ?1 LIMIT 1",
+                params![key],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        Ok(exists)
+    }
+
+    /// Check if a tag value exists as a standalone (non-compound) value in corpus.
+    ///
+    /// Used to determine if artist compound split parts have independent presence.
+    /// For example, if we're considering splitting "Priority & TwoThirds":
+    /// - If "Priority" exists as an artist on other tracks → return true
+    /// - If "Priority" only appears as part of compounds → return false
+    ///
+    /// This helps the UI suggest splitting vs. canonicalizing compound values.
+    pub fn tag_value_exists_standalone(&self, tag_name: &str, value: &str) -> Result<bool> {
+        let exists: bool = self.conn
+            .query_row(
+                r#"SELECT 1 FROM corpus_tags ct
+                   JOIN files f ON ct.inode = f.inode
+                   WHERE f.source = 'corpus'
+                     AND LOWER(ct.tag_name) = LOWER(?1)
+                     AND ct.tag_value = ?2
+                   LIMIT 1"#,
+                params![tag_name, value],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        Ok(exists)
+    }
 }

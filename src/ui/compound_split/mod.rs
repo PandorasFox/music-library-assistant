@@ -22,6 +22,8 @@ pub enum CompoundSplitAction {
     None,
     /// User confirmed this split - stage decision and advance
     Confirmed,
+    /// User chose to canonicalize - mark as single entity, don't split
+    Canonicalize,
     /// User cancelled the entire flow
     Cancelled,
     /// Navigate to another signal (Tab/Shift-Tab)
@@ -52,6 +54,9 @@ impl CompoundSplitState {
 
             // Confirm split and advance
             KeyCode::Enter => CompoundSplitAction::Confirmed,
+
+            // Canonicalize - mark as single entity, don't split
+            KeyCode::Char('c') | KeyCode::Char('C') => CompoundSplitAction::Canonicalize,
 
             // Navigate between signals non-committally
             KeyCode::Tab => {

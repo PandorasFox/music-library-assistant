@@ -709,6 +709,61 @@ pub fn execute_assimilate_disk_tags_to_db(
 }
 
 // ============================================================================
+// Signal Emission Executors
+// ============================================================================
+
+/// Execute EmitCanonicalTag mutation - emit a CanonicalTag signal to whitelist a value.
+///
+/// Creates a CanonicalTag aggregate signal that marks a compound-looking value as
+/// a single canonical entity (e.g., "Rinse & Repeat" is a band name, not a collaboration).
+/// Also clears the CompoundTagValue signal for this value so it won't be flagged again.
+pub fn execute_emit_canonical_tag(
+    tag_name: &str,
+    canonical_value: &str,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::corpus::db::types::AggregateSignalType;
+    use crate::db_thread;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Key format: "{tag_name}:{tag_value}" (e.g., "artist:Rinse & Repeat")
+    let canonical_key = format!("{}:{}", tag_name, canonical_value);
+
+    // Metadata for the CanonicalTag signal
+    let metadata = serde_json::json!({
+        "tag_name": tag_name,
+        "canonical_value": canonical_value,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+
+    // Emit CanonicalTag signal
+    sender.ensure_aggregate_signal(
+        AggregateSignalType::CanonicalTag,
+        &canonical_key,
+        Some(&metadata.to_string()),
+        witness,
+    );
+
+    // Clear CompoundTagValue signal for this value (it's now whitelisted)
+    // Key format for CompoundTagValue: "{tag_name}:{compound_value}"
+    let compound_key = format!("{}:{}", tag_name, canonical_value);
+    sender.clear_aggregate_signal(
+        AggregateSignalType::CompoundTagValue,
+        &compound_key,
+        witness,
+    );
+
+    crate::logging::log_general(format!(
+        "[MUTATION] EmitCanonicalTag: {} = {:?}",
+        tag_name, canonical_value
+    ));
+
+    Ok(())
+}
+
+// ============================================================================
 // Single Mutation Dispatch
 // ============================================================================
 
@@ -783,6 +838,11 @@ pub fn execute_single(
 
         Mutation::AssimilateDiskTagsToDb { inode, path } => {
             execute_assimilate_disk_tags_to_db(db, *inode, path, witness)
+        }
+
+        // Signal emission mutations
+        Mutation::EmitCanonicalTag { tag_name, canonical_value } => {
+            execute_emit_canonical_tag(tag_name, canonical_value, witness)
         }
 
         // Note: ApplyTagOps is handled by tag_edit.rs (spawns ApplyDbTagsToDisk)

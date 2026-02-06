@@ -345,6 +345,20 @@ pub enum Mutation {
         path: PathBuf,
     },
 
+    // ========================================================================
+    // Signal Emission Operations
+    // ========================================================================
+    /// Emit a CanonicalTag signal to whitelist a tag value.
+    ///
+    /// Used when operator confirms a compound-looking value is actually
+    /// a single canonical entity (e.g., "Rinse & Repeat" is a band name,
+    /// not a collaboration). The signal prevents future detection as
+    /// a compound value.
+    EmitCanonicalTag {
+        tag_name: String,
+        canonical_value: String,
+    },
+
     // Note: VerifyTags has been moved to corpus::computations::Computation.
     // Computations don't alter state - they only emit signals.
 }
@@ -367,6 +381,7 @@ impl Mutation {
             Mutation::LibraryMove { .. } => "Library move",
             Mutation::DbMigration { .. } => "Migration",
             Mutation::Transcode { .. } => "Transcode",
+            Mutation::EmitCanonicalTag { .. } => "Mark canonical",
         }
     }
 
@@ -381,6 +396,7 @@ impl Mutation {
                 | Mutation::DropFromIndex { .. }
                 | Mutation::AcknowledgeMtimeOnly { .. }
                 | Mutation::AssimilateDiskTagsToDb { .. }
+                | Mutation::EmitCanonicalTag { .. }
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
         )
     }
@@ -413,7 +429,8 @@ impl Mutation {
             | Mutation::DbMigration { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::DropDirectoryFromIndex { .. } => None,
+            | Mutation::DropDirectoryFromIndex { .. }
+            | Mutation::EmitCanonicalTag { .. } => None,
         }
     }
 
@@ -494,6 +511,9 @@ impl Mutation {
             Mutation::DropDirectoryFromIndex { directory_path, .. } => {
                 dirs.push(directory_path.clone());
             }
+
+            // Signal emission: DB-only, no directories affected
+            Mutation::EmitCanonicalTag { .. } => {}
         }
 
         // Deduplicate directories
@@ -552,7 +572,8 @@ impl Mutation {
 
             // Operations without specific file paths that need signal updates
             Mutation::ApplyTagOps { .. }
-            | Mutation::DbMigration { .. } => Vec::new(),
+            | Mutation::DbMigration { .. }
+            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
         }
     }
 
@@ -589,7 +610,8 @@ impl Mutation {
 
             // No signal clearing (DB-only or no file impact)
             Mutation::ApplyTagOps { .. }
-            | Mutation::DbMigration { .. } => SignalClearScope::None,
+            | Mutation::DbMigration { .. }
+            | Mutation::EmitCanonicalTag { .. } => SignalClearScope::None,
         }
     }
 
@@ -627,7 +649,8 @@ impl Mutation {
             | Mutation::UpdateFilePath { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. } => Vec::new(),
+            | Mutation::DropDirectoryFromIndex { .. }
+            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
         }
     }
 
@@ -657,7 +680,8 @@ impl Mutation {
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. } => Vec::new(),
+            | Mutation::UpdateFilePath { .. }
+            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
         }
     }
 
@@ -692,7 +716,8 @@ impl Mutation {
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. } => Vec::new(),
+            | Mutation::UpdateFilePath { .. }
+            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
         }
     }
 }

@@ -74,7 +74,8 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags |
 | MetadataDuplicate | DetectMetadataDuplicates | DetectMetadataDuplicates | Tracks with identical tag sets |
 | TagCanonicity | DetectTagCanonicalizations | DetectTagCanonicalizations | Similar tags needing unification |
-| CompoundTagValue | DetectCompoundTagValues | DetectCompoundTagValues | Tags with separators needing split |
+| CompoundTagValue | DetectCompoundTagValues | DetectCompoundTagValues, EmitCanonicalTag | Tags with separators needing split. For artist tag, includes `matching_parts` metadata with standalone artist matches |
+| CanonicalTag | EmitCanonicalTag | - | Operator-confirmed canonical tag value (whitelist). Key: `{tag_name}:{tag_value}`. Prevents compound detection from flagging this value |
 | InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
 

@@ -567,7 +567,7 @@ impl SignalWriteSender {
         signal_type: AggregateSignalType,
         key: &str,
         metadata_json: Option<&str>,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::EnsureAggregateSignal {

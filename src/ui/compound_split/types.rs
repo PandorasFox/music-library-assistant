@@ -16,16 +16,20 @@ use crate::corpus::tags::TagSet;
 /// Loaded from a CompoundTagValue signal's metadata JSON.
 #[derive(Debug, Clone)]
 pub struct CompoundSplitData {
-    /// Tag name (e.g., "genre")
+    /// Tag name (e.g., "genre", "artist")
     pub tag_name: String,
-    /// Original compound value (e.g., "Rock; Metal")
+    /// Original compound value (e.g., "Rock; Metal" or "Priority & TwoThirds")
     pub compound_value: String,
-    /// Detected separator (e.g., "; ")
+    /// Detected separator (e.g., "; " or " & ")
     pub _separator: String,
-    /// Split parts (e.g., ["Rock", "Metal"])
+    /// Split parts (e.g., ["Rock", "Metal"] or ["Priority", "TwoThirds"])
     pub split_parts: Vec<String>,
     /// Inodes affected by this compound value
     pub inodes: Vec<i64>,
+    /// For artist tag: which split parts exist as standalone artists in corpus.
+    /// Empty list = no matches → suggests canonicalization (band name).
+    /// Non-empty = known artists → suggests splitting (collaboration).
+    pub matching_parts: Vec<String>,
 }
 
 impl CompoundSplitData {
@@ -52,13 +56,47 @@ impl CompoundSplitData {
             .filter_map(|v| v.as_i64())
             .collect();
 
+        // Parse matching_parts (only present for artist tag)
+        let matching_parts: Vec<String> = json
+            .get("matching_parts")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Some(Self {
             tag_name,
             compound_value,
             _separator: separator,
             split_parts,
             inodes,
+            matching_parts,
         })
+    }
+
+    /// Whether this is an artist tag with known standalone parts (suggests splitting).
+    pub fn suggests_split(&self) -> bool {
+        self.tag_name.to_lowercase() == "artist" && !self.matching_parts.is_empty()
+    }
+
+    /// Whether this is an artist tag with NO known standalone parts (suggests canonicalizing).
+    pub fn suggests_canonicalize(&self) -> bool {
+        self.tag_name.to_lowercase() == "artist" && self.matching_parts.is_empty()
+    }
+
+    /// Create a CanonicalTag signal emission mutation.
+    ///
+    /// Called when user chooses to mark this value as canonical (not split).
+    pub fn create_canonical_signal(&self) -> Mutation {
+        // The CanonicalTag signal will be emitted by a computation after the
+        // mutation completes. We use a marker mutation to trigger this.
+        Mutation::EmitCanonicalTag {
+            tag_name: self.tag_name.clone(),
+            canonical_value: self.compound_value.clone(),
+        }
     }
 }
 

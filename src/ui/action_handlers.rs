@@ -1853,6 +1853,11 @@ impl App {
                 self.stage_compound_split_decision();
                 self.advance_to_next_compound_split();
             }
+            compound_split::CompoundSplitAction::Canonicalize => {
+                // Mark as canonical (don't split) and advance
+                self.stage_compound_canonicalize_decision();
+                self.advance_to_next_compound_split();
+            }
             compound_split::CompoundSplitAction::Cancelled => {
                 // Discard transaction if active
                 if let Some(ref mut witch) = self.witch {
@@ -1926,6 +1931,33 @@ impl App {
             state.data.compound_value,
             state.data.tag_name,
             state.data.split_parts.join(", ")
+        );
+
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::operator_decisions::stage_decision(witch, cluster_idx, &description, mutations);
+        }
+    }
+
+    /// Stage a canonicalize decision (mark compound value as canonical, don't split).
+    fn stage_compound_canonicalize_decision(&mut self) {
+        let Some(ref state) = self.compound_split_state else {
+            return;
+        };
+
+        let cluster_idx = self.compound_split_clusters
+            .as_ref()
+            .map(|c| c.current_index())
+            .unwrap_or(0);
+
+        // Create the EmitCanonicalTag mutation
+        let mutation = state.data.create_canonical_signal();
+        let mutations = vec![mutation];
+
+        // Stage the decision via operator_decisions
+        let description = format!(
+            "Keep \"{}\" in {} as canonical",
+            state.data.compound_value,
+            state.data.tag_name,
         );
 
         if let Some(ref mut witch) = self.witch {

@@ -6,7 +6,7 @@
 
 use crate::corpus::db::types::FileSource;
 use crate::corpus::paths;
-use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -1060,6 +1060,8 @@ impl App {
     /// Uses the selected insight type to determine which signals to load:
     /// - InconsistentAlbumArtist: loads all inconsistent_album_artist signals
     /// - TagCanonicity { tag_name }: loads tag_canonicity signals filtered by tag_name
+    ///
+    /// Uses the V2 three-pane layout for tag canonicity resolution.
     fn start_tag_canonicity_resolution(&mut self) {
         use crate::corpus::db::types::AggregateSignalType;
 
@@ -1072,33 +1074,35 @@ impl App {
             }
         };
 
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => {
-                self.status_message = Some("Database not available".to_string());
-                return;
-            }
-        };
+        // Load signals based on insight type (scoped borrow of read_db)
+        let (signals, pre_fill) = {
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => {
+                    self.status_message = Some("Database not available".to_string());
+                    return;
+                }
+            };
 
-        // Load signals based on insight type
-        let (signals, pre_fill) = match &insight_type {
-            insights_view::InsightType::InconsistentAlbumArtist => {
-                let sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::InconsistentAlbumArtist))
-                    .unwrap_or_default();
-                (sigs, false) // No pre-fill for album_artist
-            }
-            insights_view::InsightType::TagCanonicity { tag_name } => {
-                // Load all TagCanonicity signals, then filter by tag_name prefix
-                let all_sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::TagCanonicity))
-                    .unwrap_or_default();
-                let filtered: Vec<_> = all_sigs.into_iter()
-                    .filter(|s| s.key.starts_with(&format!("{}:", tag_name)))
-                    .collect();
-                (filtered, true) // Pre-fill for tag canonicity
-            }
-            _ => {
-                self.status_message = Some("Invalid insight type for tag resolution".to_string());
-                return;
+            match &insight_type {
+                insights_view::InsightType::InconsistentAlbumArtist => {
+                    let sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::InconsistentAlbumArtist))
+                        .unwrap_or_default();
+                    (sigs, false) // No pre-fill for album_artist
+                }
+                insights_view::InsightType::TagCanonicity { tag_name } => {
+                    // Load all TagCanonicity signals, then filter by tag_name prefix
+                    let all_sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::TagCanonicity))
+                        .unwrap_or_default();
+                    let filtered: Vec<_> = all_sigs.into_iter()
+                        .filter(|s| s.key.starts_with(&format!("{}:", tag_name)))
+                        .collect();
+                    (filtered, true) // Pre-fill for tag canonicity
+                }
+                _ => {
+                    self.status_message = Some("Invalid insight type for tag resolution".to_string());
+                    return;
+                }
             }
         };
 
@@ -1116,9 +1120,21 @@ impl App {
             let _ = witch.start_transaction("Tag canonicalization");
         }
 
-        // Load the first signal into modal data
+        // Load the first signal into V2 modal data (with file info) - scoped borrow
         let first_signal = &signals[0];
-        let data = match tag_canonicity::TagCanonicalityModalData::from_signal(first_signal) {
+        let data = {
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => {
+                    self.status_message = Some("Database not available".to_string());
+                    self.tag_canonicity_clusters = None;
+                    return;
+                }
+            };
+            tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(first_signal, &read_db)
+        };
+
+        let data = match data {
             Some(d) => d,
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
@@ -1137,7 +1153,7 @@ impl App {
             .map(|c| (c.current_index, c.signal_ids.len()))
             .unwrap_or((0, 1));
 
-        let state = tag_canonicity::TagCanonicalityState::new(data, pre_fill, group_index, total_groups);
+        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
         self.tag_canonicity_state = Some(state);
         self.mode = UiMode::TagCanonicityResolution;
     }
@@ -1736,16 +1752,16 @@ impl App {
         self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
     }
 
-    /// Handle tag canonicity modal actions.
-    pub(super) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity::TagCanonicalityAction) {
+    /// Handle tag canonicity modal actions (three-pane layout).
+    pub(super) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity_v2::TagCanonicalityActionV2) {
         match action {
-            tag_canonicity::TagCanonicalityAction::None => {}
-            tag_canonicity::TagCanonicalityAction::Confirmed => {
+            tag_canonicity_v2::TagCanonicalityActionV2::None => {}
+            tag_canonicity_v2::TagCanonicalityActionV2::Confirmed => {
                 // Stage decision and advance to next cluster
                 self.stage_canonicity_decision();
                 self.advance_to_next_cluster();
             }
-            tag_canonicity::TagCanonicalityAction::Cancelled => {
+            tag_canonicity_v2::TagCanonicalityActionV2::Cancelled => {
                 // Discard transaction if active via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::discard_transaction(witch);
@@ -1755,11 +1771,11 @@ impl App {
                 self.tag_canonicity_clusters = None;
                 self.start_insights_view();
             }
-            tag_canonicity::TagCanonicalityAction::Navigate { forward } => {
+            tag_canonicity_v2::TagCanonicalityActionV2::Navigate { forward } => {
                 // User navigated to next/prev cluster - do NOT stage decision
                 self.navigate_cluster(forward);
             }
-            tag_canonicity::TagCanonicalityAction::ShowReview => {
+            tag_canonicity_v2::TagCanonicalityActionV2::ShowReview => {
                 // Ctrl+R - stage current decision and show review
                 self.stage_canonicity_decision();
                 self.show_transaction_review_for_canonicity();
@@ -1796,7 +1812,7 @@ impl App {
         }
     }
 
-    /// Advance to next cluster after confirming current one (via Enter).
+    /// Advance to next cluster after confirming current one.
     fn advance_to_next_cluster(&mut self) {
         let Some(ref mut clusters) = self.tag_canonicity_clusters else {
             self.show_transaction_review_for_canonicity();
@@ -2234,7 +2250,7 @@ impl App {
                         self.mode = UiMode::UnifiedTagEditor;
                     }
                     Some(TransactionReviewSource::TagCanonicityResolution) => {
-                        // Reload current cluster into tag_canonicity_state
+                        // Reload current cluster into V2 tag_canonicity_state
                         if self.load_current_cluster_signal() {
                             self.mode = UiMode::TagCanonicityResolution;
                         } else {
@@ -2447,7 +2463,7 @@ impl App {
             metadata_json: signal.metadata_json,
         };
 
-        let data = match tag_canonicity::TagCanonicalityModalData::from_signal(&agg_signal) {
+        let data = match tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(&agg_signal, &read_db) {
             Some(d) => d,
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
@@ -2464,12 +2480,12 @@ impl App {
             .map(|c| (c.current_index, c.signal_ids.len()))
             .unwrap_or((0, 1));
 
-        let state = tag_canonicity::TagCanonicalityState::new(data, pre_fill, group_index, total_groups);
+        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
         self.tag_canonicity_state = Some(state);
         true
     }
 
-    /// Stage a decision for the current canonicity cluster.
+    /// Stage a decision for the current canonicity cluster (V2).
     ///
     /// This adds the decision to the transaction but does NOT confirm it.
     /// The transaction is confirmed when the user completes the review screen.
@@ -2482,23 +2498,8 @@ impl App {
             return;
         };
 
-        // Get file paths and current TagSets from disk
-        let read_db = witch.read_db();
-        let resolver = paths::get_resolver();
-        let mut track_info = std::collections::HashMap::new();
-        for &inode in &state.data.inodes {
-            if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
-                // Resolve relative DB path to absolute for filesystem operations
-                let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
-                // Load complete TagSet from disk for building new tag set
-                let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
-                    .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
-                track_info.insert(inode, (abs_path, tagset));
-            }
-        }
-
-        // Generate mutations - only for tracks whose current value is a selected variant
-        let mutations = state.mutations_with_paths(&track_info);
+        // Generate mutations using the V2 state's cached data
+        let mutations = state.mutations();
         if mutations.is_empty() {
             // No mutations for this cluster - that's OK, skip it
             return;

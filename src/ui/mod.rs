@@ -49,7 +49,7 @@ pub mod render;
 pub mod shit_format_flow;
 pub mod startup;
 pub mod subpar_duplicate_flow;
-pub mod tag_canonicity;
+pub mod tag_canonicity_v2;
 pub mod tag_editor;
 pub mod tag_search;
 pub mod tree_browser;
@@ -153,8 +153,8 @@ pub(crate) struct App {
     pub(super) missing_file_preview: Option<missing_file_flow::MissingFilePreviewState>,
     // Missing directory acknowledgment modal
     pub(super) missing_directory_preview: Option<missing_directory_flow::MissingDirectoryPreviewState>,
-    // Tag canonicity resolution modal
-    pub(super) tag_canonicity_state: Option<tag_canonicity::TagCanonicalityState>,
+    // Tag canonicity resolution three-pane modal
+    pub(super) tag_canonicity_state: Option<tag_canonicity_v2::TagCanonicalityStateV2>,
     // Tag canonicity cluster navigation (signal IDs and current index)
     pub(super) tag_canonicity_clusters: Option<TagCanonicityClusters>,
     // Compound tag split modal

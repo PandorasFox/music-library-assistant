@@ -16,7 +16,7 @@ use ratatui::{
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity, tag_editor, tag_search, transaction_review, tree_browser};
+use super::{compound_split, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -27,7 +27,7 @@ pub struct RenderContext<'a> {
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
     pub missing_directory_preview: Option<&'a super::missing_directory_flow::MissingDirectoryPreviewState>,
-    pub tag_canonicity_state: Option<&'a tag_canonicity::TagCanonicalityState>,
+    pub tag_canonicity_state: Option<&'a tag_canonicity_v2::TagCanonicalityStateV2>,
     pub compound_split_state: Option<&'a compound_split::CompoundSplitState>,
     pub oob_sync_state: Option<&'a mut oob_sync_flow::OobSyncState>,
     pub oob_conflict_state: Option<&'a mut oob_conflict_flow::OobConflictState>,
@@ -261,7 +261,7 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::TagCanonicityResolution => {
             view_name = "tag_canonicity_resolution";
             if let Some(ref state) = ctx.tag_canonicity_state {
-                tag_canonicity::render(f, area, state);
+                tag_canonicity_v2::render(f, area, state);
             }
         }
         super::UiMode::CompoundTagSplit => {

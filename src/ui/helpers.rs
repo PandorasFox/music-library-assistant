@@ -50,6 +50,19 @@ pub fn truncate_left(s: &str, max_chars: usize) -> String {
     format!("...{}", s.chars().skip(skip).collect::<String>())
 }
 
+/// Truncate a string from the right, UTF-8 safe. Result: `visible_start...`
+///
+/// Keeps the leftmost `max_chars` characters. Useful for tag values and labels
+/// where the beginning is most relevant.
+pub fn truncate_right(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s.to_string();
+    }
+    let take = max_chars.saturating_sub(3);
+    format!("{}...", s.chars().take(take).collect::<String>())
+}
+
 /// Format a Duration as a human-readable string.
 pub fn format_duration(duration: std::time::Duration) -> String {
     let total_secs = duration.as_secs();

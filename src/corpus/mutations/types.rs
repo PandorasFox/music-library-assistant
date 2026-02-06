@@ -15,6 +15,74 @@ use crate::corpus::db::types::{CorpusFileSignalType, FileSignalType, LibraryFile
 use crate::corpus::transcode::TranscodeTarget;
 
 // ============================================================================
+// TagOp - Incremental Tag Operations
+// ============================================================================
+
+/// An atomic tag operation on a specific track.
+///
+/// Expressed as (inode, tag_name, old_value, new_value) where:
+/// - old=Some, new=Some → replace value (validate old exists)
+/// - old=Some, new=None → drop value (validate old exists)
+/// - old=None, new=Some → add value (idempotent)
+/// - old=None, new=None → no-op
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TagOp {
+    pub inode: i64,
+    pub tag_name: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+}
+
+impl TagOp {
+    /// Create an operation to drop a tag value.
+    /// Validates that the old value exists before dropping.
+    pub fn drop_tag(inode: i64, tag_name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            inode,
+            tag_name: tag_name.into(),
+            old_value: Some(value.into()),
+            new_value: None,
+        }
+    }
+
+    /// Create an operation to add a tag value.
+    /// Idempotent - won't fail if value already exists.
+    pub fn add_tag(inode: i64, tag_name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            inode,
+            tag_name: tag_name.into(),
+            old_value: None,
+            new_value: Some(value.into()),
+        }
+    }
+
+    /// Create an operation to replace a tag value.
+    /// Validates that the old value exists before replacing.
+    pub fn replace_tag(
+        inode: i64,
+        tag_name: impl Into<String>,
+        old: impl Into<String>,
+        new: impl Into<String>,
+    ) -> Self {
+        Self {
+            inode,
+            tag_name: tag_name.into(),
+            old_value: Some(old.into()),
+            new_value: Some(new.into()),
+        }
+    }
+
+    /// True if this is a no-op (old == new for replace, or both None).
+    pub fn is_nop(&self) -> bool {
+        match (&self.old_value, &self.new_value) {
+            (Some(old), Some(new)) => old == new,
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+// ============================================================================
 // Pending Signal Types
 // ============================================================================
 
@@ -108,20 +176,18 @@ impl ExtractedMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mutation {
     // ========================================================================
-    // Tag Operations (DB-First Pattern with Spawn Chaining)
+    // Tag Operations (Incremental with Validation)
     // ========================================================================
-    /// Set track tags in database only (DB-first pattern, step 1).
+    /// Apply a set of incremental tag operations to tracks.
     ///
-    /// - Writes tags to DB via set_track_tags() (full replacement)
-    /// - Sets needs_disk_flush = TRUE
-    /// - **Spawns** ApplyDbTagsToDisk to sync to disk (step 2)
-    ///
-    /// If interrupted between DB write and disk write, needs_disk_flush=TRUE
-    /// enables recovery via OOB sync flow.
-    SetTrackTagsDb {
-        inode: i64,
-        /// Complete set of tags to store (replaces all existing tags).
-        tags: Vec<(String, String)>,
+    /// Operations are pre-coalesced by inode. At execution time:
+    /// 1. Group ops by inode
+    /// 2. For each inode: read current tags, validate expected old_values
+    /// 3. If ANY validation fails for an inode → that inode's ops fail (others continue)
+    /// 4. Apply tag ops directly via apply_index_tag_ops (INSERT/UPDATE/DELETE)
+    /// 5. Spawn ApplyDbTagsToDisk for each modified inode
+    ApplyTagOps {
+        ops: Vec<TagOp>,
     },
 
     // ========================================================================
@@ -298,7 +364,7 @@ pub enum Mutation {
     ///
     /// Used for:
     /// - OOB sync resolution (reject disk changes)
-    /// - Spawned from SetTrackTagsDb (DB-first pattern step 2)
+    /// - Spawned from ApplyTagOps (incremental tag edit step 2)
     ApplyDbTagsToDisk {
         inode: i64,
         path: PathBuf,
@@ -325,7 +391,7 @@ impl Mutation {
     /// Human-readable label for this mutation (for logging/display).
     pub fn label(&self) -> &'static str {
         match self {
-            Mutation::SetTrackTagsDb { .. } => "Tag edit (DB)",
+            Mutation::ApplyTagOps { .. } => "Tag edit",
             Mutation::ApplyDbTagsToDisk { .. } => "Tag sync (DB→disk)",
             Mutation::AssimilateDiskTagsToDb { .. } => "Tag sync (disk→DB)",
             Mutation::IndexTrack { .. } | Mutation::IndexFileFromPath { .. } => "Indexing",
@@ -350,7 +416,7 @@ impl Mutation {
     pub fn is_db_only(&self) -> bool {
         matches!(
             self,
-            Mutation::SetTrackTagsDb { .. }
+            Mutation::ApplyTagOps { .. }
                 | Mutation::CleanupStaleFiles { .. }
                 | Mutation::DbMigration { .. }
                 | Mutation::UpdateTrackPath { .. }
@@ -375,14 +441,14 @@ impl Mutation {
     #[cfg(test)]
     pub fn affected_inode(&self) -> Option<i64> {
         match self {
-            Mutation::SetTrackTagsDb { inode, .. }
-            | Mutation::UpdateTrack { inode, .. }
+            Mutation::UpdateTrack { inode, .. }
             | Mutation::Transcode { inode, .. }
             | Mutation::ApplyDbTagsToDisk { inode, .. }
             | Mutation::AssimilateDiskTagsToDb { inode, .. } => Some(*inode),
 
             // These don't have a single inode directly (batch operations or no inode)
-            Mutation::IndexTrack { .. }
+            Mutation::ApplyTagOps { .. }
+            | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateFileEntry { .. }
             | Mutation::CleanupStaleFiles { .. }
@@ -411,7 +477,7 @@ impl Mutation {
 
         match self {
             // DB-only tag operations don't change file presence
-            Mutation::SetTrackTagsDb { .. } => {}
+            Mutation::ApplyTagOps { .. } => {}
 
             // Single-track tag sync operations affect the file's directory
             Mutation::ApplyDbTagsToDisk { path, .. }
@@ -572,7 +638,7 @@ impl Mutation {
             Mutation::UpdateFilePath { new_path, .. } => vec![new_path.clone()],
 
             // Operations without specific file paths that need signal updates
-            Mutation::SetTrackTagsDb { .. }
+            Mutation::ApplyTagOps { .. }
             | Mutation::CleanupStaleFiles { .. }
             | Mutation::DbMigration { .. } => Vec::new(),
         }
@@ -617,7 +683,7 @@ impl Mutation {
             Mutation::UpdateFilePath { .. } => SignalClearScope::MutableOnly,
 
             // No signal clearing (DB-only or no file impact)
-            Mutation::SetTrackTagsDb { .. }
+            Mutation::ApplyTagOps { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleFiles { .. } => SignalClearScope::None,
         }
@@ -660,7 +726,7 @@ impl Mutation {
 
             // No signal updates needed (file is gone or DB-only)
             // MoveToStash/DropFromIndex: file removed, signal updates would race with index drop
-            Mutation::SetTrackTagsDb { .. }
+            Mutation::ApplyTagOps { .. }
             | Mutation::DbMigration { .. }
             | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateFilePath { .. }
@@ -695,7 +761,7 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
-            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
@@ -731,7 +797,7 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
-            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
@@ -767,7 +833,7 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
-            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
@@ -794,7 +860,7 @@ impl Mutation {
             ],
 
             // TODO: Tag mutations may need to clear aggregate tag signals here
-            // e.g., SetTrackTagsDb could clear MissingTag signals for affected tag types
+            // e.g., ApplyTagOps could clear MissingTag signals for affected tag types
 
             // Explicit: all other variants clear no specific signals
             Mutation::IndexTrack { .. }
@@ -808,7 +874,7 @@ impl Mutation {
             | Mutation::HardLink { .. }
             | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
-            | Mutation::SetTrackTagsDb { .. }
+            | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
@@ -829,7 +895,7 @@ pub struct MutationResult {
     pub error: Option<String>,
     pub _duration_ms: u64,
     /// Follow-up mutations to queue (from spawn chaining).
-    /// E.g., SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
+    /// E.g., ApplyTagOps spawns ApplyDbTagsToDisk after DB write succeeds.
     pub spawn_mutations: Vec<crate::witch::SpawnedMutation>,
     /// Signals to emit post-execution.
     /// Avoids race with async DB writes by carrying signal data from execution time.
@@ -842,12 +908,11 @@ mod tests {
 
     #[test]
     fn test_mutation_labels() {
-        let set_tags = Mutation::SetTrackTagsDb {
-            inode: 1,
-            tags: vec![("artist".to_string(), "New".to_string())],
+        let apply_tag_ops = Mutation::ApplyTagOps {
+            ops: vec![TagOp::add_tag(1, "artist", "New")],
         };
-        assert_eq!(set_tags.label(), "Tag edit (DB)");
-        assert!(set_tags.is_db_only());
+        assert_eq!(apply_tag_ops.label(), "Tag edit");
+        assert!(apply_tag_ops.is_db_only());
 
         let apply_tags = Mutation::ApplyDbTagsToDisk {
             inode: 1,

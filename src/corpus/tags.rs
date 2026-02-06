@@ -206,7 +206,6 @@ impl TagSet {
     /// - `only_left`: tags in self but not in other
     /// - `only_right`: tags in other but not in self
     /// - `common`: tags in both
-    #[cfg(test)]
     pub fn diff(&self, other: &TagSet) -> TagSetDiff {
         use std::collections::HashSet;
 
@@ -237,11 +236,10 @@ impl TagSet {
 }
 
 // =============================================================================
-// TagSetDiff - Result of comparing two TagSets (test-only)
+// TagSetDiff - Result of comparing two TagSets
 // =============================================================================
 
 /// Result of comparing two TagSets.
-#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct TagSetDiff {
     /// Tags in the first set but not the second.
@@ -252,16 +250,16 @@ pub struct TagSetDiff {
     pub common: TagSet,
 }
 
-#[cfg(test)]
 impl TagSetDiff {
     /// True if the sets are identical (no differences).
     pub fn is_empty(&self) -> bool {
-        self.only_left.is_empty() && self.only_right.is_empty()
+        self.only_left.tags.is_empty() && self.only_right.tags.is_empty()
     }
 
     /// Classify the difference for OOB detection.
+    #[cfg(test)]
     pub fn classify(&self) -> DiffClassification {
-        match (self.only_left.is_empty(), self.only_right.is_empty()) {
+        match (self.only_left.tags.is_empty(), self.only_right.tags.is_empty()) {
             (true, true) => DiffClassification::Identical,
             (false, true) => DiffClassification::LeftOnly,
             (true, false) => DiffClassification::RightOnly,

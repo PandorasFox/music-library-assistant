@@ -190,9 +190,13 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
 
     for m in mutations {
         match m {
+            // ApplyTagOps - count unique inodes from all ops
+            Mutation::ApplyTagOps { ops } => {
+                inodes.extend(ops.iter().map(|op| op.inode));
+            }
+
             // Mutations with single inode
-            Mutation::SetTrackTagsDb { inode, .. }
-            | Mutation::ApplyDbTagsToDisk { inode, .. }
+            Mutation::ApplyDbTagsToDisk { inode, .. }
             | Mutation::AssimilateDiskTagsToDb { inode, .. }
             | Mutation::UpdateTrackPath { inode, .. }
             | Mutation::UpdateTrack { inode, .. }

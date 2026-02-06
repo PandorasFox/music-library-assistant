@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::corpus::db::types::AggregateSignal;
-use crate::corpus::mutations::Mutation;
+use crate::corpus::mutations::{Mutation, TagOp};
 use crate::corpus::tags::TagSet;
 use crate::ui::widgets::TextInputState;
 
@@ -261,11 +261,13 @@ impl TagCanonicalityState {
             .collect()
     }
 
-    /// Generate mutations for the selected variants → canonical value using DB-first pattern.
+    /// Generate mutations for the selected variants → canonical value using incremental TagOps.
     ///
     /// Requires track_info: a map from inode to (path, current_tagset).
     /// Each track's current tag value is checked against selected variants.
     /// Only tracks whose current value is a selected non-canonical variant get edits.
+    ///
+    /// Returns a single ApplyTagOps mutation containing ops for all affected tracks.
     pub fn mutations_with_paths(
         &self,
         track_info: &std::collections::HashMap<i64, (PathBuf, TagSet)>,
@@ -280,9 +282,9 @@ impl TagCanonicalityState {
             return Vec::new();
         }
 
-        let mut mutations = Vec::new();
+        let mut ops = Vec::new();
 
-        // For each file, create a mutation only if its current value is a selected variant
+        // For each file, generate TagOps if its current value is a selected variant
         for &inode in &self.data.inodes {
             if let Some((_path, current_tagset)) = track_info.get(&inode) {
                 // Get current values for this tag from the TagSet
@@ -297,10 +299,10 @@ impl TagCanonicalityState {
                 let missing_is_selected = selected_variants.contains("");
 
                 // Find which existing values match selected variants
-                let matching_variants: Vec<String> = current_values
+                let matching_variants: Vec<&str> = current_values
                     .iter()
                     .filter(|v| selected_variants.contains(*v) && **v != canonical)
-                    .map(|v| v.to_string())
+                    .copied()
                     .collect();
 
                 // Skip if no matching variants AND we're not handling a missing tag
@@ -308,53 +310,34 @@ impl TagCanonicalityState {
                     continue; // No matching variants to replace
                 }
 
-                // Build new TagSet: replace matching variants with canonical value
-                let mut new_tags: Vec<(String, String)> = Vec::new();
+                // Generate TagOps for this inode:
+                // - Drop each matching variant
+                // - Add the canonical value (only once)
                 let mut added_canonical = false;
 
-                for (k, v) in current_tagset.iter() {
-                    if k.eq_ignore_ascii_case(&self.data.tag_name) {
-                        // This is the tag we're canonicalizing
-                        if matching_variants.iter().any(|mv| mv == v) {
-                            // Replace with canonical (but only add once)
-                            if !added_canonical {
-                                new_tags.push((k.to_string(), canonical.to_string()));
-                                added_canonical = true;
-                            }
-                        } else {
-                            // Keep other values for this tag unchanged
-                            new_tags.push((k.to_string(), v.to_string()));
-                        }
+                for variant in &matching_variants {
+                    // Replace: drop old variant, add canonical
+                    if !added_canonical {
+                        ops.push(TagOp::replace_tag(inode, &self.data.tag_name, *variant, canonical));
+                        added_canonical = true;
                     } else {
-                        // Keep other tags unchanged
-                        new_tags.push((k.to_string(), v.to_string()));
+                        // Already added canonical, just drop this variant
+                        ops.push(TagOp::drop_tag(inode, &self.data.tag_name, *variant));
                     }
                 }
 
-                // Add canonical if:
-                // 1. We replaced variants but didn't add canonical (shouldn't happen normally)
-                // 2. The tag was missing entirely and "" was selected (need to ADD the tag)
-                let needs_canonical = (!matching_variants.is_empty() || (tag_is_missing && missing_is_selected))
-                    && !added_canonical;
-                if needs_canonical {
-                    new_tags.push((self.data.tag_name.clone(), canonical.to_string()));
+                // If tag was missing and "" was selected, add the canonical value
+                if tag_is_missing && missing_is_selected && !added_canonical {
+                    ops.push(TagOp::add_tag(inode, &self.data.tag_name, canonical));
                 }
-
-                // Deduplicate via TagSet before creating mutation to prevent
-                // UNIQUE constraint violations in the database
-                let deduped = TagSet::new(new_tags.into_iter());
-                let deduped_tags = deduped.into_vec();
-
-                // DB-first pattern with spawn chaining:
-                // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
-                mutations.push(Mutation::SetTrackTagsDb {
-                    inode,
-                    tags: deduped_tags,
-                });
             }
         }
 
-        mutations
+        if ops.is_empty() {
+            Vec::new()
+        } else {
+            vec![Mutation::ApplyTagOps { ops }]
+        }
     }
 }
 

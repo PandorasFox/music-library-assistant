@@ -2,11 +2,71 @@
 //!
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
+use std::collections::HashMap;
+
 use super::types::{
     CommitSummary, DecisionWitness, DiscardSummary, PendingTransaction,
     TransactionError, WitnessedDecision,
 };
-use crate::corpus::mutations::Mutation;
+use crate::corpus::mutations::{Mutation, TagOp};
+
+/// Coalesce ApplyTagOps mutations into a single mutation.
+///
+/// Multiple decisions may generate overlapping tag operations for the same inode.
+/// This function:
+/// 1. Extracts all TagOps from ApplyTagOps mutations
+/// 2. Deduplicates by (inode, tag_name, old_value) → last new_value wins
+/// 3. Returns a single coalesced ApplyTagOps mutation plus other mutations unchanged
+///
+/// This ensures that if two signals affect the same track, both fixes are applied
+/// rather than the later one clobbering the earlier.
+fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
+    let mut all_ops: Vec<TagOp> = Vec::new();
+    let mut other: Vec<Mutation> = Vec::new();
+
+    for mutation in mutations {
+        match mutation {
+            Mutation::ApplyTagOps { ops } => all_ops.extend(ops),
+            m => other.push(m),
+        }
+    }
+
+    if all_ops.is_empty() {
+        return other;
+    }
+
+    // Deduplicate: (inode, tag_name, old_value) → last new_value wins
+    // This handles overlapping edits from multiple signals
+    let mut deduped: HashMap<(i64, String, Option<String>), Option<String>> = HashMap::new();
+    for op in all_ops {
+        if op.is_nop() {
+            continue;
+        }
+        deduped.insert(
+            (op.inode, op.tag_name.clone(), op.old_value.clone()),
+            op.new_value,
+        );
+    }
+
+    let final_ops: Vec<TagOp> = deduped
+        .into_iter()
+        .map(|((inode, tag_name, old_value), new_value)| TagOp {
+            inode,
+            tag_name,
+            old_value,
+            new_value,
+        })
+        .collect();
+
+    if final_ops.is_empty() {
+        return other;
+    }
+
+    // Single coalesced mutation at the start (tag ops before other mutations)
+    let mut result = vec![Mutation::ApplyTagOps { ops: final_ops }];
+    result.extend(other);
+    result
+}
 impl super::Witch {
     // -------------------------------------------------------------------------
     // Transaction Helpers
@@ -150,7 +210,7 @@ impl super::Witch {
         let mut mutation_count = 0;
 
         // Collect all mutations from all decisions
-        let all_mutations: Vec<Mutation> = txn
+        let raw_mutations: Vec<Mutation> = txn
             .decisions
             .into_values()
             .flat_map(|d| {
@@ -159,9 +219,12 @@ impl super::Witch {
             })
             .collect();
 
+        // Coalesce ApplyTagOps mutations to handle overlapping edits from multiple signals
+        let all_mutations = coalesce_tag_ops(raw_mutations);
+
         crate::logging::log_mutation(format!(
-            "[TRANSACTION] confirm_transaction OK - {} decisions, {} mutations queued",
-            decision_count, mutation_count
+            "[TRANSACTION] confirm_transaction OK - {} decisions, {} mutations (after coalescing: {})",
+            decision_count, mutation_count, all_mutations.len()
         ));
 
         // Queue mutations for execution

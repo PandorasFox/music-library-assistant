@@ -153,7 +153,7 @@ pub mod sealed {
         /// Only callable from within mutation execution context. The existence
         /// of SpawnedMutation IS the proof - it can only be created here.
         ///
-        /// Use case: `SetTrackTagsDb` spawns `ApplyDbTagsToDisk` after DB write succeeds.
+        /// Use case: `ApplyTagOps` spawns `ApplyDbTagsToDisk` after DB write succeeds.
         pub fn spawn_mutation(&self, mutation: crate::corpus::mutations::Mutation) -> SpawnedMutation {
             SpawnedMutation { mutation }
         }
@@ -165,7 +165,7 @@ pub mod sealed {
     /// [`MutationExecutionWitness::spawn_mutation()`]. The existence of this
     /// type IS the proof of authorization - no separate witness token needed.
     ///
-    /// Use case: `SetTrackTagsDb` spawns `ApplyDbTagsToDisk` after DB write succeeds.
+    /// Use case: `ApplyTagOps` spawns `ApplyDbTagsToDisk` after DB write succeeds.
     #[derive(Debug, Clone)]
     pub struct SpawnedMutation {
         pub(super) mutation: crate::corpus::mutations::Mutation,

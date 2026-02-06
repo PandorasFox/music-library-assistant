@@ -717,7 +717,7 @@ pub fn execute_acknowledge_inode_changed(
 ///
 /// Used for:
 /// - OOB sync resolution (reject disk changes, restore DB state to disk)
-/// - Spawned from SetTrackTagsDb (DB-first pattern step 2)
+/// - Spawned from ApplyTagOps (incremental tag edit step 2)
 pub fn execute_apply_db_tags_to_disk(
     db: &ReadOnlyDb<'_>,
     inode: i64,
@@ -810,7 +810,7 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     // Update DB with disk tags via db_thread
     // Use rel_path_str (from mutation param), not track.path (potentially stale)
-    sender.set_track_tags(&rel_path_str, disk_tagset.into_vec(), witness);
+    sender.set_index_track_tags(&rel_path_str, disk_tagset.into_vec(), witness);
 
     // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)
@@ -967,7 +967,7 @@ pub fn execute_single(
             execute_assimilate_disk_tags_to_db(db, *inode, path, witness)
         }
 
-        // Note: SetTrackTagsDb is now handled by tag_edit.rs (spawns ApplyDbTagsToDisk)
+        // Note: ApplyTagOps is handled by tag_edit.rs (spawns ApplyDbTagsToDisk)
         // Note: VerifyTags is now a Computation, not a Mutation.
 
         _ => Err(anyhow::anyhow!("Not an indexing mutation")),

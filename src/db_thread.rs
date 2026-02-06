@@ -285,9 +285,17 @@ enum SignalWriteOp {
     },
 
     /// Set all tags for a track (replaces existing).
-    SetTrackTags {
+    /// Used by AssimilateDiskTagsToDb when accepting disk changes.
+    SetIndexTrackTags {
         path: String,
         tags: Vec<(String, String)>,
+    },
+
+    /// Apply incremental tag operations directly.
+    /// Used by ApplyTagOps for precise INSERT/DELETE operations.
+    ApplyIndexTagOps {
+        path: String,
+        ops: Vec<crate::corpus::mutations::TagOp>,
     },
 
     /// Update track metadata (full replace for out-of-band changes).
@@ -353,7 +361,7 @@ enum SignalWriteOp {
     },
 
     /// Set the needs_disk_flush flag for a track.
-    /// Used by DB-first tag editing pattern: set TRUE after SetTrackTagsDb,
+    /// Used by DB-first tag editing pattern: set TRUE after ApplyTagOps,
     /// set FALSE after ApplyDbTagsToDisk completes successfully.
     SetNeedsDiskFlush {
         path: String,
@@ -777,16 +785,39 @@ impl SignalWriteSender {
     }
 
     /// Set all tags for a track (replaces existing).
-    pub fn set_track_tags(
+    ///
+    /// Used by AssimilateDiskTagsToDb when accepting disk changes.
+    /// For incremental tag edits (ApplyTagOps), use `apply_index_tag_ops` instead.
+    pub fn set_index_track_tags(
         &self,
         path: &str,
         tags: Vec<(String, String)>,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::SetTrackTags {
+        let _ = self.tx.send(SignalWriteOp::SetIndexTrackTags {
             path: path.to_string(),
             tags,
+        });
+    }
+
+    /// Apply incremental tag operations directly.
+    ///
+    /// Used by ApplyTagOps for precise INSERT/DELETE operations without
+    /// recomputing the diff. TagOps map directly to SQL operations:
+    /// - add → INSERT OR IGNORE
+    /// - drop → DELETE
+    /// - replace → DELETE + INSERT
+    pub fn apply_index_tag_ops(
+        &self,
+        path: &str,
+        ops: Vec<crate::corpus::mutations::TagOp>,
+        _witness: &MutationExecutionWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ApplyIndexTagOps {
+            path: path.to_string(),
+            ops,
         });
     }
 
@@ -954,7 +985,7 @@ impl SignalWriteSender {
     /// Set the needs_disk_flush flag for a track.
     ///
     /// Used by the DB-first tag editing pattern:
-    /// - SetTrackTagsDb sets this to TRUE after writing tags to DB
+    /// - ApplyTagOps sets this to TRUE after writing tags to DB
     /// - ApplyDbTagsToDisk sets this to FALSE after syncing to disk
     /// - Tracks with TRUE can be recovered via OOB flow
     pub fn set_needs_disk_flush(
@@ -1315,9 +1346,15 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::SetTrackTags { path, tags } => {
-            with_retry("set_track_tags", path, || {
-                execute_set_track_tags(db, path, tags)
+        SignalWriteOp::SetIndexTrackTags { path, tags } => {
+            with_retry("set_index_track_tags", path, || {
+                execute_set_index_track_tags(db, path, tags)
+            });
+        }
+
+        SignalWriteOp::ApplyIndexTagOps { path, ops } => {
+            with_retry("apply_index_tag_ops", path, || {
+                execute_apply_index_tag_ops(db, path, ops)
             });
         }
 
@@ -1731,15 +1768,76 @@ fn execute_update_track_inode(db: &Database, path: &str, new_inode: i64) -> anyh
     Ok(())
 }
 
-/// Execute SetTrackTags: replace all tags for a file (corpus_tags).
+/// Execute SetIndexTrackTags: replace all tags for a file (corpus_tags).
 ///
 /// Uses atomic diff-based replacement to prevent data loss on partial failure
 /// and avoid UNIQUE constraint violations from duplicate tags.
-fn execute_set_track_tags(db: &Database, path: &str, tags: &[(String, String)]) -> anyhow::Result<()> {
+///
+/// Used by AssimilateDiskTagsToDb when accepting disk changes.
+fn execute_set_index_track_tags(db: &Database, path: &str, tags: &[(String, String)]) -> anyhow::Result<()> {
     let inode = get_inode_by_path(db, path)?
         .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
     replace_tags_atomic(db.conn(), inode, tags, "corpus_tags")
+}
+
+/// Execute ApplyIndexTagOps: apply incremental tag operations directly.
+///
+/// TagOps map directly to SQL operations:
+/// - add (old=None, new=Some) → INSERT OR IGNORE (idempotent)
+/// - drop (old=Some, new=None) → DELETE with exact match
+/// - replace (old=Some, new=Some) → UPDATE with exact match
+///
+/// All operations run in a single transaction for atomicity.
+fn execute_apply_index_tag_ops(
+    db: &Database,
+    path: &str,
+    ops: &[crate::corpus::mutations::TagOp],
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    let inode = get_inode_by_path(db, path)?
+        .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
+
+    let tx = db.conn().unchecked_transaction()?;
+
+    for op in ops {
+        if op.is_nop() {
+            continue;
+        }
+
+        let tag_name = op.tag_name.to_lowercase();
+
+        match (&op.old_value, &op.new_value) {
+            (Some(old), Some(new)) => {
+                // Replace: UPDATE in place
+                tx.execute(
+                    "UPDATE corpus_tags SET tag_value = ?1 WHERE inode = ?2 AND tag_name = ?3 AND tag_value = ?4",
+                    params![new, inode, &tag_name, old],
+                )?;
+            }
+            (Some(old), None) => {
+                // Drop: DELETE with exact match
+                tx.execute(
+                    "DELETE FROM corpus_tags WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
+                    params![inode, &tag_name, old],
+                )?;
+            }
+            (None, Some(new)) => {
+                // Add: INSERT OR IGNORE (idempotent - won't fail if already exists)
+                tx.execute(
+                    "INSERT OR IGNORE INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                    params![inode, &tag_name, new],
+                )?;
+            }
+            (None, None) => {
+                // No-op - should not reach here due to is_nop() check
+            }
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
 }
 
 /// Execute UpdateTrackMetadata: full replace for out-of-band changes.

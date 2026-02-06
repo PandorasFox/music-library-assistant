@@ -81,36 +81,21 @@ pub use sealed::MutationToken;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_create_bulk_tag_mutations() {
-        // Test the DB-first tag mutation creation structure with spawn chaining.
-        // UI only generates SetTrackTagsDb mutations - disk sync is spawned during execution.
-        let files = vec![
-            (1i64, PathBuf::from("/test/a.flac")),
-            (2i64, PathBuf::from("/test/b.flac")),
+        // Test the incremental tag mutation creation structure with spawn chaining.
+        // UI generates ApplyTagOps mutations - disk sync is spawned during execution.
+        let ops = vec![
+            TagOp::add_tag(1, "album_artist", "Various Artists"),
+            TagOp::add_tag(2, "album_artist", "Various Artists"),
         ];
 
-        // Create mutations using the single-mutation pattern (spawns disk sync)
-        let mutations: Vec<Mutation> = files
-            .iter()
-            .map(|(inode, _path)| {
-                Mutation::SetTrackTagsDb {
-                    inode: *inode,
-                    tags: vec![("album_artist".to_string(), "Various Artists".to_string())],
-                }
-            })
-            .collect();
+        // Create a single ApplyTagOps mutation containing all ops
+        let mutation = Mutation::ApplyTagOps { ops };
 
-        // 2 files × 1 mutation each = 2 mutations (disk sync is spawned)
-        assert_eq!(mutations.len(), 2);
-
-        // Verify SetTrackTagsDb mutations
-        assert!(matches!(&mutations[0], Mutation::SetTrackTagsDb { inode: 1, .. }));
-        assert_eq!(mutations[0].label(), "Tag edit (DB)");
-        assert!(mutations[0].is_db_only());
-
-        assert!(matches!(&mutations[1], Mutation::SetTrackTagsDb { inode: 2, .. }));
+        // Verify ApplyTagOps mutation
+        assert_eq!(mutation.label(), "Tag edit");
+        assert!(mutation.is_db_only());
     }
 }

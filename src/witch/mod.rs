@@ -508,7 +508,7 @@ impl Witch {
             self.queue_computation_with_label(comp, None);
         }
 
-        // Queue spawned follow-up mutations (chaining from mutations like SetTrackTagsDb)
+        // Queue spawned follow-up mutations (chaining from mutations like ApplyTagOps)
         // These are pre-authorized by the parent mutation's witness chain.
         for mutation in spawned_mutations {
             self.queue_spawned_mutation(mutation);
@@ -889,7 +889,7 @@ impl Witch {
     /// from completed tasks. The spawn chain is already authorized by the
     /// parent mutation's witness - no additional operator decision required.
     ///
-    /// Example: SetTrackTagsDb spawns ApplyDbTagsToDisk after DB write succeeds.
+    /// Example: ApplyTagOps spawns ApplyDbTagsToDisk after DB write succeeds.
     fn queue_spawned_mutation(&mut self, spawned: types::SpawnedMutation) {
         // Extract the inner mutation - SpawnedMutation's existence proves authorization
         let mutation = spawned.into_inner();

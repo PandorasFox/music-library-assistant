@@ -37,7 +37,7 @@ These are not signals but database columns that track synchronization state.
 
 | Flag | Set By | Cleared By | Meaning |
 |------|--------|------------|---------|
-| needs_disk_flush | SetTrackTagsDb | ApplyDbTagsToDisk | DB tags changed but not yet synced to disk file |
+| needs_disk_flush | ApplyTagOps | ApplyDbTagsToDisk | DB tags changed but not yet synced to disk file |
 
 ### Recovery via needs_disk_flush
 

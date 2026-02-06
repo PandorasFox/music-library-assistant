@@ -1,63 +1,121 @@
 //! Tag Edit Execution
 //!
-//! Handles execution of tag-related mutations using the DB-first pattern with spawn chaining:
-//! - SetTrackTagsDb: Write complete tag set to database, set needs_disk_flush=true,
-//!   **spawn** ApplyDbTagsToDisk to sync to disk.
+//! Handles execution of tag-related mutations using incremental operations with validation:
+//! - ApplyTagOps: Apply a set of incremental tag operations, validate expected old values,
+//!   write to DB, and spawn ApplyDbTagsToDisk for each modified inode.
 //!
-//! The disk sync (ApplyDbTagsToDisk) is now in indexing.rs since it handles both
+//! The disk sync (ApplyDbTagsToDisk) is in indexing.rs since it handles both
 //! OOB sync resolution and spawned post-DB-edit syncs.
 //!
 //! All disk tag operations go through `corpus::tags` module.
 //! This file does NOT directly use lofty.
+
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
 use crate::corpus::db::types::FileSource;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
+use crate::db_thread;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
-use super::types::{Mutation, MutationResult};
+use super::types::{Mutation, MutationResult, TagOp};
 
-/// Execute SetTrackTagsDb: set tags in database only (DB-first pattern, step 1).
+/// Execute ApplyTagOps: apply incremental tag operations with validation.
 ///
-/// - Writes complete tag set to DB via set_track_tags()
-/// - Sets needs_disk_flush = TRUE
-/// - Returns authorized SpawnedMutation for ApplyDbTagsToDisk (step 2)
+/// For each inode:
+/// 1. Read current tags from DB
+/// 2. Validate that expected old_values exist (for drop/replace ops)
+/// 3. Apply changes to build new tag set
+/// 4. Write updated tags to DB
+/// 5. Spawn ApplyDbTagsToDisk for disk sync
 ///
-/// The spawned ApplyDbTagsToDisk will sync DB tags to disk.
-fn execute_set_track_tags_db(
+/// Partial success: validation failure for one inode doesn't block others.
+fn execute_apply_tag_ops(
     db: &ReadOnlyDb<'_>,
-    inode: i64,
-    tags: &[(String, String)],
+    ops: &[TagOp],
     witness: &MutationExecutionWitness,
-) -> Result<Option<SpawnedMutation>> {
-    use crate::db_thread;
-
+) -> Result<Vec<SpawnedMutation>> {
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Get audio file info from DB (read-only)
-    // Tag edits only operate on corpus files
-    let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
-    let file_path = audio_file.path();
+    // Group ops by inode
+    let mut by_inode: HashMap<i64, Vec<&TagOp>> = HashMap::new();
+    for op in ops {
+        by_inode.entry(op.inode).or_default().push(op);
+    }
 
-    // Write tags to DB (full replacement)
-    sender.set_track_tags(file_path, tags.to_vec(), witness);
+    let mut spawned = Vec::new();
+    let mut errors = Vec::new();
 
-    // Mark as needing disk flush
-    sender.set_needs_disk_flush(file_path, true, witness);
+    for (inode, inode_ops) in by_inode {
+        // Get audio file info from DB
+        let audio_file = match db.get_audio_file_by_inode(inode, FileSource::Corpus)? {
+            Some(f) => f,
+            None => {
+                errors.push(format!("inode {} not found", inode));
+                continue;
+            }
+        };
+        let file_path = audio_file.path();
 
-    // Resolve relative DB path to absolute for ApplyDbTagsToDisk
-    let resolver = paths::get_resolver();
-    let abs_path = resolver.resolve(std::path::Path::new(file_path));
+        // Get current tags as set for validation
+        let current_tags = db.get_corpus_tags(inode)?;
+        let current_set: HashSet<(String, String)> = current_tags
+            .iter()
+            .map(|t| (t.tag_name.to_lowercase(), t.tag_value.clone()))
+            .collect();
 
-    // Create authorized spawned mutation via witness factory
-    Ok(Some(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk {
-        inode,
-        path: abs_path,
-    })))
+        // Validate each op's expected old_value exists
+        let mut validation_failed = false;
+        for op in &inode_ops {
+            let key = op.tag_name.to_lowercase();
+
+            // Validate expected old_value exists (for drop/replace)
+            if let Some(ref old) = op.old_value {
+                if !current_set.contains(&(key.clone(), old.clone())) {
+                    errors.push(format!(
+                        "inode {}: expected {}={:?} not found (stale)",
+                        inode, op.tag_name, old
+                    ));
+                    validation_failed = true;
+                    break;
+                }
+            }
+        }
+
+        if validation_failed {
+            continue; // Skip this inode, try others
+        }
+
+        // Collect validated ops for this inode (filter no-ops)
+        let validated_ops: Vec<TagOp> = inode_ops
+            .into_iter()
+            .filter(|op| !op.is_nop())
+            .cloned()
+            .collect();
+
+        if validated_ops.is_empty() {
+            continue; // All ops were no-ops
+        }
+
+        // Send ops directly to DB - TagOps map to INSERT/UPDATE/DELETE
+        sender.apply_index_tag_ops(file_path, validated_ops, witness);
+        sender.set_needs_disk_flush(file_path, true, witness);
+
+        // Spawn disk sync
+        let resolver = paths::get_resolver();
+        let abs_path = resolver.resolve(std::path::Path::new(file_path));
+        spawned.push(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk { inode, path: abs_path }));
+    }
+
+    // Report errors but don't fail entire mutation (partial success)
+    if !errors.is_empty() {
+        crate::logging::log_error(format!("ApplyTagOps partial failure: {:?}", errors));
+    }
+
+    Ok(spawned)
 }
 
 /// Execute a single tag edit mutation.
@@ -73,10 +131,9 @@ pub fn execute_single(
     let start = std::time::Instant::now();
 
     let (result, spawn_mutations) = match mutation {
-        Mutation::SetTrackTagsDb { inode, tags } => {
-            match execute_set_track_tags_db(db, *inode, tags, witness) {
-                Ok(Some(spawn)) => (Ok(()), vec![spawn]),
-                Ok(None) => (Ok(()), Vec::new()),
+        Mutation::ApplyTagOps { ops } => {
+            match execute_apply_tag_ops(db, ops, witness) {
+                Ok(spawned) => (Ok(()), spawned),
                 Err(e) => (Err(e), Vec::new()),
             }
         }
@@ -114,5 +171,30 @@ mod tests {
 
         // We can't actually execute without a DB, but we can verify the structure
         assert!(matches!(move_mutation, Mutation::Move { .. }));
+    }
+
+    #[test]
+    fn test_tag_op_constructors() {
+        let add = TagOp::add_tag(1, "artist", "Foo");
+        assert_eq!(add.inode, 1);
+        assert_eq!(add.tag_name, "artist");
+        assert_eq!(add.old_value, None);
+        assert_eq!(add.new_value, Some("Foo".to_string()));
+        assert!(!add.is_nop());
+
+        let drop = TagOp::drop_tag(2, "genre", "Rock");
+        assert_eq!(drop.inode, 2);
+        assert_eq!(drop.old_value, Some("Rock".to_string()));
+        assert_eq!(drop.new_value, None);
+        assert!(!drop.is_nop());
+
+        let replace = TagOp::replace_tag(3, "album", "Old", "New");
+        assert_eq!(replace.old_value, Some("Old".to_string()));
+        assert_eq!(replace.new_value, Some("New".to_string()));
+        assert!(!replace.is_nop());
+
+        // Same value = nop
+        let nop = TagOp::replace_tag(4, "title", "Same", "Same");
+        assert!(nop.is_nop());
     }
 }

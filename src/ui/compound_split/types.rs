@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::corpus::db::types::AggregateSignal;
-use crate::corpus::mutations::Mutation;
+use crate::corpus::mutations::{Mutation, TagOp};
 use crate::corpus::tags::TagSet;
 
 // ============================================================================
@@ -103,22 +103,23 @@ impl CompoundSplitState {
         }
     }
 
-    /// Generate mutations for this split using DB-first pattern with spawn chaining.
+    /// Generate mutations for this split using incremental TagOps.
     ///
     /// For each affected track:
     /// - Verify the track still has the compound value (skip if not)
-    /// - Build new TagSet with compound value replaced by split parts
-    /// - Generate SetTrackTagsDb mutation (spawns ApplyDbTagsToDisk automatically)
+    /// - Generate TagOps: drop compound value, add each split part
     ///
     /// The `track_info` map contains (path, current_tagset) for each track.
     /// This allows verifying the track actually has the compound value before
     /// generating mutations, preventing no-op mutations when the value has
     /// already been fixed or changed.
+    ///
+    /// Returns a single ApplyTagOps mutation containing ops for all affected tracks.
     pub fn mutations_with_paths(
         &self,
         track_info: &HashMap<i64, (PathBuf, TagSet)>,
     ) -> Vec<Mutation> {
-        let mut mutations = Vec::new();
+        let mut ops = Vec::new();
 
         for &inode in &self.data.inodes {
             let Some((_path, current_tagset)) = track_info.get(&inode) else {
@@ -130,35 +131,28 @@ impl CompoundSplitState {
                 continue; // Already fixed or changed, skip this file
             }
 
-            // Build new TagSet: remove compound value, add split parts
-            let mut new_tags: Vec<(String, String)> = current_tagset
-                .iter()
-                .filter(|(k, v)| {
-                    // Keep all tags EXCEPT the compound value being split
-                    !(k.eq_ignore_ascii_case(&self.data.tag_name) && v == &self.data.compound_value)
-                })
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-
-            // Add split parts as separate values
-            for part in &self.data.split_parts {
-                new_tags.push((self.data.tag_name.clone(), part.clone()));
+            // Generate TagOps: drop compound value, add each split part
+            // First part replaces the compound value
+            if let Some(first_part) = self.data.split_parts.first() {
+                ops.push(TagOp::replace_tag(
+                    inode,
+                    &self.data.tag_name,
+                    &self.data.compound_value,
+                    first_part,
+                ));
             }
 
-            // Deduplicate via TagSet before creating mutation to prevent
-            // UNIQUE constraint violations in the database
-            let deduped = TagSet::new(new_tags.into_iter());
-            let deduped_tags = deduped.into_vec();
-
-            // DB-first pattern with spawn chaining:
-            // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
-            mutations.push(Mutation::SetTrackTagsDb {
-                inode,
-                tags: deduped_tags,
-            });
+            // Additional parts are added
+            for part in self.data.split_parts.iter().skip(1) {
+                ops.push(TagOp::add_tag(inode, &self.data.tag_name, part));
+            }
         }
 
-        mutations
+        if ops.is_empty() {
+            Vec::new()
+        } else {
+            vec![Mutation::ApplyTagOps { ops }]
+        }
     }
 }
 

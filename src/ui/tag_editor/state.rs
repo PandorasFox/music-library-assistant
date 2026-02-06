@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::corpus::db::types::AudioFile;
-use crate::corpus::mutations::Mutation;
+use crate::corpus::mutations::{Mutation, TagOp};
 use crate::corpus::paths;
 
 use super::types::{
@@ -2029,53 +2029,51 @@ impl std::fmt::Debug for UnifiedTagEditorState {
 ///
 /// Filters out "New Tag" placeholder and deleted fields.
 /// Returns the complete tag set as the final desired state.
-fn tag_fields_to_tags(fields: &[TagField]) -> Vec<(String, String)> {
-    fields
-        .iter()
-        .filter(|f| {
-            f.name != "New Tag"
-                && !f.deleted
-                && !f.value.is_empty()
-                && f.value != "[Press Enter to create]"
-        })
-        .map(|f| (f.name.to_lowercase(), f.value.clone()))
-        .collect()
-}
-
 /// Convert changes to mutations for the daemon.
 ///
-/// Uses the DB-first pattern with spawn chaining: for each file with changes, generates
-/// SetTrackTagsDb which writes tags to DB, sets needs_disk_flush=true, and spawns
-/// ApplyDbTagsToDisk to sync to disk and clear the flag.
+/// Uses incremental TagOps: for each change, generates an add/drop/replace operation
+/// that includes the expected old value for validation. This prevents stale overwrites
+/// when track state changed since staging.
 ///
-/// This pattern ensures DB is always ahead of or in sync with disk, enabling
-/// recovery via OOB flow if disk write fails/is interrupted.
-fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], all_tag_fields: &[Vec<TagField>]) -> Vec<Mutation> {
-    // Get unique file indices that have changes
-    let mut changed_files: HashSet<usize> = HashSet::new();
+/// Returns a single ApplyTagOps mutation containing all ops.
+fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], _all_tag_fields: &[Vec<TagField>]) -> Vec<Mutation> {
+    let mut ops = Vec::new();
+
     for change in changes {
-        changed_files.insert(change.track_idx);
-    }
+        let Some(audio_file) = audio_files.get(change.track_idx) else {
+            continue;
+        };
+        let inode = audio_file.inode();
 
-    // Generate one mutation per file: SetTrackTagsDb (spawns ApplyDbTagsToDisk)
-    let mut mutations = Vec::new();
-    for file_idx in changed_files {
-        if let (Some(audio_file), Some(current_fields)) = (audio_files.get(file_idx), all_tag_fields.get(file_idx)) {
-            let inode = audio_file.inode();
-
-            // Get complete desired tag set from current UI state
-            let tags = tag_fields_to_tags(current_fields);
-
-            // DB-first pattern with spawn chaining:
-            // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
-            mutations.push(Mutation::SetTrackTagsDb {
-                inode,
-                tags,
-            });
+        match (change.old_value.is_empty(), change.new_value.is_empty()) {
+            (true, false) => {
+                // Old empty, new has value → add
+                ops.push(TagOp::add_tag(inode, &change.field_name, &change.new_value));
+            }
+            (false, true) => {
+                // Old has value, new empty → drop
+                ops.push(TagOp::drop_tag(inode, &change.field_name, &change.old_value));
+            }
+            (false, false) => {
+                // Both have values → replace
+                ops.push(TagOp::replace_tag(
+                    inode,
+                    &change.field_name,
+                    &change.old_value,
+                    &change.new_value,
+                ));
+            }
+            (true, true) => {
+                // Both empty → no-op
+            }
         }
     }
 
-    mutations
+    if ops.is_empty() {
+        Vec::new()
+    } else {
+        vec![Mutation::ApplyTagOps { ops }]
+    }
 }
 
 // ============================================================================

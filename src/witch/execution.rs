@@ -112,8 +112,8 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Route directly by variant to the appropriate executor module.
     let result = with_read_only_db(|read_db| {
         match &mutation {
-            // Tag edit: DB write that spawns disk sync
-            Mutation::SetTrackTagsDb { .. } => {
+            // Tag edit: incremental operations with validation, spawns disk sync
+            Mutation::ApplyTagOps { .. } => {
                 let r = tag_edit::execute_single(read_db, &mutation, session_id, &witness);
                 (r.success, r.error, r.spawn_mutations, r.pending_signals)
             }

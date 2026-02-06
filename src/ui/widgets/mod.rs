@@ -13,6 +13,7 @@
 
 mod controls;
 mod layout;
+mod list_click_targets;
 mod modal;
 mod resolution_layout;
 pub mod signal_info_pane;
@@ -22,6 +23,7 @@ mod titlebar;
 
 // Layout widgets
 pub use layout::{PaneConfig, ThreePaneLayout};
+pub use list_click_targets::ListClickTargets;
 pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout};
 
 // Modal widgets

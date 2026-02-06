@@ -2627,6 +2627,11 @@ impl App {
                     }
                 }
             }
+            UiMode::Insights => {
+                if let Some(ref mut view) = self.insights_view {
+                    view.handle_click(x, y);
+                }
+            }
             // Add other modes as needed
             _ => {}
         }

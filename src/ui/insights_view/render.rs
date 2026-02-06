@@ -21,7 +21,7 @@ use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 use super::{BucketEntry, FocusedBucket, InsightType, InsightsViewState};
 
 /// Render the full insights view
-pub fn render_insights_view(f: &mut Frame, area: Rect, state: &InsightsViewState) {
+pub fn render_insights_view(f: &mut Frame, area: Rect, state: &mut InsightsViewState) {
     // Layout: Title bar at top, content below
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -42,11 +42,11 @@ pub fn render_insights_view(f: &mut Frame, area: Rect, state: &InsightsViewState
         .split(main_chunks[1]);
 
     render_insights_list(f, content_chunks[0], state);
-    render_insight_details(f, content_chunks[1], state);
+    render_insight_details(f, content_chunks[1], &*state);
 }
 
 /// Render the insights list with four buckets
-fn render_insights_list(f: &mut Frame, area: Rect, state: &InsightsViewState) {
+fn render_insights_list(f: &mut Frame, area: Rect, state: &mut InsightsViewState) {
     let busy = state.is_witch_busy();
     let border_color = if busy { Color::DarkGray } else { Color::Gray };
 
@@ -58,13 +58,63 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &InsightsViewState) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let mut items: Vec<ListItem> = Vec::new();
+    // Clear and set up click targets
+    state.click_targets.clear();
+    state.click_targets.set_list_area(inner);
 
-    // Build list items from all buckets using cached entries
-    items.extend(bucket_items("Corpus Files", &state.cached_entries.corpus, FocusedBucket::Corpus, state, busy));
-    items.extend(bucket_items("Similar Tag Issues", &state.cached_entries.placeholder, FocusedBucket::Placeholder, state, busy));
-    items.extend(bucket_items("Library / Deploy", &state.cached_entries.library, FocusedBucket::Library, state, busy));
-    items.extend(bucket_items_other("Other Signals", &state.cached_entries.other, state, busy));
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut y = inner.y;
+
+    // Build list items from all buckets using cached entries, tracking Y positions
+    let (corpus_items, corpus_y) = bucket_items_with_targets(
+        "Corpus Files",
+        &state.cached_entries.corpus,
+        FocusedBucket::Corpus,
+        &state.focused_bucket,
+        &state.bucket_selections,
+        busy,
+        y,
+        &mut state.click_targets,
+    );
+    items.extend(corpus_items);
+    y = corpus_y;
+
+    let (placeholder_items, placeholder_y) = bucket_items_with_targets(
+        "Similar Tag Issues",
+        &state.cached_entries.placeholder,
+        FocusedBucket::Placeholder,
+        &state.focused_bucket,
+        &state.bucket_selections,
+        busy,
+        y,
+        &mut state.click_targets,
+    );
+    items.extend(placeholder_items);
+    y = placeholder_y;
+
+    let (library_items, library_y) = bucket_items_with_targets(
+        "Library / Deploy",
+        &state.cached_entries.library,
+        FocusedBucket::Library,
+        &state.focused_bucket,
+        &state.bucket_selections,
+        busy,
+        y,
+        &mut state.click_targets,
+    );
+    items.extend(library_items);
+    y = library_y;
+
+    let (other_items, _) = bucket_items_other_with_targets(
+        "Other Signals",
+        &state.cached_entries.other,
+        &state.focused_bucket,
+        &state.bucket_selections,
+        busy,
+        y,
+        &mut state.click_targets,
+    );
+    items.extend(other_items);
 
     let list = List::new(items);
     f.render_widget(list, inner);
@@ -121,18 +171,29 @@ fn insight_line_no_count(label: &str, selected: bool, busy: bool, color: Color) 
     ListItem::new(Line::from(Span::styled(text, style)))
 }
 
-/// Build list items from pre-sorted bucket entries (unified function)
-fn bucket_items(
+use super::{BucketSelection, InsightsClickTargets};
+
+/// Build list items from pre-sorted bucket entries with click target tracking.
+/// Returns the items and the next Y position.
+fn bucket_items_with_targets(
     title: &str,
     entries: &[BucketEntry],
     bucket: FocusedBucket,
-    state: &InsightsViewState,
+    focused_bucket: &FocusedBucket,
+    bucket_selections: &[BucketSelection; 4],
     busy: bool,
-) -> Vec<ListItem<'static>> {
-    let focused = state.focused_bucket == bucket;
-    let selected_idx = state.bucket_selections[bucket.index()].selected;
+    start_y: u16,
+    click_targets: &mut InsightsClickTargets,
+) -> (Vec<ListItem<'static>>, u16) {
+    let focused = *focused_bucket == bucket;
+    let selected_idx = bucket_selections[bucket.index()].selected;
 
     let mut items = vec![bucket_header(title, focused, busy)];
+    let mut y = start_y;
+
+    // Header row (not clickable)
+    click_targets.add_header(bucket, y);
+    y += 1;
 
     for (idx, entry) in entries.iter().enumerate() {
         let selected = focused && selected_idx == idx;
@@ -140,22 +201,34 @@ fn bucket_items(
             Some(count) => items.push(insight_line(&entry.label, count, selected, busy, entry.color)),
             None => items.push(insight_line_no_count(&entry.label, selected, busy, entry.color)),
         }
+        // Add click target for this item
+        click_targets.add_item(bucket, idx, y);
+        y += 1;
     }
 
-    items
+    (items, y)
 }
 
-/// Build list items for the Other bucket (with empty fallback)
-fn bucket_items_other(
+/// Build list items for the Other bucket with click target tracking.
+/// Returns the items and the next Y position.
+fn bucket_items_other_with_targets(
     title: &str,
     entries: &[BucketEntry],
-    state: &InsightsViewState,
+    focused_bucket: &FocusedBucket,
+    bucket_selections: &[BucketSelection; 4],
     busy: bool,
-) -> Vec<ListItem<'static>> {
-    let focused = state.focused_bucket == FocusedBucket::Other;
-    let selected_idx = state.bucket_selections[FocusedBucket::Other.index()].selected;
+    start_y: u16,
+    click_targets: &mut InsightsClickTargets,
+) -> (Vec<ListItem<'static>>, u16) {
+    let focused = *focused_bucket == FocusedBucket::Other;
+    let selected_idx = bucket_selections[FocusedBucket::Other.index()].selected;
 
     let mut items = vec![bucket_header(title, focused, busy)];
+    let mut y = start_y;
+
+    // Header row (not clickable)
+    click_targets.add_header(FocusedBucket::Other, y);
+    y += 1;
 
     if entries.is_empty() {
         items.push(insight_line_no_count(
@@ -164,6 +237,8 @@ fn bucket_items_other(
             busy,
             Color::DarkGray,
         ));
+        // Empty placeholder row - no click target needed
+        y += 1;
     } else {
         for (idx, entry) in entries.iter().enumerate() {
             let selected = focused && selected_idx == idx;
@@ -171,10 +246,13 @@ fn bucket_items_other(
                 Some(count) => items.push(insight_line(&entry.label, count, selected, busy, entry.color)),
                 None => items.push(insight_line_no_count(&entry.label, selected, busy, entry.color)),
             }
+            // Add click target for this item
+            click_targets.add_item(FocusedBucket::Other, idx, y);
+            y += 1;
         }
     }
 
-    items
+    (items, y)
 }
 
 /// Render the details pane for the currently selected insight

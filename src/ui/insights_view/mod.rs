@@ -26,9 +26,11 @@
 mod render;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, LibraryDeployBucket, TagSquashBucket, OtherSignalsBucket};
+use crate::ui::widgets::ListClickTargets;
 use crate::witch::DaemonStatus;
 
 pub use render::render_insights_view;
@@ -528,6 +530,79 @@ impl CachedBucketEntries {
     }
 }
 
+// ============================================================================
+// Click Target System
+// ============================================================================
+
+/// Click target result for insights list
+#[derive(Debug, Clone, Copy)]
+pub struct InsightClickTarget {
+    pub bucket: FocusedBucket,
+    pub item_index: usize,
+}
+
+/// Maps row IDs to bucket+index for click detection.
+#[derive(Debug, Clone, Default)]
+pub struct InsightsClickTargets {
+    inner: ListClickTargets,
+}
+
+impl InsightsClickTargets {
+    /// Create new empty click targets.
+    pub fn new() -> Self {
+        Self {
+            inner: ListClickTargets::new(),
+        }
+    }
+
+    /// Clear all stored targets (call at start of each render).
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    /// Set the list area for bounds checking.
+    pub fn set_list_area(&mut self, area: Rect) {
+        self.inner.set_list_area(area);
+    }
+
+    /// Add a header row (not clickable for selection).
+    /// We don't add headers to targets - they're not selectable.
+    pub fn add_header(&mut self, _bucket: FocusedBucket, _y: u16) {
+        // Headers are not clickable - intentionally empty
+    }
+
+    /// Add an item row target.
+    pub fn add_item(&mut self, bucket: FocusedBucket, index: usize, y: u16) {
+        // Encode bucket + index as "bucket_index" string
+        let id = format!("{}_{}", bucket.index(), index);
+        self.inner.add_row(id, y);
+    }
+
+    /// Check if a click hits an item, returning the bucket and index if so.
+    pub fn hit_test(&self, x: u16, y: u16) -> Option<InsightClickTarget> {
+        let id = self.inner.hit_test(x, y)?;
+
+        // Parse "bucket_index" format
+        let parts: Vec<&str> = id.split('_').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let bucket_idx: usize = parts[0].parse().ok()?;
+        let item_index: usize = parts[1].parse().ok()?;
+
+        let bucket = match bucket_idx {
+            0 => FocusedBucket::Corpus,
+            1 => FocusedBucket::Placeholder,
+            2 => FocusedBucket::Library,
+            3 => FocusedBucket::Other,
+            _ => return None,
+        };
+
+        Some(InsightClickTarget { bucket, item_index })
+    }
+}
+
 /// State for the insights view
 pub struct InsightsViewState {
     /// Modal state tracking Witch busy status
@@ -540,6 +615,8 @@ pub struct InsightsViewState {
     pub cached_data: Option<InsightsData>,
     /// Pre-computed sorted entries - rebuilt when cached_data changes
     pub cached_entries: CachedBucketEntries,
+    /// Click targets for mouse selection (populated during render)
+    pub click_targets: InsightsClickTargets,
 }
 
 impl Default for InsightsViewState {
@@ -550,6 +627,7 @@ impl Default for InsightsViewState {
             bucket_selections: Default::default(),
             cached_data: None,
             cached_entries: CachedBucketEntries::default(),
+            click_targets: InsightsClickTargets::new(),
         }
     }
 }
@@ -682,6 +760,21 @@ impl InsightsViewState {
                 return;
             }
         }
+    }
+
+    /// Handle mouse click, updating selection if hit.
+    /// Returns true if selection changed.
+    pub fn handle_click(&mut self, x: u16, y: u16) -> bool {
+        if let Some(target) = self.click_targets.hit_test(x, y) {
+            // Check if the bucket has items at this index
+            let bucket_entry_count = self.get_bucket_entry_count(target.bucket);
+            if target.item_index < bucket_entry_count {
+                self.focused_bucket = target.bucket;
+                self.bucket_selections[target.bucket.index()].selected = target.item_index;
+                return true;
+            }
+        }
+        false
     }
 
     /// Handle key input
@@ -892,5 +985,82 @@ mod tests {
         state.navigate_to_end();
         assert_eq!(state.focused_bucket, FocusedBucket::Library);
         assert_eq!(state.current_selection().selected, 3);
+    }
+
+    #[test]
+    fn test_insights_click_targets() {
+        use ratatui::layout::Rect;
+
+        let mut targets = InsightsClickTargets::new();
+        targets.set_list_area(Rect::new(0, 0, 100, 50));
+
+        // Simulate Y positions like render would produce:
+        // Y=0: Corpus header (not clickable)
+        // Y=1: Corpus item 0
+        // Y=2: Corpus item 1
+        // Y=3: Library header (not clickable)
+        // Y=4: Library item 0
+        targets.add_header(FocusedBucket::Corpus, 0);
+        targets.add_item(FocusedBucket::Corpus, 0, 1);
+        targets.add_item(FocusedBucket::Corpus, 1, 2);
+        targets.add_header(FocusedBucket::Library, 3);
+        targets.add_item(FocusedBucket::Library, 0, 4);
+
+        // Click on header - should not hit
+        assert!(targets.hit_test(10, 0).is_none());
+
+        // Click on Corpus item 0
+        let hit = targets.hit_test(10, 1).unwrap();
+        assert_eq!(hit.bucket, FocusedBucket::Corpus);
+        assert_eq!(hit.item_index, 0);
+
+        // Click on Corpus item 1
+        let hit = targets.hit_test(10, 2).unwrap();
+        assert_eq!(hit.bucket, FocusedBucket::Corpus);
+        assert_eq!(hit.item_index, 1);
+
+        // Click on Library header - should not hit
+        assert!(targets.hit_test(10, 3).is_none());
+
+        // Click on Library item 0
+        let hit = targets.hit_test(10, 4).unwrap();
+        assert_eq!(hit.bucket, FocusedBucket::Library);
+        assert_eq!(hit.item_index, 0);
+
+        // Click outside the list area
+        assert!(targets.hit_test(150, 1).is_none());
+    }
+
+    #[test]
+    fn test_handle_click() {
+        use ratatui::layout::Rect;
+
+        let mut state = state_with_data();
+
+        // Set up click targets manually (normally done by render)
+        state.click_targets.clear();
+        state.click_targets.set_list_area(Rect::new(0, 0, 100, 50));
+        state.click_targets.add_item(FocusedBucket::Corpus, 0, 1);
+        state.click_targets.add_item(FocusedBucket::Corpus, 1, 2);
+        state.click_targets.add_item(FocusedBucket::Library, 0, 5);
+
+        // Start at default (Corpus bucket, item 0)
+        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
+        assert_eq!(state.bucket_selections[FocusedBucket::Corpus.index()].selected, 0);
+
+        // Click on Corpus item 1
+        assert!(state.handle_click(10, 2));
+        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
+        assert_eq!(state.bucket_selections[FocusedBucket::Corpus.index()].selected, 1);
+
+        // Click on Library item 0 - should change bucket
+        assert!(state.handle_click(10, 5));
+        assert_eq!(state.focused_bucket, FocusedBucket::Library);
+        assert_eq!(state.bucket_selections[FocusedBucket::Library.index()].selected, 0);
+
+        // Click outside - should return false
+        assert!(!state.handle_click(200, 200));
+        // Selection should not change
+        assert_eq!(state.focused_bucket, FocusedBucket::Library);
     }
 }

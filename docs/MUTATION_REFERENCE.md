@@ -67,7 +67,6 @@ Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue Ap
 | IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), ShitFormat | (per-file signals wiped) | Index by path |
 | DropFromIndex | UpdateCorpusFileSignals | — | (per-file signals wiped) | Remove from index |
 | DropDirectoryFromIndex | — | — | MissingFile × N, MissingDirectory | Drop directory and all contained files from index |
-| UpdateTrack | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update track metadata |
 
 ### File Entry Operations
 
@@ -132,7 +131,6 @@ Benefits:
 This pattern is used in:
 - `execute_set_index_track_tags()` - Direct tag replacement
 - `execute_index_audio_file()` - Initial indexing with tags
-- `execute_update_track_metadata()` - Metadata refresh with tags
 
 Mutation generators (`TagCanonicalityState::mutations_with_paths()`, `CompoundSplitState::mutations_with_paths()`) also deduplicate tags via `TagSet` before creating mutations, preventing duplicate `(tag_name, tag_value)` pairs from reaching the DB layer.
 

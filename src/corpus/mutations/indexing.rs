@@ -378,54 +378,6 @@ pub fn execute_drop_from_index(
     Ok(())
 }
 
-/// Execute UpdateTrack mutation - full metadata update for out-of-band changes.
-///
-/// Uses read-only DB for lookup, routes write through signal_sender.
-pub fn execute_update_track(
-    db: &ReadOnlyDb<'_>,
-    _inode: i64,
-    path: &Path,
-    metadata: &ExtractedMetadata,
-    witness: &MutationExecutionWitness,
-) -> Result<()> {
-    use crate::db_thread::{self, TrackData};
-
-    let resolver = paths::get_resolver();
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-
-    // Convert absolute path to relative for storage
-    let relative_path = resolver
-        .to_relative(path)
-        .with_context(|| {
-            format!(
-                "Path {} does not match root. Check config.kdl roots.",
-                path.display(),
-            )
-        })?;
-    let rel_path_str = relative_path.to_string_lossy();
-
-    // Verify audio file exists (read-only check)
-    let _existing = db.get_audio_file_by_path(&rel_path_str)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found: {}", rel_path_str))?;
-
-    // Build TrackData from ExtractedMetadata
-    let track_data = TrackData {
-        inode: metadata.inode,
-        file_size: metadata.file_size,
-        file_type: metadata.file_type.clone(),
-        duration_ms: metadata.duration_ms,
-        bitrate_kbps: metadata.bitrate_kbps,
-        sample_rate: metadata.sample_rate,
-        fingerprint: metadata.fingerprint.clone(),
-    };
-
-    // Route write through signal_sender
-    sender.update_track_metadata(&rel_path_str, track_data, metadata.tags.clone(), witness);
-
-    Ok(())
-}
-
 /// Result of tag verification — indicates which types of mismatches were found.
 ///
 /// Used by computations to classify OOB signals without querying persisted state
@@ -942,12 +894,6 @@ pub fn execute_single(
         Mutation::DropDirectoryFromIndex { directory_path } => {
             execute_drop_directory_from_index(db, directory_path, witness)
         }
-
-        Mutation::UpdateTrack {
-            inode,
-            path,
-            metadata,
-        } => execute_update_track(db, *inode, path, metadata, witness),
 
         // OOB resolution mutations (batch, for legacy support)
         Mutation::AcknowledgeMtimeOnly { tracks } => {

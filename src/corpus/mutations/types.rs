@@ -325,13 +325,6 @@ pub enum Mutation {
         directory_path: PathBuf,
     },
 
-    /// Full track metadata update (for out-of-band file changes).
-    UpdateTrack {
-        inode: i64,
-        path: PathBuf,
-        metadata: ExtractedMetadata,
-    },
-
     // ========================================================================
     // OOB Resolution Operations
     // ========================================================================
@@ -399,7 +392,6 @@ impl Mutation {
             Mutation::UpdateTrackPath { .. } | Mutation::UpdateFilePath { .. } => "Path update",
             Mutation::DropFromIndex { .. } => "Drop from index",
             Mutation::DropDirectoryFromIndex { .. } => "Drop directory from index",
-            Mutation::UpdateTrack { .. } => "Track update",
             Mutation::AcknowledgeMtimeOnly { .. } => "Acknowledge mtime",
             Mutation::AcknowledgeInodeChanged { .. } => "Acknowledge inode",
             Mutation::Move { .. } | Mutation::MoveToStash { .. } => "File move",
@@ -422,7 +414,6 @@ impl Mutation {
                 | Mutation::UpdateTrackPath { .. }
                 | Mutation::UpdateFilePath { .. }
                 | Mutation::DropFromIndex { .. }
-                | Mutation::UpdateTrack { .. }
                 | Mutation::AcknowledgeMtimeOnly { .. }
                 | Mutation::AssimilateDiskTagsToDb { .. }
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
@@ -441,8 +432,7 @@ impl Mutation {
     #[cfg(test)]
     pub fn affected_inode(&self) -> Option<i64> {
         match self {
-            Mutation::UpdateTrack { inode, .. }
-            | Mutation::Transcode { inode, .. }
+            Mutation::Transcode { inode, .. }
             | Mutation::ApplyDbTagsToDisk { inode, .. }
             | Mutation::AssimilateDiskTagsToDb { inode, .. } => Some(*inode),
 
@@ -556,9 +546,6 @@ impl Mutation {
                 }
             }
 
-            // Track updates don't change file presence
-            Mutation::UpdateTrack { .. } => {}
-
             // Migration doesn't affect signals
             Mutation::DbMigration { .. } => {}
 
@@ -617,9 +604,6 @@ impl Mutation {
             // Directory drop: the directory path
             Mutation::DropDirectoryFromIndex { directory_path } => vec![directory_path.clone()],
 
-            // Track update: the path being updated
-            Mutation::UpdateTrack { path, .. } => vec![path.clone()],
-
             // Transcode: source path and new output path
             Mutation::Transcode { source_path, target_format, .. } => {
                 let mut paths = vec![source_path.clone()];
@@ -671,7 +655,6 @@ impl Mutation {
             | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
@@ -704,7 +687,6 @@ impl Mutation {
             Mutation::IndexTrack { path, .. }
             | Mutation::IndexFileFromPath { path, .. }
             | Mutation::UpdateFileEntry { path, .. }
-            | Mutation::UpdateTrack { path, .. }
             | Mutation::ApplyDbTagsToDisk { path, .. }
             | Mutation::AssimilateDiskTagsToDb { path, .. } => vec![path.clone()],
 
@@ -759,7 +741,6 @@ impl Mutation {
             | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
@@ -795,7 +776,6 @@ impl Mutation {
             | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
@@ -831,7 +811,6 @@ impl Mutation {
             | Mutation::Move { .. }
             | Mutation::Copy { .. }
             | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
@@ -872,7 +851,6 @@ impl Mutation {
             | Mutation::Move { .. }
             | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
-            | Mutation::UpdateTrack { .. }
             | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }

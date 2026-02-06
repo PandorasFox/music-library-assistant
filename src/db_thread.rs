@@ -298,13 +298,6 @@ enum SignalWriteOp {
         ops: Vec<crate::corpus::mutations::TagOp>,
     },
 
-    /// Update track metadata (full replace for out-of-band changes).
-    UpdateTrackMetadata {
-        path: String,
-        track_data: TrackData,
-        tags: Vec<(String, String)>,
-    },
-
     /// Update track path and file metadata (for transcode/format conversion).
     /// Looks up track by old_path, updates to new_path with new file metadata.
     UpdateTrackPathWithMetadata {
@@ -818,22 +811,6 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::ApplyIndexTagOps {
             path: path.to_string(),
             ops,
-        });
-    }
-
-    /// Update track metadata (full replace for out-of-band changes).
-    pub fn update_track_metadata(
-        &self,
-        path: &str,
-        track_data: TrackData,
-        tags: Vec<(String, String)>,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateTrackMetadata {
-            path: path.to_string(),
-            track_data,
-            tags,
         });
     }
 
@@ -1358,12 +1335,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::UpdateTrackMetadata { path, track_data, tags } => {
-            with_retry("update_track_metadata", path, || {
-                execute_update_track_metadata(db, path, track_data, tags)
-            });
-        }
-
         SignalWriteOp::UpdateTrackPathWithMetadata {
             old_path,
             new_path,
@@ -1833,123 +1804,6 @@ fn execute_apply_index_tag_ops(
             (None, None) => {
                 // No-op - should not reach here due to is_nop() check
             }
-        }
-    }
-
-    tx.commit()?;
-    Ok(())
-}
-
-/// Execute UpdateTrackMetadata: full replace for out-of-band changes.
-/// Updates files, audio_info, and corpus_tags.
-///
-/// All operations wrapped in a single transaction for atomicity.
-/// Uses atomic diff-based tag replacement to prevent data loss.
-fn execute_update_track_metadata(
-    db: &Database,
-    path: &str,
-    track_data: &TrackData,
-    tags: &[(String, String)],
-) -> anyhow::Result<()> {
-    use rusqlite::params;
-    use std::collections::HashSet;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let inode = get_inode_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
-
-    let scanned_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    // Convert fingerprint to BLOB if present
-    let fp_blob: Option<Vec<u8>> = track_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
-
-    // Wrap all operations in a single transaction
-    let tx = db.conn().unchecked_transaction()?;
-
-    // Update files table (inode, file_size)
-    tx.execute(
-        "UPDATE files SET inode = ?1, file_size = ?2, scanned_at = ?3 WHERE path = ?4",
-        params![track_data.inode, track_data.file_size, scanned_at, path],
-    )?;
-
-    // Update audio_info (or insert if new inode)
-    tx.execute(
-        r#"
-        INSERT OR REPLACE INTO audio_info
-        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
-        "#,
-        params![
-            track_data.inode,
-            &track_data.file_type,
-            track_data.duration_ms,
-            track_data.bitrate_kbps,
-            track_data.sample_rate,
-            &fp_blob,
-        ],
-    )?;
-
-    // Atomic tag replacement: query existing, compute diff, apply changes
-    // 1. Query existing tags (from OLD inode - we're replacing)
-    let mut stmt = tx.prepare("SELECT tag_name, tag_value FROM corpus_tags WHERE inode = ?1")?;
-    let existing: HashSet<(String, String)> = stmt
-        .query_map(params![inode], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
-
-    // 2. Build desired set (deduplicated, normalized)
-    let desired: HashSet<(String, String)> = tags
-        .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| (k.to_lowercase(), v.clone()))
-        .collect();
-
-    // If inode changed, we need to move tags to the new inode
-    if inode != track_data.inode {
-        // Delete all tags from old inode
-        tx.execute("DELETE FROM corpus_tags WHERE inode = ?1", params![inode])?;
-        // Insert all desired tags to new inode
-        for (name, value) in &desired {
-            tx.execute(
-                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                params![track_data.inode, name, value],
-            )?;
-        }
-    } else {
-        // Same inode - use diff-based update
-        let to_remove: Vec<_> = existing.difference(&desired).collect();
-        let to_add: Vec<_> = desired.difference(&existing).collect();
-
-        for (name, value) in to_remove {
-            tx.execute(
-                "DELETE FROM corpus_tags WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
-                params![inode, name, value],
-            )?;
-        }
-
-        for (name, value) in to_add {
-            tx.execute(
-                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                params![inode, name, value],
-            )?;
-        }
-    }
-
-    // Clean up old inode's audio_info if orphaned
-    if inode != track_data.inode {
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM files WHERE inode = ?1",
-            params![inode],
-            |row| row.get(0),
-        )?;
-        if count == 0 {
-            tx.execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
         }
     }
 

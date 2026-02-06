@@ -473,6 +473,11 @@ pub fn execute_verify_tags(
         }
     };
 
+    // Wait for pending DB writes to drain before reading audio_info.
+    // This prevents a race where VerifyTags runs before IndexFileFromPath's
+    // fire-and-forget write is processed, causing spurious "Audio file not found" errors.
+    crate::db_thread::wait_for_queue_drain();
+
     // Get relative path for signal keys
     let resolver = crate::corpus::paths::get_resolver();
     let rel_path = match resolver.to_relative(path) {

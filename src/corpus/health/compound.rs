@@ -5,34 +5,19 @@
 //!
 //! Also handles featuring pattern detection for artist values.
 
-use std::collections::HashMap;
-
-use anyhow::Result;
 use regex::Regex;
 
-use crate::corpus::db::ReadOnlyDb;
-
-/// A detected compound tag value that should be split.
-#[derive(Debug, Clone)]
-pub struct CompoundTagValue {
-    /// Tag field name (e.g., "genre", "artist")
-    pub tag_name: String,
-    /// The compound value as stored (e.g., "Rock; Metal")
-    pub compound_value: String,
-    /// The separator that was detected (e.g., "; ")
-    pub separator: String,
-    /// The parts after splitting (e.g., ["Rock", "Metal"])
-    pub split_parts: Vec<String>,
-    /// Number of tracks with this compound value
-    pub _count: usize,
-}
+/// Helper methods for compound tag value detection.
+///
+/// Used by per-inode computations to check individual tag values.
+pub struct CompoundTagValue;
 
 impl CompoundTagValue {
     /// Split a value on a separator, trimming whitespace from parts.
     ///
     /// Also strips leading "& " from parts to handle Oxford comma patterns
     /// like "Folk, World, & Country" → ["Folk", "World", "Country"].
-    fn split_value(value: &str, separator: &str) -> Vec<String> {
+    pub fn split_value(value: &str, separator: &str) -> Vec<String> {
         value
             .split(separator)
             .map(|s| s.trim())
@@ -43,75 +28,13 @@ impl CompoundTagValue {
     }
 
     /// Check if a value contains a separator and would split into multiple parts.
-    fn is_compound(value: &str, separator: &str) -> bool {
+    pub fn is_compound(value: &str, separator: &str) -> bool {
         if !value.contains(separator) {
             return false;
         }
         // Must split into at least 2 non-empty parts
         Self::split_value(value, separator).len() > 1
     }
-}
-
-/// Detect compound tag values for a specific tag name and set of separators.
-///
-/// Returns all tag values that contain any of the given separators and would
-/// split into multiple parts.
-pub fn detect_compound_values(
-    db: &ReadOnlyDb<'_>,
-    tag_name: &str,
-    separators: &[String],
-) -> Result<Vec<CompoundTagValue>> {
-    let values = db.get_distinct_tag_values(tag_name)?;
-
-    let mut results = Vec::new();
-
-    for (value, count) in values {
-        // Try each separator to see if this value is compound
-        for separator in separators {
-            if CompoundTagValue::is_compound(&value, separator) {
-                let split_parts = CompoundTagValue::split_value(&value, separator);
-                results.push(CompoundTagValue {
-                    tag_name: tag_name.to_string(),
-                    compound_value: value.clone(),
-                    separator: separator.clone(),
-                    split_parts,
-                    _count: count,
-                });
-                // Only report the first matching separator
-                break;
-            }
-        }
-    }
-
-    Ok(results)
-}
-
-/// Detect compound values across all configured tag/separator mappings.
-///
-/// Takes a map of tag_name -> separators and returns all detected compound values.
-pub fn detect_all_compound_values(
-    db: &ReadOnlyDb<'_>,
-    tag_separators: &HashMap<String, Vec<String>>,
-) -> Result<Vec<CompoundTagValue>> {
-    let mut results = Vec::new();
-
-    for (tag_name, separators) in tag_separators {
-        let compounds = detect_compound_values(db, tag_name, separators)?;
-        results.extend(compounds);
-    }
-
-    Ok(results)
-}
-
-/// Get track IDs that have a specific compound tag value.
-///
-/// Used when emitting signals to record which files are affected.
-pub fn get_inodes_for_compound_value(
-    db: &ReadOnlyDb<'_>,
-    tag_name: &str,
-    compound_value: &str,
-) -> Result<Vec<i64>> {
-    db.get_inodes_for_tag_values(tag_name, &[compound_value])
 }
 
 // ============================================================================
@@ -151,8 +74,10 @@ pub fn detect_featuring_pattern(value: &str) -> Option<(String, Vec<String>)> {
     // - Group 1: main artist (everything before the pattern)
     // - Group 2: the pattern itself (for debugging, not used in output)
     // - Group 3: featured artists (everything after)
+    // Require preceding whitespace to avoid Scunthorpe problem
+    // (e.g., "Craft Integrated" should NOT match on the "ft" in "Craft")
     let pattern = Regex::new(
-        r"(?i)^(.+?)\s*(?:\(?\s*(feat\.?|ft\.?|featuring|vs\.?|with)\s+(.+?)\)?)\s*$"
+        r"(?i)^(.+?)\s+(?:\(?\s*(feat\.?|ft\.?|featuring|vs\.?|with)\s+(.+?)\)?)\s*$"
     ).ok()?;
 
     let caps = pattern.captures(value)?;
@@ -176,75 +101,6 @@ pub fn detect_featuring_pattern(value: &str) -> Option<(String, Vec<String>)> {
     }
 
     Some((main_artist, featured))
-}
-
-/// Detect featuring patterns in all artist values in the corpus.
-///
-/// This is an additional detection pass beyond separator-based splitting.
-/// Returns CompoundTagValue entries for artist values that match featuring
-/// patterns like "feat.", "ft.", "featuring", "with", "vs.".
-///
-/// These are returned as CompoundTagValue entries so they can be processed
-/// through the same UI flow as separator-based compounds.
-pub fn detect_featuring_compound_values(db: &ReadOnlyDb<'_>) -> Result<Vec<CompoundTagValue>> {
-    let values = db.get_distinct_tag_values("artist")?;
-    let mut results = Vec::new();
-
-    for (value, count) in values {
-        if let Some((main_artist, featured_artists)) = detect_featuring_pattern(&value) {
-            // Build split_parts: main artist first, then featured artists
-            let mut split_parts = vec![main_artist];
-            split_parts.extend(featured_artists);
-
-            // Determine the separator pattern that was matched (for display)
-            // We use a simplified representation since the actual pattern varies
-            let separator = if value.to_lowercase().contains(" feat") {
-                "feat.".to_string()
-            } else if value.to_lowercase().contains(" ft") {
-                "ft.".to_string()
-            } else if value.to_lowercase().contains(" featuring") {
-                "featuring".to_string()
-            } else if value.to_lowercase().contains(" vs") {
-                "vs.".to_string()
-            } else if value.to_lowercase().contains(" with ") {
-                "with".to_string()
-            } else {
-                "feat.".to_string() // fallback
-            };
-
-            results.push(CompoundTagValue {
-                tag_name: "artist".to_string(),
-                compound_value: value,
-                separator,
-                split_parts,
-                _count: count,
-            });
-        }
-    }
-
-    Ok(results)
-}
-
-/// Check which split parts exist as standalone values in the corpus.
-///
-/// For artist compound values, this helps determine if we should suggest
-/// splitting vs. canonicalizing:
-/// - If "Priority" and "TwoThirds" both exist as standalone artists → split
-/// - If neither exists as standalone → probably a band name, canonicalize
-///
-/// Returns the list of parts that were found as standalone values.
-pub fn find_matching_standalone_parts(
-    db: &ReadOnlyDb<'_>,
-    tag_name: &str,
-    parts: &[String],
-) -> Result<Vec<String>> {
-    let mut matching = Vec::new();
-    for part in parts {
-        if db.tag_value_exists_standalone(tag_name, part)? {
-            matching.push(part.clone());
-        }
-    }
-    Ok(matching)
 }
 
 #[cfg(test)]
@@ -375,6 +231,16 @@ mod tests {
         assert!(detect_featuring_pattern("Simon & Garfunkel").is_none());
         assert!(detect_featuring_pattern("Crosby, Stills & Nash").is_none());
         assert!(detect_featuring_pattern("Priority & TwoThirds").is_none());
+    }
+
+    #[test]
+    fn test_detect_featuring_scunthorpe_problem() {
+        // Keywords embedded in words should NOT match (require preceding space)
+        assert!(detect_featuring_pattern("Craft Integrated").is_none()); // "ft" in "Craft"
+        assert!(detect_featuring_pattern("Software Solutions").is_none()); // "ft" in "Software"
+        assert!(detect_featuring_pattern("Daft Punk").is_none()); // "ft" in "Daft"
+        assert!(detect_featuring_pattern("Leftfield").is_none()); // "ft" in "Leftfield"
+        assert!(detect_featuring_pattern("The Gift").is_none()); // "ft" in "Gift"
     }
 
     #[test]

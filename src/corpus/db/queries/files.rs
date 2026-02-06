@@ -429,6 +429,20 @@ impl Database {
         Ok(result)
     }
 
+    /// Get the corpus path for a single inode.
+    pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path FROM files WHERE inode = ?1 AND source = 'corpus' AND is_dir = 0 LIMIT 1"
+        )?;
+
+        let mut rows = stmt.query(params![inode])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get all tags ordered by inode and tag name (for metadata duplicate detection, corpus only).
     /// Returns: Vec<(inode, tag_name, tag_value)>
     pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {

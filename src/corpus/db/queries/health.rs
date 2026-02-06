@@ -1238,28 +1238,4 @@ impl Database {
             .unwrap_or(false);
         Ok(exists)
     }
-
-    /// Check if a tag value exists as a standalone (non-compound) value in corpus.
-    ///
-    /// Used to determine if artist compound split parts have independent presence.
-    /// For example, if we're considering splitting "Priority & TwoThirds":
-    /// - If "Priority" exists as an artist on other tracks → return true
-    /// - If "Priority" only appears as part of compounds → return false
-    ///
-    /// This helps the UI suggest splitting vs. canonicalizing compound values.
-    pub fn tag_value_exists_standalone(&self, tag_name: &str, value: &str) -> Result<bool> {
-        let exists: bool = self.conn
-            .query_row(
-                r#"SELECT 1 FROM corpus_tags ct
-                   JOIN files f ON ct.inode = f.inode
-                   WHERE f.source = 'corpus'
-                     AND LOWER(ct.tag_name) = LOWER(?1)
-                     AND ct.tag_value = ?2
-                   LIMIT 1"#,
-                params![tag_name, value],
-                |_| Ok(true),
-            )
-            .unwrap_or(false);
-        Ok(exists)
-    }
 }

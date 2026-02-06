@@ -304,6 +304,7 @@ impl SignalType {
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
+            "compound_tag" => Some(Self::CompoundTagValue),
             "cross_source_overlap" => Some(Self::CrossSourceOverlap),
             // Legacy: map old error signal types to CorruptFile
             "tag_parse_error" => Some(Self::CorruptFile),
@@ -341,6 +342,7 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::CorruptFile => Self::CorruptFile,
             CorpusFileSignalType::ShitFormat => Self::ShitFormat,
             CorpusFileSignalType::SubparDuplicate => Self::SubparDuplicate,
+            CorpusFileSignalType::CompoundTag => Self::CompoundTagValue,
         }
     }
 }
@@ -407,6 +409,9 @@ pub enum CorpusFileSignalType {
     ShitFormat,
     /// Track is an subpar duplicate (lower quality version of another track)
     SubparDuplicate,
+    /// Tag value contains separator characters needing split (per-file)
+    /// Metadata: { "inode", "compounds": [{ "tag_name", "compound_value", "split_parts", "separator" }] }
+    CompoundTag,
 }
 
 impl CorpusFileSignalType {
@@ -425,6 +430,7 @@ impl CorpusFileSignalType {
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
             Self::SubparDuplicate => "subpar_duplicate",
+            Self::CompoundTag => "compound_tag",
         }
     }
 
@@ -443,6 +449,7 @@ impl CorpusFileSignalType {
             Self::CorruptFile => SignalType::CorruptFile,
             Self::ShitFormat => SignalType::ShitFormat,
             Self::SubparDuplicate => SignalType::SubparDuplicate,
+            Self::CompoundTag => SignalType::CompoundTagValue,
         }
     }
 }

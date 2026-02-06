@@ -82,10 +82,17 @@ pub enum Computation {
     /// Finds albums where tracks have different artists but missing/inconsistent album_artist.
     DetectInconsistentAlbumArtist,
 
-    /// Detect compound tag values that should be split.
+    /// Detect compound tag values that should be split (orchestrator).
     ///
-    /// Finds tag values containing separator characters (e.g., "Rock; Metal" in genre).
+    /// Spawns DetectCompoundTagsForInode for each corpus inode, parallelizing
+    /// the expensive regex work across worker threads.
     DetectCompoundTagValues,
+
+    /// Detect compound tag values for a single inode.
+    ///
+    /// Checks tags for separator patterns and featuring patterns, emitting
+    /// per-file CompoundTag signals for files with compound values.
+    DetectCompoundTagsForInode { inode: i64 },
 
     /// Detect files with non-Vorbis container formats (MP3, M4A, WAV, etc).
     ///
@@ -141,7 +148,8 @@ impl Computation {
             Computation::DetectMetadataDuplicates => "Detecting metadata duplicates",
             Computation::DetectTagCanonicalizations => "Detecting tag canonicalizations",
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
-            Computation::DetectCompoundTagValues => "Detecting compound tag values",
+            Computation::DetectCompoundTagValues => "Scheduling compound tag detection",
+            Computation::DetectCompoundTagsForInode { .. } => "Detecting compound tags",
             Computation::DetectShitFormats => "Detecting shit format files",
             Computation::AnalyzeFingerprintOverlaps => "Analyzing fingerprint overlaps",
             Computation::DetectCrossSourceOverlaps => "Detecting cross-source overlaps",

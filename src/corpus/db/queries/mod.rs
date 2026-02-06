@@ -601,6 +601,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_corpus_inodes()
     }
 
+    /// Get the corpus path for a single inode.
+    pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
+        self.db.get_corpus_path_for_inode(inode)
+    }
+
     /// Get all tags ordered by inode and tag name (for metadata duplicate detection).
     pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
         self.db.get_all_tags_ordered()
@@ -680,10 +685,5 @@ impl<'a> ReadOnlyDb<'a> {
     /// Check if a CanonicalTag signal exists for this tag_name:tag_value.
     pub fn is_canonical_tag(&self, tag_name: &str, tag_value: &str) -> Result<bool> {
         self.db.is_canonical_tag(tag_name, tag_value)
-    }
-
-    /// Check if a tag value exists as a standalone (non-compound) value in corpus.
-    pub fn tag_value_exists_standalone(&self, tag_name: &str, value: &str) -> Result<bool> {
-        self.db.tag_value_exists_standalone(tag_name, value)
     }
 }

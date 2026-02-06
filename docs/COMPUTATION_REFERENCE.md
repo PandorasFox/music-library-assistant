@@ -52,7 +52,8 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectMetadataDuplicates | Find tracks with identical tag sets |
 | DetectTagCanonicalizations | Find tag canonicalization opportunities |
 | DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums |
-| DetectCompoundTagValues | Find compound values needing splits. Uses both separator-based detection (from config) AND featuring pattern detection (feat./ft./featuring/with/vs.) for artist tags. Skips CanonicalTag whitelisted values. For artist tag, includes `matching_parts` metadata showing which split parts exist as standalone artists |
+| DetectCompoundTagValues | Orchestrator: spawns DetectCompoundTagsForInode for each corpus inode. Parallelizes expensive regex work across worker threads. |
+| DetectCompoundTagsForInode | Per-inode: detects compound tags (separator-based AND featuring patterns). Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
@@ -97,7 +98,8 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectMissingTags | — | MissingTag | MissingTag (all, then recreate) |
 | DetectMetadataDuplicates | — | MetadataDuplicate | MetadataDuplicate (all, then recreate) |
 | DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (all, then recreate) |
-| DetectCompoundTagValues | — | CompoundTagValue | CompoundTagValue (skips CanonicalTag whitelisted values) |
+| DetectCompoundTagValues | DetectCompoundTagsForInode (per inode) | — | CompoundTag (all, before spawning) |
+| DetectCompoundTagsForInode | — | CompoundTag (per-file) | — |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate | SubparDuplicate (all, then recreate) |

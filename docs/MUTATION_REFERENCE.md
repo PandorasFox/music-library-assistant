@@ -108,6 +108,29 @@ Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutation
 
 ## Key Patterns
 
+### Atomic Tag Replacement
+
+Tag operations use **diff-based atomic replacement** instead of DELETE-ALL-then-INSERT:
+
+1. **Query existing tags** for the track
+2. **Compute diff** between existing and desired tag sets
+3. **DELETE only removed tags** (not in desired set)
+4. **INSERT only new tags** (not in existing set)
+5. **All within a single transaction** (rollback on failure)
+
+Benefits:
+- **No data loss on partial failure**: Transaction rolls back, leaving original state
+- **No UNIQUE constraint violations**: Desired set is deduplicated before diffing
+- **Minimal disk churn**: Unchanged tags aren't rewritten
+- **Consistent state guaranteed**: Either all changes apply, or none do
+
+This pattern is used in:
+- `execute_set_track_tags()` - Direct tag replacement
+- `execute_index_audio_file()` - Initial indexing with tags
+- `execute_update_track_metadata()` - Metadata refresh with tags
+
+Mutation generators (`TagCanonicalityState::mutations_with_paths()`, `CompoundSplitState::mutations_with_paths()`) also deduplicate tags via `TagSet` before creating mutations, preventing duplicate `(tag_name, tag_value)` pairs from reaching the DB layer.
+
 ### Spawn Chaining
 
 Mutations can spawn follow-up mutations that execute automatically:

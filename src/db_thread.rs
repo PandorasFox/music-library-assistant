@@ -1416,6 +1416,80 @@ fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
     fp.iter().flat_map(|n| n.to_le_bytes()).collect()
 }
 
+/// Atomically replace tags for a track using diff-based CRUD.
+///
+/// Instead of DELETE-ALL-then-INSERT, this:
+/// 1. Queries existing tags
+/// 2. Computes diff between existing and desired
+/// 3. DELETEs only tags that should be removed
+/// 4. INSERTs only tags that are new
+/// 5. All within a single transaction
+///
+/// This prevents:
+/// - Data loss on partial failure (transaction rollback)
+/// - Unnecessary disk churn (unchanged tags stay)
+/// - UNIQUE constraint violations (deduplication in desired set)
+fn replace_tags_atomic(
+    conn: &rusqlite::Connection,
+    inode: i64,
+    new_tags: &[(String, String)],
+    tag_table: &str,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::collections::HashSet;
+
+    let tx = conn.unchecked_transaction()?;
+
+    // 1. Query existing tags
+    let mut stmt = tx.prepare(&format!(
+        "SELECT tag_name, tag_value FROM {} WHERE inode = ?1",
+        tag_table
+    ))?;
+    let existing: HashSet<(String, String)> = stmt
+        .query_map(params![inode], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
+    // 2. Build desired set (deduplicated, normalized)
+    let desired: HashSet<(String, String)> = new_tags
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_lowercase(), v.clone()))
+        .collect();
+
+    // 3. Compute diff
+    let to_remove: Vec<_> = existing.difference(&desired).collect();
+    let to_add: Vec<_> = desired.difference(&existing).collect();
+
+    // 4. DELETE only what needs removing
+    for (name, value) in to_remove {
+        tx.execute(
+            &format!(
+                "DELETE FROM {} WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
+                tag_table
+            ),
+            params![inode, name, value],
+        )?;
+    }
+
+    // 5. INSERT only what's new
+    for (name, value) in to_add {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                tag_table
+            ),
+            params![inode, name, value],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
 /// Get inode by path from files table. Returns None if file doesn't exist.
 fn get_inode_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>> {
     use rusqlite::params;
@@ -1430,6 +1504,9 @@ fn get_inode_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>> {
 }
 
 /// Execute IndexAudioFile: insert/replace files + audio_info + corpus_tags.
+///
+/// All operations wrapped in a single transaction for atomicity.
+/// Uses atomic diff-based tag replacement to prevent data loss.
 fn execute_index_audio_file(
     db: &Database,
     path: &str,
@@ -1438,6 +1515,7 @@ fn execute_index_audio_file(
     tags: &[(String, String)],
 ) -> anyhow::Result<()> {
     use rusqlite::params;
+    use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let scanned_at = SystemTime::now()
@@ -1445,8 +1523,18 @@ fn execute_index_audio_file(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    // Determine which tag table to use based on source
+    let tag_table = if file_data.source == "inbox" {
+        "inbox_tags"
+    } else {
+        "corpus_tags"
+    };
+
+    // Wrap all operations in a single transaction
+    let tx = db.conn().unchecked_transaction()?;
+
     // Insert or replace files row
-    db.conn().execute(
+    tx.execute(
         r#"
         INSERT OR REPLACE INTO files
         (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
@@ -1468,7 +1556,7 @@ fn execute_index_audio_file(
     let fp_blob: Option<Vec<u8>> = audio_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
 
     // Insert or replace audio_info row
-    db.conn().execute(
+    tx.execute(
         r#"
         INSERT OR REPLACE INTO audio_info
         (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
@@ -1484,30 +1572,54 @@ fn execute_index_audio_file(
         ],
     )?;
 
-    // Determine which tag table to use based on source
-    let tag_table = if file_data.source == "inbox" {
-        "inbox_tags"
-    } else {
-        "corpus_tags"
-    };
-
-    // Delete existing tags for this inode
-    db.conn().execute(
-        &format!("DELETE FROM {} WHERE inode = ?1", tag_table),
-        params![file_data.inode],
-    )?;
-
-    // Insert new tags
-    let insert_sql = format!(
-        "INSERT INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+    // Atomic tag replacement: query existing, compute diff, apply changes
+    // 1. Query existing tags
+    let mut stmt = tx.prepare(&format!(
+        "SELECT tag_name, tag_value FROM {} WHERE inode = ?1",
         tag_table
-    );
-    for (name, value) in tags {
-        if !value.is_empty() {
-            db.conn().execute(&insert_sql, params![file_data.inode, name, value])?;
-        }
+    ))?;
+    let existing: HashSet<(String, String)> = stmt
+        .query_map(params![file_data.inode], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
+    // 2. Build desired set (deduplicated, normalized)
+    let desired: HashSet<(String, String)> = tags
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_lowercase(), v.clone()))
+        .collect();
+
+    // 3. Compute diff
+    let to_remove: Vec<_> = existing.difference(&desired).collect();
+    let to_add: Vec<_> = desired.difference(&existing).collect();
+
+    // 4. DELETE only what needs removing
+    for (name, value) in to_remove {
+        tx.execute(
+            &format!(
+                "DELETE FROM {} WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
+                tag_table
+            ),
+            params![file_data.inode, name, value],
+        )?;
     }
 
+    // 5. INSERT only what's new
+    for (name, value) in to_add {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                tag_table
+            ),
+            params![file_data.inode, name, value],
+        )?;
+    }
+
+    tx.commit()?;
     Ok(())
 }
 
@@ -1573,6 +1685,8 @@ fn execute_update_track_path(db: &Database, old_path: &str, new_path: &str) -> a
 
 /// Execute UpdateTrackInode: update inode for replaced file.
 /// This handles the case where a file's content is replaced (new inode).
+///
+/// All operations wrapped in a single transaction for atomicity.
 fn execute_update_track_inode(db: &Database, path: &str, new_inode: i64) -> anyhow::Result<()> {
     use rusqlite::params;
 
@@ -1582,65 +1696,57 @@ fn execute_update_track_inode(db: &Database, path: &str, new_inode: i64) -> anyh
         None => return Ok(()), // File doesn't exist
     };
 
+    // Wrap all operations in a single transaction
+    let tx = db.conn().unchecked_transaction()?;
+
     // Update files table inode
-    db.conn().execute(
+    tx.execute(
         "UPDATE files SET inode = ?1 WHERE path = ?2",
         params![new_inode, path],
     )?;
 
     // Move audio_info to new inode if old inode has no other references
-    let count: i64 = db.conn().query_row(
+    let count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM files WHERE inode = ?1",
         params![old_inode],
         |row| row.get(0),
     )?;
     if count == 0 {
         // Copy audio_info to new inode
-        db.conn().execute(
+        tx.execute(
             "INSERT OR REPLACE INTO audio_info SELECT ?1, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush FROM audio_info WHERE inode = ?2",
             params![new_inode, old_inode],
         )?;
         // Copy tags to new inode
-        db.conn().execute(
+        tx.execute(
             "INSERT OR IGNORE INTO corpus_tags SELECT ?1, tag_name, tag_value FROM corpus_tags WHERE inode = ?2",
             params![new_inode, old_inode],
         )?;
         // Delete old entries
-        db.conn().execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
-        db.conn().execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
+        tx.execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
+        tx.execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
     }
 
+    tx.commit()?;
     Ok(())
 }
 
 /// Execute SetTrackTags: replace all tags for a file (corpus_tags).
+///
+/// Uses atomic diff-based replacement to prevent data loss on partial failure
+/// and avoid UNIQUE constraint violations from duplicate tags.
 fn execute_set_track_tags(db: &Database, path: &str, tags: &[(String, String)]) -> anyhow::Result<()> {
-    use rusqlite::params;
-
     let inode = get_inode_by_path(db, path)?
         .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
-    // Delete existing tags
-    db.conn().execute(
-        "DELETE FROM corpus_tags WHERE inode = ?1",
-        params![inode],
-    )?;
-
-    // Insert new tags
-    for (name, value) in tags {
-        if !value.is_empty() {
-            db.conn().execute(
-                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                params![inode, name, value],
-            )?;
-        }
-    }
-
-    Ok(())
+    replace_tags_atomic(db.conn(), inode, tags, "corpus_tags")
 }
 
 /// Execute UpdateTrackMetadata: full replace for out-of-band changes.
 /// Updates files, audio_info, and corpus_tags.
+///
+/// All operations wrapped in a single transaction for atomicity.
+/// Uses atomic diff-based tag replacement to prevent data loss.
 fn execute_update_track_metadata(
     db: &Database,
     path: &str,
@@ -1648,6 +1754,7 @@ fn execute_update_track_metadata(
     tags: &[(String, String)],
 ) -> anyhow::Result<()> {
     use rusqlite::params;
+    use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let inode = get_inode_by_path(db, path)?
@@ -1658,17 +1765,20 @@ fn execute_update_track_metadata(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    // Convert fingerprint to BLOB if present
+    let fp_blob: Option<Vec<u8>> = track_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
+
+    // Wrap all operations in a single transaction
+    let tx = db.conn().unchecked_transaction()?;
+
     // Update files table (inode, file_size)
-    db.conn().execute(
+    tx.execute(
         "UPDATE files SET inode = ?1, file_size = ?2, scanned_at = ?3 WHERE path = ?4",
         params![track_data.inode, track_data.file_size, scanned_at, path],
     )?;
 
-    // Convert fingerprint to BLOB if present
-    let fp_blob: Option<Vec<u8>> = track_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
-
     // Update audio_info (or insert if new inode)
-    db.conn().execute(
+    tx.execute(
         r#"
         INSERT OR REPLACE INTO audio_info
         (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
@@ -1684,39 +1794,75 @@ fn execute_update_track_metadata(
         ],
     )?;
 
-    // Replace tags in corpus_tags
-    db.conn().execute(
-        "DELETE FROM corpus_tags WHERE inode = ?1",
-        params![inode],
-    )?;
+    // Atomic tag replacement: query existing, compute diff, apply changes
+    // 1. Query existing tags (from OLD inode - we're replacing)
+    let mut stmt = tx.prepare("SELECT tag_name, tag_value FROM corpus_tags WHERE inode = ?1")?;
+    let existing: HashSet<(String, String)> = stmt
+        .query_map(params![inode], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
 
-    for (name, value) in tags {
-        if !value.is_empty() {
-            db.conn().execute(
+    // 2. Build desired set (deduplicated, normalized)
+    let desired: HashSet<(String, String)> = tags
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_lowercase(), v.clone()))
+        .collect();
+
+    // If inode changed, we need to move tags to the new inode
+    if inode != track_data.inode {
+        // Delete all tags from old inode
+        tx.execute("DELETE FROM corpus_tags WHERE inode = ?1", params![inode])?;
+        // Insert all desired tags to new inode
+        for (name, value) in &desired {
+            tx.execute(
                 "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
                 params![track_data.inode, name, value],
+            )?;
+        }
+    } else {
+        // Same inode - use diff-based update
+        let to_remove: Vec<_> = existing.difference(&desired).collect();
+        let to_add: Vec<_> = desired.difference(&existing).collect();
+
+        for (name, value) in to_remove {
+            tx.execute(
+                "DELETE FROM corpus_tags WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
+                params![inode, name, value],
+            )?;
+        }
+
+        for (name, value) in to_add {
+            tx.execute(
+                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                params![inode, name, value],
             )?;
         }
     }
 
     // Clean up old inode's audio_info if orphaned
     if inode != track_data.inode {
-        let count: i64 = db.conn().query_row(
+        let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM files WHERE inode = ?1",
             params![inode],
             |row| row.get(0),
         )?;
         if count == 0 {
-            db.conn().execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
-            db.conn().execute("DELETE FROM corpus_tags WHERE inode = ?1", params![inode])?;
+            tx.execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
         }
     }
 
+    tx.commit()?;
     Ok(())
 }
 
 /// Execute UpdateTrackPathWithMetadata: update path and file metadata for transcoded file.
 /// Updates files table path/inode/file_size, and audio_info file_type.
+///
+/// All operations wrapped in a single transaction for atomicity.
 fn execute_update_track_path_with_metadata(
     db: &Database,
     old_path: &str,
@@ -1737,8 +1883,11 @@ fn execute_update_track_path_with_metadata(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    // Wrap all operations in a single transaction
+    let tx = db.conn().unchecked_transaction()?;
+
     // Update files table
-    let rows_updated = db.conn().execute(
+    let rows_updated = tx.execute(
         "UPDATE files SET path = ?1, inode = ?2, file_size = ?3, scanned_at = ?4 WHERE path = ?5",
         params![new_path, new_inode, new_file_size, scanned_at, old_path],
     )?;
@@ -1749,14 +1898,14 @@ fn execute_update_track_path_with_metadata(
 
     // Get old audio_info to copy to new inode
     let (duration_ms, bitrate_kbps, sample_rate, fingerprint): (Option<i64>, Option<i32>, Option<i32>, Option<Vec<u8>>) =
-        db.conn().query_row(
+        tx.query_row(
             "SELECT duration_ms, bitrate_kbps, sample_rate, fingerprint FROM audio_info WHERE inode = ?1",
             params![old_inode],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
 
     // Insert new audio_info with new file_type
-    db.conn().execute(
+    tx.execute(
         r#"
         INSERT OR REPLACE INTO audio_info
         (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
@@ -1766,24 +1915,25 @@ fn execute_update_track_path_with_metadata(
     )?;
 
     // Copy tags to new inode
-    db.conn().execute(
+    tx.execute(
         "INSERT OR IGNORE INTO corpus_tags SELECT ?1, tag_name, tag_value FROM corpus_tags WHERE inode = ?2",
         params![new_inode, old_inode],
     )?;
 
     // Clean up old inode if orphaned
     if old_inode != new_inode {
-        let count: i64 = db.conn().query_row(
+        let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM files WHERE inode = ?1",
             params![old_inode],
             |row| row.get(0),
         )?;
         if count == 0 {
-            db.conn().execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
-            db.conn().execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
+            tx.execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
+            tx.execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
         }
     }
 
+    tx.commit()?;
     Ok(())
 }
 

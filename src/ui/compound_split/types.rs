@@ -145,11 +145,16 @@ impl CompoundSplitState {
                 new_tags.push((self.data.tag_name.clone(), part.clone()));
             }
 
+            // Deduplicate via TagSet before creating mutation to prevent
+            // UNIQUE constraint violations in the database
+            let deduped = TagSet::new(new_tags.into_iter());
+            let deduped_tags = deduped.into_vec();
+
             // DB-first pattern with spawn chaining:
             // SetTrackTagsDb writes to DB and spawns ApplyDbTagsToDisk for disk sync
             mutations.push(Mutation::SetTrackTagsDb {
                 inode,
-                tags: new_tags,
+                tags: deduped_tags,
             });
         }
 

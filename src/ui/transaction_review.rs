@@ -198,7 +198,6 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             // Mutations with single inode
             Mutation::ApplyDbTagsToDisk { inode, .. }
             | Mutation::AssimilateDiskTagsToDb { inode, .. }
-            | Mutation::UpdateTrackPath { inode, .. }
             | Mutation::Transcode { inode, .. } => {
                 inodes.insert(*inode);
             }
@@ -219,11 +218,7 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             // Mutations without inodes
             Mutation::MoveToStash { .. }
             | Mutation::Move { .. }
-            | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateFileEntry { .. }
-            | Mutation::CleanupStaleFiles { .. }
-            | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }

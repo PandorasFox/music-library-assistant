@@ -32,10 +32,6 @@ use crate::db_thread;
 
 use super::types::{Migration, MigrationWitness, MutationExecutionWitness, SpawnedMutation, Task, TaskResult};
 
-/// File types that should trigger ShitFormat signal (non-Vorbis containers).
-/// Includes lossy formats with poor metadata and lossless needing remux.
-const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
-
 // ============================================================================
 // Database Opening Helper (Migrations Only)
 // ============================================================================
@@ -119,11 +115,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             }
 
             // Indexing operations (including OOB tag sync which does disk I/O)
-            Mutation::IndexTrack { .. }
-            | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateFileEntry { .. }
-            | Mutation::CleanupStaleFiles { .. }
-            | Mutation::UpdateTrackPath { .. }
+            Mutation::IndexFileFromPath { .. }
             | Mutation::UpdateFilePath { .. }
             | Mutation::DropFromIndex { .. }
             | Mutation::DropDirectoryFromIndex { .. }
@@ -137,7 +129,6 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
             // File operations
             Mutation::Move { .. }
-            | Mutation::Copy { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. } => {
@@ -467,69 +458,16 @@ fn emit_pending_signals(
 ///
 /// For IndexFileFromPath, uses pending_signals (determined at execution time)
 /// to avoid race conditions with async DB writes.
-///
-/// For other mutations, uses the `checks_corrupt_file()` and `checks_shit_format()`
-/// methods to determine whether and how to emit these file-inherent signals.
 fn emit_file_inherent_signals(
     mutation: &Mutation,
     pending_signals: &[PendingSignal],
     witness: &MutationExecutionWitness,
 ) {
-    let resolver = paths::get_resolver();
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s,
-        None => return,
-    };
-
-    // IndexFileFromPath: use pending_signals (avoids race with async DB writes)
+    // Only IndexFileFromPath emits file-inherent signals
     if let Mutation::IndexFileFromPath { .. } = mutation {
-        emit_pending_signals(pending_signals, &sender, witness);
-        return;
-    }
-
-    // Non-deferred case: check inline metadata
-    let should_check_corrupt = mutation.checks_corrupt_file();
-    let file_type_check = mutation.checks_shit_format();
-
-    // Both return Some for non-deferred, Some(false)/Some("") for skip
-    let (Some(is_corrupt), Some(file_type)) = (should_check_corrupt, file_type_check) else {
-        return;
-    };
-
-    // Get path for the signal key
-    let path = match mutation {
-        Mutation::IndexTrack { path, .. } => path,
-        _ => return,
-    };
-
-    if let Some(rel) = resolver.to_relative(path) {
-        let rel_str = rel.to_string_lossy();
-
-        // CorruptFile if fingerprint extraction failed
-        if is_corrupt {
-            sender.ensure_file_signal(
-                CorpusFileSignalType::CorruptFile.into(),
-                &rel_str,
-                witness,
-            );
-        }
-
-        // ShitFormat if non-Vorbis container
-        if !file_type.is_empty() && is_shit_format(file_type) {
-            let metadata_json = serde_json::json!({ "file_type": file_type }).to_string();
-            sender.ensure_file_signal_with_metadata(
-                CorpusFileSignalType::ShitFormat.into(),
-                &rel_str,
-                Some(&metadata_json),
-                witness,
-            );
+        if let Some(sender) = db_thread::signal_sender() {
+            emit_pending_signals(pending_signals, &sender, witness);
         }
     }
-}
-
-/// Check if a file type is a "shit format" (non-Vorbis container).
-fn is_shit_format(file_type: &str) -> bool {
-    let file_type_lower = file_type.to_lowercase();
-    SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str())
 }
 

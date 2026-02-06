@@ -724,39 +724,4 @@ impl Database {
         )?;
         Ok(())
     }
-
-    /// Cleanup stale file entries (inodes not in valid set).
-    pub fn cleanup_stale_files(
-        &self,
-        source: &str,
-        valid_inodes: &std::collections::HashSet<i64>,
-        _witness: &impl crate::db_thread::SignalWitness,
-    ) -> Result<usize> {
-        if valid_inodes.is_empty() {
-            // Delete all files for this source
-            let affected = self.conn.execute(
-                "DELETE FROM files WHERE source = ?1",
-                params![source],
-            )?;
-            return Ok(affected);
-        }
-
-        // Build placeholders for IN clause
-        let placeholders: Vec<String> = (0..valid_inodes.len())
-            .map(|i| format!("?{}", i + 2))
-            .collect();
-        let sql = format!(
-            "DELETE FROM files WHERE source = ?1 AND inode NOT IN ({})",
-            placeholders.join(",")
-        );
-
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(source.to_string())];
-        for inode in valid_inodes {
-            params_vec.push(Box::new(*inode));
-        }
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
-        let affected = self.conn.execute(&sql, params_refs.as_slice())?;
-        Ok(affected)
-    }
 }

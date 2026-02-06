@@ -48,36 +48,6 @@ pub fn execute_move(
     Ok(())
 }
 
-/// Execute a Copy mutation.
-///
-/// Copies a file to a new location, creating parent directories if needed.
-pub fn execute_copy(source: &Path, destination: &Path) -> Result<()> {
-    // Ensure source exists
-    if !source.exists() {
-        return Err(anyhow::anyhow!(
-            "Source file does not exist: {}",
-            source.display()
-        ));
-    }
-
-    // Create destination directory if needed
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
-    }
-
-    // Copy the file
-    fs::copy(source, destination).with_context(|| {
-        format!(
-            "Failed to copy {} to {}",
-            source.display(),
-            destination.display()
-        )
-    })?;
-
-    Ok(())
-}
-
 /// Execute a HardLink mutation.
 ///
 /// Creates a hard link from source to destination (for deployment).
@@ -271,11 +241,6 @@ pub fn execute_single(
             source,
             destination,
         } => execute_move(source, destination),
-
-        Mutation::Copy {
-            source,
-            destination,
-        } => execute_copy(source, destination),
 
         Mutation::MoveToStash { path, stash_name, .. } => {
             match stash_root {

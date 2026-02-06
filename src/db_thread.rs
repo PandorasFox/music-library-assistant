@@ -272,12 +272,6 @@ enum SignalWriteOp {
         path: String,
     },
 
-    /// Update track path (file moved/renamed).
-    UpdateTrackPath {
-        old_path: String,
-        new_path: String,
-    },
-
     /// Update track inode (file replaced with same content).
     UpdateTrackInode {
         path: String,
@@ -330,12 +324,6 @@ enum SignalWriteOp {
         source: String,
         inode: i64,
         new_path: String,
-    },
-
-    /// Cleanup stale file entries (files no longer exist).
-    CleanupStaleFiles {
-        source: String,
-        valid_inodes: Vec<i64>,
     },
 
     /// Index a directory entry in the files table.
@@ -749,20 +737,6 @@ impl SignalWriteSender {
         });
     }
 
-    /// Update track path (file moved/renamed).
-    pub fn update_track_path(
-        &self,
-        old_path: &str,
-        new_path: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateTrackPath {
-            old_path: old_path.to_string(),
-            new_path: new_path.to_string(),
-        });
-    }
-
     /// Update track inode (file replaced).
     pub fn update_track_inode(
         &self,
@@ -878,20 +852,6 @@ impl SignalWriteSender {
             source: source.to_string(),
             inode,
             new_path: new_path.to_string(),
-        });
-    }
-
-    /// Cleanup stale file entries (files no longer exist).
-    pub fn cleanup_stale_files(
-        &self,
-        source: &str,
-        valid_inodes: Vec<i64>,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::CleanupStaleFiles {
-            source: source.to_string(),
-            valid_inodes,
         });
     }
 
@@ -1311,12 +1271,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::UpdateTrackPath { old_path, new_path } => {
-            with_retry("update_track_path", old_path, || {
-                execute_update_track_path(db, old_path, new_path)
-            });
-        }
-
         SignalWriteOp::UpdateTrackInode { path, new_inode } => {
             with_retry("update_track_inode", path, || {
                 execute_update_track_inode(db, path, *new_inode)
@@ -1364,13 +1318,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::UpdateFilePath { source, inode, new_path } => {
             with_retry("update_file_path", new_path, || {
                 db.update_file_path(source, *inode, new_path, &witness)
-            });
-        }
-
-        SignalWriteOp::CleanupStaleFiles { source, valid_inodes } => {
-            with_retry("cleanup_stale_files", source, || {
-                let valid_set: std::collections::HashSet<i64> = valid_inodes.iter().copied().collect();
-                db.cleanup_stale_files(source, &valid_set, &witness).map(|_| ())
             });
         }
 
@@ -1673,19 +1620,6 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
     db.conn().execute(
         "DELETE FROM signals WHERE issue_key = ?1",
         params![path],
-    )?;
-
-    Ok(())
-}
-
-/// Execute UpdateTrackPath: update path for relocated file.
-fn execute_update_track_path(db: &Database, old_path: &str, new_path: &str) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    // Update files table
-    db.conn().execute(
-        "UPDATE files SET path = ?1 WHERE path = ?2",
-        params![new_path, old_path],
     )?;
 
     Ok(())

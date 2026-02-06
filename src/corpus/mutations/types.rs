@@ -193,13 +193,6 @@ pub enum Mutation {
     // ========================================================================
     // Indexing Operations
     // ========================================================================
-    /// Index a track into the database from extracted metadata.
-    IndexTrack {
-        path: PathBuf,
-        source: String,
-        metadata: ExtractedMetadata,
-    },
-
     /// Index a file from path only - extracts metadata during execution.
     ///
     /// This is the worker-thread-safe way to index files. Metadata extraction
@@ -209,33 +202,16 @@ pub enum Mutation {
         source: String,
     },
 
-    /// Update file entry for incremental scanning.
-    UpdateFileEntry {
-        source: String,
-        inode: u64,
-        mtime_secs: i64,
-        mtime_nanos: i64,
-        file_size: u64,
-        path: PathBuf,
-    },
-
-    /// Cleanup stale file entries (files that no longer exist).
-    CleanupStaleFiles {
-        source: String,
-        valid_inodes: Vec<u64>,
-    },
-
     // ========================================================================
     // File Operations
     // ========================================================================
     /// Move a file from source to destination.
+    ///
+    /// NOTE: This mutation is fully plumbed but intentionally not yet utilized in UI.
+    /// It will be used by the inbox intake flow for moving files from inbox to corpus.
+    /// This is an exception to our "don't add unused code" policy - we need to stop
+    /// adding infrastructure too early in general.
     Move {
-        source: PathBuf,
-        destination: PathBuf,
-    },
-
-    /// Copy a file from source to destination.
-    Copy {
         source: PathBuf,
         destination: PathBuf,
     },
@@ -290,13 +266,6 @@ pub enum Mutation {
     // ========================================================================
     // Signal Resolution Operations
     // ========================================================================
-    /// Update track path in database (for relocated files).
-    UpdateTrackPath {
-        inode: i64,
-        old_path: PathBuf,
-        new_path: PathBuf,
-    },
-
     /// Update file path in files table (for relocated files).
     UpdateFilePath {
         source: String,
@@ -387,15 +356,13 @@ impl Mutation {
             Mutation::ApplyTagOps { .. } => "Tag edit",
             Mutation::ApplyDbTagsToDisk { .. } => "Tag sync (DB→disk)",
             Mutation::AssimilateDiskTagsToDb { .. } => "Tag sync (disk→DB)",
-            Mutation::IndexTrack { .. } | Mutation::IndexFileFromPath { .. } => "Indexing",
-            Mutation::UpdateFileEntry { .. } | Mutation::CleanupStaleFiles { .. } => "File entry",
-            Mutation::UpdateTrackPath { .. } | Mutation::UpdateFilePath { .. } => "Path update",
+            Mutation::IndexFileFromPath { .. } => "Indexing",
+            Mutation::UpdateFilePath { .. } => "Path update",
             Mutation::DropFromIndex { .. } => "Drop from index",
             Mutation::DropDirectoryFromIndex { .. } => "Drop directory from index",
             Mutation::AcknowledgeMtimeOnly { .. } => "Acknowledge mtime",
             Mutation::AcknowledgeInodeChanged { .. } => "Acknowledge inode",
             Mutation::Move { .. } | Mutation::MoveToStash { .. } => "File move",
-            Mutation::Copy { .. } => "File copy",
             Mutation::HardLink { .. } => "Hard link",
             Mutation::LibraryMove { .. } => "Library move",
             Mutation::DbMigration { .. } => "Migration",
@@ -409,9 +376,7 @@ impl Mutation {
         matches!(
             self,
             Mutation::ApplyTagOps { .. }
-                | Mutation::CleanupStaleFiles { .. }
                 | Mutation::DbMigration { .. }
-                | Mutation::UpdateTrackPath { .. }
                 | Mutation::UpdateFilePath { .. }
                 | Mutation::DropFromIndex { .. }
                 | Mutation::AcknowledgeMtimeOnly { .. }
@@ -438,15 +403,10 @@ impl Mutation {
 
             // These don't have a single inode directly (batch operations or no inode)
             Mutation::ApplyTagOps { .. }
-            | Mutation::IndexTrack { .. }
             | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateFileEntry { .. }
-            | Mutation::CleanupStaleFiles { .. }
-            | Mutation::UpdateTrackPath { .. }
             | Mutation::UpdateFilePath { .. }
             | Mutation::DropFromIndex { .. }
             | Mutation::Move { .. }
-            | Mutation::Copy { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
@@ -478,28 +438,14 @@ impl Mutation {
             }
 
             // Indexing operations affect the file's directory
-            Mutation::IndexTrack { path, .. }
-            | Mutation::IndexFileFromPath { path, .. }
-            | Mutation::UpdateFileEntry { path, .. } => {
+            Mutation::IndexFileFromPath { path, .. } => {
                 if let Some(parent) = path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
-            Mutation::CleanupStaleFiles { .. } => {
-                // Affects multiple paths, but we don't track which ones
-                // Signal recomputation will happen naturally on next eyeball
-            }
 
             // File operations affect source and destination directories
             Mutation::Move { source, destination, .. } => {
-                if let Some(parent) = source.parent() {
-                    dirs.push(parent.to_path_buf());
-                }
-                if let Some(parent) = destination.parent() {
-                    dirs.push(parent.to_path_buf());
-                }
-            }
-            Mutation::Copy { source, destination } => {
                 if let Some(parent) = source.parent() {
                     dirs.push(parent.to_path_buf());
                 }
@@ -516,15 +462,6 @@ impl Mutation {
             // Deployment operations happen outside corpus, don't affect corpus signals
             Mutation::HardLink { .. } | Mutation::LibraryMove { .. } => {}
 
-            // Path updates affect both old and new directories
-            Mutation::UpdateTrackPath { old_path, new_path, .. } => {
-                if let Some(parent) = old_path.parent() {
-                    dirs.push(parent.to_path_buf());
-                }
-                if let Some(parent) = new_path.parent() {
-                    dirs.push(parent.to_path_buf());
-                }
-            }
             // UpdateFilePath only has new_path (old path not tracked)
             Mutation::UpdateFilePath { new_path, .. } => {
                 if let Some(parent) = new_path.parent() {
@@ -573,9 +510,7 @@ impl Mutation {
     pub fn affected_paths(&self) -> Vec<PathBuf> {
         match self {
             // Indexing: the file being indexed
-            Mutation::IndexTrack { path, .. }
-            | Mutation::IndexFileFromPath { path, .. }
-            | Mutation::UpdateFileEntry { path, .. } => vec![path.clone()],
+            Mutation::IndexFileFromPath { path, .. } => vec![path.clone()],
 
             // Tag operations: single-track mutations with path
             Mutation::ApplyDbTagsToDisk { path, .. }
@@ -583,7 +518,6 @@ impl Mutation {
 
             // File operations: source and destination
             Mutation::Move { source, destination, .. }
-            | Mutation::Copy { source, destination }
             | Mutation::HardLink { source, destination }
             | Mutation::LibraryMove { source, destination } => {
                 vec![source.clone(), destination.clone()]
@@ -592,11 +526,6 @@ impl Mutation {
             Mutation::MoveToStash { path, .. } => {
                 vec![path.clone()]
             }
-
-            // Path updates: both old and new paths
-            Mutation::UpdateTrackPath {
-                old_path, new_path, ..
-            } => vec![old_path.clone(), new_path.clone()],
 
             // Drop: the path being dropped
             Mutation::DropFromIndex { path, .. } => vec![path.clone()],
@@ -623,7 +552,6 @@ impl Mutation {
 
             // Operations without specific file paths that need signal updates
             Mutation::ApplyTagOps { .. }
-            | Mutation::CleanupStaleFiles { .. }
             | Mutation::DbMigration { .. } => Vec::new(),
         }
     }
@@ -649,26 +577,19 @@ impl Mutation {
             | Mutation::Transcode { .. } => SignalClearScope::All,
 
             // Clear mutable signals only (preserve CorruptFile, ShitFormat)
-            Mutation::IndexTrack { .. }
-            | Mutation::IndexFileFromPath { .. }
+            Mutation::IndexFileFromPath { .. }
             | Mutation::Move { .. }
-            | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
             | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateFileEntry { .. } => SignalClearScope::MutableOnly,
-
-            // Clear mutable signals for path updates (clears MovedFile)
-            Mutation::UpdateFilePath { .. } => SignalClearScope::MutableOnly,
+            | Mutation::UpdateFilePath { .. } => SignalClearScope::MutableOnly,
 
             // No signal clearing (DB-only or no file impact)
             Mutation::ApplyTagOps { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleFiles { .. } => SignalClearScope::None,
+            | Mutation::DbMigration { .. } => SignalClearScope::None,
         }
     }
 
@@ -684,21 +605,14 @@ impl Mutation {
             }
 
             // Most mutations: use affected_paths equivalent
-            Mutation::IndexTrack { path, .. }
-            | Mutation::IndexFileFromPath { path, .. }
-            | Mutation::UpdateFileEntry { path, .. }
+            Mutation::IndexFileFromPath { path, .. }
             | Mutation::ApplyDbTagsToDisk { path, .. }
             | Mutation::AssimilateDiskTagsToDb { path, .. } => vec![path.clone()],
 
             Mutation::Move { source, destination, .. }
-            | Mutation::Copy { source, destination }
             | Mutation::HardLink { source, destination }
             | Mutation::LibraryMove { source, destination } => {
                 vec![source.clone(), destination.clone()]
-            }
-
-            Mutation::UpdateTrackPath { old_path, new_path, .. } => {
-                vec![old_path.clone(), new_path.clone()]
             }
 
             Mutation::AcknowledgeMtimeOnly { tracks }
@@ -710,82 +624,10 @@ impl Mutation {
             // MoveToStash/DropFromIndex: file removed, signal updates would race with index drop
             Mutation::ApplyTagOps { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateFilePath { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
             | Mutation::DropDirectoryFromIndex { .. } => Vec::new(),
-        }
-    }
-
-    /// Whether this mutation should check for CorruptFile signal emission.
-    ///
-    /// Returns:
-    /// - `Some(true)`: Check for corrupt file (fingerprint is already known to be missing)
-    /// - `Some(false)`: No CorruptFile emission needed
-    /// - `None`: Deferred check (needs DB lookup after execution, e.g., IndexFileFromPath)
-    pub fn checks_corrupt_file(&self) -> Option<bool> {
-        match self {
-            // IndexTrack: check inline metadata
-            Mutation::IndexTrack { metadata, .. } => Some(metadata.fingerprint.is_none()),
-
-            // IndexFileFromPath: deferred check (needs DB lookup after execution)
-            Mutation::IndexFileFromPath { .. } => None,
-
-            // All others: no CorruptFile emission
-            Mutation::MoveToStash { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::Transcode { .. }
-            | Mutation::Move { .. }
-            | Mutation::Copy { .. }
-            | Mutation::HardLink { .. }
-            | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrackPath { .. }
-            | Mutation::ApplyTagOps { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateFileEntry { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleFiles { .. }
-            | Mutation::UpdateFilePath { .. } => Some(false),
-        }
-    }
-
-    /// Whether this mutation should check for ShitFormat signal emission.
-    ///
-    /// Returns:
-    /// - `Some(file_type)`: Check this file type (non-empty = check, empty = no check)
-    /// - `None`: Deferred check (needs DB lookup after execution)
-    pub fn checks_shit_format(&self) -> Option<&str> {
-        match self {
-            // IndexTrack: check inline metadata
-            Mutation::IndexTrack { metadata, .. } => Some(&metadata.file_type),
-
-            // IndexFileFromPath: deferred check
-            Mutation::IndexFileFromPath { .. } => None,
-
-            // All others: no ShitFormat emission (explicit listing)
-            Mutation::MoveToStash { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::Transcode { .. }
-            | Mutation::Move { .. }
-            | Mutation::Copy { .. }
-            | Mutation::HardLink { .. }
-            | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrackPath { .. }
-            | Mutation::ApplyTagOps { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateFileEntry { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleFiles { .. }
-            | Mutation::UpdateFilePath { .. } => Some(""),
         }
     }
 
@@ -802,24 +644,19 @@ impl Mutation {
             ],
 
             // Explicit: all other variants spawn no additional computations
-            Mutation::IndexTrack { .. }
-            | Mutation::IndexFileFromPath { .. }
+            Mutation::IndexFileFromPath { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
             | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::Transcode { .. }
             | Mutation::Move { .. }
-            | Mutation::Copy { .. }
             | Mutation::LibraryMove { .. }
-            | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateFileEntry { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateFilePath { .. } => Vec::new(),
         }
     }
@@ -842,24 +679,19 @@ impl Mutation {
             // e.g., ApplyTagOps could clear MissingTag signals for affected tag types
 
             // Explicit: all other variants clear no specific signals
-            Mutation::IndexTrack { .. }
-            | Mutation::IndexFileFromPath { .. }
+            Mutation::IndexFileFromPath { .. }
             | Mutation::MoveToStash { .. }
             | Mutation::DropFromIndex { .. }
             | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::Transcode { .. }
             | Mutation::Move { .. }
-            | Mutation::Copy { .. }
             | Mutation::HardLink { .. }
-            | Mutation::UpdateTrackPath { .. }
             | Mutation::ApplyTagOps { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
             | Mutation::AcknowledgeInodeChanged { .. }
-            | Mutation::UpdateFileEntry { .. }
             | Mutation::DbMigration { .. }
-            | Mutation::CleanupStaleFiles { .. }
             | Mutation::UpdateFilePath { .. } => Vec::new(),
         }
     }

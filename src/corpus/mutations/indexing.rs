@@ -1,9 +1,7 @@
 //! Indexing Operations
 //!
 //! Handles execution of indexing-related mutations:
-//! - IndexTrack: Insert or update a track in the database
-//! - UpdateFileEntry: Update file entry for incremental scanning
-//! - CleanupStaleFiles: Remove stale file entries
+//! - IndexFileFromPath: Extract metadata and index a file
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -25,13 +23,13 @@ use crate::witch::MutationExecutionWitness;
 
 use super::types::{ExtractedMetadata, Mutation, MutationResult, PendingSignal};
 
-/// Execute an IndexTrack mutation.
+/// Index a track from extracted metadata (internal helper).
 ///
 /// Inserts or updates a track in the database from extracted metadata.
 /// Tags are stored in corpus_tags table (or inbox_tags for inbox files).
 ///
 /// Routes write through signal_sender (fire-and-forget).
-pub fn execute_index_track(
+fn index_track_from_metadata(
     _db: &ReadOnlyDb<'_>,
     path: &Path,
     source: &str,
@@ -147,115 +145,15 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
         }
     }
 
-    // Note: _db is unused - execute_index_track routes through signal_sender
-    execute_index_track(_db, path, source, &extracted, witness)?;
+    // Note: _db is unused - index_track_from_metadata routes through signal_sender
+    index_track_from_metadata(_db, path, source, &extracted, witness)?;
 
     Ok(pending_signals)
-}
-
-/// Execute an UpdateFileEntry mutation.
-///
-/// Updates the file entry for a file, enabling incremental scanning.
-///
-/// Routes write through signal_sender (fire-and-forget).
-pub fn execute_update_file_entry(
-    _db: &ReadOnlyDb<'_>,
-    source: &str,
-    inode: u64,
-    mtime_secs: i64,
-    mtime_nanos: i64,
-    file_size: u64,
-    path: &Path,
-    witness: &MutationExecutionWitness,
-) -> Result<()> {
-    use crate::db_thread::{self, FileEntryData};
-
-    let resolver = paths::get_resolver();
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-
-    // Convert absolute path to relative for storage
-    let relative_path = resolver
-        .to_relative(path)
-        .with_context(|| {
-            format!(
-                "Path {} does not match root. Check config.kdl roots.",
-                path.display(),
-            )
-        })?;
-
-    let file_entry = FileEntryData {
-        inode: inode as i64,
-        mtime_secs,
-        mtime_nanos,
-        file_size: file_size as i64,
-    };
-
-    // Route write through signal_sender
-    sender.upsert_file_entry(&relative_path.to_string_lossy(), source, file_entry, witness);
-
-    Ok(())
-}
-
-/// Execute a CleanupStaleFiles mutation.
-///
-/// Removes stale file entries for files that no longer exist.
-/// Routes write through signal_sender (fire-and-forget).
-pub fn execute_cleanup_stale_files(
-    _db: &ReadOnlyDb<'_>,
-    source: &str,
-    valid_inodes: &[u64],
-    witness: &MutationExecutionWitness,
-) -> Result<()> {
-    use crate::db_thread;
-
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-
-    let valid_i64: Vec<i64> = valid_inodes.iter().map(|&i| i as i64).collect();
-    sender.cleanup_stale_files(source, valid_i64, witness);
-
-    Ok(())
 }
 
 // ============================================================================
 // Signal Resolution Executors
 // ============================================================================
-
-/// Execute UpdateTrackPath mutation - update path for relocated file.
-///
-/// Note: This function needs the source to determine which root to use for
-/// relative path conversion. It fetches the file's source from the database.
-///
-/// Uses read-only DB for lookup, routes write through signal_sender.
-pub fn execute_update_track_path(db: &ReadOnlyDb<'_>, inode: i64, new_path: &Path, witness: &MutationExecutionWitness) -> Result<()> {
-    use crate::db_thread;
-
-    let resolver = paths::get_resolver();
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-
-    // Get old path from DB (read-only)
-    // UpdateTrackPath only operates on corpus files
-    let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
-    let old_path = audio_file.path().to_string();
-
-    // Convert absolute path to relative for storage
-    let relative_path = resolver
-        .to_relative(new_path)
-        .with_context(|| {
-            format!(
-                "Path {} does not match root. Check config.kdl roots.",
-                new_path.display(),
-            )
-        })?;
-
-    // Route write through signal_sender
-    sender.update_track_path(&old_path, &relative_path.to_string_lossy(), witness);
-
-    Ok(())
-}
 
 /// Execute UpdateFilePath mutation - update file path for relocated file.
 ///
@@ -849,36 +747,10 @@ pub fn execute_single(
     }
 
     let result = match mutation {
-        Mutation::IndexTrack {
-            path,
-            source,
-            metadata,
-        } => execute_index_track(db, path, source, metadata, witness).map(|_| ()),
-
         // Already handled above with early return
         Mutation::IndexFileFromPath { .. } => unreachable!(),
 
-        Mutation::UpdateFileEntry {
-            source,
-            inode,
-            mtime_secs,
-            mtime_nanos,
-            file_size,
-            path,
-        } => execute_update_file_entry(db, source, *inode, *mtime_secs, *mtime_nanos, *file_size, path, witness),
-
-        Mutation::CleanupStaleFiles {
-            source,
-            valid_inodes,
-        } => execute_cleanup_stale_files(db, source, valid_inodes, witness),
-
         // Signal resolution mutations
-        Mutation::UpdateTrackPath {
-            inode,
-            new_path,
-            ..
-        } => execute_update_track_path(db, *inode, new_path, witness),
-
         Mutation::UpdateFilePath {
             source,
             inode,
@@ -937,7 +809,6 @@ pub fn execute_single(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_extracted_metadata_creation() {
@@ -958,27 +829,5 @@ mod tests {
         assert_eq!(metadata.get_tag("artist"), Some("Test Artist"));
         assert_eq!(metadata.get_tag("album"), Some("Test Album"));
         assert_eq!(metadata.get_tag("missing"), None);
-    }
-
-    #[test]
-    fn test_index_track_mutation_structure() {
-        let metadata = ExtractedMetadata {
-            inode: 12345,
-            file_size: 1024 * 1024,
-            file_type: "FLAC".to_string(),
-            duration_ms: Some(180000),
-            bitrate_kbps: Some(1411),
-            sample_rate: Some(44100),
-            fingerprint: None,
-            tags: vec![],
-        };
-
-        let mutation = Mutation::IndexTrack {
-            path: PathBuf::from("/test/file.flac"),
-            source: "corpus".to_string(),
-            metadata,
-        };
-
-        assert!(matches!(mutation, Mutation::IndexTrack { .. }));
     }
 }

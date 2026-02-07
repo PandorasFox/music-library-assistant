@@ -265,7 +265,7 @@ impl Database {
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.source = 'corpus' AND f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0
+            WHERE f.source = 'corpus' AND f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
             ORDER BY f.path"#,
         )?;
 
@@ -283,7 +283,7 @@ impl Database {
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0
+            WHERE f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
             ORDER BY f.path"#,
         )?;
 

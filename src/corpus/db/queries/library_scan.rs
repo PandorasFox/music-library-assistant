@@ -29,7 +29,7 @@ impl Database {
         let count = self
             .conn
             .execute(
-                "DELETE FROM files WHERE source = 'library' AND path LIKE ?1 ESCAPE '\\'",
+                "DELETE FROM files WHERE source = 'library' AND path LIKE ?1 ESCAPE '\'",
                 params![pattern],
             )
             .context("Failed to clear library files")?;
@@ -84,7 +84,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT path, inode
              FROM files
-             WHERE source = 'library' AND path LIKE ?1 ESCAPE '\\'
+             WHERE source = 'library' AND path LIKE ?1 ESCAPE '\'
              ORDER BY path",
         )?;
 

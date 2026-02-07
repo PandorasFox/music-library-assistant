@@ -1,9 +1,25 @@
 //! Types for inode changed acknowledgement flow.
+//!
+//! **OBSOLETE**: InodeChanged signals were removed in v3 migration.
+//! Inode changes are now exposed as MissingFile + UnindexedFile pair.
+//! This module is retained for compilation but the flow is deprecated.
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::corpus::db::types::InodeChangedFile;
 use crate::ui::widgets::FocusPane;
+
+// ============================================================================
+// Obsolete InodeChangedFile replacement
+// ============================================================================
+
+/// Placeholder type for backwards compatibility (obsolete).
+#[derive(Debug, Clone)]
+pub struct InodeChangedFile {
+    pub inode: i64,
+    pub path: String,
+    pub old_inode: i64,
+    pub new_inode: i64,
+}
 
 // ============================================================================
 // Button Selection

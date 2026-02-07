@@ -31,7 +31,7 @@ use std::time::Instant;
 
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, FileSignalType, SignalType,
+    AggregateSignal, AggregateSignalType, CorpusFileSignalType, FileSignalType, SignalType,
 };
 use crate::corpus::db::Database;
 use crate::corpus::tags::TagSet;
@@ -184,6 +184,34 @@ enum SignalWriteOp {
         signal_type: FileSignalType,
         path: String,
     },
+
+    // =========================================================================
+    // Inode-Keyed Corpus Signal Operations (Phase 4)
+    // =========================================================================
+
+    /// Ensure an inode-keyed corpus signal exists (uses native inode column)
+    EnsureCorpusSignal {
+        signal_type: CorpusFileSignalType,
+        inode: i64,
+        path: String,
+    },
+    /// Ensure an inode-keyed corpus signal with additional metadata
+    EnsureCorpusSignalWithMetadata {
+        signal_type: CorpusFileSignalType,
+        inode: i64,
+        path: String,
+        extra_metadata: String,
+    },
+    /// Clear an inode-keyed corpus signal
+    ClearCorpusSignal {
+        signal_type: CorpusFileSignalType,
+        inode: i64,
+    },
+    /// Clear all corpus signals for an inode
+    ClearAllCorpusSignals {
+        inode: i64,
+    },
+
     /// Aggregate signal (with metadata)
     EnsureAggregateSignal {
         signal_type: AggregateSignalType,
@@ -566,6 +594,69 @@ impl SignalWriteSender {
             signal_type,
             path: path.to_string(),
         });
+    }
+
+    // =========================================================================
+    // Inode-keyed corpus signal operations (uses native inode column)
+    // =========================================================================
+
+    /// Enqueue an inode-keyed corpus signal (uses native inode column).
+    ///
+    /// The inode is stored in the dedicated `inode` column for efficient queries.
+    /// The path is stored in metadata_json for display purposes.
+    pub fn ensure_corpus_signal(
+        &self,
+        signal_type: CorpusFileSignalType,
+        inode: i64,
+        path: &str,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::EnsureCorpusSignal {
+            signal_type,
+            inode,
+            path: path.to_string(),
+        });
+    }
+
+    /// Enqueue an inode-keyed corpus signal with additional metadata.
+    pub fn ensure_corpus_signal_with_metadata(
+        &self,
+        signal_type: CorpusFileSignalType,
+        inode: i64,
+        path: &str,
+        extra_metadata: serde_json::Value,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::EnsureCorpusSignalWithMetadata {
+            signal_type,
+            inode,
+            path: path.to_string(),
+            extra_metadata: extra_metadata.to_string(),
+        });
+    }
+
+    /// Clear an inode-keyed corpus signal.
+    pub fn clear_corpus_signal(
+        &self,
+        signal_type: CorpusFileSignalType,
+        inode: i64,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearCorpusSignal {
+            signal_type,
+            inode,
+        });
+    }
+
+    /// Clear all corpus signals for an inode.
+    ///
+    /// Used when dropping a file from the index to clear all associated signals.
+    pub fn clear_all_corpus_signals(&self, inode: i64, _witness: &impl SignalWitness) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearAllCorpusSignals { inode });
     }
 
     // =========================================================================
@@ -1174,6 +1265,39 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
+        // Inode-keyed corpus signal operations
+        SignalWriteOp::EnsureCorpusSignal {
+            signal_type,
+            inode,
+            path,
+        } => {
+            with_retry("ensure_corpus_signal", path, || {
+                db.ensure_corpus_signal(*signal_type, *inode, path, &witness).map(|_| ())
+            });
+        }
+        SignalWriteOp::EnsureCorpusSignalWithMetadata {
+            signal_type,
+            inode,
+            path,
+            extra_metadata,
+        } => {
+            with_retry("ensure_corpus_signal_with_metadata", path, || {
+                let metadata: serde_json::Value = serde_json::from_str(extra_metadata)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                db.ensure_corpus_signal_with_metadata(*signal_type, *inode, path, metadata, &witness).map(|_| ())
+            });
+        }
+        SignalWriteOp::ClearCorpusSignal { signal_type, inode } => {
+            with_retry("clear_corpus_signal", &inode.to_string(), || {
+                db.clear_corpus_signal(*signal_type, *inode, &witness).map(|_| ())
+            });
+        }
+        SignalWriteOp::ClearAllCorpusSignals { inode } => {
+            with_retry("clear_all_corpus_signals", &inode.to_string(), || {
+                db.clear_all_corpus_signals_for_inode(*inode, &witness).map(|_| ())
+            });
+        }
+
         // Aggregate signal operations
         SignalWriteOp::EnsureAggregateSignal {
             signal_type,
@@ -1705,8 +1829,15 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
         )?;
     }
 
-    // Clear all signals for this path (MissingFile, CorruptFile, etc.)
-    // This is the resolution action - dropping from index resolves file-level signals
+    // Clear all inode-keyed signals for this inode (MissingFile, CorruptFile, etc.)
+    // This uses the native inode column for proper cleanup
+    db.conn().execute(
+        "DELETE FROM signals WHERE inode = ?1",
+        params![inode],
+    )?;
+
+    // Also clear path-keyed signals (MissingDirectory, library signals, etc.)
+    // These use issue_key = path
     db.conn().execute(
         "DELETE FROM signals WHERE issue_key = ?1",
         params![path],

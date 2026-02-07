@@ -219,14 +219,11 @@ pub fn execute_drop_directory_from_index(
     // Drop each file from the index
     for audio_file in &audio_files {
         let file_path = audio_file.path();
+        let inode = audio_file.entry.inode;
         sender.drop_from_index(file_path, witness);
-        sender.drop_file_index_by_inode("corpus", audio_file.entry.inode, witness);
-        // Clear MissingFile signal for this file
-        sender.clear_file_signal(
-            CorpusFileSignalType::MissingFile.into(),
-            file_path,
-            witness,
-        );
+        sender.drop_file_index_by_inode("corpus", inode, witness);
+        // Clear all corpus signals for this inode (MissingFile, CorruptFile, etc.)
+        sender.clear_all_corpus_signals(inode, witness);
     }
 
     // Drop the directory entry itself from files table
@@ -482,74 +479,6 @@ pub fn execute_acknowledge_mtime_only(
         sender.clear_file_signal(
             CorpusFileSignalType::MtimeOnlyMismatch.into(),
             audio_file.path(),
-            witness,
-        );
-
-        affected_paths.push(abs_path.clone());
-    }
-
-    Ok(affected_paths)
-}
-
-/// Execute AcknowledgeInodeChanged mutation.
-///
-/// For each track: updates track.inode to the new inode, deletes old files table
-/// entry, creates new file entry with current mtime, and clears the InodeChanged signal.
-/// Tag differences are handled separately through the OOB tag resolution flow.
-pub fn execute_acknowledge_inode_changed(
-    db: &ReadOnlyDb<'_>,
-    tracks: &[(i64, std::path::PathBuf)],
-    witness: &MutationExecutionWitness,
-) -> Result<Vec<std::path::PathBuf>> {
-    use crate::corpus::db::types::CorpusFileSignalType;
-    use crate::db_thread::{self, FileEntryData};
-    use std::os::unix::fs::MetadataExt;
-
-    let sender = db_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
-    let mut affected_paths = Vec::new();
-
-    for (old_inode, abs_path) in tracks {
-        // Get audio file info (need relative path and old inode for DB operations)
-        // OOB inode changed resolution only operates on corpus files
-        let audio_file = match db.get_audio_file_by_inode(*old_inode, FileSource::Corpus)? {
-            Some(af) => af,
-            None => continue, // Skip missing files
-        };
-        let file_path = audio_file.path();
-        let source_str = audio_file.entry.source.as_str();
-
-        // Read current disk metadata
-        let metadata = std::fs::metadata(abs_path)
-            .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
-        let new_inode = metadata.ino() as i64;
-        let mtime_secs = metadata.mtime();
-        let mtime_nanos = metadata.mtime_nsec() as i64;
-        let file_size = metadata.len() as i64;
-
-        // Update audio_info.inode to the new value via db_thread
-        sender.update_track_inode(file_path, new_inode, witness);
-
-        // Delete old files table entry (keyed by old inode) via db_thread
-        sender.drop_file_index_by_inode(source_str, *old_inode, witness);
-
-        // Insert new file entry with new inode and current mtime via db_thread
-        sender.upsert_file_entry(
-            file_path,
-            source_str,
-            FileEntryData {
-                inode: new_inode,
-                mtime_secs,
-                mtime_nanos,
-                file_size,
-            },
-            witness,
-        );
-
-        // Clear InodeChanged signal via db_thread
-        sender.clear_file_signal(
-            CorpusFileSignalType::InodeChanged.into(),
-            file_path,
             witness,
         );
 
@@ -829,8 +758,12 @@ pub fn execute_single(
             execute_acknowledge_mtime_only(db, tracks, witness).map(|_| ())
         }
 
-        Mutation::AcknowledgeInodeChanged { tracks } => {
-            execute_acknowledge_inode_changed(db, tracks, witness).map(|_| ())
+        // OBSOLETE: InodeChanged signals removed in v3 migration
+        // Now exposed as MissingFile + UnindexedFile pair
+        #[allow(deprecated)]
+        Mutation::AcknowledgeInodeChanged { .. } => {
+            // No-op - signal type no longer exists
+            Ok(())
         }
 
         // Single-file tag sync mutations

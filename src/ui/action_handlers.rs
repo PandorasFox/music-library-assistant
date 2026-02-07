@@ -1308,39 +1308,12 @@ impl App {
     }
 
     /// Start inode changed acknowledgement flow.
+    ///
+    /// **OBSOLETE**: InodeChanged signals were removed in v3 migration.
+    /// Inode changes are now exposed as MissingFile + UnindexedFile pair.
     fn start_inode_changed_acknowledge(&mut self) {
-        let Some(ref mut witch) = self.witch else {
-            self.status_message = Some("No database connection".to_string());
-            return;
-        };
-
-        // Query files with inode_changed signals
-        let files = {
-            let read_db = witch.read_db();
-            match read_db.get_inode_changed_files() {
-                Ok(f) => f,
-                Err(e) => {
-                    self.status_message = Some(format!("Failed to query inode changes: {}", e));
-                    return;
-                }
-            }
-        };
-
-        if files.is_empty() {
-            self.status_message = Some("No inode-changed files to acknowledge".to_string());
-            return;
-        }
-
-        crate::logging::log_general(format!(
-            "Starting inode changed acknowledgement: {} files",
-            files.len()
-        ));
-
-        // Start transaction for the acknowledgement
-        let _ = witch.start_transaction("Inode changed acknowledgement");
-
-        self.inode_changed_state = Some(inode_changed_flow::InodeChangedState::new(files));
-        self.mode = UiMode::InodeChangedAcknowledge;
+        // InodeChanged signals no longer exist - inform user
+        self.status_message = Some("Inode changes are now shown as Missing + Unindexed file pairs".to_string());
     }
 
     /// Handle inode changed acknowledgement actions.

@@ -240,6 +240,117 @@ impl Database {
             .is_ok()
     }
 
+    // ========================================================================
+    // Inode-Native Signal Operations
+    // ========================================================================
+
+    /// Fast existence check for an inode-keyed corpus signal.
+    ///
+    /// Uses the native `inode` column for efficient lookup.
+    pub fn corpus_signal_exists_by_inode(
+        &self,
+        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        inode: i64,
+    ) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM signals WHERE issue_type = ?1 AND inode = ?2 LIMIT 1",
+                params![signal_type.as_str(), inode],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
+    /// Ensure an inode-keyed corpus signal exists (idempotent).
+    ///
+    /// Uses the native `inode` column. The path is stored in `metadata_json`
+    /// for display purposes, and `issue_key` is set to the inode as string
+    /// for backwards compatibility.
+    pub fn ensure_corpus_signal(
+        &self,
+        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        inode: i64,
+        path: &str,
+        _witness: &impl SignalWitness,
+    ) -> Result<bool> {
+        let key = inode.to_string();
+        let metadata = serde_json::json!({ "path": path });
+        self.conn
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO signals
+                (issue_type, issue_key, inode, discovered_at, metadata_json)
+                VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, ?4)
+                "#,
+                params![signal_type.as_str(), key, inode, metadata.to_string()],
+            )
+            .context("Failed to ensure corpus signal")?;
+
+        Ok(self.conn.changes() > 0)
+    }
+
+    /// Ensure an inode-keyed corpus signal with additional metadata.
+    ///
+    /// Merges the path into the provided metadata and stores the signal.
+    pub fn ensure_corpus_signal_with_metadata(
+        &self,
+        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        inode: i64,
+        path: &str,
+        mut extra_metadata: serde_json::Value,
+        _witness: &impl SignalWitness,
+    ) -> Result<bool> {
+        let key = inode.to_string();
+        extra_metadata["path"] = serde_json::json!(path);
+        self.conn
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO signals
+                (issue_type, issue_key, inode, discovered_at, metadata_json)
+                VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, ?4)
+                "#,
+                params![signal_type.as_str(), key, inode, extra_metadata.to_string()],
+            )
+            .context("Failed to ensure corpus signal with metadata")?;
+
+        Ok(self.conn.changes() > 0)
+    }
+
+    /// Clear an inode-keyed corpus signal (idempotent delete).
+    pub fn clear_corpus_signal(
+        &self,
+        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        inode: i64,
+        _witness: &impl SignalWitness,
+    ) -> Result<bool> {
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM signals WHERE issue_type = ?1 AND inode = ?2",
+                params![signal_type.as_str(), inode],
+            )
+            .context("Failed to clear corpus signal")?;
+
+        Ok(deleted > 0)
+    }
+
+    /// Clear all corpus signals for an inode.
+    ///
+    /// Used when dropping a file from the index to clear all associated signals.
+    pub fn clear_all_corpus_signals_for_inode(
+        &self,
+        inode: i64,
+        _witness: &impl SignalWitness,
+    ) -> Result<usize> {
+        let deleted = self.conn
+            .execute(
+                "DELETE FROM signals WHERE inode = ?1",
+                params![inode],
+            )
+            .context("Failed to clear corpus signals for inode")?;
+
+        Ok(deleted)
+    }
+
     /// Delete all signals for a specific path (for path-keyed signals like library signals).
     ///
     /// Used during track deletion to clear all associated signals.
@@ -739,7 +850,6 @@ impl Database {
         let oob_tag_conflict = self.count_signal_type("oob_tag_conflict")?
             + self.count_signal_type("oob_tag").unwrap_or(0);
         let mtime_only_mismatch = self.count_signal_type("mtime_only_mismatch")?;
-        let inode_changed = self.count_signal_type("inode_changed")?;
 
         // Standard corpus file signals
         let files_in_corpus = self.count_signal_type("file_in_corpus")?;
@@ -763,7 +873,6 @@ impl Database {
             oob_tag_sync,
             oob_tag_conflict,
             mtime_only_mismatch,
-            inode_changed,
             files_in_corpus,
             files_indexed,
             files_unindexed,

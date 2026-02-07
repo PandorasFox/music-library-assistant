@@ -84,6 +84,69 @@ impl MigrationRegistry {
             },
         });
 
+        // v2→v3: Add native inode column to signals table for inode-keyed signals
+        registry.register(Migration {
+            from_version: 2,
+            to_version: 3,
+            description: "Add inode column to signals table for proper inode-keyed signal storage",
+            apply: |db| {
+                // Check if inode column already exists (idempotent)
+                let has_inode_column: bool = db.conn().query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('signals') WHERE name = 'inode'",
+                    [],
+                    |row| row.get(0),
+                )?;
+
+                if !has_inode_column {
+                    db.conn().execute(
+                        "ALTER TABLE signals ADD COLUMN inode INTEGER",
+                        [],
+                    )?;
+                }
+
+                // Create index on inode column (IF NOT EXISTS is idempotent)
+                db.conn().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_signals_inode ON signals(inode)",
+                    [],
+                )?;
+
+                // Migrate existing inode-keyed signals: parse issue_key as integer and store in inode column
+                // These are corpus file signals where issue_key stores inode.to_string()
+                let inode_keyed_types = [
+                    "file_in_corpus", "unindexed_file", "healthy_file", "missing_file",
+                    "moved_file", "oob_tag_sync", "oob_tag_conflict", "mtime_only_mismatch",
+                    "corrupt_file", "shit_format", "subpar_duplicate", "compound_tag",
+                    "deploy_ready", "deployed_healthy",
+                ];
+
+                for signal_type in inode_keyed_types {
+                    // Only update rows where issue_key looks like an integer (all digits)
+                    // and inode column is still NULL
+                    db.conn().execute(
+                        &format!(
+                            r#"UPDATE signals
+                               SET inode = CAST(issue_key AS INTEGER)
+                               WHERE issue_type = '{}'
+                               AND inode IS NULL
+                               AND issue_key GLOB '[0-9]*'
+                               AND issue_key NOT GLOB '*[^0-9]*'"#,
+                            signal_type
+                        ),
+                        [],
+                    )?;
+                }
+
+                // Delete obsolete InodeChanged signals
+                // These are now exposed as MissingFile + UnindexedFile pair
+                db.conn().execute(
+                    "DELETE FROM signals WHERE issue_type = 'inode_changed'",
+                    [],
+                )?;
+
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -171,10 +234,13 @@ mod tests {
         let registry = MigrationRegistry::new();
 
         // v1→v2: tags_version + dirty_inodes
-        assert_eq!(registry.latest_version(), 2);
-        // From v1, there should be 1 pending migration
-        assert_eq!(registry.pending_migrations(1).len(), 1);
-        // From v2, no pending migrations
-        assert!(registry.pending_migrations(2).is_empty());
+        // v2→v3: inode column in signals table
+        assert_eq!(registry.latest_version(), 3);
+        // From v1, there should be 2 pending migrations
+        assert_eq!(registry.pending_migrations(1).len(), 2);
+        // From v2, there should be 1 pending migration
+        assert_eq!(registry.pending_migrations(2).len(), 1);
+        // From v3, no pending migrations
+        assert!(registry.pending_migrations(3).is_empty());
     }
 }

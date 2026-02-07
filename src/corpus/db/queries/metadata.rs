@@ -280,35 +280,6 @@ impl Database {
         Ok(files)
     }
 
-    /// Get files with InodeChanged signals for the acknowledgement flow.
-    ///
-    /// Returns files where the inode changed (file was replaced).
-    /// Extracts old_inode and new_inode from signal metadata.
-    pub fn get_inode_changed_files(&self) -> Result<Vec<crate::corpus::db::types::InodeChangedFile>> {
-        use crate::corpus::db::types::InodeChangedFile;
-
-        let mut stmt = self.conn.prepare(
-            "SELECT f.inode, s.issue_key,
-                json_extract(s.metadata_json, '$.old_inode') as old_inode,
-                json_extract(s.metadata_json, '$.new_inode') as new_inode
-             FROM signals s
-             INNER JOIN files f ON f.path = s.issue_key AND f.source = 'corpus'
-             WHERE s.issue_type = 'inode_changed'
-             ORDER BY s.issue_key"
-        )?;
-
-        let files: Vec<InodeChangedFile> = stmt.query_map(params![], |row| {
-            Ok(InodeChangedFile {
-                inode: row.get(0)?,
-                path: row.get(1)?,
-                old_inode: row.get(2)?,
-                new_inode: row.get(3)?,
-            })
-        })?.filter_map(|r| r.ok()).collect();
-
-        Ok(files)
-    }
-
     /// Get files with MovedFile signals (same inode, different path).
     pub fn get_moved_files(&self) -> Result<Vec<crate::corpus::db::types::MovedFileInfo>> {
         use crate::corpus::db::types::MovedFileInfo;

@@ -304,11 +304,11 @@ pub enum Mutation {
         tracks: Vec<(i64, PathBuf)>,
     },
 
-    /// Acknowledge inode change - update audio_info and files table, clear InodeChanged signal.
+    /// **OBSOLETE**: Inode changes are now exposed as MissingFile + UnindexedFile pair.
     ///
-    /// Used when a file was replaced (same path, different inode). Updates the stored
-    /// inode to match disk and refreshes file entry. Tag differences are handled separately
-    /// through the OOB tag resolution flow.
+    /// This variant is retained for backwards compatibility but is a no-op.
+    /// The v2→v3 migration deletes all InodeChanged signals.
+    #[deprecated(note = "InodeChanged signals removed in v3 migration")]
     AcknowledgeInodeChanged {
         /// Inodes with their absolute paths: (inode, abs_path)
         tracks: Vec<(i64, PathBuf)>,

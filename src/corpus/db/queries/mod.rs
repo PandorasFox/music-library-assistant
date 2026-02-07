@@ -481,6 +481,25 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.file_signal_exists(signal_type, key)
     }
 
+    /// Check if an inode-keyed corpus signal exists.
+    ///
+    /// Uses the native `inode` column for efficient lookup.
+    pub fn corpus_signal_exists_by_inode(
+        &self,
+        signal_type: super::types::CorpusFileSignalType,
+        inode: i64,
+    ) -> bool {
+        self.db.corpus_signal_exists_by_inode(signal_type, inode)
+    }
+
+    /// Get aggregate signal keys with metadata for a given type.
+    pub fn get_aggregate_signal_keys_with_metadata(
+        &self,
+        signal_type: super::types::AggregateSignalType,
+    ) -> Result<Vec<(String, Option<String>)>> {
+        self.db.get_aggregate_signal_keys_with_metadata(signal_type)
+    }
+
     // =========================================================================
     // OOB / Tag Mismatch Queries
     // =========================================================================
@@ -493,11 +512,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get OOB files bucketed by conflict type.
     pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::corpus::db::types::BucketedOobFile>> {
         self.db.get_oob_files_bucketed()
-    }
-
-    /// Get files with changed inodes.
-    pub fn get_inode_changed_files(&self) -> Result<Vec<crate::corpus::db::types::InodeChangedFile>> {
-        self.db.get_inode_changed_files()
     }
 
     /// Get files that have been moved (same inode, different path).
@@ -664,14 +678,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get all inodes that are deployed in any library.
     pub fn get_all_library_inodes(&self) -> Result<std::collections::HashSet<i64>> {
         self.db.get_all_library_inodes()
-    }
-
-    /// Get aggregate signal keys with metadata for set-difference computations.
-    pub fn get_aggregate_signal_keys_with_metadata(
-        &self,
-        signal_type: super::types::AggregateSignalType,
-    ) -> Result<Vec<(String, Option<String>)>> {
-        self.db.get_aggregate_signal_keys_with_metadata(signal_type)
     }
 
     /// Get audio info for a track by inode.

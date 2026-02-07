@@ -382,14 +382,8 @@ impl CachedBucketEntries {
                 if corpus.oob_tag_conflict > 0 { Color::Red } else { Color::DarkGray },
                 InsightAction::LaunchOobTagConflict,
             ),
-            BucketEntry::corpus(
-                InsightType::CorpusInodeChanged,
-                "Files replaced (inode changed)",
-                corpus.inode_changed,
-                if corpus.inode_changed > 0 { 0 } else { 2 },
-                if corpus.inode_changed > 0 { Color::Red } else { Color::DarkGray },
-                InsightAction::LaunchInodeChangedAcknowledge,
-            ),
+            // Note: InodeChanged was removed in v3 migration
+            // Inode changes are now exposed as MissingFile + UnindexedFile pair
             BucketEntry::corpus(
                 InsightType::CorpusFilesInCorpus,
                 "Files in corpus",
@@ -855,7 +849,6 @@ mod tests {
                 oob_tag_sync: 0,
                 oob_tag_conflict: 0,
                 mtime_only_mismatch: 0,
-                inode_changed: 0,
                 files_in_corpus: 100,
                 files_indexed: 90,
                 files_unindexed: 5,
@@ -969,12 +962,12 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 1);
 
-        // Navigate to end of corpus bucket (12 items: 0-11)
-        for _ in 0..10 {
+        // Navigate to end of corpus bucket (11 items: 0-10)
+        for _ in 0..9 {
             state.navigate_down();
         }
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 11);
+        assert_eq!(state.current_selection().selected, 10);
 
         // Navigate down should move to Placeholder bucket
         state.navigate_down();
@@ -984,7 +977,7 @@ mod tests {
         // Navigate up should return to Corpus bucket at last item
         state.navigate_up();
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 11);
+        assert_eq!(state.current_selection().selected, 10);
     }
 
     #[test]

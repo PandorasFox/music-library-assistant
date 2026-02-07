@@ -132,6 +132,29 @@ pub struct DeploymentStats {
 }
 
 // ============================================================================
+// Signal Key Types
+// ============================================================================
+
+/// How a signal type is keyed in the database.
+///
+/// Different signal types use different keying strategies:
+/// - Inode-keyed: Uses the native `inode` column for efficient lookup
+/// - Path-keyed: Uses `issue_key` as the file path
+/// - Library-keyed: Uses `issue_key` as a compound key like `"library_leftover:{name}:{path}"`
+/// - Semantic-keyed: Uses `issue_key` as a semantic key (for aggregates)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SignalKeyType {
+    /// Signal is keyed by inode (uses `inode` column)
+    Inode,
+    /// Signal is keyed by file path (uses `issue_key` column)
+    Path,
+    /// Signal is keyed by compound library key (uses `issue_key` column)
+    Library,
+    /// Signal is keyed by semantic key (uses `issue_key` column)
+    Semantic,
+}
+
+// ============================================================================
 // Health Issue Types
 // ============================================================================
 
@@ -202,9 +225,6 @@ pub enum SignalType {
     MtimeOnlyMismatch,
     /// Multiple corpus entries share the same inode (hard links or DB inconsistency)
     DuplicateInode,
-    /// File at path was replaced (different inode than indexed)
-    /// issue_key: relative path, metadata: {"old_inode": i64, "new_inode": i64}
-    InodeChanged,
     /// Tag value collision needing canonicalization
     TagCanonicity,
     /// Album has tracks with different artists + missing/inconsistent album_artist
@@ -258,7 +278,6 @@ impl SignalType {
             Self::OutOfBandTagConflict => "oob_tag_conflict",
             Self::MtimeOnlyMismatch => "mtime_only_mismatch",
             Self::DuplicateInode => "duplicate_inode",
-            Self::InodeChanged => "inode_changed",
             Self::TagCanonicity => "tag_canonicity",
             Self::InconsistentAlbumArtist => "inconsistent_album_artist",
             Self::CompoundTagValue => "compound_tag_value",
@@ -300,7 +319,9 @@ impl SignalType {
             // Legacy: treat old "oob_tag" as conflict (conservative)
             "oob_tag" => Some(Self::OutOfBandTagConflict),
             "duplicate_inode" => Some(Self::DuplicateInode),
-            "inode_changed" => Some(Self::InodeChanged),
+            // Legacy: inode_changed was removed in v3 migration
+            // These are now exposed as MissingFile + UnindexedFile pair
+            "inode_changed" => Some(Self::MissingFile),
             "tag_canonicity" => Some(Self::TagCanonicity),
             "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
             "compound_tag_value" => Some(Self::CompoundTagValue),
@@ -338,7 +359,6 @@ impl From<CorpusFileSignalType> for SignalType {
             CorpusFileSignalType::OutOfBandTagSync => Self::OutOfBandTagSync,
             CorpusFileSignalType::OutOfBandTagConflict => Self::OutOfBandTagConflict,
             CorpusFileSignalType::MtimeOnlyMismatch => Self::MtimeOnlyMismatch,
-            CorpusFileSignalType::InodeChanged => Self::InodeChanged,
             CorpusFileSignalType::CorruptFile => Self::CorruptFile,
             CorpusFileSignalType::ShitFormat => Self::ShitFormat,
             CorpusFileSignalType::SubparDuplicate => Self::SubparDuplicate,
@@ -401,8 +421,6 @@ pub enum CorpusFileSignalType {
     OutOfBandTagConflict,
     /// File mtime changed but tags are identical (requires operator acknowledgement)
     MtimeOnlyMismatch,
-    /// File at path was replaced (different inode than indexed)
-    InodeChanged,
     /// File is corrupt (unreadable tags or waveform decode failure)
     CorruptFile,
     /// File is in a non-Vorbis container format (MP3, M4A, AAC, WMA, or lossless needing remux)
@@ -426,11 +444,22 @@ impl CorpusFileSignalType {
             Self::OutOfBandTagSync => "oob_tag_sync",
             Self::OutOfBandTagConflict => "oob_tag_conflict",
             Self::MtimeOnlyMismatch => "mtime_only_mismatch",
-            Self::InodeChanged => "inode_changed",
             Self::CorruptFile => "corrupt_file",
             Self::ShitFormat => "shit_format",
             Self::SubparDuplicate => "subpar_duplicate",
             Self::CompoundTag => "compound_tag",
+        }
+    }
+
+    /// Get the key type for this signal type.
+    ///
+    /// Most corpus file signals are inode-keyed. Only MissingDirectory is path-keyed
+    /// because directories don't have inodes in our domain model.
+    pub fn key_type(&self) -> SignalKeyType {
+        match self {
+            Self::MissingDirectory => SignalKeyType::Path,
+            // All other corpus file signals are inode-keyed
+            _ => SignalKeyType::Inode,
         }
     }
 
@@ -445,7 +474,6 @@ impl CorpusFileSignalType {
             Self::OutOfBandTagSync => SignalType::OutOfBandTagSync,
             Self::OutOfBandTagConflict => SignalType::OutOfBandTagConflict,
             Self::MtimeOnlyMismatch => SignalType::MtimeOnlyMismatch,
-            Self::InodeChanged => SignalType::InodeChanged,
             Self::CorruptFile => SignalType::CorruptFile,
             Self::ShitFormat => SignalType::ShitFormat,
             Self::SubparDuplicate => SignalType::SubparDuplicate,
@@ -495,6 +523,18 @@ impl LibraryFileSignalType {
             }
         }
     }
+
+    /// Get the key type for this signal type.
+    ///
+    /// Library signals use different key types:
+    /// - DeployReady/DeployedHealthy are inode-keyed (track the corpus file inode)
+    /// - LibraryLeftover/LibraryStale use compound library keys
+    pub fn key_type(&self) -> SignalKeyType {
+        match self {
+            Self::DeployReady | Self::DeployedHealthy => SignalKeyType::Inode,
+            Self::LibraryLeftover | Self::LibraryStale => SignalKeyType::Library,
+        }
+    }
 }
 
 impl std::fmt::Display for LibraryFileSignalType {
@@ -529,6 +569,14 @@ impl FileSignalType {
         match self {
             Self::Corpus(t) => t.to_signal_type(),
             Self::Library(t) => t.to_signal_type(),
+        }
+    }
+
+    /// Get the key type for this signal type.
+    pub fn key_type(&self) -> SignalKeyType {
+        match self {
+            Self::Corpus(t) => t.key_type(),
+            Self::Library(t) => t.key_type(),
         }
     }
 }
@@ -788,7 +836,6 @@ pub struct CorpusFilesBucket {
     pub oob_tag_sync: usize,
     pub oob_tag_conflict: usize,
     pub mtime_only_mismatch: usize,
-    pub inode_changed: usize,
     // Standard corpus file signals
     pub files_in_corpus: usize,
     pub files_indexed: usize,
@@ -1057,15 +1104,6 @@ pub struct BucketedOobFile {
     pub inode: i64,
     pub path: String,
     pub bucket: ConflictBucket,
-}
-
-/// A file with an InodeChanged signal (file was replaced).
-#[derive(Debug, Clone)]
-pub struct InodeChangedFile {
-    pub inode: i64,
-    pub path: String,
-    pub old_inode: i64,
-    pub new_inode: i64,
 }
 
 /// A file with a MovedFile signal (same inode, different path).

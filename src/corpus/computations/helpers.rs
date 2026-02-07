@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSignalType};
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, FileSignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread::{self, SignalWitness};
 
@@ -157,64 +157,58 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 }
 
 // ============================================================================
-// Signal Emission Helpers (Inode-Keyed)
+// Signal Emission Helpers (Native Inode Column)
 // ============================================================================
+// These helpers use the native `inode` column in the signals table for
+// inode-keyed corpus signals. This is the preferred pattern for all
+// corpus file signals.
 
-/// Ensure an inode-keyed file signal exists, with path stored in metadata.
+/// Ensure a corpus signal exists using the native inode column.
 ///
-/// Uses inode as the signal key (stored as string) and stores the path in
-/// metadata_json for display purposes. This is the primary signal emission
-/// pattern for corpus file signals.
-///
-/// Uses the read-only DB to check freshness before queueing to the write thread.
-pub(crate) fn ensure_inode_signal_if_missing(
+/// Uses `read_only_db.corpus_signal_exists_by_inode()` for efficient freshness check,
+/// then queues to the write thread if needed.
+pub(crate) fn ensure_corpus_signal(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: FileSignalType,
+    signal_type: CorpusFileSignalType,
     inode: i64,
     path: &str,
     witness: &impl SignalWitness,
 ) {
-    let key = inode.to_string();
-    if !read_only_db.file_signal_exists(signal_type, &key) {
-        let metadata = serde_json::json!({ "path": path });
-        sender.ensure_file_signal_with_metadata(signal_type, &key, Some(&metadata.to_string()), witness);
+    if !read_only_db.corpus_signal_exists_by_inode(signal_type, inode) {
+        sender.ensure_corpus_signal(signal_type, inode, path, witness);
     }
 }
 
-/// Ensure an inode-keyed signal with additional metadata fields.
+/// Ensure a corpus signal exists with additional metadata.
 ///
-/// Merges the path into the provided extra_metadata and uses inode as the key.
-pub(crate) fn ensure_inode_signal_with_metadata_if_missing(
+/// Uses the native inode column and merges path into the metadata.
+pub(crate) fn ensure_corpus_signal_with_metadata(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: FileSignalType,
+    signal_type: CorpusFileSignalType,
     inode: i64,
     path: &str,
     extra_metadata: serde_json::Value,
     witness: &impl SignalWitness,
 ) {
-    let key = inode.to_string();
-    if !read_only_db.file_signal_exists(signal_type, &key) {
-        let mut metadata = extra_metadata;
-        metadata["path"] = serde_json::json!(path);
-        sender.ensure_file_signal_with_metadata(signal_type, &key, Some(&metadata.to_string()), witness);
+    if !read_only_db.corpus_signal_exists_by_inode(signal_type, inode) {
+        sender.ensure_corpus_signal_with_metadata(signal_type, inode, path, extra_metadata, witness);
     }
 }
 
-/// Drop a stale inode-keyed file signal.
+/// Drop a stale corpus signal using the native inode column.
 ///
 /// Use when a computation determines the signal should not exist for this inode.
-pub(crate) fn drop_stale_inode_signal(
+pub(crate) fn drop_stale_corpus_signal(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: FileSignalType,
+    signal_type: CorpusFileSignalType,
     inode: i64,
     witness: &impl SignalWitness,
 ) {
-    let key = inode.to_string();
-    if read_only_db.file_signal_exists(signal_type, &key) {
-        sender.clear_file_signal(signal_type, &key, witness);
+    if read_only_db.corpus_signal_exists_by_inode(signal_type, inode) {
+        sender.clear_corpus_signal(signal_type, inode, witness);
     }
 }
 

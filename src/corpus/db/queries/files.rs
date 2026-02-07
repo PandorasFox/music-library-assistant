@@ -473,8 +473,8 @@ impl Database {
     }
 
     /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection, corpus only).
-    /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc)>
-    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
+    /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc, year)>
+    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String)>> {
         // Only detect inconsistent album artist within corpus files
         let sql = r#"
             SELECT
@@ -483,7 +483,8 @@ impl Database {
                 COALESCE(artist.tag_value, '') as artist,
                 COALESCE(album_artist.tag_value, '') as album_artist,
                 COALESCE(catalog.tag_value, '') as catalog_number,
-                COALESCE(isrc.tag_value, '') as isrc
+                COALESCE(isrc.tag_value, '') as isrc,
+                COALESCE(year.tag_value, '') as year
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags album
@@ -496,6 +497,8 @@ impl Database {
                 ON f.inode = catalog.inode AND LOWER(catalog.tag_name) = 'catalognumber'
             LEFT JOIN corpus_tags isrc
                 ON f.inode = isrc.inode AND LOWER(isrc.tag_name) = 'isrc'
+            LEFT JOIN corpus_tags year
+                ON f.inode = year.inode AND LOWER(year.tag_name) = 'year'
             WHERE f.is_dir = 0 AND f.source = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
         "#;
 
@@ -508,6 +511,7 @@ impl Database {
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
             ))
         })?;
 

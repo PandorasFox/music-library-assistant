@@ -676,7 +676,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get album artist data for inconsistency detection.
-    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String)>> {
+    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String)>> {
         self.db.get_album_artist_data()
     }
 

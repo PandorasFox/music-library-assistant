@@ -1,9 +1,14 @@
 //! Album Artist Detection
 //!
 //! Detects albums that need album_artist resolution:
-//! - Same album tag (normalized)
+//! - Same album tag (normalized) AND same year
 //! - Different artist tags (multiple distinct artists)
 //! - Missing OR inconsistent album_artist tags
+//!
+//! Albums are grouped by (normalized_album, year) to avoid false positives when
+//! different artists release albums with the same name in different years (e.g.,
+//! "Alive" from 1977 vs "Alive" from 2012). Missing year is treated as a distinct
+//! value, so tracks without year metadata only group with other year-less tracks.
 //!
 //! These represent compilations or multi-artist albums where the album_artist
 //! field should be set to something like "Various Artists" or a specific artist.
@@ -33,8 +38,11 @@ pub struct AlbumArtistIssue {
 /// Detect albums needing album_artist resolution.
 ///
 /// Returns albums where:
-/// - Multiple distinct artist values exist on tracks with the same album
+/// - Multiple distinct artist values exist on tracks with the same album AND year
 /// - album_artist is missing OR inconsistent across those tracks
+///
+/// Albums are grouped by (normalized_album, year) to reduce false positives from
+/// different artists releasing albums with the same name in different years.
 ///
 /// This is designed to catch:
 /// - Compilations where each track has a different artist but album_artist is unset
@@ -50,7 +58,7 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
     // We need: album, artist, album_artist for each track
     let album_data = query_album_artist_data(db)?;
 
-    for (normalized_album, tracks) in album_data {
+    for ((normalized_album, _year), tracks) in album_data {
         // Count distinct artists
         let mut artist_counts: HashMap<String, usize> = HashMap::new();
         let mut album_artist_counts: HashMap<String, usize> = HashMap::new();
@@ -123,16 +131,18 @@ struct TrackAlbumData {
 }
 
 /// Query album/artist/album_artist data for all tracks.
-/// Also fetches catalog_number and isrc for release differentiation.
-/// Returns: HashMap<normalized_album, Vec<TrackAlbumData>>
+/// Also fetches catalog_number, isrc, and year for release differentiation.
+/// Returns: HashMap<(normalized_album, year), Vec<TrackAlbumData>>
+/// Year is included in the key to avoid false positives when different artists
+/// release albums with the same name in different years.
 fn query_album_artist_data(
     db: &ReadOnlyDb<'_>,
-) -> Result<HashMap<String, Vec<TrackAlbumData>>> {
+) -> Result<HashMap<(String, String), Vec<TrackAlbumData>>> {
     let rows = db.get_album_artist_data()?;
 
-    let mut album_data: HashMap<String, Vec<TrackAlbumData>> = HashMap::new();
+    let mut album_data: HashMap<(String, String), Vec<TrackAlbumData>> = HashMap::new();
 
-    for (inode, album, artist, album_artist, catalog_number, isrc) in rows {
+    for (inode, album, artist, album_artist, catalog_number, isrc, year) in rows {
         let data = TrackAlbumData {
             inode,
             album: album.clone(),
@@ -142,7 +152,9 @@ fn query_album_artist_data(
             isrc,
         };
         let normalized = normalize_album(&album);
-        album_data.entry(normalized).or_default().push(data);
+        // Group by (normalized_album, year) - empty year is treated as distinct
+        // This avoids false positives like "Alive" (1977) vs "Alive" (2012)
+        album_data.entry((normalized, year)).or_default().push(data);
     }
 
     Ok(album_data)

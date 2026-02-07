@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::helpers::truncate_right;
+use crate::ui::helpers::{render_pane, truncate_right};
 
 use super::types::{CompoundSplitStateV2, FocusPaneV2};
 
@@ -107,8 +107,7 @@ fn render_parts_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize;
@@ -183,8 +182,7 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize;
@@ -242,8 +240,7 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Show tags for the selected file
     let file = state.data.files.get(state.file_cursor);

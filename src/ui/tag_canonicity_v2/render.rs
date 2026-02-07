@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::helpers::truncate_right;
+use crate::ui::helpers::{render_pane, truncate_right};
 
 use super::types::{FocusPaneV2, TagCanonicalityStateV2};
 
@@ -96,8 +96,7 @@ fn render_variants_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize; // Leave space for cursor
@@ -165,8 +164,7 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) 
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(2) as usize;
@@ -226,8 +224,7 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Get selected file's tags
     let Some(file) = state.data.files.get(state.file_cursor) else {

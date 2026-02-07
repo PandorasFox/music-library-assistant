@@ -6,6 +6,29 @@
 pub use super::widgets::centered_rect;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::widgets::{Block, Clear};
+use ratatui::Frame;
+
+// ============================================================================
+// Pane Rendering Utilities
+// ============================================================================
+
+/// Render a block and return its inner area, properly cleared.
+///
+/// This is the standard way to render panes in MLA. It:
+/// 1. Computes the inner area from the block
+/// 2. Renders the block (borders, title, etc.)
+/// 3. Clears the inner area to prevent leftover content from showing through
+/// 4. Returns the inner Rect for content rendering
+///
+/// Without clearing, list widgets that don't fill their area will show
+/// "ghost" content from previous renders.
+pub fn render_pane(f: &mut Frame, area: Rect, block: Block) -> Rect {
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    f.render_widget(Clear, inner);
+    inner
+}
 
 /// Compute a centered rectangle with fixed dimensions within an area.
 ///

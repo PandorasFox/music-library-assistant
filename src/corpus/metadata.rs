@@ -11,6 +11,7 @@ use symphonia::core::probe::Hint;
 
 use crate::config::is_audio_extension;
 use crate::corpus::mutations::ExtractedMetadata;
+use crate::corpus::tags::TagSet;
 
 pub struct AudioMetadata {
     pub duration_ms: Option<i64>,
@@ -76,7 +77,7 @@ pub fn extract_metadata(path: &Path, _source: &str) -> Result<ExtractedMetadata>
         bitrate_kbps: audio_meta.bitrate_kbps,
         sample_rate: audio_meta.sample_rate,
         fingerprint,
-        tags: Vec::new(), // Empty - caller fills in via TagSet::from_file()
+        tags: TagSet::empty(), // Empty - caller fills in via TagSet::from_file()
     })
 }
 

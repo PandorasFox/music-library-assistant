@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::corpus::db::types::{CorpusFileSignalType, FileSource};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
+use crate::corpus::tags::TagSet;
 
 /// File types that should trigger ShitFormat signal (non-Vorbis containers).
 /// Includes lossy formats with poor metadata and lossless needing remux.
@@ -107,16 +108,14 @@ fn index_track_from_metadata(
 /// a post-execution DB read might not see the write yet.
 pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<Vec<PendingSignal>> {
     use crate::corpus::metadata;
-    use crate::corpus::tags::TagSet;
 
     // Extract audio properties (returns ExtractedMetadata with empty tags)
     let mut extracted = metadata::extract_metadata(path, source)
         .with_context(|| format!("Failed to extract metadata from {:?}", path))?;
 
     // Read tags using TagSet and populate the extracted metadata
-    let tag_set = TagSet::from_file(path)
+    extracted.tags = TagSet::from_file(path)
         .with_context(|| format!("Failed to read tags from {:?}", path))?;
-    extracted.tags = tag_set.into_vec();
 
     // Build pending signals from extracted metadata BEFORE the async DB write.
     // This avoids the race condition where post-execution DB queries don't see
@@ -663,7 +662,7 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     // Update DB with disk tags via db_thread
     // Use rel_path_str (from mutation param), not track.path (potentially stale)
-    sender.set_index_track_tags(&rel_path_str, disk_tagset.into_vec(), witness);
+    sender.set_index_track_tags(&rel_path_str, disk_tagset, witness);
 
     // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)
@@ -883,10 +882,10 @@ mod tests {
             bitrate_kbps: Some(1411),
             sample_rate: Some(44100),
             fingerprint: Some(vec![0xabc123]),
-            tags: vec![
+            tags: TagSet::new(vec![
                 ("artist".to_string(), "Test Artist".to_string()),
                 ("album".to_string(), "Test Album".to_string()),
-            ],
+            ]),
         };
 
         assert_eq!(metadata.get_tag("artist"), Some("Test Artist"));

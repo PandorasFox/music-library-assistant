@@ -34,6 +34,7 @@ use crate::corpus::db::types::{
     AggregateSignal, AggregateSignalType, FileSignalType, SignalType,
 };
 use crate::corpus::db::Database;
+use crate::corpus::tags::TagSet;
 use crate::witch::MutationExecutionWitness;
 use crate::config;
 
@@ -263,7 +264,7 @@ enum SignalWriteOp {
         path: String,
         file_data: FileData,
         audio_data: AudioData,
-        tags: Vec<(String, String)>,
+        tags: TagSet,
     },
 
     /// Drop file from index (file no longer exists or excluded).
@@ -282,7 +283,7 @@ enum SignalWriteOp {
     /// Used by AssimilateDiskTagsToDb when accepting disk changes.
     SetIndexTrackTags {
         path: String,
-        tags: Vec<(String, String)>,
+        tags: TagSet,
     },
 
     /// Apply incremental tag operations directly.
@@ -727,7 +728,7 @@ impl SignalWriteSender {
         path: &str,
         file_data: FileData,
         audio_data: AudioData,
-        tags: Vec<(String, String)>,
+        tags: TagSet,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -768,7 +769,7 @@ impl SignalWriteSender {
     pub fn set_index_track_tags(
         &self,
         path: &str,
-        tags: Vec<(String, String)>,
+        tags: TagSet,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -1463,36 +1464,61 @@ fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
     fp.iter().flat_map(|n| n.to_le_bytes()).collect()
 }
 
-/// Atomically replace tags for a track using diff-based CRUD.
+/// Result of applying a TagSet to an inode.
 ///
-/// Instead of DELETE-ALL-then-INSERT, this:
-/// 1. Queries existing tags
-/// 2. Computes diff between existing and desired
-/// 3. DELETEs only tags that should be removed
-/// 4. INSERTs only tags that are new
-/// 5. All within a single transaction
+/// Contains the changes made for history writing.
+struct TagMutationResult {
+    /// Tags removed: (field_name, old_value)
+    removed: Vec<(String, String)>,
+    /// Tags added: (field_name, new_value)
+    added: Vec<(String, String)>,
+}
+
+impl TagMutationResult {
+    /// Whether any changes were made.
+    fn has_changes(&self) -> bool {
+        !self.removed.is_empty() || !self.added.is_empty()
+    }
+
+    /// Convert to history entries: (field_name, old_value, new_value).
+    fn to_history_entries(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        let mut entries = Vec::with_capacity(self.removed.len() + self.added.len());
+        for (field, value) in &self.removed {
+            entries.push((field.clone(), Some(value.clone()), None));
+        }
+        for (field, value) in &self.added {
+            entries.push((field.clone(), None, Some(value.clone())));
+        }
+        entries
+    }
+}
+
+/// Apply a TagSet to an inode, computing and executing the minimal diff.
 ///
-/// This prevents:
-/// - Data loss on partial failure (transaction rollback)
-/// - Unnecessary disk churn (unchanged tags stay)
-/// - UNIQUE constraint violations (deduplication in desired set)
-fn replace_tags_atomic(
-    conn: &rusqlite::Connection,
+/// Uses TagSet::diff() to determine what changed:
+/// - DELETEs tags in existing but not in desired
+/// - INSERTs tags in desired but not in existing
+///
+/// Returns the changes made for history writing. Does NOT:
+/// - Write history (caller decides if this is an edit vs discovery)
+/// - Increment tags_version (caller decides)
+/// - Mark inode dirty (caller decides)
+///
+/// Caller must provide a transaction for atomicity.
+fn apply_tagset_to_inode(
+    tx: &rusqlite::Transaction,
     inode: i64,
-    new_tags: &[(String, String)],
+    new_tags: &TagSet,
     tag_table: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TagMutationResult> {
     use rusqlite::params;
-    use std::collections::HashSet;
 
-    let tx = conn.unchecked_transaction()?;
-
-    // 1. Query existing tags
+    // Query existing tags from DB and build a TagSet
     let mut stmt = tx.prepare(&format!(
         "SELECT tag_name, tag_value FROM {} WHERE inode = ?1",
         tag_table
     ))?;
-    let existing: HashSet<(String, String)> = stmt
+    let existing_pairs: Vec<(String, String)> = stmt
         .query_map(params![inode], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
@@ -1500,19 +1526,24 @@ fn replace_tags_atomic(
         .collect();
     drop(stmt);
 
-    // 2. Build desired set (deduplicated, normalized)
-    let desired: HashSet<(String, String)> = new_tags
-        .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| (k.to_lowercase(), v.clone()))
+    let existing = TagSet::new(existing_pairs);
+
+    // Use TagSet::diff() to compute changes
+    // existing.diff(new_tags) gives:
+    //   only_left = in existing but not in new_tags → DELETE these
+    //   only_right = in new_tags but not in existing → INSERT these
+    let diff = existing.diff(new_tags);
+
+    // Collect for result before consuming
+    let removed: Vec<(String, String)> = diff.only_left.iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let added: Vec<(String, String)> = diff.only_right.iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    // 3. Compute diff
-    let to_remove: Vec<_> = existing.difference(&desired).collect();
-    let to_add: Vec<_> = desired.difference(&existing).collect();
-
-    // 4. DELETE only what needs removing
-    for (name, value) in to_remove {
+    // DELETE tags that should be removed
+    for (name, value) in &removed {
         tx.execute(
             &format!(
                 "DELETE FROM {} WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
@@ -1522,8 +1553,8 @@ fn replace_tags_atomic(
         )?;
     }
 
-    // 5. INSERT only what's new
-    for (name, value) in to_add {
+    // INSERT tags that are new
+    for (name, value) in &added {
         tx.execute(
             &format!(
                 "INSERT INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
@@ -1533,8 +1564,7 @@ fn replace_tags_atomic(
         )?;
     }
 
-    tx.commit()?;
-    Ok(())
+    Ok(TagMutationResult { removed, added })
 }
 
 /// Get inode by path from files table. Returns None if file doesn't exist.
@@ -1553,16 +1583,16 @@ fn get_inode_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>> {
 /// Execute IndexAudioFile: insert/replace files + audio_info + corpus_tags.
 ///
 /// All operations wrapped in a single transaction for atomicity.
-/// Uses atomic diff-based tag replacement to prevent data loss.
+/// Uses apply_tagset_to_inode for atomic diff-based tag replacement.
+/// Writes tag_edit_history for discovered tags (old_value=None, new_value=tag).
 fn execute_index_audio_file(
     db: &Database,
     path: &str,
     file_data: &FileData,
     audio_data: &AudioData,
-    tags: &[(String, String)],
+    tags: &TagSet,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let scanned_at = SystemTime::now()
@@ -1619,54 +1649,17 @@ fn execute_index_audio_file(
         ],
     )?;
 
-    // Atomic tag replacement: query existing, compute diff, apply changes
-    // 1. Query existing tags
-    let mut stmt = tx.prepare(&format!(
-        "SELECT tag_name, tag_value FROM {} WHERE inode = ?1",
-        tag_table
-    ))?;
-    let existing: HashSet<(String, String)> = stmt
-        .query_map(params![file_data.inode], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
+    // Apply tags using the unified helper
+    let result = apply_tagset_to_inode(&tx, file_data.inode, tags, tag_table)?;
 
-    // 2. Build desired set (deduplicated, normalized)
-    let desired: HashSet<(String, String)> = tags
-        .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| (k.to_lowercase(), v.clone()))
-        .collect();
-
-    // 3. Compute diff
-    let to_remove: Vec<_> = existing.difference(&desired).collect();
-    let to_add: Vec<_> = desired.difference(&existing).collect();
-
-    // 4. DELETE only what needs removing
-    for (name, value) in to_remove {
-        tx.execute(
-            &format!(
-                "DELETE FROM {} WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
-                tag_table
-            ),
-            params![file_data.inode, name, value],
-        )?;
+    // Write history for discovered/changed tags
+    if result.has_changes() {
+        let session_id = format!("index:{}", path);
+        let changes = result.to_history_entries();
+        write_tag_edit_history(&tx, file_data.inode, &changes, &session_id)?;
     }
 
-    // 5. INSERT only what's new
-    for (name, value) in to_add {
-        tx.execute(
-            &format!(
-                "INSERT INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                tag_table
-            ),
-            params![file_data.inode, name, value],
-        )?;
-    }
-
-    // 6. Mark inode dirty for tag-dependent computations (only for corpus files)
+    // Mark inode dirty for tag-dependent computations (only for corpus files)
     if file_data.source == "corpus" {
         mark_inode_dirty(&tx, file_data.inode)?;
     }
@@ -1772,13 +1765,11 @@ fn execute_update_track_inode(db: &Database, path: &str, new_inode: i64) -> anyh
 
 /// Execute SetIndexTrackTags: replace all tags for a file (corpus_tags).
 ///
-/// Uses atomic diff-based replacement to prevent data loss on partial failure
-/// and avoid UNIQUE constraint violations from duplicate tags.
+/// Uses apply_tagset_to_inode for atomic diff-based replacement.
+/// Writes tag edit history for all changes (this IS an edit, not discovery).
 ///
 /// Used by AssimilateDiskTagsToDb when accepting disk changes.
-fn execute_set_index_track_tags(db: &Database, path: &str, tags: &[(String, String)]) -> anyhow::Result<()> {
-    use rusqlite::params;
-    use std::collections::HashSet;
+fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet) -> anyhow::Result<()> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let inode = get_inode_by_path(db, path)?
@@ -1786,72 +1777,21 @@ fn execute_set_index_track_tags(db: &Database, path: &str, tags: &[(String, Stri
 
     let tx = db.conn().unchecked_transaction()?;
 
-    // Query existing tags for diff and history
-    let mut stmt = tx.prepare("SELECT tag_name, tag_value FROM corpus_tags WHERE inode = ?1")?;
-    let existing: HashSet<(String, String)> = stmt
-        .query_map(params![inode], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
+    // Apply tags using the unified helper
+    let result = apply_tagset_to_inode(&tx, inode, tags, "corpus_tags")?;
 
-    // Build desired set (deduplicated, normalized)
-    let desired: HashSet<(String, String)> = tags
-        .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| (k.to_lowercase(), v.clone()))
-        .collect();
+    if result.has_changes() {
+        // Increment tags_version using the helper
+        increment_tags_version(&tx, inode)?;
 
-    // Compute diff
-    let to_remove: Vec<_> = existing.difference(&desired).collect();
-    let to_add: Vec<_> = desired.difference(&existing).collect();
-
-    // Only proceed if there are actual changes
-    let has_changes = !to_remove.is_empty() || !to_add.is_empty();
-
-    if has_changes {
-        // DELETE only what needs removing
-        for (name, value) in &to_remove {
-            tx.execute(
-                "DELETE FROM corpus_tags WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
-                params![inode, name, value],
-            )?;
-        }
-
-        // INSERT only what's new
-        for (name, value) in &to_add {
-            tx.execute(
-                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
-                params![inode, name, value],
-            )?;
-        }
-
-        // Increment tags_version
-        tx.execute(
-            "UPDATE audio_info SET tags_version = tags_version + 1 WHERE inode = ?1",
-            params![inode],
-        )?;
-
-        // Write tag edit history
+        // Write tag edit history using the helper
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let session_id = format!("set_tags:{}", now);
-
-        for (name, value) in &to_remove {
-            tx.execute(
-                "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, ?3, NULL, ?4)",
-                params![inode, name, value, &session_id],
-            )?;
-        }
-        for (name, value) in &to_add {
-            tx.execute(
-                "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, NULL, ?3, ?4)",
-                params![inode, name, value, &session_id],
-            )?;
-        }
+        let changes = result.to_history_entries();
+        write_tag_edit_history(&tx, inode, &changes, &session_id)?;
 
         // Mark inode dirty for tag-dependent computations
         mark_inode_dirty(&tx, inode)?;
@@ -1888,12 +1828,8 @@ fn execute_apply_index_tag_ops(
 
     let tx = db.conn().unchecked_transaction()?;
 
-    // Generate session ID for history
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let session_id = format!("apply_ops:{}", now);
+    // Collect history entries while applying operations
+    let mut history_entries: Vec<(String, Option<String>, Option<String>)> = Vec::new();
 
     for op in &effective_ops {
         let tag_name = op.tag_name.to_lowercase();
@@ -1925,18 +1861,24 @@ fn execute_apply_index_tag_ops(
             }
         }
 
-        // Write history entry for this operation
-        tx.execute(
-            "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![inode, &tag_name, &op.old_value, &op.new_value, &session_id],
-        )?;
+        // Collect history entry for this operation
+        history_entries.push((
+            tag_name,
+            op.old_value.clone(),
+            op.new_value.clone(),
+        ));
     }
 
-    // Increment tags_version
-    tx.execute(
-        "UPDATE audio_info SET tags_version = tags_version + 1 WHERE inode = ?1",
-        params![inode],
-    )?;
+    // Write history entries using the helper
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let session_id = format!("apply_ops:{}", now);
+    write_tag_edit_history(&tx, inode, &history_entries, &session_id)?;
+
+    // Increment tags_version using the helper
+    increment_tags_version(&tx, inode)?;
 
     // Mark inode dirty for tag-dependent computations
     mark_inode_dirty(&tx, inode)?;

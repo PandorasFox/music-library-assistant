@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use crate::corpus::computations::{Computation, awakening};
 use crate::corpus::db::types::{CorpusFileSignalType, FileSignalType, LibraryFileSignalType};
+use crate::corpus::tags::TagSet;
 use crate::corpus::transcode::TranscodeTarget;
 
 // ============================================================================
@@ -152,18 +153,15 @@ pub struct ExtractedMetadata {
     pub sample_rate: Option<i32>,
     /// Chromaprint acoustic fingerprint as raw u32 values.
     pub fingerprint: Option<Vec<u32>>,
-    /// All tags extracted from the file: (tag_name, tag_value)
-    pub tags: Vec<(String, String)>,
+    /// All tags extracted from the file.
+    pub tags: TagSet,
 }
 
 impl ExtractedMetadata {
     /// Get a tag value by name.
     #[cfg(test)]
     pub fn get_tag(&self, name: &str) -> Option<&str> {
-        self.tags
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| v.as_str())
+        self.tags.values_for(name).next()
     }
 }
 

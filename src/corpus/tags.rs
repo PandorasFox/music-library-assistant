@@ -24,6 +24,7 @@
 //! - Duplicate any of this logic
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::corpus::db::types::CorpusFileSignalType;
@@ -43,7 +44,7 @@ use crate::witch::MutationExecutionWitness;
 ///
 /// Keys are normalized to lowercase for comparison but original case is preserved
 /// for display and round-trip fidelity where possible.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TagSet {
     /// Sorted, deduplicated (key, value) pairs.
     /// Sorting is by (lowercase_key, value) for stable comparison.

@@ -31,7 +31,7 @@
 //! - Ctrl+Q: Canonicalize (mark as single entity, don't split)
 //! - Tab/Shift-Tab: Navigate to next/prev signal (non-committal)
 //! - Ctrl+R: Stage current decision and jump to review screen
-//! - Ctrl+A: Stage ALL signals and jump to review (bulk mode)
+//! - Ctrl+A: Stage ALL signals and jump to review (safe mode only)
 //! - Esc: Cancel entire flow (or cancel edit if editing)
 
 pub mod render;
@@ -53,12 +53,15 @@ impl CompoundSplitStateV2 {
             return self.handle_editing_key(key);
         }
 
-        // Ctrl+R: Show review
+        // Ctrl shortcuts
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('r' | 'R') => return CompoundSplitActionV2::ShowReview,
                 KeyCode::Char('q' | 'Q') => return CompoundSplitActionV2::Canonicalize,
-                KeyCode::Char('a' | 'A') => return CompoundSplitActionV2::StageAllAndReview,
+                // Ctrl+A only available in safe mode (bulk confirm all)
+                KeyCode::Char('a' | 'A') if self.is_safe_mode => {
+                    return CompoundSplitActionV2::StageAllAndReview;
+                }
                 _ => {}
             }
         }

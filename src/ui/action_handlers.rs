@@ -72,10 +72,24 @@ impl App {
                         self.start_tag_canonicity_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitSafe) => {
-                        self.start_compound_split_resolution(true);
+                        // Extract tag name from selected insight type
+                        let tag_name = self.insights_view.as_ref()
+                            .and_then(|v| v.selected_insight_type())
+                            .and_then(|t| match t {
+                                insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
+                                _ => None,
+                            });
+                        self.start_compound_split_resolution(true, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitReview) => {
-                        self.start_compound_split_resolution(false);
+                        // Extract tag name from selected insight type
+                        let tag_name = self.insights_view.as_ref()
+                            .and_then(|v| v.selected_insight_type())
+                            .and_then(|t| match t {
+                                insights_view::InsightType::CompoundTagValueReview { tag_name } => Some(tag_name),
+                                _ => None,
+                            });
+                        self.start_compound_split_resolution(false, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchOobTagSync) => {
                         self.start_oob_sync_resolution();
@@ -113,8 +127,14 @@ impl App {
                 }
             }
             insights_view::InsightsAction::ConfirmAllSafeCompoundSplits => {
-                // Ctrl+A from insights: start safe compound flow, stage all, show review
-                self.confirm_all_safe_compound_splits_from_insights();
+                // Ctrl+A from insights: extract tag name and stage all for that tag
+                let tag_name = self.insights_view.as_ref()
+                    .and_then(|v| v.selected_insight_type())
+                    .and_then(|t| match t {
+                        insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
+                        _ => None,
+                    });
+                self.confirm_all_safe_compound_splits_from_insights(tag_name.as_deref());
             }
         }
     }
@@ -1165,7 +1185,8 @@ impl App {
     ///
     /// Loads CompoundTagValue signals filtered by safety and enters the split modal.
     /// If `safe_only` is true, loads only signals where all split parts exist in corpus.
-    fn start_compound_split_resolution(&mut self, safe_only: bool) {
+    /// If `tag_filter` is Some, only loads signals for that specific tag name.
+    fn start_compound_split_resolution(&mut self, safe_only: bool, tag_filter: Option<&str>) {
         let read_db = match self.witch.as_mut() {
             Some(w) => w.read_db(),
             None => {
@@ -1174,8 +1195,8 @@ impl App {
             }
         };
 
-        // Load compound signals filtered by safety classification
-        let signals = read_db.get_compound_signals_by_safety(safe_only)
+        // Load compound signals filtered by safety classification and tag
+        let signals = read_db.get_compound_signals_by_safety(safe_only, tag_filter)
             .unwrap_or_default();
 
         if signals.is_empty() {
@@ -1973,7 +1994,8 @@ impl App {
     ///
     /// This is a one-shot flow: loads safe compound signals, stages all splits,
     /// and immediately shows the transaction review screen.
-    fn confirm_all_safe_compound_splits_from_insights(&mut self) {
+    /// If `tag_filter` is Some, only processes signals for that specific tag.
+    fn confirm_all_safe_compound_splits_from_insights(&mut self, tag_filter: Option<&str>) {
         let read_db = match self.witch.as_mut() {
             Some(w) => w.read_db(),
             None => {
@@ -1982,8 +2004,8 @@ impl App {
             }
         };
 
-        // Load safe compound signals only
-        let signals = read_db.get_compound_signals_by_safety(true).unwrap_or_default();
+        // Load safe compound signals only, filtered by tag if specified
+        let signals = read_db.get_compound_signals_by_safety(true, tag_filter).unwrap_or_default();
 
         if signals.is_empty() {
             self.status_message = Some("No safe compound splits available".to_string());

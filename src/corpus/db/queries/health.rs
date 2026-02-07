@@ -545,7 +545,8 @@ impl Database {
     /// If `safe_only` is true, returns only signals where ALL compounds have
     /// all split parts existing in corpus (matching_parts.len() == split_parts.len()).
     /// If false, returns only signals that need review (some/all parts are new).
-    pub fn get_compound_signals_by_safety(&self, safe_only: bool) -> Result<Vec<AggregateSignal>> {
+    /// If `tag_filter` is Some, only returns signals containing compounds for that tag name.
+    pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<AggregateSignal>> {
         // Note: Uses 'compound_tag' (per-file signal) not 'compound_tag_value' (aggregate)
         // The per-file CompoundTag signals are emitted by DetectCompoundTagsForInode
         let mut stmt = self.conn.prepare(
@@ -579,38 +580,67 @@ impl Database {
         for row in rows {
             let signal = row?;
 
-            // Classify this signal
+            // Parse and classify this signal
+            let dominated_tag_name;
             let is_safe = match &signal.metadata_json {
                 Some(metadata) => {
                     match serde_json::from_str::<serde_json::Value>(metadata) {
                         Ok(json) => {
                             let compounds = json.get("compounds").and_then(|v| v.as_array());
                             match compounds {
-                                Some(arr) if !arr.is_empty() => arr.iter().all(|compound| {
-                                    let split_len = compound
-                                        .get("split_parts")
-                                        .and_then(|v| v.as_array())
-                                        .map(|a| a.len())
-                                        .unwrap_or(0);
-                                    let match_len = compound
-                                        .get("matching_parts")
-                                        .and_then(|v| v.as_array())
-                                        .map(|a| a.len())
-                                        .unwrap_or(0);
-                                    split_len > 0 && split_len == match_len
-                                }),
-                                _ => false,
+                                Some(arr) if !arr.is_empty() => {
+                                    // Extract the tag name from the first compound
+                                    dominated_tag_name = arr.first()
+                                        .and_then(|c| c.get("tag_name"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+
+                                    arr.iter().all(|compound| {
+                                        let split_len = compound
+                                            .get("split_parts")
+                                            .and_then(|v| v.as_array())
+                                            .map(|a| a.len())
+                                            .unwrap_or(0);
+                                        let match_len = compound
+                                            .get("matching_parts")
+                                            .and_then(|v| v.as_array())
+                                            .map(|a| a.len())
+                                            .unwrap_or(0);
+                                        split_len > 0 && split_len == match_len
+                                    })
+                                }
+                                _ => {
+                                    dominated_tag_name = None;
+                                    false
+                                }
                             }
                         }
-                        Err(_) => false,
+                        Err(_) => {
+                            dominated_tag_name = None;
+                            false
+                        }
                     }
                 }
-                None => false,
+                None => {
+                    dominated_tag_name = None;
+                    false
+                }
             };
 
-            if is_safe == safe_only {
-                results.push(signal);
+            // Check safety classification
+            if is_safe != safe_only {
+                continue;
             }
+
+            // Check tag filter if specified
+            if let Some(filter) = tag_filter {
+                match &dominated_tag_name {
+                    Some(tag) if tag == filter => {}
+                    _ => continue,
+                }
+            }
+
+            results.push(signal);
         }
 
         Ok(results)

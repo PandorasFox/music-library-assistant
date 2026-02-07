@@ -460,9 +460,9 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_aggregate_signals(signal_type)
     }
 
-    /// Get compound tag signals filtered by safety classification.
-    pub fn get_compound_signals_by_safety(&self, safe_only: bool) -> Result<Vec<super::types::AggregateSignal>> {
-        self.db.get_compound_signals_by_safety(safe_only)
+    /// Get compound tag signals filtered by safety classification and optional tag name.
+    pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<super::types::AggregateSignal>> {
+        self.db.get_compound_signals_by_safety(safe_only, tag_filter)
     }
 
     /// Check if an aggregate signal exists (semantic-keyed).

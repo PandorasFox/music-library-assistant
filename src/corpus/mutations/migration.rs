@@ -64,33 +64,6 @@ impl MigrationRegistry {
             },
         });
 
-        // v2→v3: Bootstrap all existing inodes as dirty for compound_tag
-        //
-        // EPHEMERAL DEV MIGRATION: Remove this at public release and flatten into base schema.
-        // This ensures existing databases get their inodes marked dirty so compound tag
-        // detection runs at least once after the incremental system is deployed.
-        registry.register(Migration {
-            from_version: 2,
-            to_version: 3,
-            description: "Bootstrap existing inodes as dirty for compound_tag detection",
-            apply: |db| {
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-
-                db.conn().execute(
-                    r#"
-                    INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at)
-                    SELECT inode, 'compound_tag', ?1 FROM audio_info
-                    "#,
-                    rusqlite::params![now],
-                )?;
-                Ok(())
-            },
-        });
-
         registry
     }
 
@@ -161,11 +134,11 @@ mod tests {
     fn test_migration_registry_baseline() {
         let registry = MigrationRegistry::new();
 
-        // v1→v2 (tags_version + dirty_inodes) and v2→v3 (bootstrap dirty)
-        assert_eq!(registry.latest_version(), 3);
-        // From v1, there should be 2 pending migrations
-        assert_eq!(registry.pending_migrations(1).len(), 2);
-        // From v3, no pending migrations
-        assert!(registry.pending_migrations(3).is_empty());
+        // v1→v2: tags_version + dirty_inodes
+        assert_eq!(registry.latest_version(), 2);
+        // From v1, there should be 1 pending migration
+        assert_eq!(registry.pending_migrations(1).len(), 1);
+        // From v2, no pending migrations
+        assert!(registry.pending_migrations(2).is_empty());
     }
 }

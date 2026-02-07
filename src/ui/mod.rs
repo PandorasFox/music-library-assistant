@@ -29,7 +29,7 @@ pub mod transaction_review;
 
 pub mod app;
 pub mod bulk_selection;
-pub mod compound_split;
+pub mod compound_split_v2;
 pub mod corrupt_file_flow;
 pub mod deploy_flow;
 pub mod directory_cluster_flow;
@@ -157,10 +157,12 @@ pub(crate) struct App {
     pub(super) tag_canonicity_state: Option<tag_canonicity_v2::TagCanonicalityStateV2>,
     // Tag canonicity cluster navigation (signal IDs and current index)
     pub(super) tag_canonicity_clusters: Option<TagCanonicityClusters>,
-    // Compound tag split modal
-    pub(super) compound_split_state: Option<compound_split::CompoundSplitState>,
+    // Compound tag split modal (v2 three-pane)
+    pub(super) compound_split_state: Option<compound_split_v2::CompoundSplitStateV2>,
     // Compound split cluster navigation (signal IDs and current index)
-    pub(super) compound_split_clusters: Option<compound_split::CompoundSplitClusters>,
+    pub(super) compound_split_clusters: Option<compound_split_v2::CompoundSplitClustersV2>,
+    // Whether we're in safe mode (bulk) or review mode
+    pub(super) compound_split_safe_mode: bool,
     // OOB tag sync resolution
     pub(super) oob_sync_state: Option<oob_sync_flow::OobSyncState>,
     // OOB tag conflict inspection
@@ -231,6 +233,7 @@ impl App {
             tag_canonicity_clusters: None,
             compound_split_state: None,
             compound_split_clusters: None,
+            compound_split_safe_mode: false,
             oob_sync_state: None,
             oob_conflict_state: None,
             inode_changed_state: None,

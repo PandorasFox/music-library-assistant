@@ -488,6 +488,80 @@ impl Database {
         Ok(results)
     }
 
+    /// Get compound tag signals filtered by safety classification.
+    ///
+    /// If `safe_only` is true, returns only signals where ALL compounds have
+    /// all split parts existing in corpus (matching_parts.len() == split_parts.len()).
+    /// If false, returns only signals that need review (some/all parts are new).
+    pub fn get_compound_signals_by_safety(&self, safe_only: bool) -> Result<Vec<AggregateSignal>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
+               FROM signals WHERE issue_type = 'compound_tag_value'
+               ORDER BY discovered_at DESC"#,
+        )?;
+
+        let row_mapper = |row: &rusqlite::Row| {
+            let id: i64 = row.get(0)?;
+            let type_str: String = row.get(1)?;
+            let key: String = row.get(2)?;
+            let discovered_at: Option<String> = row.get(3)?;
+            let metadata_json: Option<String> = row.get(4)?;
+
+            let signal_type = AggregateSignalType::from_str(&type_str)
+                .unwrap_or(AggregateSignalType::CompoundTagValue);
+
+            Ok(AggregateSignal {
+                id: Some(id),
+                signal_type,
+                key,
+                discovered_at,
+                metadata_json,
+            })
+        };
+
+        let rows = stmt.query_map(params![], row_mapper)?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let signal = row?;
+
+            // Classify this signal
+            let is_safe = match &signal.metadata_json {
+                Some(metadata) => {
+                    match serde_json::from_str::<serde_json::Value>(metadata) {
+                        Ok(json) => {
+                            let compounds = json.get("compounds").and_then(|v| v.as_array());
+                            match compounds {
+                                Some(arr) if !arr.is_empty() => arr.iter().all(|compound| {
+                                    let split_len = compound
+                                        .get("split_parts")
+                                        .and_then(|v| v.as_array())
+                                        .map(|a| a.len())
+                                        .unwrap_or(0);
+                                    let match_len = compound
+                                        .get("matching_parts")
+                                        .and_then(|v| v.as_array())
+                                        .map(|a| a.len())
+                                        .unwrap_or(0);
+                                    split_len > 0 && split_len == match_len
+                                }),
+                                _ => false,
+                            }
+                        }
+                        Err(_) => false,
+                    }
+                }
+                None => false,
+            };
+
+            if is_safe == safe_only {
+                results.push(signal);
+            }
+        }
+
+        Ok(results)
+    }
+
     // ========================================================================
     // Directory-Level Queries (for chunked computations)
     // ========================================================================
@@ -753,8 +827,9 @@ impl Database {
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
 
-        // Count compound_tag_value signals
-        let compound_tag_value_count = self.count_signal_type("compound_tag_value")?;
+        // Count compound_tag_value signals by safety classification
+        // A signal is "safe" if all its compounds have matching_parts.len() == split_parts.len()
+        let (compound_safe_count, compound_review_count) = self.count_compound_signals_by_safety()?;
 
         // Group tag_canonicity signals by tag name (extracted from issue_key prefix)
         // Key format: "{tag_name}:{normalized_key}" e.g., "artist:dragonforce"
@@ -786,8 +861,74 @@ impl Database {
             subpar_duplicate_count,
             tag_canonicity,
             inconsistent_album_artist_count,
-            compound_tag_value_count,
+            compound_safe_count,
+            compound_review_count,
         })
+    }
+
+    /// Count compound tag signals by safety classification.
+    ///
+    /// A compound signal is "safe" if ALL its compounds have all split parts
+    /// existing in the corpus (matching_parts.len() == split_parts.len()).
+    /// Returns (safe_count, review_count).
+    fn count_compound_signals_by_safety(&self) -> Result<(usize, usize)> {
+        // Get all compound_tag_value signals and classify them
+        let mut stmt = self.conn.prepare(
+            r#"SELECT metadata_json FROM signals WHERE issue_type = 'compound_tag_value'"#,
+        )?;
+
+        let mut safe_count = 0usize;
+        let mut review_count = 0usize;
+
+        let rows = stmt.query_map(params![], |row| {
+            let metadata: Option<String> = row.get(0)?;
+            Ok(metadata)
+        })?;
+
+        for row in rows {
+            let metadata = match row? {
+                Some(m) => m,
+                None => {
+                    review_count += 1; // No metadata = needs review
+                    continue;
+                }
+            };
+
+            let json: serde_json::Value = match serde_json::from_str(&metadata) {
+                Ok(v) => v,
+                Err(_) => {
+                    review_count += 1; // Bad JSON = needs review
+                    continue;
+                }
+            };
+
+            // Check each compound in the signal
+            let compounds = json.get("compounds").and_then(|v| v.as_array());
+            let is_safe = match compounds {
+                Some(arr) => arr.iter().all(|compound| {
+                    let split_len = compound
+                        .get("split_parts")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    let match_len = compound
+                        .get("matching_parts")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    split_len > 0 && split_len == match_len
+                }),
+                None => false,
+            };
+
+            if is_safe {
+                safe_count += 1;
+            } else {
+                review_count += 1;
+            }
+        }
+
+        Ok((safe_count, review_count))
     }
 
     fn compute_other_signals_bucket(&self) -> Result<crate::corpus::db::types::OtherSignalsBucket> {

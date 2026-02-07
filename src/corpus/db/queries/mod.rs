@@ -455,6 +455,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_aggregate_signals(signal_type)
     }
 
+    /// Get compound tag signals filtered by safety classification.
+    pub fn get_compound_signals_by_safety(&self, safe_only: bool) -> Result<Vec<super::types::AggregateSignal>> {
+        self.db.get_compound_signals_by_safety(safe_only)
+    }
+
     /// Check if a file signal exists.
     pub fn file_signal_exists(&self, signal_type: super::types::FileSignalType, key: &str) -> bool {
         self.db.file_signal_exists(signal_type, key)

@@ -143,7 +143,8 @@ pub enum InsightType {
     SubparDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
-    CompoundTagValue,
+    CompoundTagValueSafe,   // All split parts exist in corpus
+    CompoundTagValueReview, // Some/all parts are new to corpus
     // Library bucket entries
     LibraryStale,
     LibraryLeftover,
@@ -164,8 +165,10 @@ pub enum InsightAction {
     LaunchMissingDirectoryResolution,
     /// Launch tag canonicity resolution flow
     LaunchTagCanonicityResolution,
-    /// Launch compound tag split flow
-    LaunchCompoundTagSplit,
+    /// Launch compound tag split flow (safe - all parts exist)
+    LaunchCompoundTagSplitSafe,
+    /// Launch compound tag split flow (review - some parts new)
+    LaunchCompoundTagSplitReview,
     /// Launch OOB tag sync resolution flow
     LaunchOobTagSync,
     /// Launch OOB tag conflict inspection
@@ -288,15 +291,27 @@ impl BucketEntry {
         }
     }
 
-    /// Create compound tag value entry
-    fn compound_tag_value(count: usize) -> Self {
+    /// Create compound tag value safe entry (all parts exist in corpus)
+    fn compound_tag_value_safe(count: usize) -> Self {
         Self {
-            insight_type: InsightType::CompoundTagValue,
-            label: "Compound tag values".to_string(),
+            insight_type: InsightType::CompoundTagValueSafe,
+            label: "Compound splits (safe)".to_string(),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::Green },
+            color: if count > 0 { Color::Green } else { Color::DarkGray },
             rank: 0,
-            action: InsightAction::LaunchCompoundTagSplit,
+            action: InsightAction::LaunchCompoundTagSplitSafe,
+        }
+    }
+
+    /// Create compound tag value review entry (some parts are new)
+    fn compound_tag_value_review(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::CompoundTagValueReview,
+            label: "Compound splits (review)".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            rank: 0,
+            action: InsightAction::LaunchCompoundTagSplitReview,
         }
     }
 
@@ -305,7 +320,7 @@ impl BucketEntry {
         // Determine action based on signal type
         let action = match signal_type {
             "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
-            "CompoundTagValue" => InsightAction::LaunchCompoundTagSplit,
+            "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview, // Default to review
             _ => InsightAction::NotImplemented,
         };
 
@@ -502,9 +517,12 @@ impl CachedBucketEntries {
             entries.push(BucketEntry::tag_canonicity(&entry.tag_name, entry.cluster_count));
         }
 
-        // Add compound tag values if present
-        if bucket.compound_tag_value_count > 0 {
-            entries.push(BucketEntry::compound_tag_value(bucket.compound_tag_value_count));
+        // Add compound tag values - safe first (easy bulk action), then review
+        if bucket.compound_safe_count > 0 {
+            entries.push(BucketEntry::compound_tag_value_safe(bucket.compound_safe_count));
+        }
+        if bucket.compound_review_count > 0 {
+            entries.push(BucketEntry::compound_tag_value_review(bucket.compound_review_count));
         }
 
         entries
@@ -854,7 +872,8 @@ mod tests {
                 subpar_duplicate_count: 0,
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
-                compound_tag_value_count: 0,
+                compound_safe_count: 0,
+                compound_review_count: 0,
             },
             bucket_library: LibraryDeployBucket {
                 library_stale: 1,

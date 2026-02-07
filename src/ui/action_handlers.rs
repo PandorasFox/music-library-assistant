@@ -4,9 +4,8 @@
 //! Actions that are handled here. These handlers coordinate state transitions,
 //! Witch interactions, and modal displays.
 
-use crate::corpus::db::types::FileSource;
 use crate::corpus::paths;
-use crate::ui::{compound_split, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split_v2, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -72,8 +71,11 @@ impl App {
                     Some(insights_view::InsightAction::LaunchTagCanonicityResolution) => {
                         self.start_tag_canonicity_resolution();
                     }
-                    Some(insights_view::InsightAction::LaunchCompoundTagSplit) => {
-                        self.start_compound_split_resolution();
+                    Some(insights_view::InsightAction::LaunchCompoundTagSplitSafe) => {
+                        self.start_compound_split_resolution(true);
+                    }
+                    Some(insights_view::InsightAction::LaunchCompoundTagSplitReview) => {
+                        self.start_compound_split_resolution(false);
                     }
                     Some(insights_view::InsightAction::LaunchOobTagSync) => {
                         self.start_oob_sync_resolution();
@@ -1160,10 +1162,9 @@ impl App {
 
     /// Start compound tag split resolution flow.
     ///
-    /// Loads CompoundTagValue signals and enters the split modal.
-    fn start_compound_split_resolution(&mut self) {
-        use crate::corpus::db::types::AggregateSignalType;
-
+    /// Loads CompoundTagValue signals filtered by safety and enters the split modal.
+    /// If `safe_only` is true, loads only signals where all split parts exist in corpus.
+    fn start_compound_split_resolution(&mut self, safe_only: bool) {
         let read_db = match self.witch.as_mut() {
             Some(w) => w.read_db(),
             None => {
@@ -1172,27 +1173,39 @@ impl App {
             }
         };
 
-        // Load all CompoundTagValue signals
-        let signals = read_db.get_aggregate_signals(Some(AggregateSignalType::CompoundTagValue))
+        // Load compound signals filtered by safety classification
+        let signals = read_db.get_compound_signals_by_safety(safe_only)
             .unwrap_or_default();
 
         if signals.is_empty() {
-            self.status_message = Some("No compound tag values to split".to_string());
+            let msg = if safe_only {
+                "No safe compound splits available"
+            } else {
+                "No compound splits needing review"
+            };
+            self.status_message = Some(msg.to_string());
             return;
         }
 
         // Store signal IDs for cluster navigation
         let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        self.compound_split_clusters = Some(compound_split::CompoundSplitClusters::new(signal_ids));
+        self.compound_split_clusters = Some(compound_split_v2::CompoundSplitClustersV2::new(signal_ids));
+        self.compound_split_safe_mode = safe_only;
 
         // Start transaction ONCE for entire flow
         if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction("Compound tag split");
+            let mode_str = if safe_only { "safe" } else { "review" };
+            let _ = witch.start_transaction(&format!("Compound tag split ({})", mode_str));
         }
 
-        // Load the first signal into modal data
+        // Load the first signal into modal data (need witch for file info)
         let first_signal = &signals[0];
-        let data = match compound_split::CompoundSplitData::from_signal(first_signal) {
+        let data = {
+            let read_db = self.witch.as_mut().unwrap().read_db();
+            compound_split_v2::CompoundSplitDataV2::from_signal_with_files(first_signal, &read_db)
+        };
+
+        let data = match data {
             Some(d) => d,
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
@@ -1211,7 +1224,7 @@ impl App {
             .map(|c| (c.current_index(), c.total()))
             .unwrap_or((0, 1));
 
-        let state = compound_split::CompoundSplitState::new(data, group_index, total_groups);
+        let state = compound_split_v2::CompoundSplitStateV2::new(data, safe_only, group_index, total_groups);
         self.compound_split_state = Some(state);
         self.mode = UiMode::CompoundTagSplit;
     }
@@ -1860,21 +1873,21 @@ impl App {
     // Compound Tag Split Resolution
     // ========================================================================
 
-    /// Handle compound tag split modal actions.
-    pub(super) fn handle_compound_split_action(&mut self, action: compound_split::CompoundSplitAction) {
+    /// Handle compound tag split modal actions (v2).
+    pub(super) fn handle_compound_split_action(&mut self, action: compound_split_v2::CompoundSplitActionV2) {
         match action {
-            compound_split::CompoundSplitAction::None => {}
-            compound_split::CompoundSplitAction::Confirmed => {
+            compound_split_v2::CompoundSplitActionV2::None => {}
+            compound_split_v2::CompoundSplitActionV2::Confirmed => {
                 // Stage decision and advance to next signal
                 self.stage_compound_split_decision();
                 self.advance_to_next_compound_split();
             }
-            compound_split::CompoundSplitAction::Canonicalize => {
+            compound_split_v2::CompoundSplitActionV2::Canonicalize => {
                 // Mark as canonical (don't split) and advance
                 self.stage_compound_canonicalize_decision();
                 self.advance_to_next_compound_split();
             }
-            compound_split::CompoundSplitAction::Cancelled => {
+            compound_split_v2::CompoundSplitActionV2::Cancelled => {
                 // Discard transaction if active
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::discard_transaction(witch);
@@ -1884,16 +1897,16 @@ impl App {
                 self.compound_split_clusters = None;
                 self.start_insights_view();
             }
-            compound_split::CompoundSplitAction::Navigate { forward } => {
+            compound_split_v2::CompoundSplitActionV2::Navigate { forward } => {
                 // Navigate to next/prev signal without staging
                 self.navigate_compound_split(forward);
             }
-            compound_split::CompoundSplitAction::ShowReview => {
+            compound_split_v2::CompoundSplitActionV2::ShowReview => {
                 // Ctrl+R - stage current decision and show review
                 self.stage_compound_split_decision();
                 self.show_transaction_review_for_compound_split();
             }
-            compound_split::CompoundSplitAction::StageAllAndReview => {
+            compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
                 // Ctrl+A - stage ALL splits and go to review
                 self.stage_all_compound_splits();
                 self.show_transaction_review_for_compound_split();
@@ -1901,7 +1914,7 @@ impl App {
         }
     }
 
-    /// Stage the current compound split decision.
+    /// Stage the current compound split decision (v2).
     fn stage_compound_split_decision(&mut self) {
         let Some(ref state) = self.compound_split_state else {
             return;
@@ -1912,30 +1925,8 @@ impl App {
             .map(|c| c.current_index())
             .unwrap_or(0);
 
-        // Get track info from witch: path and current TagSet
-        // This allows mutations_with_paths to verify each track still has the compound value
-        // and build the complete new tag set for DB-first pattern.
-        let track_info = self.witch.as_mut()
-            .map(|w| {
-                let read_db = w.read_db();
-                let resolver = paths::get_resolver();
-                let mut info = std::collections::HashMap::new();
-                for &inode in &state.data.inodes {
-                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
-                        // Resolve relative DB path to absolute for filesystem operations
-                        let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
-                        // Load complete TagSet from disk for building new tag set
-                        let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
-                            .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
-                        info.insert(inode, (abs_path, tagset));
-                    }
-                }
-                info
-            })
-            .unwrap_or_default();
-
-        // Generate mutations (only for tracks that still have the compound value)
-        let mutations = state.mutations_with_paths(&track_info);
+        // Generate mutations using v2 state
+        let mutations = state.mutations();
 
         if mutations.is_empty() {
             return;
@@ -1944,9 +1935,9 @@ impl App {
         // Stage the decision via operator_decisions
         let description = format!(
             "Split \"{}\" in {} → [{}]",
-            state.data.compound_value,
-            state.data.tag_name,
-            state.data.split_parts.join(", ")
+            state.data.compound.compound_value,
+            state.data.compound.tag_name,
+            state.edited_parts.join(", ")
         );
 
         if let Some(ref mut witch) = self.witch {
@@ -1972,8 +1963,8 @@ impl App {
         // Stage the decision via operator_decisions
         let description = format!(
             "Keep \"{}\" in {} as canonical",
-            state.data.compound_value,
-            state.data.tag_name,
+            state.data.compound.compound_value,
+            state.data.compound.tag_name,
         );
 
         if let Some(ref mut witch) = self.witch {
@@ -1981,7 +1972,7 @@ impl App {
         }
     }
 
-    /// Stage ALL compound split decisions at once.
+    /// Stage ALL compound split decisions at once (v2).
     fn stage_all_compound_splits(&mut self) {
         use crate::corpus::db::types::{AggregateSignal, AggregateSignalType};
         use crate::corpus::mutations::Mutation;
@@ -1992,6 +1983,7 @@ impl App {
 
         let signal_ids = clusters.all_signal_ids().to_vec();
         let total = signal_ids.len();
+        let is_safe_mode = self.compound_split_safe_mode;
 
         // First pass: collect all data from database
         let mut decisions_to_stage: Vec<(usize, String, Vec<Mutation>)> = Vec::new();
@@ -2001,7 +1993,6 @@ impl App {
                 Some(w) => w.read_db(),
                 None => return,
             };
-            let resolver = paths::get_resolver();
 
             for (idx, signal_id) in signal_ids.iter().enumerate() {
                 // Get signal by ID
@@ -2027,25 +2018,14 @@ impl App {
                     continue;
                 }
 
-                // Parse data
-                let Some(data) = compound_split::CompoundSplitData::from_signal(&agg_signal) else {
+                // Parse data using v2
+                let Some(data) = compound_split_v2::CompoundSplitDataV2::from_signal_with_files(&agg_signal, &read_db) else {
                     continue;
                 };
 
-                // Build track info: path and current TagSet
-                let mut track_info = std::collections::HashMap::new();
-                for &inode in &data.inodes {
-                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
-                        let abs_path = resolver.resolve(std::path::Path::new(audio_file.path()));
-                        let tagset = crate::corpus::tags::TagSet::from_file(&abs_path)
-                            .unwrap_or_else(|_| crate::corpus::tags::TagSet::empty());
-                        track_info.insert(inode, (abs_path, tagset));
-                    }
-                }
-
                 // Create temporary state to generate mutations
-                let state = compound_split::CompoundSplitState::new(data.clone(), idx, total);
-                let mutations = state.mutations_with_paths(&track_info);
+                let state = compound_split_v2::CompoundSplitStateV2::new(data.clone(), is_safe_mode, idx, total);
+                let mutations = state.mutations();
 
                 if mutations.is_empty() {
                     continue;
@@ -2053,9 +2033,9 @@ impl App {
 
                 let description = format!(
                     "Split \"{}\" in {} → [{}]",
-                    data.compound_value,
-                    data.tag_name,
-                    data.split_parts.join(", ")
+                    data.compound.compound_value,
+                    data.compound.tag_name,
+                    data.compound.split_parts.join(", ")
                 );
 
                 decisions_to_stage.push((idx, description, mutations));
@@ -2206,15 +2186,21 @@ impl App {
             return false;
         }
 
-        // Parse modal data from signal
-        let Some(data) = compound_split::CompoundSplitData::from_signal(&agg_signal) else {
+        // Parse modal data from signal (need witch for file info)
+        let data = {
+            let read_db = self.witch.as_mut().unwrap().read_db();
+            compound_split_v2::CompoundSplitDataV2::from_signal_with_files(&agg_signal, &read_db)
+        };
+
+        let Some(data) = data else {
             self.status_message = Some("Failed to parse signal data".to_string());
             return false;
         };
 
         // Create modal state
-        let state = compound_split::CompoundSplitState::new(
+        let state = compound_split_v2::CompoundSplitStateV2::new(
             data,
+            self.compound_split_safe_mode,
             clusters.current_index(),
             clusters.total(),
         );

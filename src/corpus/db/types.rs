@@ -803,8 +803,10 @@ pub struct TagSquashBucket {
     pub tag_canonicity: Vec<TagSquashEntry>,
     /// Inconsistent album_artist issues count
     pub inconsistent_album_artist_count: usize,
-    /// Compound tag values needing split (e.g., "Rock; Metal")
-    pub compound_tag_value_count: usize,
+    /// Compound tag values - safe splits (all parts exist in corpus)
+    pub compound_safe_count: usize,
+    /// Compound tag values - needs review (some/all parts are new)
+    pub compound_review_count: usize,
 }
 
 /// Entry for tag squash signals (grouped by tag name)

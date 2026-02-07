@@ -16,7 +16,7 @@ use ratatui::{
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser};
+use super::{compound_split_v2, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -28,7 +28,7 @@ pub struct RenderContext<'a> {
     pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
     pub missing_directory_preview: Option<&'a super::missing_directory_flow::MissingDirectoryPreviewState>,
     pub tag_canonicity_state: Option<&'a tag_canonicity_v2::TagCanonicalityStateV2>,
-    pub compound_split_state: Option<&'a compound_split::CompoundSplitState>,
+    pub compound_split_state: Option<&'a compound_split_v2::CompoundSplitStateV2>,
     pub oob_sync_state: Option<&'a mut oob_sync_flow::OobSyncState>,
     pub oob_conflict_state: Option<&'a mut oob_conflict_flow::OobConflictState>,
     pub inode_changed_state: Option<&'a mut super::inode_changed_flow::InodeChangedState>,
@@ -267,7 +267,7 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::CompoundTagSplit => {
             view_name = "compound_tag_split";
             if let Some(ref state) = ctx.compound_split_state {
-                compound_split::render(f, area, state);
+                compound_split_v2::render(f, area, state);
             }
         }
         super::UiMode::OobSyncResolution => {

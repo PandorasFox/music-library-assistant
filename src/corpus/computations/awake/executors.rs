@@ -746,6 +746,47 @@ pub fn execute_detect_compound_tags_for_inode(
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
+    // Populate matching_parts for each compound by checking which split parts
+    // exist as standalone values in the corpus. This enables "safe split" detection.
+    let mut tag_values_cache: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+
+    for compound in &mut compounds {
+        let tag_name = match compound.get("tag_name").and_then(|v| v.as_str()) {
+            Some(name) => name.to_lowercase(),
+            None => continue,
+        };
+
+        // Get or fetch existing values for this tag type
+        let existing_values = tag_values_cache.entry(tag_name.clone()).or_insert_with(|| {
+            read_only_db
+                .get_distinct_tag_values(&tag_name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(value, _count)| value)
+                .collect()
+        });
+
+        // Find which split parts exist as standalone values
+        let split_parts = compound
+            .get("split_parts")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let matching_parts: Vec<String> = split_parts
+            .iter()
+            .filter(|part| existing_values.contains(&part.to_string()))
+            .map(|s| s.to_string())
+            .collect();
+
+        compound["matching_parts"] = serde_json::json!(matching_parts);
+    }
+
     // Emit per-file CompoundTag signal
     let metadata = serde_json::json!({
         "inode": inode,

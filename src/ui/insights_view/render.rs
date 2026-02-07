@@ -635,28 +635,45 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        InsightType::CompoundTagValue => {
+        InsightType::CompoundTagValueSafe => {
             lines.push(Line::from(Span::styled(
-                "Compound Tag Values",
+                "Compound Splits (Safe)",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Tags containing separators (e.g.,",
+                "All split parts already exist in",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "\"Rock; Metal\") that should be split",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "into multiple values.",
+                "corpus. Safe to split in bulk.",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Press Enter to split.",
-                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+                "Press Enter to bulk split.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Green }),
+            )));
+        }
+
+        InsightType::CompoundTagValueReview => {
+            lines.push(Line::from(Span::styled(
+                "Compound Splits (Review)",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Some split parts are new to corpus.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "Review each to verify or edit.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to review.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Yellow }),
             )));
         }
 

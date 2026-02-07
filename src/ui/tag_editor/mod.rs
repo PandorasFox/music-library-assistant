@@ -10,8 +10,16 @@
 //! ## Module Structure
 //!
 //! - `types`: Core type definitions (TagField, TagChange, etc.)
+//! - `mutations`: Pure functions for change computation and mutation generation
+//! - `field_editing`: Buffer operations and field manipulation
+//! - `input`: Keyboard event handling
+//! - `render`: All rendering methods
 //! - `state`: UnifiedTagEditorState for transaction-based editing
 
+mod field_editing;
+mod input;
+pub mod mutations;
+mod render;
 pub mod state;
 pub mod types;
 

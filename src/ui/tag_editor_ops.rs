@@ -3,11 +3,24 @@
 //! Functions for launching and navigating the unified tag editor in various
 //! contexts (single file, bulk edit, directory edit, tag search results).
 
+use crossterm::event;
+
 use crate::corpus::db::types::AudioFile;
 use crate::corpus::paths;
 use crate::ui::tag_editor;
 use crate::ui::types::UiMode;
 use super::App;
+
+/// Drain any pending input events from the terminal buffer.
+///
+/// Call this after slow operations (like loading tags from disk) to prevent
+/// buffered keypresses from being processed as if they were intentional input
+/// in the newly loaded UI state.
+fn drain_input_buffer() {
+    while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
+    }
+}
 
 impl App {
     /// Start tag editor for a file path (from tree browser or external trigger).
@@ -167,11 +180,17 @@ impl App {
             let _ = the_witch.start_transaction(label);
         }
 
-        self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::single_file(
+        // NOTE: single_file reads tags from disk
+        let editor = tag_editor::UnifiedTagEditorState::single_file(
             audio_file,
             source,
             group_context,
-        ));
+        );
+
+        // Drain any keypresses that accumulated during loading
+        drain_input_buffer();
+
+        self.unified_tag_editor = Some(editor);
         self.mode = UiMode::UnifiedTagEditor;
     }
 
@@ -192,11 +211,17 @@ impl App {
             let _ = the_witch.start_transaction(label);
         }
 
-        self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::bulk_from_audio_files(
+        // NOTE: bulk_from_audio_files reads tags from disk for all files
+        let editor = tag_editor::UnifiedTagEditorState::bulk_from_audio_files(
             audio_files,
             source,
             group_context,
-        ));
+        );
+
+        // Drain any keypresses that accumulated during loading
+        drain_input_buffer();
+
+        self.unified_tag_editor = Some(editor);
         self.mode = UiMode::UnifiedTagEditor;
     }
 
@@ -244,7 +269,11 @@ impl App {
         }
 
         // Use directory_aggregated for aggregated tag view across all files
+        // NOTE: This is slow - reads tags from disk for all files
         let editor = tag_editor::UnifiedTagEditorState::directory_aggregated(audio_files);
+
+        // Drain any keypresses that accumulated during the slow loading
+        drain_input_buffer();
 
         self.unified_tag_editor = Some(editor);
         self.mode = UiMode::UnifiedTagEditor;
@@ -267,10 +296,16 @@ impl App {
         }
 
         // Use aggregated mode - all files edited as one unit
-        self.unified_tag_editor = Some(tag_editor::UnifiedTagEditorState::aggregated_bulk(
+        // NOTE: aggregated_bulk reads tags from disk for all files
+        let editor = tag_editor::UnifiedTagEditorState::aggregated_bulk(
             audio_files,
             tag_editor::TagEditorSource::TagSearch,
-        ));
+        );
+
+        // Drain any keypresses that accumulated during loading
+        drain_input_buffer();
+
+        self.unified_tag_editor = Some(editor);
         self.mode = UiMode::UnifiedTagEditor;
     }
 }

@@ -1121,22 +1121,20 @@ impl Database {
     pub fn get_deploy_ready_files(&self) -> Result<Vec<crate::corpus::db::types::DeploySignalFile>> {
         use crate::corpus::db::types::DeploySignalFile;
 
-        // deploy_ready signals: issue_key = corpus_path, metadata_json contains deploy_path
-        // Join with files table to get inode (used as identifier for mutations)
+        // deploy_ready signals are inode-keyed: issue_key = inode (as string)
+        // Path is in metadata_json.path, deploy_path is in metadata_json.deploy_path
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                 h.issue_key as corpus_path,
-                 json_extract(h.metadata_json, '$.deploy_path') as deploy_path,
-                 COALESCE(f.inode, 0) as inode
+                 json_extract(h.metadata_json, '$.path') as corpus_path,
+                 json_extract(h.metadata_json, '$.deploy_path') as deploy_path
                FROM signals h
-               LEFT JOIN files f ON f.path = h.issue_key AND f.source = 'corpus'
                WHERE h.issue_type = 'deploy_ready'
-               ORDER BY h.issue_key"#
+               ORDER BY json_extract(h.metadata_json, '$.path')"#
         )?;
 
         let results = stmt.query_map(params![], |row| {
             Ok(DeploySignalFile {
-                corpus_path: row.get(0)?,
+                corpus_path: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
             })
         })?
@@ -1152,19 +1150,20 @@ impl Database {
     pub fn get_deployed_healthy_files(&self) -> Result<Vec<crate::corpus::db::types::DeploySignalFile>> {
         use crate::corpus::db::types::DeploySignalFile;
 
-        // deployed_healthy signals: issue_key = corpus_path, metadata_json contains library_path
+        // deployed_healthy signals are inode-keyed: issue_key = inode (as string)
+        // Path is in metadata_json.path, library_path is in metadata_json.library_path
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                 h.issue_key as corpus_path,
+                 json_extract(h.metadata_json, '$.path') as corpus_path,
                  json_extract(h.metadata_json, '$.library_path') as library_path
                FROM signals h
                WHERE h.issue_type = 'deployed_healthy'
-               ORDER BY h.issue_key"#
+               ORDER BY json_extract(h.metadata_json, '$.path')"#
         )?;
 
         let results = stmt.query_map(params![], |row| {
             Ok(DeploySignalFile {
-                corpus_path: row.get(0)?,
+                corpus_path: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 deploy_path: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
             })
         })?

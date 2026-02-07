@@ -35,7 +35,6 @@ pub mod deploy_flow;
 pub mod directory_cluster_flow;
 pub mod eye;
 pub mod filter_popup;
-pub mod format_standardization;
 pub mod helpers;
 pub mod insights_view;
 pub mod missing_file_flow;
@@ -182,8 +181,6 @@ pub(crate) struct App {
     pub(super) tag_search: Option<tag_search::TagSearchState>,
     // Intake confirmation modal
     pub(super) intake_confirmation: Option<startup::IntakeConfirmationState>,
-    // Format standardization view (lateral view ring)
-    pub(super) format_std: Option<format_standardization::FormatStdState>,
     // Corrupt file resolution modal
     pub(super) corrupt_file_preview: Option<corrupt_file_flow::CorruptFilePreviewState>,
     // Shit format transcode resolution modal
@@ -241,7 +238,6 @@ impl App {
             insights_view: None,
             tag_search: None,
             intake_confirmation: None,
-            format_std: None,
             corrupt_file_preview: None,
             shit_format_preview: None,
             subpar_duplicate_preview: None,
@@ -466,12 +462,6 @@ impl App {
                     self.handle_moved_file_action(action);
                 }
             }
-            UiMode::FormatStandardization => {
-                if let Some(ref mut state) = self.format_std {
-                    let action = state.handle_key(key);
-                    self.handle_format_std_action(action);
-                }
-            }
             UiMode::CorruptFileResolution => {
                 if let Some(ref mut preview) = self.corrupt_file_preview {
                     let action = preview.handle_key(key);
@@ -558,12 +548,6 @@ impl App {
         self.mode = UiMode::TagSearch;
     }
 
-    pub(super) fn start_format_standardization(&mut self) {
-        let read_db = self.read_db();
-        self.format_std = Some(format_standardization::FormatStdState::new(&read_db));
-        self.mode = UiMode::FormatStandardization;
-    }
-
     /// Start the lateral view identified by the given variant.
     /// Used by CycleNext/CyclePrev handlers to dispatch via LateralView::next()/prev().
     pub(super) fn start_lateral_view(&mut self, view: widgets::LateralView) {
@@ -571,7 +555,6 @@ impl App {
             widgets::LateralView::TagSearch => self.start_tag_search(),
             widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
             widgets::LateralView::Insights => self.start_insights_view(),
-            widgets::LateralView::FormatStandardization => self.start_format_standardization(),
         }
     }
 
@@ -678,7 +661,6 @@ fn render(f: &mut Frame, app: &mut App) {
         insights_view: app.insights_view.as_mut(),
         tag_search: app.tag_search.as_ref(),
         intake_confirmation: app.intake_confirmation.as_ref(),
-        format_std: app.format_std.as_ref(),
         corrupt_file_preview: app.corrupt_file_preview.as_ref(),
         shit_format_preview: app.shit_format_preview.as_ref(),
         subpar_duplicate_preview: app.subpar_duplicate_preview.as_ref(),

@@ -163,16 +163,6 @@ pub mod presets {
             .binding(KeyBinding::new("Esc", "Menu"))
     }
 
-    /// Format standardization controls
-    pub fn format_standardization() -> ControlsHint {
-        ControlsHint::new()
-            .binding(KeyBinding::new("↑↓", "Select action"))
-            .binding(KeyBinding::new("←→", "Adjust bitrate"))
-            .binding(KeyBinding::new("Enter", "Convert"))
-            .binding(KeyBinding::new("Tab/Shift+Tab", "Cycle"))
-            .binding(KeyBinding::new("Esc", "Exit"))
-    }
-
     /// Tag search controls
     pub fn tag_search() -> ControlsHint {
         ControlsHint::new()

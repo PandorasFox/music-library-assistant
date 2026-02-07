@@ -441,17 +441,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_corpus_tags(inode)
     }
 
-    /// Get audio file counts grouped by file type.
-    pub fn get_audio_type_counts(&self) -> Result<std::collections::HashMap<String, i64>> {
-        self.db.get_audio_type_counts()
-    }
-
-    /// Get audio files by file types.
-    /// Returns (inode, path, file_type) tuples.
-    pub fn get_audio_files_by_types(&self, file_types: &[&str]) -> Result<Vec<(i64, String, String)>> {
-        self.db.get_audio_files_by_types(file_types)
-    }
-
     // =========================================================================
     // Signal Queries
     // =========================================================================
@@ -659,15 +648,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get missing directory signal paths (for UI resolution modal).
     pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
         self.db.get_missing_directory_paths()
-    }
-
-    /// Get signals in a specific directory.
-    pub fn get_signals_in_directory(
-        &self,
-        dir: &std::path::Path,
-        signal_type: super::types::SignalType,
-    ) -> Result<Vec<super::types::Signal>> {
-        self.db.get_signals_in_directory(dir, signal_type)
     }
 
     /// Get all files for a library (for DeriveDeployHealthSignals).

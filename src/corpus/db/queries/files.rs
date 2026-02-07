@@ -555,64 +555,6 @@ impl Database {
         Ok(results)
     }
 
-    /// Get audio files by file types.
-    /// Returns (inode, path, file_type) tuples.
-    pub fn get_audio_files_by_types(&self, file_types: &[&str]) -> Result<Vec<(i64, String, String)>> {
-        if file_types.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let placeholders: Vec<String> = (0..file_types.len()).map(|i| format!("?{}", i + 1)).collect();
-        let sql = format!(
-            r#"SELECT f.inode, f.path, a.file_type
-               FROM files f
-               JOIN audio_info a ON f.inode = a.inode
-               WHERE f.source = 'corpus' AND a.file_type IN ({})"#,
-            placeholders.join(", ")
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-
-        let params: Vec<&dyn rusqlite::types::ToSql> = file_types
-            .iter()
-            .map(|ft| ft as &dyn rusqlite::types::ToSql)
-            .collect();
-
-        let rows = stmt.query_map(params.as_slice(), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
-    /// Get file type breakdown for corpus files.
-    pub fn get_audio_type_counts(&self) -> Result<HashMap<String, i64>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT a.file_type, COUNT(*) as count
-               FROM files f
-               JOIN audio_info a ON f.inode = a.inode
-               WHERE f.source = 'corpus'
-               GROUP BY a.file_type"#
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            let file_type: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            Ok((file_type, count))
-        })?;
-
-        let mut counts = HashMap::new();
-        for row in rows {
-            let (file_type, count) = row?;
-            counts.insert(file_type, count);
-        }
-        Ok(counts)
-    }
-
     /// Get audio file count, optionally filtered by source.
     pub fn get_audio_file_count(&self, source: Option<&str>) -> Result<usize> {
         let count: i64 = if let Some(src) = source {

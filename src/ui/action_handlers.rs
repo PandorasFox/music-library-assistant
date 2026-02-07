@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::corpus::paths;
-use crate::ui::{compound_split_v2, corrupt_file_flow, filter_popup, format_standardization, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split_v2, corrupt_file_flow, filter_popup, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -2181,10 +2181,6 @@ impl App {
                             self.start_insights_view();
                         }
                     }
-                    Some(TransactionReviewSource::FormatStandardization) => {
-                        // format_std state was preserved
-                        self.mode = UiMode::FormatStandardization;
-                    }
                     Some(TransactionReviewSource::OobSyncResolution) => {
                         // oob_sync_state was preserved
                         self.mode = UiMode::OobSyncResolution;
@@ -2279,7 +2275,6 @@ impl App {
         self.missing_file_preview = None;
         self.missing_directory_preview = None;
         self.intake_confirmation = None;
-        self.format_std = None;
         self.oob_sync_state = None;
         self.oob_conflict_state = None;
         self.corrupt_file_preview = None;
@@ -2412,100 +2407,6 @@ impl App {
 
         // Add decision to existing transaction via sealed operator decision handler
         let _ = super::operator_decisions::stage_decision(witch, cluster_idx, &label, mutations);
-    }
-
-    // =========================================================================
-    // Format Standardization
-    // =========================================================================
-
-    pub(super) fn handle_format_std_action(&mut self, action: format_standardization::FormatStdAction) {
-        match action {
-            format_standardization::FormatStdAction::None => {}
-            format_standardization::FormatStdAction::RequestQuit => {
-                if self.has_pending_operations() {
-                    self.status_message = Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
-                    self.mode = UiMode::ExitConfirmModal;
-                }
-            }
-            format_standardization::FormatStdAction::CycleNext => {
-                self.format_std = None;
-                self.start_lateral_view(widgets::LateralView::FormatStandardization.next());
-            }
-            format_standardization::FormatStdAction::CyclePrev => {
-                self.format_std = None;
-                self.start_lateral_view(widgets::LateralView::FormatStandardization.prev());
-            }
-            format_standardization::FormatStdAction::ConvertLossy { bitrate_kbps } => {
-                let target = crate::corpus::transcode::TranscodeTarget::Opus { bitrate_kbps };
-                self.stage_format_conversion(
-                    format_standardization::LOSSY_TYPES,
-                    target,
-                    &format!("Convert lossy → {}", target.label()),
-                );
-            }
-            format_standardization::FormatStdAction::ConvertLossless => {
-                let target = crate::corpus::transcode::TranscodeTarget::Flac;
-                self.stage_format_conversion(
-                    format_standardization::LOSSLESS_TYPES,
-                    target,
-                    &format!("Convert lossless → {}", target.label()),
-                );
-            }
-        }
-    }
-
-    /// Stage transcode mutations for all tracks matching given file types.
-    fn stage_format_conversion(
-        &mut self,
-        file_types: &[&str],
-        target: crate::corpus::transcode::TranscodeTarget,
-        label: &str,
-    ) {
-        use crate::corpus::mutations::Mutation;
-
-        let Some(ref mut witch) = self.witch else {
-            self.status_message = Some("Witch not available".to_string());
-            return;
-        };
-
-        let read_db = witch.read_db();
-        let resolver = paths::get_resolver();
-
-        let audio_files = read_db.get_audio_files_by_types(file_types).unwrap_or_default();
-        if audio_files.is_empty() {
-            self.status_message = Some("No matching files found".to_string());
-            return;
-        }
-
-        let mutations: Vec<Mutation> = audio_files
-            .iter()
-            .map(|(inode, rel_path, _file_type)| {
-                let abs_path = resolver.resolve(
-                    std::path::Path::new(rel_path),
-                );
-                Mutation::Transcode {
-                    inode: *inode,
-                    source_path: abs_path,
-                    target_format: target,
-                    stash_name: "remux-input".to_string(),
-                }
-            })
-            .collect();
-
-        if mutations.is_empty() {
-            self.status_message = Some("No resolvable tracks found".to_string());
-            return;
-        }
-
-        let count = mutations.len();
-        let _ = witch.start_transaction(label);
-        let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
-
-        self.status_message = Some(format!("Staged {} transcode operations", count));
-        // Note: format_std state is NOT cleared - preserved for Cancel return
-        self.start_transaction_review(transaction_review::TransactionReviewSource::FormatStandardization);
     }
 
     // =========================================================================

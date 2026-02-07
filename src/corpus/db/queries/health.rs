@@ -695,36 +695,6 @@ impl Database {
         Ok(result)
     }
 
-    /// Get signals in a specific directory.
-    ///
-    /// For FileInCorpus signals, issue_key is the file path.
-    /// Uses LIKE pattern with trailing slash to avoid matching sibling directories
-    /// (e.g., `/path/to/dir/` won't match `/path/to/dir-extra/file.mp3`).
-    pub fn get_signals_in_directory(
-        &self,
-        dir: &std::path::Path,
-        signal_type: SignalType,
-    ) -> Result<Vec<Signal>> {
-        let pattern = super::dir_like_pattern(dir);
-
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json, inode
-               FROM signals
-               WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\'"#
-        )?;
-
-        let rows = stmt.query_map(
-            params![signal_type.as_str(), pattern],
-            Self::row_to_signal
-        )?;
-
-        let mut issues = Vec::new();
-        for row in rows {
-            issues.push(row?);
-        }
-        Ok(issues)
-    }
-
     /// Get health summary statistics.
     pub fn get_signal_summary(&self) -> Result<SignalSummary> {
         let mut summary = SignalSummary::default();

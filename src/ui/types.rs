@@ -70,8 +70,6 @@ pub(crate) enum UiMode {
     MovedFileAcknowledge,
     /// Standardized transaction review modal - all mutation flows pass through here
     TransactionReview,
-    /// Format standardization view (part of lateral view ring)
-    FormatStandardization,
     /// Corrupt file resolution modal (stash + drop)
     CorruptFileResolution,
     /// Shit format transcode resolution modal

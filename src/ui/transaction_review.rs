@@ -35,7 +35,6 @@ pub enum TransactionReviewSource {
     MissingFileResolution,
     MissingDirectoryResolution,
     IntakeConfirmation,
-    FormatStandardization,
     OobSyncResolution,
     OobConflictResolution,
     CorruptFileResolution,

@@ -16,7 +16,7 @@ use ratatui::{
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::helpers::format_duration;
 use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split_v2, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, format_standardization, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser};
+use super::{compound_split_v2, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -39,7 +39,6 @@ pub struct RenderContext<'a> {
     pub progress_screen: Option<&'a super::progress_screen::ProgressScreen>,
     pub insights_view: Option<&'a mut insights_view::InsightsViewState>,
     pub tag_search: Option<&'a tag_search::TagSearchState>,
-    pub format_std: Option<&'a format_standardization::FormatStdState>,
     pub intake_confirmation: Option<&'a super::startup::IntakeConfirmationState>,
     pub corrupt_file_preview: Option<&'a corrupt_file_flow::CorruptFilePreviewState>,
     pub shit_format_preview: Option<&'a shit_format_flow::ShitFormatPreviewState>,
@@ -89,7 +88,6 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         super::UiMode::TagSearch
             | super::UiMode::CorpusBrowser
             | super::UiMode::Insights
-            | super::UiMode::FormatStandardization
     );
 
     if uses_unified_titlebar {
@@ -172,7 +170,6 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::OobConflictInspection => Some("OOB Tag Conflicts"),
         super::UiMode::MovedFileAcknowledge => Some("Moved Files"),
         super::UiMode::TransactionReview => Some("Transaction Review"),
-        super::UiMode::FormatStandardization => Some("Format Standardization"),
         super::UiMode::CorruptFileResolution => Some("Corrupt File Resolution"),
         super::UiMode::ShitFormatResolution => Some("Shit Format Resolution"),
         super::UiMode::SubparDuplicateResolution => Some("Subpar Duplicate Resolution"),
@@ -290,12 +287,6 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             view_name = "transaction_review";
             if let Some(ref state) = ctx.transaction_review {
                 transaction_review::render(f, area, state, &ctx.transaction_review_decisions);
-            }
-        }
-        super::UiMode::FormatStandardization => {
-            view_name = "format_standardization";
-            if let Some(ref state) = ctx.format_std {
-                format_standardization::render::render(f, area, state);
             }
         }
         super::UiMode::CorruptFileResolution => {
@@ -793,7 +784,6 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::OobConflictInspection => control_presets::empty(), // Modal handles its own hints
         super::UiMode::MovedFileAcknowledge => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TransactionReview => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::FormatStandardization => control_presets::format_standardization(),
         super::UiMode::CorruptFileResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::ShitFormatResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::SubparDuplicateResolution => control_presets::empty(), // Modal handles its own hints

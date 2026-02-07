@@ -48,6 +48,8 @@ pub enum InsightsAction {
     CyclePrev,
     /// Launch flow for selected insight
     LaunchFlow,
+    /// Confirm all safe compound splits and jump to review (Ctrl+A)
+    ConfirmAllSafeCompoundSplits,
 }
 
 /// State for the insights view modal/status
@@ -142,8 +144,8 @@ pub enum InsightType {
     SubparDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
-    CompoundTagValueSafe,   // All split parts exist in corpus
-    CompoundTagValueReview, // Some/all parts are new to corpus
+    CompoundTagValueSafe { tag_name: String },   // All split parts exist in corpus
+    CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
     // Library bucket entries
     LibraryStale,
     LibraryLeftover,
@@ -289,10 +291,10 @@ impl BucketEntry {
     }
 
     /// Create compound tag value safe entry (all parts exist in corpus)
-    fn compound_tag_value_safe(count: usize) -> Self {
+    fn compound_tag_value_safe(tag_name: &str, count: usize) -> Self {
         Self {
-            insight_type: InsightType::CompoundTagValueSafe,
-            label: "Compound splits (safe)".to_string(),
+            insight_type: InsightType::CompoundTagValueSafe { tag_name: tag_name.to_string() },
+            label: format!("{} compound splits (safe)", tag_name),
             count: Some(count),
             color: if count > 0 { Color::Green } else { Color::DarkGray },
             rank: 0,
@@ -301,10 +303,10 @@ impl BucketEntry {
     }
 
     /// Create compound tag value review entry (some parts are new)
-    fn compound_tag_value_review(count: usize) -> Self {
+    fn compound_tag_value_review(tag_name: &str, count: usize) -> Self {
         Self {
-            insight_type: InsightType::CompoundTagValueReview,
-            label: "Compound splits (review)".to_string(),
+            insight_type: InsightType::CompoundTagValueReview { tag_name: tag_name.to_string() },
+            label: format!("{} compound splits (review)", tag_name),
             count: Some(count),
             color: if count > 0 { Color::Yellow } else { Color::DarkGray },
             rank: 0,
@@ -508,12 +510,14 @@ impl CachedBucketEntries {
             entries.push(BucketEntry::tag_canonicity(&entry.tag_name, entry.cluster_count));
         }
 
-        // Add compound tag values - safe first (easy bulk action), then review
-        if bucket.compound_safe_count > 0 {
-            entries.push(BucketEntry::compound_tag_value_safe(bucket.compound_safe_count));
-        }
-        if bucket.compound_review_count > 0 {
-            entries.push(BucketEntry::compound_tag_value_review(bucket.compound_review_count));
+        // Add compound tag values per tag - safe first (easy bulk action), then review
+        for entry in &bucket.compound_tags {
+            if entry.safe_count > 0 {
+                entries.push(BucketEntry::compound_tag_value_safe(&entry.tag_name, entry.safe_count));
+            }
+            if entry.review_count > 0 {
+                entries.push(BucketEntry::compound_tag_value_review(&entry.tag_name, entry.review_count));
+            }
         }
 
         entries
@@ -788,6 +792,19 @@ impl InsightsViewState {
 
     /// Handle key input
     pub fn handle_key(&mut self, key: KeyEvent) -> InsightsAction {
+        // Handle Ctrl+A for safe compound splits
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let KeyCode::Char('a' | 'A') = key.code {
+                // Only trigger for safe compound split insights
+                if let Some(InsightType::CompoundTagValueSafe { .. }) = self.selected_insight_type() {
+                    if !self.is_witch_busy() {
+                        return InsightsAction::ConfirmAllSafeCompoundSplits;
+                    }
+                }
+                return InsightsAction::None;
+            }
+        }
+
         match key.code {
             KeyCode::Esc => InsightsAction::RequestQuit,
 
@@ -862,8 +879,7 @@ mod tests {
                 subpar_duplicate_count: 0,
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
-                compound_safe_count: 0,
-                compound_review_count: 0,
+                compound_tags: vec![],
             },
             bucket_library: LibraryDeployBucket {
                 library_stale: 1,

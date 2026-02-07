@@ -687,10 +687,8 @@ pub struct TagSquashBucket {
     pub tag_canonicity: Vec<TagSquashEntry>,
     /// Inconsistent album_artist issues count
     pub inconsistent_album_artist_count: usize,
-    /// Compound tag values - safe splits (all parts exist in corpus)
-    pub compound_safe_count: usize,
-    /// Compound tag values - needs review (some/all parts are new)
-    pub compound_review_count: usize,
+    /// Compound tag values grouped by tag name (e.g., "artist", "genre")
+    pub compound_tags: Vec<CompoundTagEntry>,
 }
 
 /// Entry for tag squash signals (grouped by tag name)
@@ -702,6 +700,17 @@ pub struct TagSquashEntry {
     pub cluster_count: usize,
     /// Total tracks affected (for ordering - higher = more important)
     pub _total_tracks: usize,
+}
+
+/// Entry for compound tag signals (grouped by tag name)
+#[derive(Debug, Clone)]
+pub struct CompoundTagEntry {
+    /// Tag name (e.g., "artist", "genre")
+    pub tag_name: String,
+    /// Number of safe splits (all parts exist in corpus)
+    pub safe_count: usize,
+    /// Number of splits needing review (some parts are new)
+    pub review_count: usize,
 }
 
 // Aliases for compatibility

@@ -142,6 +142,9 @@ impl TagCanonicalityModalDataV2 {
             }
         }
 
+        // Sort files alphabetically by filename for consistent display
+        files.sort_by(|a, b| a.filename.cmp(&b.filename));
+
         Some(Self {
             tag_name,
             context_label,

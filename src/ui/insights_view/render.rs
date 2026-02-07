@@ -611,18 +611,18 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        InsightType::CompoundTagValueSafe => {
+        InsightType::CompoundTagValueSafe { ref tag_name } => {
             lines.push(Line::from(Span::styled(
-                "Compound Splits (Safe)",
+                format!("{} Compound Splits (Safe)", tag_name),
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "All split parts already exist in",
+                format!("All split parts for {} tags already", tag_name),
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "corpus. Safe to split in bulk.",
+                "exist in corpus. Safe to split in bulk.",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(""));
@@ -630,20 +630,24 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 "Press Enter to bulk split.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Green }),
             )));
+            lines.push(Line::from(Span::styled(
+                "Press Ctrl+A to confirm all and review.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
         }
 
-        InsightType::CompoundTagValueReview => {
+        InsightType::CompoundTagValueReview { ref tag_name } => {
             lines.push(Line::from(Span::styled(
-                "Compound Splits (Review)",
+                format!("{} Compound Splits (Review)", tag_name),
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Some split parts are new to corpus.",
+                format!("Some split parts for {} tags are", tag_name),
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "Review each to verify or edit.",
+                "new to corpus. Review each to verify.",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(""));

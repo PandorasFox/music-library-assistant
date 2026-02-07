@@ -829,9 +829,8 @@ impl Database {
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
 
-        // Count compound_tag_value signals by safety classification
-        // A signal is "safe" if all its compounds have matching_parts.len() == split_parts.len()
-        let (compound_safe_count, compound_review_count) = self.count_compound_signals_by_safety()?;
+        // Group compound_tag signals by tag name with safety classification
+        let compound_tags = self.count_compound_signals_by_tag()?;
 
         // Group tag_canonicity signals by tag name (extracted from issue_key prefix)
         // Key format: "{tag_name}:{normalized_key}" e.g., "artist:dragonforce"
@@ -863,25 +862,27 @@ impl Database {
             subpar_duplicate_count,
             tag_canonicity,
             inconsistent_album_artist_count,
-            compound_safe_count,
-            compound_review_count,
+            compound_tags,
         })
     }
 
-    /// Count compound tag signals by safety classification.
+    /// Count compound tag signals by safety classification, grouped by tag name.
     ///
     /// A compound signal is "safe" if ALL its compounds have all split parts
     /// existing in the corpus (matching_parts.len() == split_parts.len()).
-    /// Returns (safe_count, review_count).
-    fn count_compound_signals_by_safety(&self) -> Result<(usize, usize)> {
+    /// Returns entries grouped by tag name, sorted by total count descending.
+    fn count_compound_signals_by_tag(&self) -> Result<Vec<crate::corpus::db::types::CompoundTagEntry>> {
+        use std::collections::HashMap;
+        use crate::corpus::db::types::CompoundTagEntry;
+
         // Note: Uses 'compound_tag' (per-file signal) not 'compound_tag_value' (aggregate)
         // The per-file CompoundTag signals are emitted by DetectCompoundTagsForInode
         let mut stmt = self.conn.prepare(
             r#"SELECT metadata_json FROM signals WHERE issue_type = 'compound_tag'"#,
         )?;
 
-        let mut safe_count = 0usize;
-        let mut review_count = 0usize;
+        // Map: tag_name -> (safe_count, review_count)
+        let mut by_tag: HashMap<String, (usize, usize)> = HashMap::new();
 
         let rows = stmt.query_map(params![], |row| {
             let metadata: Option<String> = row.get(0)?;
@@ -891,24 +892,24 @@ impl Database {
         for row in rows {
             let metadata = match row? {
                 Some(m) => m,
-                None => {
-                    review_count += 1; // No metadata = needs review
-                    continue;
-                }
+                None => continue, // Skip signals without metadata
             };
 
             let json: serde_json::Value = match serde_json::from_str(&metadata) {
                 Ok(v) => v,
-                Err(_) => {
-                    review_count += 1; // Bad JSON = needs review
-                    continue;
-                }
+                Err(_) => continue, // Skip malformed JSON
             };
 
-            // Check each compound in the signal
+            // Process each compound in the signal
             let compounds = json.get("compounds").and_then(|v| v.as_array());
-            let is_safe = match compounds {
-                Some(arr) => arr.iter().all(|compound| {
+            if let Some(arr) = compounds {
+                for compound in arr {
+                    let tag_name = compound
+                        .get("tag_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
                     let split_len = compound
                         .get("split_parts")
                         .and_then(|v| v.as_array())
@@ -919,19 +920,36 @@ impl Database {
                         .and_then(|v| v.as_array())
                         .map(|a| a.len())
                         .unwrap_or(0);
-                    split_len > 0 && split_len == match_len
-                }),
-                None => false,
-            };
 
-            if is_safe {
-                safe_count += 1;
-            } else {
-                review_count += 1;
+                    let is_safe = split_len > 0 && split_len == match_len;
+
+                    let entry = by_tag.entry(tag_name).or_insert((0, 0));
+                    if is_safe {
+                        entry.0 += 1;
+                    } else {
+                        entry.1 += 1;
+                    }
+                }
             }
         }
 
-        Ok((safe_count, review_count))
+        // Convert to vec and sort by total count descending
+        let mut entries: Vec<CompoundTagEntry> = by_tag
+            .into_iter()
+            .map(|(tag_name, (safe_count, review_count))| CompoundTagEntry {
+                tag_name,
+                safe_count,
+                review_count,
+            })
+            .collect();
+
+        entries.sort_by(|a, b| {
+            let total_a = a.safe_count + a.review_count;
+            let total_b = b.safe_count + b.review_count;
+            total_b.cmp(&total_a)
+        });
+
+        Ok(entries)
     }
 
     fn compute_other_signals_bucket(&self) -> Result<crate::corpus::db::types::OtherSignalsBucket> {

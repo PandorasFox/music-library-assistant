@@ -112,6 +112,10 @@ impl App {
                     }
                 }
             }
+            insights_view::InsightsAction::ConfirmAllSafeCompoundSplits => {
+                // Ctrl+A from insights: start safe compound flow, stage all, show review
+                self.confirm_all_safe_compound_splits_from_insights();
+            }
         }
     }
 
@@ -1963,6 +1967,44 @@ impl App {
         }
 
         self.status_message = Some(format!("Staged {} compound tag splits", staged_count));
+    }
+
+    /// Confirm all safe compound splits directly from insights (Ctrl+A shortcut).
+    ///
+    /// This is a one-shot flow: loads safe compound signals, stages all splits,
+    /// and immediately shows the transaction review screen.
+    fn confirm_all_safe_compound_splits_from_insights(&mut self) {
+        let read_db = match self.witch.as_mut() {
+            Some(w) => w.read_db(),
+            None => {
+                self.status_message = Some("Database not available".to_string());
+                return;
+            }
+        };
+
+        // Load safe compound signals only
+        let signals = read_db.get_compound_signals_by_safety(true).unwrap_or_default();
+
+        if signals.is_empty() {
+            self.status_message = Some("No safe compound splits available".to_string());
+            return;
+        }
+
+        // Store signal IDs for cluster tracking
+        let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
+        self.compound_split_clusters = Some(compound_split_v2::CompoundSplitClustersV2::new(signal_ids));
+        self.compound_split_safe_mode = true;
+
+        // Start transaction
+        if let Some(ref mut witch) = self.witch {
+            let _ = witch.start_transaction("Compound tag split (safe bulk)");
+        }
+
+        // Stage all splits at once
+        self.stage_all_compound_splits();
+
+        // Go directly to review screen
+        self.show_transaction_review_for_compound_split();
     }
 
     /// Navigate to next/prev compound split signal without staging.

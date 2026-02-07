@@ -247,6 +247,53 @@ impl TagCanonicalityStateV2 {
         }
     }
 
+    /// Restore UI state from a previously staged decision's mutations.
+    ///
+    /// When navigating back to a cluster that already has a staged decision,
+    /// this method extracts the canonical value and selected variants from
+    /// the stored mutations and applies them to the modal state.
+    pub fn restore_from_mutations(&mut self, mutations: &[Mutation]) {
+        // Find ApplyTagOps mutation and extract tag operations
+        let ops: Vec<&TagOp> = mutations
+            .iter()
+            .filter_map(|m| match m {
+                Mutation::ApplyTagOps { ops } => Some(ops.iter()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        if ops.is_empty() {
+            return;
+        }
+
+        // Extract the canonical value (new_value from any op that has one)
+        let canonical_value = ops
+            .iter()
+            .find_map(|op| op.new_value.as_ref())
+            .cloned()
+            .unwrap_or_default();
+
+        // Extract the variants that were selected (old_values from the ops)
+        let selected_old_values: HashSet<String> = ops
+            .iter()
+            .filter_map(|op| op.old_value.as_ref().cloned())
+            .collect();
+
+        // Map old_values back to variant indices
+        let mut selected_variants: HashSet<usize> = HashSet::new();
+        for (idx, variant) in self.data.variants.iter().enumerate() {
+            if selected_old_values.contains(&variant.value) {
+                selected_variants.insert(idx);
+            }
+        }
+
+        // Apply restored state
+        self.canonical_input.set_value(canonical_value);
+        self.selected_variants = selected_variants;
+        self.pre_filled = true; // Already has a confirmed value
+    }
+
     /// Toggle selection of the variant at cursor (only works if variant_cursor >= 0).
     pub fn toggle_selection(&mut self) {
         if self.variant_cursor >= 0 {

@@ -2173,13 +2173,22 @@ impl App {
             return false;
         };
 
+        let group_index = clusters.current_index();
+
         // Create modal state
-        let state = compound_split_v2::CompoundSplitStateV2::new(
+        let mut state = compound_split_v2::CompoundSplitStateV2::new(
             data,
             self.compound_split_safe_mode,
-            clusters.current_index(),
+            group_index,
             clusters.total(),
         );
+
+        // Back-fill UI state from staged decision if one exists for this cluster
+        if let Some(ref witch) = self.witch {
+            if let Some(decision) = witch.get_decision(group_index) {
+                state.restore_from_mutations(&decision.mutations);
+            }
+        }
 
         self.compound_split_state = Some(state);
         true
@@ -2437,7 +2446,15 @@ impl App {
             .map(|c| (c.current_index, c.signal_ids.len()))
             .unwrap_or((0, 1));
 
-        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
+        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
+
+        // Back-fill UI state from staged decision if one exists for this cluster
+        if let Some(ref witch) = self.witch {
+            if let Some(decision) = witch.get_decision(group_index) {
+                state.restore_from_mutations(&decision.mutations);
+            }
+        }
+
         self.tag_canonicity_state = Some(state);
         true
     }

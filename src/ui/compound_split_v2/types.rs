@@ -265,6 +265,76 @@ impl CompoundSplitStateV2 {
         }
     }
 
+    /// Check if the staged decision was a canonicalize action (EmitCanonicalTag).
+    ///
+    /// Returns true if the mutations indicate the user chose to mark this value
+    /// as canonical rather than split it.
+    pub fn is_canonicalize_decision(mutations: &[Mutation]) -> bool {
+        mutations.iter().any(|m| matches!(m, Mutation::EmitCanonicalTag { .. }))
+    }
+
+    /// Restore UI state from a previously staged decision's mutations.
+    ///
+    /// When navigating back to a cluster that already has a staged decision,
+    /// this method extracts the edited parts and selected files from the
+    /// stored mutations and applies them to the modal state.
+    ///
+    /// Note: For canonicalize decisions (EmitCanonicalTag), callers should
+    /// use `is_canonicalize_decision()` first and handle separately if needed.
+    pub fn restore_from_mutations(&mut self, mutations: &[Mutation]) {
+        // Find ApplyTagOps mutation and extract tag operations
+        let ops: Vec<&TagOp> = mutations
+            .iter()
+            .filter_map(|m| match m {
+                Mutation::ApplyTagOps { ops } => Some(ops.iter()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        if ops.is_empty() {
+            return;
+        }
+
+        // Extract edited_parts from the ops:
+        // - First op with new_value is the replacement for the compound value
+        // - Subsequent add_tag ops (old_value=None) are the additional parts
+        let mut parts: Vec<String> = Vec::new();
+
+        // First: find the replace operation (has old_value matching compound value)
+        if let Some(replace_op) = ops.iter().find(|op| {
+            op.old_value.as_ref() == Some(&self.data.compound.compound_value)
+        }) {
+            if let Some(ref new_val) = replace_op.new_value {
+                parts.push(new_val.clone());
+            }
+        }
+
+        // Then: find all add operations (old_value=None) for this tag
+        for op in &ops {
+            if op.old_value.is_none() && op.new_value.is_some() {
+                if let Some(ref new_val) = op.new_value {
+                    parts.push(new_val.clone());
+                }
+            }
+        }
+
+        // Find which files were selected (inodes present in ops)
+        let inodes_in_ops: HashSet<i64> = ops.iter().map(|op| op.inode).collect();
+        let mut selected_files: HashSet<usize> = HashSet::new();
+        for (idx, file) in self.data.files.iter().enumerate() {
+            if inodes_in_ops.contains(&file.inode) {
+                selected_files.insert(idx);
+            }
+        }
+
+        // Apply restored state
+        if !parts.is_empty() {
+            self.edited_parts = parts;
+        }
+        self.selected_files = selected_files;
+    }
+
     /// Move part cursor up.
     pub fn part_cursor_up(&mut self) {
         if self.part_cursor > 0 {

@@ -492,7 +492,7 @@ pub fn execute_verify_tags(
     };
     let rel_str = rel_path.to_string_lossy().to_string();
 
-    match indexing::execute_verify_tags(read_only_db, inode, path, &sender, witness) {
+    match indexing::execute_verify_tags(read_only_db, inode, path) {
         Ok(verify_result) => {
             // Full classification based on TagVerifyResult
             if verify_result.is_clean() {
@@ -562,14 +562,18 @@ pub fn execute_verify_tags(
                     "[COMPUTE] VerifyTags: tag conflict for inode {} ({})",
                     inode, path.display()
                 ));
-                ensure_file_signal_if_missing(
+                // Serialize mismatches as JSON for the resolution UI
+                let metadata_json = serde_json::json!({
+                    "mismatches": verify_result.mismatches
+                }).to_string();
+                // Clear all OOB signals first (including target type to refresh metadata)
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagConflict.into(),
                     &rel_str,
                     witness,
                 );
-                // Clear mutually exclusive signals
                 drop_stale_file_signal(
                     read_only_db,
                     &sender,
@@ -582,6 +586,13 @@ pub fn execute_verify_tags(
                     &sender,
                     CorpusFileSignalType::MtimeOnlyMismatch.into(),
                     &rel_str,
+                    witness,
+                );
+                // Create fresh signal with current mismatch metadata
+                sender.ensure_file_signal_with_metadata(
+                    CorpusFileSignalType::OutOfBandTagConflict.into(),
+                    &rel_str,
+                    Some(&metadata_json),
                     witness,
                 );
             } else {
@@ -590,14 +601,18 @@ pub fn execute_verify_tags(
                     "[COMPUTE] VerifyTags: syncable tag diff for inode {} ({})",
                     inode, path.display()
                 ));
-                ensure_file_signal_if_missing(
+                // Serialize mismatches as JSON for the resolution UI
+                let metadata_json = serde_json::json!({
+                    "mismatches": verify_result.mismatches
+                }).to_string();
+                // Clear all OOB signals first (including target type to refresh metadata)
+                drop_stale_file_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagSync.into(),
                     &rel_str,
                     witness,
                 );
-                // Clear mutually exclusive signals
                 drop_stale_file_signal(
                     read_only_db,
                     &sender,
@@ -610,6 +625,13 @@ pub fn execute_verify_tags(
                     &sender,
                     CorpusFileSignalType::MtimeOnlyMismatch.into(),
                     &rel_str,
+                    witness,
+                );
+                // Create fresh signal with current mismatch metadata
+                sender.ensure_file_signal_with_metadata(
+                    CorpusFileSignalType::OutOfBandTagSync.into(),
+                    &rel_str,
+                    Some(&metadata_json),
                     witness,
                 );
             }

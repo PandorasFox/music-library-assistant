@@ -276,6 +276,16 @@ pub fn execute_drop_from_index(
     Ok(())
 }
 
+/// A single tag mismatch between DB and disk.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TagMismatch {
+    pub field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub db_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_value: Option<String>,
+}
+
 /// Result of tag verification — indicates which types of mismatches were found.
 ///
 /// Used by computations to classify OOB signals without querying persisted state
@@ -287,11 +297,13 @@ pub struct TagVerifyResult {
     pub has_extra_disk: bool,
     /// At least one tag present in DB but absent on disk.
     pub has_extra_db: bool,
+    /// All detected mismatches with their values.
+    pub mismatches: Vec<TagMismatch>,
 }
 
 impl TagVerifyResult {
     fn empty() -> Self {
-        Self { has_conflict: false, has_extra_disk: false, has_extra_db: false }
+        Self { has_conflict: false, has_extra_disk: false, has_extra_db: false, mismatches: Vec::new() }
     }
 
     /// True if no mismatches at all.
@@ -305,21 +317,17 @@ impl TagVerifyResult {
     }
 }
 
-/// Execute tag verification - compare in-file tags with database, record mismatches.
+/// Execute tag verification - compare in-file tags with database.
 ///
-/// This is a read-mostly operation that emits OOB signals for detected mismatches.
-/// Writes are routed through the db_thread's write connection via the sender.
-///
-/// Returns a `TagVerifyResult` summarizing the mismatch directions found.
-/// Computations use this for in-memory classification (async db_thread writes may lag).
+/// Returns a `TagVerifyResult` with classification flags and the actual mismatches.
+/// Computations use this for in-memory classification, then emit signals with
+/// the mismatch details serialized as metadata.
 ///
 /// Note: This function is public because it's called from corpus::computations.
 pub fn execute_verify_tags(
     db: &crate::corpus::db::ReadOnlyDb<'_>,
     inode: i64,
     path: &Path,
-    sender: &crate::db_thread::SignalWriteSender,
-    witness: &crate::corpus::computations::ComputationWitness,
 ) -> Result<TagVerifyResult> {
     use crate::corpus::tags::TagSet;
     use std::collections::HashSet;
@@ -410,17 +418,12 @@ pub fn execute_verify_tags(
                 Some(disk_values.join("; "))
             };
 
-            // Record mismatch via db_thread
-            sender.record_tag_mismatch(
-                inode,
-                &tag_name,
-                db_display.as_deref(),
-                disk_display.as_deref(),
-                witness,
-            );
-        } else {
-            // Clear any existing mismatch for this field (now in sync)
-            sender.clear_tag_mismatch(inode, &tag_name, witness);
+            // Collect mismatch for signal metadata
+            result.mismatches.push(TagMismatch {
+                field: tag_name.clone(),
+                db_value: db_display,
+                disk_value: disk_display,
+            });
         }
     }
 

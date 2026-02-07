@@ -11,14 +11,14 @@
 //! +------------------------------------------------------------------+
 //! | Set "artist" variants (2/5) - Album: Clockwork Hearts            |
 //! +------------------------------------------------------------------+
+//! | Squash to: [The Correct Artist____________]                      |
+//! +------------------------------------------------------------------+
 //! | VALUES          | TRACKS (7)       | TAG VALUES                  |
 //! |-----------------|------------------|----------------------------|
 //! | [x] Variant A   | > 01 - Song.flac | artist: Variant A          |
 //! | [x] Variant B   |   02 - Song.flac | album_artist: Various      |
 //! | [ ] Variant C   |   03 - Song.flac | genre: Electronic          |
 //! +-----------------+------------------+----------------------------+
-//! | Squash to: [The Correct Artist____________]                      |
-//! +------------------------------------------------------------------+
 //! | ^/v navigate | Space toggle | F fill | Tab next | ^R review      |
 //! +------------------------------------------------------------------+
 //! ```
@@ -26,7 +26,7 @@
 //! ## Key Behaviors
 //!
 //! - Left/Right: Switch focus between variants pane and files pane
-//! - Up/Down: Navigate within focused pane; from variants pane, navigate into text field
+//! - Up/Down: Navigate within focused pane; Up from first variant goes to text field (at top)
 //! - Space: Toggle selection (variants pane only, when cursor >= 0)
 //! - F: Fill text input from hovered variant value
 //! - Enter: Confirm current squash, stage decision, and advance to next group
@@ -102,19 +102,19 @@ impl TagCanonicalityStateV2 {
                 TagCanonicalityActionV2::None
             }
 
-            // Text input handling (when cursor is on text field, variant_cursor == -1)
-            _ if self.focus_pane == FocusPaneV2::Variants && self.variant_cursor == -1 => {
-                self.canonical_input.handle_key(key);
-                TagCanonicalityActionV2::None
-            }
-
-            // Enter: confirm
+            // Enter: confirm (check BEFORE text input handling to avoid swallowing Enter)
             KeyCode::Enter => {
                 if self.can_submit() {
                     TagCanonicalityActionV2::Confirmed
                 } else {
                     TagCanonicalityActionV2::None
                 }
+            }
+
+            // Text input handling (when cursor is on text field, variant_cursor == -1)
+            _ if self.focus_pane == FocusPaneV2::Variants && self.variant_cursor == -1 => {
+                self.canonical_input.handle_key(key);
+                TagCanonicalityActionV2::None
             }
 
             // Tab/Shift-Tab: navigate clusters

@@ -23,18 +23,19 @@ pub fn render(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
     // Clear background
     f.render_widget(Clear, area);
 
-    // Layout: title (3) + content (min) + input (3) + controls (2)
+    // Layout: title (3) + input (3) + content (min) + controls (2)
+    // Input at top so up/down navigation matches visual layout (cursor -1 = top)
     let chunks = Layout::vertical([
         Constraint::Length(3), // Title bar
+        Constraint::Length(3), // Text input (at top)
         Constraint::Min(8),    // Three-pane content
-        Constraint::Length(3), // Text input
         Constraint::Length(2), // Controls
     ])
     .split(area);
 
     render_title(f, chunks[0], state);
-    render_three_panes(f, chunks[1], state);
-    render_input(f, chunks[2], state);
+    render_input(f, chunks[1], state);
+    render_three_panes(f, chunks[2], state);
     render_controls(f, chunks[3]);
 }
 
@@ -281,10 +282,12 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
 fn render_input(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
     let is_focused =
         state.focus_pane == FocusPaneV2::Variants && state.variant_cursor == -1;
+    // Magenta when unfocused = editable but not currently focused
+    // Cyan when focused = active input
     let input_style = if is_focused {
         Style::default().fg(Color::Cyan)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Magenta)
     };
 
     let label = if state.pre_filled {

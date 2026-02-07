@@ -39,20 +39,56 @@ impl MigrationRegistry {
             migrations: Vec::new(),
         };
 
-        // Schema v1: inode-based files/audio_info/corpus_tags
-        // This is the baseline - no migrations needed yet.
-        //
-        // PLACEHOLDER: The migration system is intentionally unused during alpha/beta.
-        // We're keeping the scaffolding in place for the public release, at which point
-        // schema stability matters. Until then, breaking schema changes just nuke the DB.
-        // This dummy registration ensures the `register` method isn't dead code.
-        //
-        // Remove this placeholder and add real migrations when preparing for public release.
+        // v1→v2: Add tags_version column to audio_info and create dirty_inodes table
         registry.register(Migration {
-            from_version: 0,
-            to_version: 0,
-            description: "Placeholder - migration system scaffolding (remove at public release)",
-            apply: |_db| Ok(()),
+            from_version: 1,
+            to_version: 2,
+            description: "Add tags_version column and dirty_inodes table for incremental computation",
+            apply: |db| {
+                db.conn().execute_batch(
+                    r#"
+                    -- Add tags_version column for tracking tag changes
+                    ALTER TABLE audio_info ADD COLUMN tags_version INTEGER NOT NULL DEFAULT 0;
+
+                    -- Create dirty_inodes table for incremental computation tracking
+                    CREATE TABLE IF NOT EXISTS dirty_inodes (
+                        inode INTEGER NOT NULL,
+                        computation_type TEXT NOT NULL,
+                        dirtied_at INTEGER NOT NULL,
+                        PRIMARY KEY (inode, computation_type)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_dirty_inodes_type ON dirty_inodes(computation_type);
+                    "#
+                )?;
+                Ok(())
+            },
+        });
+
+        // v2→v3: Bootstrap all existing inodes as dirty for compound_tag
+        //
+        // EPHEMERAL DEV MIGRATION: Remove this at public release and flatten into base schema.
+        // This ensures existing databases get their inodes marked dirty so compound tag
+        // detection runs at least once after the incremental system is deployed.
+        registry.register(Migration {
+            from_version: 2,
+            to_version: 3,
+            description: "Bootstrap existing inodes as dirty for compound_tag detection",
+            apply: |db| {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+
+                db.conn().execute(
+                    r#"
+                    INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at)
+                    SELECT inode, 'compound_tag', ?1 FROM audio_info
+                    "#,
+                    rusqlite::params![now],
+                )?;
+                Ok(())
+            },
         });
 
         registry
@@ -125,9 +161,11 @@ mod tests {
     fn test_migration_registry_baseline() {
         let registry = MigrationRegistry::new();
 
-        // Placeholder migration is v0->v0, so latest_version is 0
-        // (real migrations will change this)
-        assert_eq!(registry.latest_version(), 0);
-        assert!(registry.pending_migrations(1).is_empty());
+        // v1→v2 (tags_version + dirty_inodes) and v2→v3 (bootstrap dirty)
+        assert_eq!(registry.latest_version(), 3);
+        // From v1, there should be 2 pending migrations
+        assert_eq!(registry.pending_migrations(1).len(), 2);
+        // From v3, no pending migrations
+        assert!(registry.pending_migrations(3).is_empty());
     }
 }

@@ -569,48 +569,47 @@ pub fn execute_detect_tag_canonicalizations(
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
+/// Computation type identifier for dirty inode tracking.
+const COMPOUND_TAG_COMPUTATION: &str = "compound_tag";
+
 /// Execute DetectCompoundTagValues - orchestrator for compound tag detection.
 ///
-/// Spawns DetectCompoundTagsForInode for each corpus inode, parallelizing
-/// the expensive regex work across the Witch's worker threads.
+/// Uses incremental dirty-inode tracking: only spawns DetectCompoundTagsForInode
+/// for inodes that have been marked dirty (tags changed since last computation).
+/// On first run after migration, all inodes are marked dirty for bootstrap.
 pub fn execute_detect_compound_tag_values(
     read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    _witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = Computation::DetectCompoundTagValues;
 
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
-
-    // Clear stale CompoundTag signals before spawning per-inode computations
-    // Use the per-file signal type (compound_tag), not the legacy aggregate type
-    sender.clear_signals_by_type(SignalType::CompoundTagValue, witness);
-
-    // Get all corpus inodes to spawn per-inode computations
-    let corpus_inodes = match read_only_db.get_all_corpus_inodes() {
+    // Query dirty inodes instead of all corpus inodes
+    let dirty_inodes = match read_only_db.get_dirty_inodes(COMPOUND_TAG_COMPUTATION) {
         Ok(inodes) => inodes,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to get corpus inodes: {}", e),
+                format!("Failed to get dirty inodes: {}", e),
             );
         }
     };
 
-    // Spawn per-inode computations for parallel processing
-    let spawn: Vec<Computation> = corpus_inodes
-        .keys()
-        .map(|&inode| Computation::DetectCompoundTagsForInode { inode })
+    // Skip if no dirty inodes
+    if dirty_inodes.is_empty() {
+        log_general("[COMPUTE] DetectCompoundTagValues: no dirty inodes, skipping");
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+    }
+
+    // Note: We do NOT clear existing signals here. Each per-inode computation will
+    // emit or clear its own signal as appropriate. Signals for unchanged inodes
+    // (not in dirty list) are preserved.
+
+    // Spawn per-inode computations only for dirty inodes
+    let spawn: Vec<Computation> = dirty_inodes
+        .into_iter()
+        .map(|inode| Computation::DetectCompoundTagsForInode { inode })
         .collect();
 
     log_general(format!(
@@ -624,7 +623,8 @@ pub fn execute_detect_compound_tag_values(
 /// Execute DetectCompoundTagsForInode - detect compound tags for a single inode.
 ///
 /// Checks all tags for separator patterns and featuring patterns, emitting
-/// a per-file CompoundTag signal if any compound values are found.
+/// a per-file CompoundTag signal if any compound values are found. Clears the
+/// dirty flag after processing regardless of outcome.
 pub fn execute_detect_compound_tags_for_inode(
     read_only_db: &ReadOnlyDb<'_>,
     inode: i64,
@@ -651,7 +651,8 @@ pub fn execute_detect_compound_tags_for_inode(
     let corpus_path = match read_only_db.get_corpus_path_for_inode(inode) {
         Ok(Some(path)) => path,
         Ok(None) => {
-            // File no longer in corpus - skip silently
+            // File no longer in corpus - clear dirty and skip silently
+            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
             return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
         }
         Err(e) => {
@@ -666,6 +667,9 @@ pub fn execute_detect_compound_tags_for_inode(
     // Get tags for this inode
     let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
     if tags.is_empty() {
+        // No tags - clear any existing signal and dirty flag
+        sender.clear_file_signal(CorpusFileSignalType::CompoundTag.into(), &corpus_path, witness);
+        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
@@ -673,6 +677,7 @@ pub fn execute_detect_compound_tags_for_inode(
     let config = match crate::config::load_config() {
         Ok(c) => c,
         Err(_) => {
+            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
             return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
         }
     };
@@ -741,8 +746,10 @@ pub fn execute_detect_compound_tags_for_inode(
         }
     }
 
-    // If no compounds found, no signal needed
+    // If no compounds found, clear any existing signal
     if compounds.is_empty() {
+        sender.clear_file_signal(CorpusFileSignalType::CompoundTag.into(), &corpus_path, witness);
+        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
@@ -799,6 +806,9 @@ pub fn execute_detect_compound_tags_for_inode(
         Some(&metadata.to_string()),
         witness,
     );
+
+    // Clear dirty flag after successful processing
+    sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

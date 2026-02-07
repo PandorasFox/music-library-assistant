@@ -207,7 +207,8 @@ impl Database {
                 bitrate_kbps INTEGER,
                 sample_rate INTEGER,
                 fingerprint BLOB,
-                needs_tag_flush INTEGER NOT NULL DEFAULT 0
+                needs_tag_flush INTEGER NOT NULL DEFAULT 0,
+                tags_version INTEGER NOT NULL DEFAULT 0  -- monotonic counter for tag changes
             );
 
             CREATE INDEX IF NOT EXISTS idx_audio_info_fingerprint ON audio_info(fingerprint);
@@ -287,6 +288,21 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(issue_type);
             CREATE INDEX IF NOT EXISTS idx_signals_discovered ON signals(discovered_at);
+
+            -- =================================================================
+            -- Dirty Inodes (incremental computation tracking)
+            -- =================================================================
+            -- Tracks inodes that need recomputation for specific computation types.
+            -- When tags change, inodes are marked dirty here. Computations query
+            -- only dirty inodes instead of rescanning the entire corpus.
+            CREATE TABLE IF NOT EXISTS dirty_inodes (
+                inode INTEGER NOT NULL,
+                computation_type TEXT NOT NULL,     -- 'compound_tag', etc.
+                dirtied_at INTEGER NOT NULL,        -- unix timestamp
+                PRIMARY KEY (inode, computation_type)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dirty_inodes_type ON dirty_inodes(computation_type);
 
             -- =================================================================
             -- Application Metadata (version tracking)
@@ -685,5 +701,17 @@ impl<'a> ReadOnlyDb<'a> {
     /// Check if a CanonicalTag signal exists for this tag_name:tag_value.
     pub fn is_canonical_tag(&self, tag_name: &str, tag_value: &str) -> Result<bool> {
         self.db.is_canonical_tag(tag_name, tag_value)
+    }
+
+    // =========================================================================
+    // Dirty Inode Queries (for incremental computations)
+    // =========================================================================
+
+    /// Get all inodes marked dirty for a specific computation type.
+    ///
+    /// Used by per-inode computations (e.g., compound tag detection) to query
+    /// only the inodes that need reprocessing instead of the entire corpus.
+    pub fn get_dirty_inodes(&self, computation_type: &str) -> Result<Vec<i64>> {
+        self.db.get_dirty_inodes(computation_type)
     }
 }

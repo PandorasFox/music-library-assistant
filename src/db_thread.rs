@@ -367,6 +367,16 @@ enum SignalWriteOp {
     },
 
     // =========================================================================
+    // Dirty Inode Operations (for incremental computations)
+    // =========================================================================
+
+    /// Clear dirty flag for an inode after successful computation.
+    ClearDirtyInode {
+        inode: i64,
+        computation_type: String,
+    },
+
+    // =========================================================================
     // Shutdown
     // =========================================================================
 
@@ -937,6 +947,27 @@ impl SignalWriteSender {
             value,
         });
     }
+
+    // =========================================================================
+    // Dirty Inode Operations (for incremental computations)
+    // =========================================================================
+
+    /// Clear dirty flag for an inode after successful computation.
+    ///
+    /// Called by per-inode computations after successfully processing an inode.
+    /// This prevents the inode from being reprocessed in the next cycle.
+    pub fn clear_dirty_inode(
+        &self,
+        inode: i64,
+        computation_type: &str,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearDirtyInode {
+            inode,
+            computation_type: computation_type.to_string(),
+        });
+    }
 }
 
 // IndexWriteSender has been removed - all operations now go through SignalWriteSender.
@@ -1357,6 +1388,12 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
+        SignalWriteOp::ClearDirtyInode { inode, computation_type } => {
+            with_retry("clear_dirty_inode", computation_type, || {
+                execute_clear_dirty_inode(db, *inode, computation_type)
+            });
+        }
+
         // Shutdown is handled in the run_db_thread loop, never reaches here
         SignalWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }
@@ -1365,6 +1402,61 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
 // ============================================================================
 // Index Operation Helpers (internal to db_thread)
 // ============================================================================
+
+/// Computation types that use per-inode spawning and need dirty tracking.
+/// Other computations use bulk SQL queries and don't need this optimization.
+const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag"];
+
+/// Mark an inode as dirty for all per-inode computations.
+/// Called whenever tags change for a corpus file.
+fn mark_inode_dirty(conn: &rusqlite::Connection, inode: i64) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    for computation_type in PER_INODE_COMPUTATIONS {
+        conn.execute(
+            "INSERT OR REPLACE INTO dirty_inodes (inode, computation_type, dirtied_at) VALUES (?1, ?2, ?3)",
+            params![inode, *computation_type, now],
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Increment the tags_version counter for an inode.
+/// Called whenever tags are modified (not on initial indexing).
+fn increment_tags_version(conn: &rusqlite::Connection, inode: i64) -> anyhow::Result<()> {
+    use rusqlite::params;
+    conn.execute(
+        "UPDATE audio_info SET tags_version = tags_version + 1 WHERE inode = ?1",
+        params![inode],
+    )?;
+    Ok(())
+}
+
+/// Write tag edit history entries for changed tags.
+fn write_tag_edit_history(
+    conn: &rusqlite::Connection,
+    inode: i64,
+    changes: &[(String, Option<String>, Option<String>)], // (field_name, old_value, new_value)
+    session_id: &str,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    for (field_name, old_value, new_value) in changes {
+        conn.execute(
+            "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![inode, field_name, old_value, new_value, session_id],
+        )?;
+    }
+
+    Ok(())
+}
 
 /// Convert fingerprint Vec<u32> to BLOB bytes (little-endian).
 fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
@@ -1574,6 +1666,11 @@ fn execute_index_audio_file(
         )?;
     }
 
+    // 6. Mark inode dirty for tag-dependent computations (only for corpus files)
+    if file_data.source == "corpus" {
+        mark_inode_dirty(&tx, file_data.inode)?;
+    }
+
     tx.commit()?;
     Ok(())
 }
@@ -1680,10 +1777,88 @@ fn execute_update_track_inode(db: &Database, path: &str, new_inode: i64) -> anyh
 ///
 /// Used by AssimilateDiskTagsToDb when accepting disk changes.
 fn execute_set_index_track_tags(db: &Database, path: &str, tags: &[(String, String)]) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::collections::HashSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     let inode = get_inode_by_path(db, path)?
         .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
-    replace_tags_atomic(db.conn(), inode, tags, "corpus_tags")
+    let tx = db.conn().unchecked_transaction()?;
+
+    // Query existing tags for diff and history
+    let mut stmt = tx.prepare("SELECT tag_name, tag_value FROM corpus_tags WHERE inode = ?1")?;
+    let existing: HashSet<(String, String)> = stmt
+        .query_map(params![inode], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
+    // Build desired set (deduplicated, normalized)
+    let desired: HashSet<(String, String)> = tags
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_lowercase(), v.clone()))
+        .collect();
+
+    // Compute diff
+    let to_remove: Vec<_> = existing.difference(&desired).collect();
+    let to_add: Vec<_> = desired.difference(&existing).collect();
+
+    // Only proceed if there are actual changes
+    let has_changes = !to_remove.is_empty() || !to_add.is_empty();
+
+    if has_changes {
+        // DELETE only what needs removing
+        for (name, value) in &to_remove {
+            tx.execute(
+                "DELETE FROM corpus_tags WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
+                params![inode, name, value],
+            )?;
+        }
+
+        // INSERT only what's new
+        for (name, value) in &to_add {
+            tx.execute(
+                "INSERT INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                params![inode, name, value],
+            )?;
+        }
+
+        // Increment tags_version
+        tx.execute(
+            "UPDATE audio_info SET tags_version = tags_version + 1 WHERE inode = ?1",
+            params![inode],
+        )?;
+
+        // Write tag edit history
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let session_id = format!("set_tags:{}", now);
+
+        for (name, value) in &to_remove {
+            tx.execute(
+                "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, ?3, NULL, ?4)",
+                params![inode, name, value, &session_id],
+            )?;
+        }
+        for (name, value) in &to_add {
+            tx.execute(
+                "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, NULL, ?3, ?4)",
+                params![inode, name, value, &session_id],
+            )?;
+        }
+
+        // Mark inode dirty for tag-dependent computations
+        mark_inode_dirty(&tx, inode)?;
+    }
+
+    tx.commit()?;
+    Ok(())
 }
 
 /// Execute ApplyIndexTagOps: apply incremental tag operations directly.
@@ -1700,17 +1875,27 @@ fn execute_apply_index_tag_ops(
     ops: &[crate::corpus::mutations::TagOp],
 ) -> anyhow::Result<()> {
     use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     let inode = get_inode_by_path(db, path)?
         .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
+    // Filter to non-nop operations
+    let effective_ops: Vec<_> = ops.iter().filter(|op| !op.is_nop()).collect();
+    if effective_ops.is_empty() {
+        return Ok(());
+    }
+
     let tx = db.conn().unchecked_transaction()?;
 
-    for op in ops {
-        if op.is_nop() {
-            continue;
-        }
+    // Generate session ID for history
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let session_id = format!("apply_ops:{}", now);
 
+    for op in &effective_ops {
         let tag_name = op.tag_name.to_lowercase();
 
         match (&op.old_value, &op.new_value) {
@@ -1736,10 +1921,25 @@ fn execute_apply_index_tag_ops(
                 )?;
             }
             (None, None) => {
-                // No-op - should not reach here due to is_nop() check
+                // No-op - should not reach here due to filter
             }
         }
+
+        // Write history entry for this operation
+        tx.execute(
+            "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![inode, &tag_name, &op.old_value, &op.new_value, &session_id],
+        )?;
     }
+
+    // Increment tags_version
+    tx.execute(
+        "UPDATE audio_info SET tags_version = tags_version + 1 WHERE inode = ?1",
+        params![inode],
+    )?;
+
+    // Mark inode dirty for tag-dependent computations
+    mark_inode_dirty(&tx, inode)?;
 
     tx.commit()?;
     Ok(())
@@ -1937,6 +2137,18 @@ fn execute_set_needs_disk_flush(db: &Database, path: &str, value: bool) -> anyho
             inode
         ));
     }
+
+    Ok(())
+}
+
+/// Execute ClearDirtyInode: remove dirty flag after successful computation.
+fn execute_clear_dirty_inode(db: &Database, inode: i64, computation_type: &str) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        "DELETE FROM dirty_inodes WHERE inode = ?1 AND computation_type = ?2",
+        params![inode, computation_type],
+    )?;
 
     Ok(())
 }

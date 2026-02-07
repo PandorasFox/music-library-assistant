@@ -738,4 +738,27 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // ========================================================================
+    // Dirty Inode Queries (for incremental computations)
+    // ========================================================================
+
+    /// Get all inodes marked dirty for a specific computation type.
+    ///
+    /// Used by per-inode computations (e.g., compound tag detection) to query
+    /// only the inodes that need reprocessing instead of the entire corpus.
+    pub fn get_dirty_inodes(&self, computation_type: &str) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode FROM dirty_inodes WHERE computation_type = ?1"
+        )?;
+
+        let rows = stmt.query_map(params![computation_type], |row| row.get(0))?;
+
+        let mut inodes = Vec::new();
+        for row in rows {
+            inodes.push(row?);
+        }
+
+        Ok(inodes)
+    }
 }

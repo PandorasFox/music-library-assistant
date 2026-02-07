@@ -31,7 +31,6 @@ pub struct RenderContext<'a> {
     pub compound_split_state: Option<&'a compound_split_v2::CompoundSplitStateV2>,
     pub oob_sync_state: Option<&'a mut oob_sync_flow::OobSyncState>,
     pub oob_conflict_state: Option<&'a mut oob_conflict_flow::OobConflictState>,
-    pub inode_changed_state: Option<&'a mut super::inode_changed_flow::InodeChangedState>,
     pub moved_file_state: Option<&'a mut super::moved_file_flow::MovedFileState>,
     pub transaction_review: Option<&'a transaction_review::TransactionReviewState>,
     pub transaction_review_decisions: Vec<transaction_review::DecisionSummary>,
@@ -171,7 +170,6 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
         super::UiMode::CompoundTagSplit => Some("Compound Tag Split"),
         super::UiMode::OobSyncResolution => Some("OOB Tag Sync"),
         super::UiMode::OobConflictInspection => Some("OOB Tag Conflicts"),
-        super::UiMode::InodeChangedAcknowledge => Some("Inode Changed"),
         super::UiMode::MovedFileAcknowledge => Some("Moved Files"),
         super::UiMode::TransactionReview => Some("Transaction Review"),
         super::UiMode::FormatStandardization => Some("Format Standardization"),
@@ -280,12 +278,6 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
             view_name = "oob_conflict_inspection";
             if let Some(ref mut state) = ctx.oob_conflict_state {
                 oob_conflict_flow::render(f, area, state);
-            }
-        }
-        super::UiMode::InodeChangedAcknowledge => {
-            view_name = "inode_changed_acknowledge";
-            if let Some(ref mut state) = ctx.inode_changed_state {
-                super::inode_changed_flow::render(f, area, state);
             }
         }
         super::UiMode::MovedFileAcknowledge => {
@@ -799,7 +791,6 @@ fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderConte
         super::UiMode::CompoundTagSplit => control_presets::empty(), // Modal handles its own hints
         super::UiMode::OobSyncResolution => control_presets::empty(), // Modal handles its own hints
         super::UiMode::OobConflictInspection => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::InodeChangedAcknowledge => control_presets::empty(), // Modal handles its own hints
         super::UiMode::MovedFileAcknowledge => control_presets::empty(), // Modal handles its own hints
         super::UiMode::TransactionReview => control_presets::empty(), // Modal handles its own hints
         super::UiMode::FormatStandardization => control_presets::format_standardization(),

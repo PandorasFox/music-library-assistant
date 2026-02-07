@@ -120,7 +120,6 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             | Mutation::DropFromIndex { .. }
             | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::EmitCanonicalTag { .. } => {

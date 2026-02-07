@@ -137,23 +137,6 @@ pub struct DeploymentStats {
 
 /// How a signal type is keyed in the database.
 ///
-/// Different signal types use different keying strategies:
-/// - Inode-keyed: Uses the native `inode` column for efficient lookup
-/// - Path-keyed: Uses `issue_key` as the file path
-/// - Library-keyed: Uses `issue_key` as a compound key like `"library_leftover:{name}:{path}"`
-/// - Semantic-keyed: Uses `issue_key` as a semantic key (for aggregates)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SignalKeyType {
-    /// Signal is keyed by inode (uses `inode` column)
-    Inode,
-    /// Signal is keyed by file path (uses `issue_key` column)
-    Path,
-    /// Signal is keyed by compound library key (uses `issue_key` column)
-    Library,
-    /// Signal is keyed by semantic key (uses `issue_key` column)
-    Semantic,
-}
-
 // ============================================================================
 // Health Issue Types
 // ============================================================================
@@ -451,18 +434,6 @@ impl CorpusFileSignalType {
         }
     }
 
-    /// Get the key type for this signal type.
-    ///
-    /// Most corpus file signals are inode-keyed. Only MissingDirectory is path-keyed
-    /// because directories don't have inodes in our domain model.
-    pub fn key_type(&self) -> SignalKeyType {
-        match self {
-            Self::MissingDirectory => SignalKeyType::Path,
-            // All other corpus file signals are inode-keyed
-            _ => SignalKeyType::Inode,
-        }
-    }
-
     pub fn to_signal_type(&self) -> SignalType {
         match self {
             Self::FileInCorpus => SignalType::FileInCorpus,
@@ -523,18 +494,6 @@ impl LibraryFileSignalType {
             }
         }
     }
-
-    /// Get the key type for this signal type.
-    ///
-    /// Library signals use different key types:
-    /// - DeployReady/DeployedHealthy are inode-keyed (track the corpus file inode)
-    /// - LibraryLeftover/LibraryStale use compound library keys
-    pub fn key_type(&self) -> SignalKeyType {
-        match self {
-            Self::DeployReady | Self::DeployedHealthy => SignalKeyType::Inode,
-            Self::LibraryLeftover | Self::LibraryStale => SignalKeyType::Library,
-        }
-    }
 }
 
 impl std::fmt::Display for LibraryFileSignalType {
@@ -569,14 +528,6 @@ impl FileSignalType {
         match self {
             Self::Corpus(t) => t.to_signal_type(),
             Self::Library(t) => t.to_signal_type(),
-        }
-    }
-
-    /// Get the key type for this signal type.
-    pub fn key_type(&self) -> SignalKeyType {
-        match self {
-            Self::Corpus(t) => t.key_type(),
-            Self::Library(t) => t.key_type(),
         }
     }
 }

@@ -210,8 +210,7 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             }
 
             // OOB resolution mutations with multiple (inode, path) pairs
-            Mutation::AcknowledgeMtimeOnly { tracks }
-            | Mutation::AcknowledgeInodeChanged { tracks } => {
+            Mutation::AcknowledgeMtimeOnly { tracks } => {
                 inodes.extend(tracks.iter().map(|(id, _)| *id));
             }
 

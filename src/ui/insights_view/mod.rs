@@ -129,7 +129,6 @@ pub enum InsightType {
     CorpusMtimeOnly,
     CorpusOobTagSync,
     CorpusOobTagConflict,
-    CorpusInodeChanged,
     CorpusFilesInCorpus,
     CorpusFilesIndexed,
     CorpusFilesUnindexed,
@@ -173,8 +172,6 @@ pub enum InsightAction {
     LaunchOobTagSync,
     /// Launch OOB tag conflict inspection
     LaunchOobTagConflict,
-    /// Launch inode changed acknowledgement flow
-    LaunchInodeChangedAcknowledge,
     /// Launch moved file acknowledgement flow
     LaunchMovedFileAcknowledge,
     /// Launch corrupt file resolution flow (stash + drop)

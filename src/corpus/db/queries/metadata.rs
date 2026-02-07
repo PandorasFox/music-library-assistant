@@ -141,11 +141,11 @@ impl Database {
         use crate::corpus::db::types::{OobSyncDirection, OobSyncFile, TagMismatchEntry};
 
         // Get all files with oob_tag_sync signals
-        // signals.issue_key stores the file path for file-level signals
+        // Inode-keyed signals: join on s.inode = f.inode, extract path from metadata_json
         let mut stmt = self.conn.prepare(
-            "SELECT f.inode, s.issue_key, s.metadata_json
+            "SELECT f.inode, f.path, s.metadata_json
              FROM signals s
-             INNER JOIN files f ON f.path = s.issue_key AND f.source = 'corpus'
+             INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
              WHERE s.issue_type = 'oob_tag_sync'"
         )?;
 
@@ -224,12 +224,13 @@ impl Database {
     pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::corpus::db::types::BucketedOobFile>> {
         use crate::corpus::db::types::{BucketedOobFile, ConflictBucket};
 
+        // Inode-keyed signals: join on s.inode = f.inode, use f.path for display
         let mut stmt = self.conn.prepare(
-            "SELECT f.inode, s.issue_key, s.issue_type, s.metadata_json
+            "SELECT f.inode, f.path, s.issue_type, s.metadata_json
              FROM signals s
-             INNER JOIN files f ON f.path = s.issue_key AND f.source = 'corpus'
+             INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
              WHERE s.issue_type IN ('mtime_only_mismatch', 'oob_tag_conflict', 'oob_tag', 'oob_tag_sync')
-             ORDER BY s.issue_key"
+             ORDER BY f.path"
         )?;
 
         let mut files = Vec::new();

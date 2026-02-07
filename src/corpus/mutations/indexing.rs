@@ -758,14 +758,6 @@ pub fn execute_single(
             execute_acknowledge_mtime_only(db, tracks, witness).map(|_| ())
         }
 
-        // OBSOLETE: InodeChanged signals removed in v3 migration
-        // Now exposed as MissingFile + UnindexedFile pair
-        #[allow(deprecated)]
-        Mutation::AcknowledgeInodeChanged { .. } => {
-            // No-op - signal type no longer exists
-            Ok(())
-        }
-
         // Single-file tag sync mutations
         Mutation::ApplyDbTagsToDisk { inode, path } => {
             execute_apply_db_tags_to_disk(db, *inode, path, witness)

@@ -5,7 +5,7 @@
 //! Witch interactions, and modal displays.
 
 use crate::corpus::paths;
-use crate::ui::{compound_split_v2, corrupt_file_flow, filter_popup, format_standardization, inode_changed_flow, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
+use crate::ui::{compound_split_v2, corrupt_file_flow, filter_popup, format_standardization, insights_view, missing_directory_flow, missing_file_flow, moved_file_flow, oob_sync_flow, oob_conflict_flow, progress_screen, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_search, transaction_review, tree_browser, tag_editor, deploy_flow, startup, widgets, FilterPopupContext};
 use crate::ui::types::{UiMode, ExitConfirmModalState};
 use super::App;
 
@@ -82,9 +82,6 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchOobTagConflict) => {
                         self.start_oob_conflict_inspection();
-                    }
-                    Some(insights_view::InsightAction::LaunchInodeChangedAcknowledge) => {
-                        self.start_inode_changed_acknowledge();
                     }
                     Some(insights_view::InsightAction::LaunchMovedFileAcknowledge) => {
                         self.start_moved_file_acknowledge();
@@ -1305,64 +1302,6 @@ impl App {
 
         self.oob_conflict_state = Some(state);
         self.mode = UiMode::OobConflictInspection;
-    }
-
-    /// Start inode changed acknowledgement flow.
-    ///
-    /// **OBSOLETE**: InodeChanged signals were removed in v3 migration.
-    /// Inode changes are now exposed as MissingFile + UnindexedFile pair.
-    fn start_inode_changed_acknowledge(&mut self) {
-        // InodeChanged signals no longer exist - inform user
-        self.status_message = Some("Inode changes are now shown as Missing + Unindexed file pairs".to_string());
-    }
-
-    /// Handle inode changed acknowledgement actions.
-    pub(super) fn handle_inode_changed_action(&mut self, action: inode_changed_flow::InodeChangedAction) {
-        match action {
-            inode_changed_flow::InodeChangedAction::None => {}
-            inode_changed_flow::InodeChangedAction::Acknowledge => {
-                self.stage_inode_changed_acknowledge();
-                // Transition to review (no source variant needed - just cancel goes to insights)
-                self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
-            }
-            inode_changed_flow::InodeChangedAction::Cancel => {
-                crate::logging::log_general("Inode changed acknowledgement cancelled");
-                // Discard any active transaction
-                if let Some(ref mut witch) = self.witch {
-                    if witch.has_transaction() {
-                        let _ = super::operator_decisions::discard_transaction(witch);
-                    }
-                }
-                self.inode_changed_state = None;
-                self.start_insights_view();
-            }
-        }
-    }
-
-    /// Stage mutations for inode changed acknowledgement.
-    fn stage_inode_changed_acknowledge(&mut self) {
-        use crate::corpus::mutations::Mutation;
-
-        let Some(ref state) = self.inode_changed_state else {
-            return;
-        };
-
-        if state.files.is_empty() {
-            return;
-        }
-
-        let tracks = state.tracks_with_paths();
-        let label = format!(
-            "Acknowledge {} inode change{}",
-            tracks.len(),
-            if tracks.len() == 1 { "" } else { "s" }
-        );
-        let mutations = vec![Mutation::AcknowledgeInodeChanged { tracks }];
-
-        // Stage the AcknowledgeInodeChanged mutation
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, 0, &label, mutations);
-        }
     }
 
     /// Start moved file acknowledgement flow.

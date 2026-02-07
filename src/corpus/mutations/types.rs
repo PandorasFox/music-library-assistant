@@ -304,16 +304,6 @@ pub enum Mutation {
         tracks: Vec<(i64, PathBuf)>,
     },
 
-    /// **OBSOLETE**: Inode changes are now exposed as MissingFile + UnindexedFile pair.
-    ///
-    /// This variant is retained for backwards compatibility but is a no-op.
-    /// The v2→v3 migration deletes all InodeChanged signals.
-    #[deprecated(note = "InodeChanged signals removed in v3 migration")]
-    AcknowledgeInodeChanged {
-        /// Inodes with their absolute paths: (inode, abs_path)
-        tracks: Vec<(i64, PathBuf)>,
-    },
-
     /// Apply DB tags to disk file (defer to db / reject disk changes).
     ///
     /// - Reads tags from database (source of truth)
@@ -373,7 +363,6 @@ impl Mutation {
             Mutation::DropFromIndex { .. } => "Drop from index",
             Mutation::DropDirectoryFromIndex { .. } => "Drop directory from index",
             Mutation::AcknowledgeMtimeOnly { .. } => "Acknowledge mtime",
-            Mutation::AcknowledgeInodeChanged { .. } => "Acknowledge inode",
             Mutation::Move { .. } | Mutation::MoveToStash { .. } => "File move",
             Mutation::HardLink { .. } => "Hard link",
             Mutation::LibraryMove { .. } => "Library move",
@@ -426,7 +415,6 @@ impl Mutation {
             | Mutation::LibraryMove { .. }
             | Mutation::DbMigration { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::DropDirectoryFromIndex { .. }
             | Mutation::EmitCanonicalTag { .. } => None,
         }
@@ -502,8 +490,7 @@ impl Mutation {
             Mutation::DbMigration { .. } => {}
 
             // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
-            Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. } => {}
+            Mutation::AcknowledgeMtimeOnly { .. } => {}
 
             // Directory drops: the directory itself is affected
             Mutation::DropDirectoryFromIndex { directory_path, .. } => {
@@ -560,8 +547,7 @@ impl Mutation {
             }
 
             // Batch OOB resolution: paths are stored in the mutation
-            Mutation::AcknowledgeMtimeOnly { tracks }
-            | Mutation::AcknowledgeInodeChanged { tracks } => {
+            Mutation::AcknowledgeMtimeOnly { tracks } => {
                 tracks.iter().map(|(_, path)| path.clone()).collect()
             }
 
@@ -603,7 +589,6 @@ impl Mutation {
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::UpdateFilePath { .. } => SignalClearScope::MutableOnly,
 
             // No signal clearing (DB-only or no file impact)
@@ -635,8 +620,7 @@ impl Mutation {
                 vec![source.clone(), destination.clone()]
             }
 
-            Mutation::AcknowledgeMtimeOnly { tracks }
-            | Mutation::AcknowledgeInodeChanged { tracks } => {
+            Mutation::AcknowledgeMtimeOnly { tracks } => {
                 tracks.iter().map(|(_, path)| path.clone()).collect()
             }
 
@@ -676,7 +660,6 @@ impl Mutation {
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::DbMigration { .. }
             | Mutation::UpdateFilePath { .. }
             | Mutation::EmitCanonicalTag { .. } => Vec::new(),
@@ -712,7 +695,6 @@ impl Mutation {
             | Mutation::ApplyDbTagsToDisk { .. }
             | Mutation::AssimilateDiskTagsToDb { .. }
             | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::AcknowledgeInodeChanged { .. }
             | Mutation::DbMigration { .. }
             | Mutation::UpdateFilePath { .. }
             | Mutation::EmitCanonicalTag { .. } => Vec::new(),

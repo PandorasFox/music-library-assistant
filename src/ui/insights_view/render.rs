@@ -356,30 +356,6 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 Style::default().fg(Color::Cyan),
             )));
         }
-        InsightType::CorpusInodeChanged => {
-            lines.push(Line::from(Span::styled(
-                "Files Replaced (Inode Changed)",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Files at existing paths now have",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "different inodes (regenerated from",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "source or replaced).",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Press Enter to acknowledge.",
-                Style::default().fg(Color::Cyan),
-            )));
-        }
         InsightType::CorpusCorruptFiles => {
             lines.push(Line::from(Span::styled(
                 "Corrupt Files",

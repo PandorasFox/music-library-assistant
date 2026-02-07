@@ -93,8 +93,7 @@ impl IntakeConfirmationState {
             return None;
         }
 
-        // Each UnindexedFile signal has a relative file path as issue_key
-        // Resolve to absolute for filesystem operations
+        // Inode-keyed signals: path is in metadata_json, not issue_key
         let resolver = paths::get_resolver();
         let mut all_paths: Vec<PathBuf> = Vec::new();
         let mut total_bytes: u64 = 0;
@@ -103,8 +102,16 @@ impl IntakeConfirmationState {
         let mut dir_to_files: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
         for issue in &issues {
-            // Resolve relative signal key to absolute path
-            let rel_path = std::path::Path::new(&issue.issue_key);
+            // Extract path from metadata_json (inode-keyed signals store path there)
+            let rel_path_str = issue.metadata_json.as_ref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .and_then(|v| v.get("path")?.as_str().map(|s| s.to_string()));
+
+            let Some(rel_path_str) = rel_path_str else {
+                continue;
+            };
+
+            let rel_path = std::path::Path::new(&rel_path_str);
             let abs_path = resolver.resolve(rel_path);
 
             // Verify file still exists and get size

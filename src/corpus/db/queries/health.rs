@@ -19,7 +19,7 @@ use rusqlite::{params, OptionalExtension};
 use super::Database;
 use crate::db_thread::SignalWitness;
 use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, CorpusSummary, FileSignalType, FileSource, Signal,
+    AggregateSignal, AggregateSignalType, CorpusSummary, FileSource, Signal,
     SignalType, SignalSummary,
 };
 
@@ -184,13 +184,13 @@ impl Database {
     ) -> Result<Vec<Signal>> {
         let sql = match issue_type {
             Some(_) => {
-                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
+                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json, inode
                    FROM signals
                    WHERE issue_type = ?1
                    ORDER BY discovered_at DESC"#
             }
             None => {
-                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
+                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json, inode
                    FROM signals
                    ORDER BY discovered_at DESC"#
             }
@@ -216,7 +216,7 @@ impl Database {
     pub fn get_signal_by_id(&self, signal_id: i64) -> Result<Option<Signal>> {
         self.conn
             .query_row(
-                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
+                r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json, inode
                    FROM signals
                    WHERE id = ?1"#,
                 params![signal_id],
@@ -226,11 +226,10 @@ impl Database {
             .context("Failed to query signal by ID")
     }
 
-    /// Fast existence check for a file signal type.
+    /// Fast existence check for an aggregate signal (semantic-keyed).
     ///
-    /// For inode-keyed signals, pass `inode.to_string()` as the key.
-    /// For path-keyed signals (library signals, etc.), pass the key directly.
-    pub fn file_signal_exists(&self, signal_type: FileSignalType, key: &str) -> bool {
+    /// Used for LibraryStale, LibraryLeftover, and other semantic-keyed signals.
+    pub fn aggregate_signal_exists(&self, signal_type: AggregateSignalType, key: &str) -> bool {
         self.conn
             .query_row(
                 "SELECT 1 FROM signals WHERE issue_type = ?1 AND issue_key = ?2 LIMIT 1",
@@ -387,70 +386,11 @@ impl Database {
     }
 
     // ========================================================================
-    // Type-Safe Signal Operations (File and Aggregate)
+    // Type-Safe Signal Operations (Aggregate)
     // ========================================================================
-
-    /// Ensure a file signal exists (idempotent, no metadata).
-    pub fn ensure_file_signal(
-        &self,
-        signal_type: FileSignalType,
-        path: &str,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        self.conn
-            .execute(
-                r#"
-                INSERT OR IGNORE INTO signals
-                (issue_type, issue_key, discovered_at, metadata_json)
-                VALUES (?1, ?2, CURRENT_TIMESTAMP, NULL)
-                "#,
-                params![signal_type.as_str(), path],
-            )
-            .context("Failed to ensure file signal")?;
-
-        Ok(self.conn.changes() > 0)
-    }
-
-    /// Ensure a file signal exists with metadata (idempotent).
-    ///
-    /// Works for all FileSignalType variants including DeployReady/DeployedHealthy.
-    pub fn ensure_file_signal_with_metadata(
-        &self,
-        signal_type: FileSignalType,
-        key: &str,
-        metadata_json: Option<&str>,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        self.conn
-            .execute(
-                r#"
-                INSERT OR IGNORE INTO signals
-                (issue_type, issue_key, discovered_at, metadata_json)
-                VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
-                "#,
-                params![signal_type.as_str(), key, metadata_json],
-            )
-            .context("Failed to ensure file signal with metadata")?;
-
-        Ok(self.conn.changes() > 0)
-    }
-
-    /// Clear a file signal (idempotent delete).
-    pub fn clear_file_signal(
-        &self,
-        signal_type: FileSignalType,
-        path: &str,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
-                params![signal_type.as_str(), path],
-            )
-            .context("Failed to clear file signal")?;
-
-        Ok(deleted > 0)
-    }
+    // NOTE: ensure_file_signal/clear_file_signal have been removed.
+    // - Corpus signals: use ensure_corpus_signal/clear_corpus_signal (inode-keyed)
+    // - Library signals: use ensure_aggregate_signal/clear_aggregate_signal (semantic-keyed)
 
     /// Ensure an aggregate signal exists (with metadata).
     pub fn ensure_aggregate_signal(
@@ -678,20 +618,21 @@ impl Database {
     // Directory-Level Queries
     // ========================================================================
 
-    /// Get indexed corpus directories (directories stored in files table).
+    /// Get indexed corpus directories with their inodes.
     ///
-    /// Returns directory paths from the files table where is_dir=1 and source='corpus'.
+    /// Returns (path, inode) tuples from the files table where is_dir=1 and source='corpus'.
     /// Used to detect missing directories (directories that were indexed but no longer exist).
-    pub fn get_indexed_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+    pub fn get_indexed_corpus_directories(&self) -> Result<Vec<(std::path::PathBuf, i64)>> {
         use std::path::PathBuf;
 
         let mut stmt = self.conn.prepare(
-            r#"SELECT path FROM files
+            r#"SELECT path, inode FROM files
                WHERE is_dir = 1 AND source = 'corpus'"#
         )?;
         let rows = stmt.query_map(params![], |row| {
             let path: String = row.get(0)?;
-            Ok(PathBuf::from(path))
+            let inode: i64 = row.get(1)?;
+            Ok((PathBuf::from(path), inode))
         })?;
 
         let mut directories = Vec::new();
@@ -765,7 +706,7 @@ impl Database {
         let pattern = super::dir_like_pattern(dir);
 
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
+            r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json, inode
                FROM signals
                WHERE issue_type = ?1 AND issue_key LIKE ?2 ESCAPE '\'"#
         )?;
@@ -1133,7 +1074,7 @@ impl Database {
     // ========================================================================
 
     /// Convert a row to Signal.
-    /// Expected columns: id, issue_type, issue_key, discovered_at, metadata_json
+    /// Expected columns: id, issue_type, issue_key, discovered_at, metadata_json, inode
     pub(super) fn row_to_signal(row: &rusqlite::Row) -> rusqlite::Result<Signal> {
         let issue_type_str: String = row.get(1)?;
 
@@ -1144,6 +1085,7 @@ impl Database {
             issue_key: row.get(2)?,
             discovered_at: row.get(3)?,
             metadata_json: row.get(4)?,
+            inode: row.get(5)?,
         })
     }
 

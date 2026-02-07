@@ -408,20 +408,20 @@ pub fn write_file_tags(
     );
 
     // Clear OOB/tag signals after successful write - they'll be recomputed next cycle
-    // This ensures mutations don't leave stale signals behind
-    sender.clear_file_signal(
-        CorpusFileSignalType::OutOfBandTagSync.into(),
-        &rel_path_str,
+    // This ensures mutations don't leave stale signals behind (inode-keyed)
+    sender.clear_corpus_signal(
+        CorpusFileSignalType::OutOfBandTagSync,
+        inode,
         witness,
     );
-    sender.clear_file_signal(
-        CorpusFileSignalType::OutOfBandTagConflict.into(),
-        &rel_path_str,
+    sender.clear_corpus_signal(
+        CorpusFileSignalType::OutOfBandTagConflict,
+        inode,
         witness,
     );
-    sender.clear_file_signal(
-        CorpusFileSignalType::MtimeOnlyMismatch.into(),
-        &rel_path_str,
+    sender.clear_corpus_signal(
+        CorpusFileSignalType::MtimeOnlyMismatch,
+        inode,
         witness,
     );
     // Clear tag mismatches - will be recomputed by VerifyTags

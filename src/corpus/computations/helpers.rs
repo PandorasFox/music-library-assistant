@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, FileSignalType};
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread::{self, SignalWitness};
 
@@ -213,60 +213,39 @@ pub(crate) fn drop_stale_corpus_signal(
 }
 
 // ============================================================================
-// Signal Emission Helpers (Path-Keyed - Legacy)
+// Signal Emission Helpers (Aggregate - Semantic Keys)
 // ============================================================================
-// These helpers use path as the key. They are retained for:
-// - Library signals (which use compound keys)
-// - Transition period while migrating to inode-keyed signals
+// These helpers use semantic string keys for aggregate signals.
+// Used for LibraryStale, LibraryLeftover, and other semantic-keyed signals.
 
-/// Ensure a file signal exists, but only queue the write if it doesn't already exist.
+/// Ensure an aggregate signal exists, but only queue the write if it doesn't already exist.
 ///
 /// Uses the read-only DB to check freshness before queueing to the write thread.
-/// This dramatically reduces redundant writes during re-computation.
-pub(crate) fn ensure_file_signal_if_missing(
+pub(crate) fn ensure_aggregate_signal_if_missing(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: FileSignalType,
+    signal_type: AggregateSignalType,
     key: &str,
+    metadata_json: Option<&str>,
     witness: &impl SignalWitness,
 ) {
-    if !read_only_db.file_signal_exists(signal_type, key) {
-        sender.ensure_file_signal(signal_type, key, witness);
+    if !read_only_db.aggregate_signal_exists(signal_type, key) {
+        sender.ensure_aggregate_signal(signal_type, key, metadata_json, witness);
     }
 }
 
-/// Ensure a file signal with metadata, only queue if it doesn't exist.
-///
-/// For signals like LibraryStale that need extra context in metadata_json.
-pub(crate) fn ensure_file_signal_with_metadata_if_missing(
-    read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
-    signal_type: FileSignalType,
-    key: &str,
-    metadata_json: &str,
-    witness: &impl SignalWitness,
-) {
-    if !read_only_db.file_signal_exists(signal_type, key) {
-        sender.ensure_file_signal_with_metadata(signal_type, key, Some(metadata_json), witness);
-    }
-}
-
-/// Drop a stale file signal that this computation determined should not exist.
+/// Drop a stale aggregate signal that this computation determined should not exist.
 ///
 /// Use when a computation definitively determines "signal X should NOT exist for this key".
-/// This is the semantic inverse of `ensure_file_signal_if_missing`: where that creates if
-/// absent, this drops if present. Call this in else-branches or when NOT ensuring a signal.
-///
-/// Uses the read-only DB to check existence before queueing to the write thread.
-pub(crate) fn drop_stale_file_signal(
+pub(crate) fn drop_stale_aggregate_signal(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: FileSignalType,
+    signal_type: AggregateSignalType,
     key: &str,
     witness: &impl SignalWitness,
 ) {
-    if read_only_db.file_signal_exists(signal_type, key) {
-        sender.clear_file_signal(signal_type, key, witness);
+    if read_only_db.aggregate_signal_exists(signal_type, key) {
+        sender.clear_aggregate_signal(signal_type, key, witness);
     }
 }
 

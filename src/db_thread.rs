@@ -31,7 +31,7 @@ use std::time::Instant;
 
 use crate::corpus::computations::ComputationWitness;
 use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, CorpusFileSignalType, FileSignalType, SignalType,
+    AggregateSignal, AggregateSignalType, CorpusFileSignalType, SignalType,
 };
 use crate::corpus::db::Database;
 use crate::corpus::tags::TagSet;
@@ -168,25 +168,12 @@ pub fn request_shutdown() {
 /// Signal write operations (health signals and computation state).
 #[derive(Debug)]
 enum SignalWriteOp {
-    /// File signal (no metadata) - type-safe, preferred
-    EnsureFileSignal {
-        signal_type: FileSignalType,
-        path: String,
-    },
-    /// File signal with metadata (for signals like LibraryStale that need extra context)
-    EnsureFileSignalWithMetadata {
-        signal_type: FileSignalType,
-        key: String,
-        metadata_json: Option<String>,
-    },
-    /// Clear a file signal
-    ClearFileSignal {
-        signal_type: FileSignalType,
-        path: String,
-    },
+    // NOTE: EnsureFileSignal/ClearFileSignal have been removed.
+    // - Corpus signals use EnsureCorpusSignal/ClearCorpusSignal (inode-keyed)
+    // - Library signals use EnsureAggregateSignal/ClearAggregateSignal (semantic-keyed)
 
     // =========================================================================
-    // Inode-Keyed Corpus Signal Operations (Phase 4)
+    // Inode-Keyed Corpus Signal Operations
     // =========================================================================
 
     /// Ensure an inode-keyed corpus signal exists (uses native inode column)
@@ -266,23 +253,6 @@ enum SignalWriteOp {
     },
 
     // =========================================================================
-    // Tag Mismatch Operations (OOB verification)
-    // =========================================================================
-
-    /// Record a tag mismatch for an audio file (DB differs from disk).
-    RecordTagMismatch {
-        inode: i64,
-        field: String,
-        db_value: Option<String>,
-        disk_value: Option<String>,
-    },
-    /// Clear a specific tag mismatch field for an audio file.
-    ClearTagMismatch {
-        inode: i64,
-        field: String,
-    },
-
-    // =========================================================================
     // File/Audio Index Operations (Mutation execution)
     // =========================================================================
 
@@ -299,12 +269,6 @@ enum SignalWriteOp {
     /// Cascades to audio_info, corpus_tags/inbox_tags, tag_edit_history.
     DropFromIndex {
         path: String,
-    },
-
-    /// Update track inode (file replaced with same content).
-    UpdateTrackInode {
-        path: String,
-        new_inode: i64,
     },
 
     /// Set all tags for a track (replaces existing).
@@ -548,53 +512,9 @@ impl SignalWriteSender {
         self.stats.queue_empty.store(false, Ordering::Release);
     }
 
-    // =========================================================================
-    // Type-safe file signal operations (preferred)
-    // =========================================================================
-
-    /// Enqueue a file signal (idempotent create, no metadata).
-    pub fn ensure_file_signal(
-        &self,
-        signal_type: FileSignalType,
-        path: &str,
-        _witness: &impl SignalWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::EnsureFileSignal {
-            signal_type,
-            path: path.to_string(),
-        });
-    }
-
-    /// Enqueue a file signal with metadata (for signals needing extra context).
-    pub fn ensure_file_signal_with_metadata(
-        &self,
-        signal_type: FileSignalType,
-        key: &str,
-        metadata_json: Option<&str>,
-        _witness: &impl SignalWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::EnsureFileSignalWithMetadata {
-            signal_type,
-            key: key.to_string(),
-            metadata_json: metadata_json.map(|s| s.to_string()),
-        });
-    }
-
-    /// Clear a file signal (idempotent delete).
-    pub fn clear_file_signal(
-        &self,
-        signal_type: FileSignalType,
-        path: &str,
-        _witness: &impl SignalWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearFileSignal {
-            signal_type,
-            path: path.to_string(),
-        });
-    }
+    // NOTE: ensure_file_signal/clear_file_signal have been removed.
+    // - Corpus signals: use ensure_corpus_signal/clear_corpus_signal (inode-keyed)
+    // - Library signals: use ensure_aggregate_signal/clear_aggregate_signal (semantic-keyed)
 
     // =========================================================================
     // Inode-keyed corpus signal operations (uses native inode column)
@@ -771,42 +691,6 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
-    // Tag Mismatch Operations (OOB verification)
-    // =========================================================================
-
-    /// Record a tag mismatch for an audio file (routed through db_thread for write access).
-    pub fn record_tag_mismatch(
-        &self,
-        inode: i64,
-        field: &str,
-        db_value: Option<&str>,
-        disk_value: Option<&str>,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::RecordTagMismatch {
-            inode,
-            field: field.to_string(),
-            db_value: db_value.map(|s| s.to_string()),
-            disk_value: disk_value.map(|s| s.to_string()),
-        });
-    }
-
-    /// Clear a specific tag mismatch field for an audio file.
-    pub fn clear_tag_mismatch(
-        &self,
-        inode: i64,
-        field: &str,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearTagMismatch {
-            inode,
-            field: field.to_string(),
-        });
-    }
-
-    // =========================================================================
     // File/Audio Index Operations (Mutation execution)
     // =========================================================================
 
@@ -836,20 +720,6 @@ impl SignalWriteSender {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::DropFromIndex {
             path: path.to_string(),
-        });
-    }
-
-    /// Update track inode (file replaced).
-    pub fn update_track_inode(
-        &self,
-        path: &str,
-        new_inode: i64,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateTrackInode {
-            path: path.to_string(),
-            new_inode,
         });
     }
 
@@ -1244,27 +1114,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
     let witness = crate::corpus::computations::ComputationWitness::new_for_db_thread();
 
     match op {
-        // Type-safe file signal operations
-        SignalWriteOp::EnsureFileSignal { signal_type, path } => {
-            with_retry("ensure_file_signal", path, || {
-                db.ensure_file_signal(*signal_type, path, &witness).map(|_| ())
-            });
-        }
-        SignalWriteOp::EnsureFileSignalWithMetadata {
-            signal_type,
-            key,
-            metadata_json,
-        } => {
-            with_retry("ensure_file_signal_with_metadata", key, || {
-                db.ensure_file_signal_with_metadata(*signal_type, key, metadata_json.as_deref(), &witness).map(|_| ())
-            });
-        }
-        SignalWriteOp::ClearFileSignal { signal_type, path } => {
-            with_retry("clear_file_signal", path, || {
-                db.clear_file_signal(*signal_type, path, &witness).map(|_| ())
-            });
-        }
-
         // Inode-keyed corpus signal operations
         SignalWriteOp::EnsureCorpusSignal {
             signal_type,
@@ -1389,23 +1238,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        // Tag mismatch operations (OOB verification)
-        SignalWriteOp::RecordTagMismatch {
-            inode,
-            field,
-            db_value,
-            disk_value,
-        } => {
-            with_retry("record_tag_mismatch", field, || {
-                db.record_tag_mismatch(*inode, field, db_value.as_deref(), disk_value.as_deref(), &witness)
-            });
-        }
-        SignalWriteOp::ClearTagMismatch { inode, field } => {
-            with_retry("clear_tag_mismatch", field, || {
-                db.clear_tag_mismatch(*inode, field, &witness)
-            });
-        }
-
         // =====================================================================
         // File/Audio Index Operations (Mutation execution)
         // =====================================================================
@@ -1424,12 +1256,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::DropFromIndex { path } => {
             with_retry("drop_from_index", path, || {
                 execute_drop_from_index(db, path)
-            });
-        }
-
-        SignalWriteOp::UpdateTrackInode { path, new_inode } => {
-            with_retry("update_track_inode", path, || {
-                execute_update_track_inode(db, path, *new_inode)
             });
         }
 
@@ -1843,54 +1669,6 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
         params![path],
     )?;
 
-    Ok(())
-}
-
-/// Execute UpdateTrackInode: update inode for replaced file.
-/// This handles the case where a file's content is replaced (new inode).
-///
-/// All operations wrapped in a single transaction for atomicity.
-fn execute_update_track_inode(db: &Database, path: &str, new_inode: i64) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    // Get old inode first
-    let old_inode = match get_inode_by_path(db, path)? {
-        Some(id) => id,
-        None => return Ok(()), // File doesn't exist
-    };
-
-    // Wrap all operations in a single transaction
-    let tx = db.conn().unchecked_transaction()?;
-
-    // Update files table inode
-    tx.execute(
-        "UPDATE files SET inode = ?1 WHERE path = ?2",
-        params![new_inode, path],
-    )?;
-
-    // Move audio_info to new inode if old inode has no other references
-    let count: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM files WHERE inode = ?1",
-        params![old_inode],
-        |row| row.get(0),
-    )?;
-    if count == 0 {
-        // Copy audio_info to new inode
-        tx.execute(
-            "INSERT OR REPLACE INTO audio_info SELECT ?1, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush FROM audio_info WHERE inode = ?2",
-            params![new_inode, old_inode],
-        )?;
-        // Copy tags to new inode
-        tx.execute(
-            "INSERT OR IGNORE INTO corpus_tags SELECT ?1, tag_name, tag_value FROM corpus_tags WHERE inode = ?2",
-            params![new_inode, old_inode],
-        )?;
-        // Delete old entries
-        tx.execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
-        tx.execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
-    }
-
-    tx.commit()?;
     Ok(())
 }
 

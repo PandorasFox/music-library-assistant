@@ -14,7 +14,7 @@ use crate::corpus::computations::helpers::{
     drop_stale_corpus_signal,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{CorpusFileSignalType, FileSource};
+use crate::corpus::db::types::{CorpusFileSignalType, FileSource, SignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -48,7 +48,7 @@ pub fn execute_clear_existing_observation_state(
     };
 
     // Clear all FileInCorpus signals - they'll be rebuilt during the corpus walk
-    sender.clear_signals_by_type(CorpusFileSignalType::FileInCorpus.into(), witness);
+    sender.clear_signals_by_type(SignalType::FileInCorpus, witness);
 
     log_general("[COMPUTE] ClearExistingObservationState: complete");
 

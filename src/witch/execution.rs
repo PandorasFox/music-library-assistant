@@ -20,6 +20,7 @@
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
 //! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
 
+use std::os::unix::fs::MetadataExt;
 use std::time::Instant;
 
 use crate::config;
@@ -191,18 +192,23 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         // be flagged for stashing rather than remaining as mere UnindexedFile signals.
         if let Mutation::IndexFileFromPath { path, .. } = &mutation {
             if let Some(sender) = db_thread::signal_sender() {
-                let resolver = paths::get_resolver();
-                if let Some(rel) = resolver.to_relative(path) {
-                    let rel_str = rel.to_string_lossy();
-                    sender.ensure_file_signal(
-                        CorpusFileSignalType::CorruptFile.into(),
-                        &rel_str,
-                        &witness,
-                    );
-                    crate::logging::log_general(format!(
-                        "[EXECUTION] Emitted CorruptFile signal for failed indexing: {}",
-                        rel_str
-                    ));
+                // Get inode from filesystem (file exists but failed to parse)
+                if let Ok(metadata) = std::fs::metadata(path) {
+                    let inode = metadata.ino() as i64;
+                    let resolver = paths::get_resolver();
+                    if let Some(rel) = resolver.to_relative(path) {
+                        let rel_str = rel.to_string_lossy();
+                        sender.ensure_corpus_signal(
+                            CorpusFileSignalType::CorruptFile,
+                            inode,
+                            &rel_str,
+                            &witness,
+                        );
+                        crate::logging::log_general(format!(
+                            "[EXECUTION] Emitted CorruptFile signal for failed indexing: {}",
+                            rel_str
+                        ));
+                    }
                 }
             }
         }
@@ -405,24 +411,22 @@ fn apply_post_execution(
 /// Clear signals matching a type+key pattern.
 ///
 /// Used for targeted clearing like LibraryStale signals, where the key format
-/// is compound (e.g., "library_stale:{name}:{path}") and doesn't match simple
-/// path-based clearing.
+/// is compound (e.g., "{name}:{path}") and doesn't match simple path-based clearing.
 fn clear_signals_by_pattern(
     db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     spec: &SignalToClear,
     witness: &MutationExecutionWitness,
 ) {
-    // Query existing signals of this type (convert FileSignalType → SignalType for query)
-    // and clear those matching the pattern
-    if let Ok(signals) = db.get_signals(Some(spec.signal_type.to_signal_type())) {
+    // Query existing aggregate signals of this type and clear those matching the pattern
+    if let Ok(signals) = db.get_aggregate_signals(Some(spec.signal_type)) {
         for signal in signals {
             // Match if key ends with the pattern (compound key format)
             // or if key equals the pattern exactly
-            if signal.issue_key.ends_with(&format!(":{}", spec.key_pattern))
-               || signal.issue_key == spec.key_pattern
+            if signal.key.ends_with(&format!(":{}", spec.key_pattern))
+               || signal.key == spec.key_pattern
             {
-                sender.clear_file_signal(spec.signal_type, &signal.issue_key, witness);
+                sender.clear_aggregate_signal(spec.signal_type, &signal.key, witness);
             }
         }
     }
@@ -439,14 +443,17 @@ fn emit_pending_signals(
 ) {
     for signal in pending_signals {
         match signal {
-            PendingSignal::FileSignal { signal_type, path } => {
-                sender.ensure_file_signal((*signal_type).into(), path, witness);
+            PendingSignal::CorpusSignal { signal_type, inode, path } => {
+                sender.ensure_corpus_signal(*signal_type, *inode, path, witness);
             }
-            PendingSignal::FileSignalWithMetadata { signal_type, path, metadata_json } => {
-                sender.ensure_file_signal_with_metadata(
-                    (*signal_type).into(),
+            PendingSignal::CorpusSignalWithMetadata { signal_type, inode, path, metadata_json } => {
+                let extra_metadata: serde_json::Value = serde_json::from_str(metadata_json)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                sender.ensure_corpus_signal_with_metadata(
+                    *signal_type,
+                    *inode,
                     path,
-                    Some(metadata_json),
+                    extra_metadata,
                     witness,
                 );
             }

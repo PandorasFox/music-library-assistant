@@ -10,12 +10,13 @@ use mla_utils::tag_names::find_tag_in_map;
 
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
-    drop_stale_file_signal, ensure_file_signal_if_missing,
-    ensure_file_signal_with_metadata_if_missing, get_configured_library_names,
-    parse_inodes_csv, reconcile_aggregate_signals, ComputedAggregateSignal,
+    drop_stale_aggregate_signal, ensure_aggregate_signal_if_missing,
+    drop_stale_corpus_signal, ensure_corpus_signal, ensure_corpus_signal_with_metadata,
+    get_configured_library_names, parse_inodes_csv, reconcile_aggregate_signals,
+    ComputedAggregateSignal,
 };
 use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSource, LibraryFileSignalType, SignalType};
+use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, FileSource, SignalType};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread;
@@ -668,7 +669,7 @@ pub fn execute_detect_compound_tags_for_inode(
     let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
     if tags.is_empty() {
         // No tags - clear any existing signal and dirty flag
-        sender.clear_file_signal(CorpusFileSignalType::CompoundTag.into(), &corpus_path, witness);
+        sender.clear_corpus_signal(CorpusFileSignalType::CompoundTag, inode, witness);
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
@@ -748,7 +749,7 @@ pub fn execute_detect_compound_tags_for_inode(
 
     // If no compounds found, clear any existing signal
     if compounds.is_empty() {
-        sender.clear_file_signal(CorpusFileSignalType::CompoundTag.into(), &corpus_path, witness);
+        sender.clear_corpus_signal(CorpusFileSignalType::CompoundTag, inode, witness);
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
@@ -800,10 +801,11 @@ pub fn execute_detect_compound_tags_for_inode(
         "compounds": compounds,
     });
 
-    sender.ensure_file_signal_with_metadata(
-        CorpusFileSignalType::CompoundTag.into(),
+    sender.ensure_corpus_signal_with_metadata(
+        CorpusFileSignalType::CompoundTag,
+        inode,
         &corpus_path,
-        Some(&metadata.to_string()),
+        metadata,
         witness,
     );
 
@@ -1049,7 +1051,7 @@ pub fn execute_derive_deploy_health_signals(
         );
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            drop_stale_file_signal(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
+            drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryLeftover, &leftover_key, witness);
 
             // Check if stale and capture metadata for the signal
             let stale_metadata = if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
@@ -1090,22 +1092,22 @@ pub fn execute_derive_deploy_health_signals(
 
             if let Some(metadata) = stale_metadata {
                 stale_count += 1;
-                ensure_file_signal_with_metadata_if_missing(
+                ensure_aggregate_signal_if_missing(
                     read_only_db,
                     &sender,
-                    LibraryFileSignalType::LibraryStale.into(),
+                    AggregateSignalType::LibraryStale,
                     &stale_key,
-                    &metadata.to_string(),
+                    Some(&metadata.to_string()),
                     witness,
                 );
             } else {
                 healthy_count += 1;
-                drop_stale_file_signal(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
+                drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryStale, &stale_key, witness);
             }
         } else {
             leftover_count += 1;
-            ensure_file_signal_if_missing(read_only_db, &sender, LibraryFileSignalType::LibraryLeftover.into(), &leftover_key, witness);
-            drop_stale_file_signal(read_only_db, &sender, LibraryFileSignalType::LibraryStale.into(), &stale_key, witness);
+            ensure_aggregate_signal_if_missing(read_only_db, &sender, AggregateSignalType::LibraryLeftover, &leftover_key, None, witness);
+            drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryStale, &stale_key, witness);
         }
     }
 
@@ -1204,33 +1206,33 @@ pub fn execute_derive_corpus_deploy_status(
         let corpus_path = &signal.issue_key;
         let corpus_path_buf = std::path::Path::new(corpus_path);
 
-        // Skip files not in a configured source directory
-        if !config.is_path_in_source(corpus_path_buf) {
-            skipped_not_configured += 1;
-            // Clear any stale deploy signals for unconfigured files
-            drop_stale_file_signal(
-                read_only_db,
-                &sender,
-                LibraryFileSignalType::DeployReady.into(),
-                corpus_path,
-                witness,
-            );
-            drop_stale_file_signal(
-                read_only_db,
-                &sender,
-                LibraryFileSignalType::DeployedHealthy.into(),
-                corpus_path,
-                witness,
-            );
-            continue;
-        }
-
-        // Get the audio file (we need inode for tags lookup)
+        // Get the audio file (we need inode for signals and tags lookup)
         let audio_file = match read_only_db.get_audio_file_by_path(corpus_path) {
             Ok(Some(af)) => af,
             _ => continue, // Skip if file not found
         };
         let inode = audio_file.inode();
+
+        // Skip files not in a configured source directory
+        if !config.is_path_in_source(corpus_path_buf) {
+            skipped_not_configured += 1;
+            // Clear any stale deploy signals for unconfigured files
+            drop_stale_corpus_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::DeployReady,
+                inode,
+                witness,
+            );
+            drop_stale_corpus_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::DeployedHealthy,
+                inode,
+                witness,
+            );
+            continue;
+        }
 
         // Check if this inode is deployed anywhere and not stale
         let is_deployed = deployed_inodes.contains(&inode);
@@ -1239,18 +1241,19 @@ pub fn execute_derive_corpus_deploy_status(
         if is_deployed && !is_stale {
             // File is correctly deployed
             deployed_healthy_count += 1;
-            ensure_file_signal_if_missing(
+            ensure_corpus_signal(
                 read_only_db,
                 &sender,
-                LibraryFileSignalType::DeployedHealthy.into(),
+                CorpusFileSignalType::DeployedHealthy,
+                inode,
                 corpus_path,
                 witness,
             );
-            drop_stale_file_signal(
+            drop_stale_corpus_signal(
                 read_only_db,
                 &sender,
-                LibraryFileSignalType::DeployReady.into(),
-                corpus_path,
+                CorpusFileSignalType::DeployReady,
+                inode,
                 witness,
             );
         } else {
@@ -1270,19 +1273,20 @@ pub fn execute_derive_corpus_deploy_status(
             let metadata = serde_json::json!({
                 "deploy_path": deploy_path.to_string_lossy(),
             });
-            ensure_file_signal_with_metadata_if_missing(
+            ensure_corpus_signal_with_metadata(
                 read_only_db,
                 &sender,
-                LibraryFileSignalType::DeployReady.into(),
+                CorpusFileSignalType::DeployReady,
+                inode,
                 corpus_path,
-                &metadata.to_string(),
+                metadata,
                 witness,
             );
-            drop_stale_file_signal(
+            drop_stale_corpus_signal(
                 read_only_db,
                 &sender,
-                LibraryFileSignalType::DeployedHealthy.into(),
-                corpus_path,
+                CorpusFileSignalType::DeployedHealthy,
+                inode,
                 witness,
             );
         }
@@ -1665,7 +1669,7 @@ pub fn execute_analyze_fingerprint_overlaps(
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
 
     // Clear all existing SubparDuplicate signals
-    sender.clear_signals_by_type(SignalType::from(CorpusFileSignalType::SubparDuplicate), witness);
+    sender.clear_signals_by_type(SignalType::SubparDuplicate, witness);
 
     // Get all FingerprintOverlap signals
     let fp_dup_signals = read_only_db
@@ -1819,10 +1823,11 @@ pub fn execute_analyze_fingerprint_overlaps(
                         "superior_quality_score": best_score,
                     });
 
-                    sender.ensure_file_signal_with_metadata(
-                        CorpusFileSignalType::SubparDuplicate.into(),
+                    sender.ensure_corpus_signal_with_metadata(
+                        CorpusFileSignalType::SubparDuplicate,
+                        audio_file.inode(),
                         audio_file.path(),
-                        Some(&metadata.to_string()),
+                        metadata,
                         witness,
                     );
 

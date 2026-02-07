@@ -330,59 +330,23 @@ impl SignalType {
     }
 }
 
-impl From<CorpusFileSignalType> for SignalType {
-    fn from(t: CorpusFileSignalType) -> Self {
-        match t {
-            CorpusFileSignalType::FileInCorpus => Self::FileInCorpus,
-            CorpusFileSignalType::UnindexedFile => Self::UnindexedFile,
-            CorpusFileSignalType::HealthyFile => Self::HealthyFile,
-            CorpusFileSignalType::MissingFile => Self::MissingFile,
-            CorpusFileSignalType::MissingDirectory => Self::MissingDirectory,
-            CorpusFileSignalType::MovedFile => Self::MovedFile,
-            CorpusFileSignalType::OutOfBandTagSync => Self::OutOfBandTagSync,
-            CorpusFileSignalType::OutOfBandTagConflict => Self::OutOfBandTagConflict,
-            CorpusFileSignalType::MtimeOnlyMismatch => Self::MtimeOnlyMismatch,
-            CorpusFileSignalType::CorruptFile => Self::CorruptFile,
-            CorpusFileSignalType::ShitFormat => Self::ShitFormat,
-            CorpusFileSignalType::SubparDuplicate => Self::SubparDuplicate,
-            CorpusFileSignalType::CompoundTag => Self::CompoundTagValue,
-        }
-    }
-}
-
-impl From<LibraryFileSignalType> for SignalType {
-    fn from(t: LibraryFileSignalType) -> Self {
-        match t {
-            LibraryFileSignalType::LibraryLeftover => Self::LibraryLeftover,
-            LibraryFileSignalType::LibraryStale => Self::LibraryStale,
-            // DeployReady/DeployedHealthy don't have SignalType equivalents
-            // They're library-specific internal states
-            LibraryFileSignalType::DeployReady | LibraryFileSignalType::DeployedHealthy => {
-                panic!("DeployReady/DeployedHealthy cannot be converted to SignalType")
-            }
-        }
-    }
-}
+// NOTE: From<CorpusFileSignalType> for SignalType has been intentionally removed.
+// This prevents accidental coercion that could lead to keying mismatches.
+// If you need the string representation, use signal_type.as_str() directly.
 
 
 // ============================================================================
 // Signal Types (Type-Safe Signal System)
 // ============================================================================
 
-/// File-based health signal.
-///
-/// The path uniquely identifies the signal. No metadata needed.
-#[derive(Debug, Clone)]
-pub struct FileSignal {
-    pub id: Option<i64>,
-    pub signal_type: FileSignalType,
-    pub path: String,
-    pub discovered_at: Option<String>,
-}
+// NOTE: FileSignal struct has been removed.
+// Corpus file signals are now inode-keyed (use CorpusFileSignalType).
+// Library signals are now aggregate signals (use AggregateSignalType).
 
 /// Types of corpus file signals.
 ///
 /// These signals track the state of files in the corpus directory.
+/// **All corpus file signals are keyed by inode** - use `clear_corpus_signal(type, inode)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CorpusFileSignalType {
     /// File exists in corpus directory
@@ -413,6 +377,12 @@ pub enum CorpusFileSignalType {
     /// Tag value contains separator characters needing split (per-file)
     /// Metadata: { "inode", "compounds": [{ "tag_name", "compound_value", "split_parts", "separator" }] }
     CompoundTag,
+    /// Healthy corpus file ready for deployment (not yet in any library)
+    /// Metadata: { "deploy_path": "..." }
+    DeployReady,
+    /// Healthy corpus file deployed at correct library path
+    /// Metadata: { "library_path": "..." }
+    DeployedHealthy,
 }
 
 impl CorpusFileSignalType {
@@ -431,24 +401,8 @@ impl CorpusFileSignalType {
             Self::ShitFormat => "shit_format",
             Self::SubparDuplicate => "subpar_duplicate",
             Self::CompoundTag => "compound_tag",
-        }
-    }
-
-    pub fn to_signal_type(&self) -> SignalType {
-        match self {
-            Self::FileInCorpus => SignalType::FileInCorpus,
-            Self::UnindexedFile => SignalType::UnindexedFile,
-            Self::HealthyFile => SignalType::HealthyFile,
-            Self::MissingFile => SignalType::MissingFile,
-            Self::MissingDirectory => SignalType::MissingDirectory,
-            Self::MovedFile => SignalType::MovedFile,
-            Self::OutOfBandTagSync => SignalType::OutOfBandTagSync,
-            Self::OutOfBandTagConflict => SignalType::OutOfBandTagConflict,
-            Self::MtimeOnlyMismatch => SignalType::MtimeOnlyMismatch,
-            Self::CorruptFile => SignalType::CorruptFile,
-            Self::ShitFormat => SignalType::ShitFormat,
-            Self::SubparDuplicate => SignalType::SubparDuplicate,
-            Self::CompoundTag => SignalType::CompoundTagValue,
+            Self::DeployReady => "deploy_ready",
+            Self::DeployedHealthy => "deployed_healthy",
         }
     }
 }
@@ -459,96 +413,14 @@ impl std::fmt::Display for CorpusFileSignalType {
     }
 }
 
-/// Types of library file signals.
-///
-/// These signals track the state of files in library directories (deployment targets).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LibraryFileSignalType {
-    /// Library file without corpus backing
-    LibraryLeftover,
-    /// Library file at wrong path (tags changed since deploy)
-    LibraryStale,
-    /// Healthy corpus file ready for deployment (not yet in any library)
-    DeployReady,
-    /// Healthy corpus file deployed at correct library path
-    DeployedHealthy,
-}
-
-impl LibraryFileSignalType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::LibraryLeftover => "library_leftover",
-            Self::LibraryStale => "library_stale",
-            Self::DeployReady => "deploy_ready",
-            Self::DeployedHealthy => "deployed_healthy",
-        }
-    }
-
-    pub fn to_signal_type(&self) -> SignalType {
-        match self {
-            Self::LibraryLeftover => SignalType::LibraryLeftover,
-            Self::LibraryStale => SignalType::LibraryStale,
-            // DeployReady/DeployedHealthy don't have SignalType equivalents
-            Self::DeployReady | Self::DeployedHealthy => {
-                panic!("DeployReady/DeployedHealthy should not use to_signal_type")
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for LibraryFileSignalType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-/// Unified file signal type for database storage compatibility.
-///
-/// This enum wraps both corpus and library signal types for cases where
-/// we need to handle both in a unified way (e.g., database queries).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FileSignalType {
-    Corpus(CorpusFileSignalType),
-    Library(LibraryFileSignalType),
-}
-
-impl FileSignalType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Corpus(t) => t.as_str(),
-            Self::Library(t) => t.as_str(),
-        }
-    }
-
-    /// Convert to SignalType for DB queries.
-    ///
-    /// Panics for library types that don't have SignalType equivalents
-    /// (DeployReady, DeployedHealthy).
-    pub fn to_signal_type(&self) -> SignalType {
-        match self {
-            Self::Corpus(t) => t.to_signal_type(),
-            Self::Library(t) => t.to_signal_type(),
-        }
-    }
-}
-
-impl std::fmt::Display for FileSignalType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl From<CorpusFileSignalType> for FileSignalType {
-    fn from(t: CorpusFileSignalType) -> Self {
-        Self::Corpus(t)
-    }
-}
-
-impl From<LibraryFileSignalType> for FileSignalType {
-    fn from(t: LibraryFileSignalType) -> Self {
-        Self::Library(t)
-    }
-}
+// NOTE: LibraryFileSignalType and FileSignalType have been removed.
+//
+// - DeployReady/DeployedHealthy moved to CorpusFileSignalType (inode-keyed)
+// - LibraryStale/LibraryLeftover moved to AggregateSignalType (semantic-keyed)
+//
+// This ensures compile-time enforcement of keying semantics:
+// - CorpusFileSignalType -> must use clear_corpus_signal(type, inode)
+// - AggregateSignalType -> must use clear_aggregate_signal(type, key)
 
 /// Aggregate health signal.
 ///
@@ -588,7 +460,9 @@ impl AggregateSignal {
     }
 }
 
-/// Types of aggregate signals.
+/// Types of aggregate signals (semantic-keyed).
+///
+/// These signals use arbitrary string keys (not inodes). Use `clear_aggregate_signal(type, key)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AggregateSignalType {
     /// Multiple files with same fingerprint (internal overlap detection, not surfaced directly)
@@ -621,6 +495,13 @@ pub enum AggregateSignalType {
     /// Key: "{tag_name}:{tag_value}" (e.g., "artist:Rinse & Repeat")
     /// Metadata: { "tag_name", "canonical_value", "created_at" }
     CanonicalTag,
+    /// Library file without corpus backing
+    /// Key: "library_leftover:{library_name}:{library_path}"
+    LibraryLeftover,
+    /// Library file at wrong path (tags changed since deploy)
+    /// Key: "library_stale:{library_name}:{library_path}"
+    /// Metadata: { "library_path", "expected_path" }
+    LibraryStale,
 }
 
 impl AggregateSignalType {
@@ -636,6 +517,8 @@ impl AggregateSignalType {
             Self::CompoundTagValue => "compound_tag_value",
             Self::CrossSourceOverlap => "cross_source_overlap",
             Self::CanonicalTag => "canonical_tag",
+            Self::LibraryLeftover => "library_leftover",
+            Self::LibraryStale => "library_stale",
         }
     }
 
@@ -651,6 +534,8 @@ impl AggregateSignalType {
             "compound_tag_value" => Some(Self::CompoundTagValue),
             "cross_source_overlap" => Some(Self::CrossSourceOverlap),
             "canonical_tag" => Some(Self::CanonicalTag),
+            "library_leftover" => Some(Self::LibraryLeftover),
+            "library_stale" => Some(Self::LibraryStale),
             _ => None,
         }
     }
@@ -680,25 +565,11 @@ pub struct Signal {
     pub issue_key: String,
     pub discovered_at: Option<String>,
     pub metadata_json: Option<String>,
+    /// Native inode for inode-keyed signals (corpus file signals).
+    /// Path-keyed signals (MissingDirectory, library signals) have None.
+    pub inode: Option<i64>,
 }
 
-// NOTE: When UI code needs to display inode-keyed signals, add these helpers:
-// - Signal::inode() -> Option<i64> - parse inode from issue_key
-// - Signal::path() -> Option<String> - extract path from metadata_json
-// - Signal::display_path() -> String - path if available, else issue_key
-
-impl From<FileSignal> for Signal {
-    fn from(sig: FileSignal) -> Self {
-        Self {
-            id: sig.id,
-            issue_type: SignalType::from_str(sig.signal_type.as_str())
-                .unwrap_or(SignalType::FileInCorpus),
-            issue_key: sig.path,
-            discovered_at: sig.discovered_at,
-            metadata_json: None,
-        }
-    }
-}
 
 impl From<AggregateSignal> for Signal {
     fn from(sig: AggregateSignal) -> Self {
@@ -709,6 +580,7 @@ impl From<AggregateSignal> for Signal {
             issue_key: sig.key,
             discovered_at: sig.discovered_at,
             metadata_json: sig.metadata_json,
+            inode: None, // AggregateSignal is semantic-keyed, not inode-keyed
         }
     }
 }

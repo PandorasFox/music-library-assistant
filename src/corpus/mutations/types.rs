@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::corpus::computations::{Computation, awakening};
-use crate::corpus::db::types::{CorpusFileSignalType, FileSignalType, LibraryFileSignalType};
+use crate::corpus::db::types::{AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::tags::TagSet;
 use crate::corpus::transcode::TranscodeTarget;
 
@@ -95,16 +95,20 @@ impl TagOp {
 /// When a mutation executes and sends a fire-and-forget write to db_thread,
 /// querying the read-only connection immediately may not see the write yet.
 /// By embedding the signal data in the MutationResult, we avoid this race.
+///
+/// All pending signals are corpus file signals, keyed by inode.
 #[derive(Debug, Clone)]
 pub enum PendingSignal {
-    /// File signal without metadata
-    FileSignal {
+    /// Corpus file signal without extra metadata
+    CorpusSignal {
         signal_type: CorpusFileSignalType,
+        inode: i64,
         path: String,
     },
-    /// File signal with JSON metadata
-    FileSignalWithMetadata {
+    /// Corpus file signal with extra JSON metadata
+    CorpusSignalWithMetadata {
         signal_type: CorpusFileSignalType,
+        inode: i64,
         path: String,
         metadata_json: String,
     },
@@ -137,7 +141,7 @@ pub enum SignalClearScope {
 /// where the signal key doesn't match the mutation's affected paths.
 #[derive(Debug, Clone)]
 pub struct SignalToClear {
-    pub signal_type: FileSignalType,
+    pub signal_type: AggregateSignalType,
     pub key_pattern: String,
 }
 
@@ -675,7 +679,7 @@ impl Mutation {
         match self {
             Mutation::LibraryMove { source, .. } => vec![
                 SignalToClear {
-                    signal_type: LibraryFileSignalType::LibraryStale.into(),
+                    signal_type: AggregateSignalType::LibraryStale,
                     key_pattern: source.to_string_lossy().to_string(),
                 }
             ],

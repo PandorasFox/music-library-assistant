@@ -476,9 +476,9 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_compound_signals_by_safety(safe_only)
     }
 
-    /// Check if a file signal exists.
-    pub fn file_signal_exists(&self, signal_type: super::types::FileSignalType, key: &str) -> bool {
-        self.db.file_signal_exists(signal_type, key)
+    /// Check if an aggregate signal exists (semantic-keyed).
+    pub fn aggregate_signal_exists(&self, signal_type: super::types::AggregateSignalType, key: &str) -> bool {
+        self.db.aggregate_signal_exists(signal_type, key)
     }
 
     /// Check if an inode-keyed corpus signal exists.
@@ -651,8 +651,8 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_tags_ordered()
     }
 
-    /// Get indexed corpus directories (directories stored in files table).
-    pub fn get_indexed_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+    /// Get indexed corpus directories with their inodes.
+    pub fn get_indexed_corpus_directories(&self) -> Result<Vec<(std::path::PathBuf, i64)>> {
         self.db.get_indexed_corpus_directories()
     }
 

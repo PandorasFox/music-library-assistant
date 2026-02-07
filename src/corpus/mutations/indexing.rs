@@ -127,8 +127,9 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
 
         // CorruptFile if fingerprint extraction failed
         if extracted.fingerprint.is_none() {
-            pending_signals.push(PendingSignal::FileSignal {
+            pending_signals.push(PendingSignal::CorpusSignal {
                 signal_type: CorpusFileSignalType::CorruptFile,
+                inode: extracted.inode,
                 path: rel_str.clone(),
             });
         }
@@ -136,8 +137,9 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
         // ShitFormat if non-Vorbis container
         if is_shit_format(&extracted.file_type) {
             let metadata_json = serde_json::json!({ "file_type": extracted.file_type }).to_string();
-            pending_signals.push(PendingSignal::FileSignalWithMetadata {
+            pending_signals.push(PendingSignal::CorpusSignalWithMetadata {
                 signal_type: CorpusFileSignalType::ShitFormat,
+                inode: extracted.inode,
                 path: rel_str,
                 metadata_json,
             });
@@ -226,18 +228,17 @@ pub fn execute_drop_directory_from_index(
         sender.clear_all_corpus_signals(inode, witness);
     }
 
-    // Drop the directory entry itself from files table
+    // Drop the directory entry itself from files table and clear its signals
     // We need to get the directory's inode first
     if let Ok(Some(dir_entry)) = db.get_file_entry_by_path(&dir_str, "corpus") {
         sender.drop_file_index_by_inode("corpus", dir_entry.inode, witness);
+        // Clear MissingDirectory signal (inode-keyed)
+        sender.clear_corpus_signal(
+            CorpusFileSignalType::MissingDirectory,
+            dir_entry.inode,
+            witness,
+        );
     }
-
-    // Clear MissingDirectory signal
-    sender.clear_file_signal(
-        CorpusFileSignalType::MissingDirectory.into(),
-        &dir_str,
-        witness,
-    );
 
     Ok(())
 }
@@ -476,9 +477,10 @@ pub fn execute_acknowledge_mtime_only(
         );
 
         // Clear MtimeOnlyMismatch signal via db_thread
-        sender.clear_file_signal(
-            CorpusFileSignalType::MtimeOnlyMismatch.into(),
-            audio_file.path(),
+        // NOTE: Corpus file signals are keyed by inode, NOT by path
+        sender.clear_corpus_signal(
+            CorpusFileSignalType::MtimeOnlyMismatch,
+            *inode,
             witness,
         );
 
@@ -620,19 +622,20 @@ pub fn execute_assimilate_disk_tags_to_db(
     sender.clear_tag_mismatches_for_track(&rel_path_str, witness);
 
     // Clear OOB signals via db_thread
-    sender.clear_file_signal(
-        CorpusFileSignalType::OutOfBandTagSync.into(),
-        &rel_path_str,
+    // NOTE: New signals are keyed by inode. Clear both inode-keyed (new) and path-keyed (legacy) signals.
+    sender.clear_corpus_signal(
+        CorpusFileSignalType::OutOfBandTagSync,
+        inode,
         witness,
     );
-    sender.clear_file_signal(
-        CorpusFileSignalType::OutOfBandTagConflict.into(),
-        &rel_path_str,
+    sender.clear_corpus_signal(
+        CorpusFileSignalType::OutOfBandTagConflict,
+        inode,
         witness,
     );
-    sender.clear_file_signal(
-        CorpusFileSignalType::MtimeOnlyMismatch.into(),
-        &rel_path_str,
+    sender.clear_corpus_signal(
+        CorpusFileSignalType::MtimeOnlyMismatch,
+        inode,
         witness,
     );
 

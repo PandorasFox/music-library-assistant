@@ -865,14 +865,16 @@ pub fn execute_detect_shit_formats(
     for audio_file in audio_files {
         let file_type_lower = audio_file.audio.file_type.to_lowercase();
         if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
-            let metadata_json = serde_json::json!({
+            let extra_metadata = serde_json::json!({
                 "file_type": audio_file.audio.file_type
-            }).to_string();
+            });
 
-            sender.ensure_file_signal_with_metadata(
-                CorpusFileSignalType::ShitFormat.into(),
+            // Use inode-keyed signal (path stored in metadata by ensure_corpus_signal_with_metadata)
+            sender.ensure_corpus_signal_with_metadata(
+                CorpusFileSignalType::ShitFormat,
+                audio_file.inode(),
                 audio_file.path(),
-                Some(&metadata_json),
+                extra_metadata,
                 witness,
             );
 

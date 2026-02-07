@@ -1652,16 +1652,16 @@ fn execute_index_audio_file(
     // Apply tags using the unified helper
     let result = apply_tagset_to_inode(&tx, file_data.inode, tags, tag_table)?;
 
-    // Write history for discovered/changed tags
+    // Write history for discovered/changed tags and mark dirty for recomputation
     if result.has_changes() {
         let session_id = format!("index:{}", path);
         let changes = result.to_history_entries();
         write_tag_edit_history(&tx, file_data.inode, &changes, &session_id)?;
-    }
 
-    // Mark inode dirty for tag-dependent computations (only for corpus files)
-    if file_data.source == "corpus" {
-        mark_inode_dirty(&tx, file_data.inode)?;
+        // Mark inode dirty for tag-dependent computations (only for corpus files)
+        if file_data.source == "corpus" {
+            mark_inode_dirty(&tx, file_data.inode)?;
+        }
     }
 
     tx.commit()?;

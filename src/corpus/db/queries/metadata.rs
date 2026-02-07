@@ -1,51 +1,11 @@
-//! Tag mismatch operations and OOB tag resolution queries.
-//!
-//! NOTE: The tag_mismatches table has been removed in the new schema.
-//! Tag conflicts are now stored as OOB signals with mismatch details in metadata_json.
-//! The record/clear methods are no-ops until callers are fully migrated to signals.
+//! OOB tag resolution queries and tag collision detection.
 
 use anyhow::Result;
 use rusqlite::params;
 
 use super::Database;
-use crate::db_thread::SignalWitness;
 
 impl Database {
-    // =========================================================================
-    // Tag Mismatch Methods (DEPRECATED - tag_mismatches table removed)
-    // =========================================================================
-
-    /// Record a tag mismatch for a file (DB differs from disk).
-    ///
-    /// **DEPRECATED**: tag_mismatches table is removed. Tag conflicts are now
-    /// stored as OOB signals with mismatch details in metadata_json.
-    /// This is a no-op until callers are migrated.
-    pub fn record_tag_mismatch(
-        &self,
-        _inode: i64,
-        _field: &str,
-        _db_value: Option<&str>,
-        _disk_value: Option<&str>,
-        _witness: &impl SignalWitness,
-    ) -> Result<()> {
-        // TODO: Convert to signal-based mismatch tracking
-        Ok(())
-    }
-
-    /// Clear a specific tag mismatch for a file.
-    ///
-    /// **DEPRECATED**: tag_mismatches table is removed.
-    /// This is a no-op until callers are migrated.
-    pub fn clear_tag_mismatch(
-        &self,
-        _inode: i64,
-        _field: &str,
-        _witness: &impl SignalWitness,
-    ) -> Result<()> {
-        // TODO: Convert to signal-based mismatch tracking
-        Ok(())
-    }
-
     // ========================================================================
     // Tag Collision Detection Queries (for canonicalization signals)
     // ========================================================================

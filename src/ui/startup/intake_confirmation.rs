@@ -34,6 +34,13 @@ pub struct DirectoryGroup {
     pub filenames: Vec<String>,
 }
 
+/// File entry with path for indexing.
+#[derive(Debug, Clone)]
+pub struct UnindexedFileEntry {
+    /// Absolute path for indexing
+    pub abs_path: PathBuf,
+}
+
 /// State for the intake confirmation modal.
 #[derive(Debug)]
 pub struct IntakeConfirmationState {
@@ -41,8 +48,8 @@ pub struct IntakeConfirmationState {
     pub file_count: usize,
     /// Total bytes to read (sum of file sizes)
     pub total_bytes: u64,
-    /// Paths to index (gathered from UnindexedFile signals)
-    pub paths: Vec<PathBuf>,
+    /// Files to index, keyed by inode
+    pub files: Vec<UnindexedFileEntry>,
     /// Source identifier ("corpus" or "legacy")
     pub source: String,
     /// Number of directories containing unindexed files
@@ -68,7 +75,8 @@ impl IntakeConfirmationState {
     /// Gather intake confirmation state from the database.
     ///
     /// Queries UnindexedFile signals (created during second-level signal derivation)
-    /// to get the list of files that need indexing.
+    /// to get the list of files that need indexing. Files are tracked by inode
+    /// (matching the signal key) with paths for display and mutation creation.
     ///
     /// Returns None if there are no unindexed files.
     pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
@@ -93,16 +101,16 @@ impl IntakeConfirmationState {
             return None;
         }
 
-        // Inode-keyed signals: path is in metadata_json, not issue_key
+        // Inode-keyed signals: inode in dedicated column, path in metadata_json
         let resolver = paths::get_resolver();
-        let mut all_paths: Vec<PathBuf> = Vec::new();
+        let mut files: Vec<UnindexedFileEntry> = Vec::new();
         let mut total_bytes: u64 = 0;
         let mut directories: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         // Group files by their relative directory path for display
         let mut dir_to_files: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
         for issue in &issues {
-            // Extract path from metadata_json (inode-keyed signals store path there)
+            // Extract path from metadata_json
             let rel_path_str = issue.metadata_json.as_ref()
                 .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
                 .and_then(|v| v.get("path")?.as_str().map(|s| s.to_string()));
@@ -132,37 +140,39 @@ impl IntakeConfirmationState {
                     dir_to_files.entry(dir_str).or_default().push(file_str);
                 }
 
-                all_paths.push(abs_path);
+                files.push(UnindexedFileEntry {
+                    abs_path,
+                });
             }
         }
 
-        if all_paths.is_empty() {
+        if files.is_empty() {
             return None;
         }
 
         // Build grouped files list, sorting filenames within each directory
         let grouped_files: Vec<DirectoryGroup> = dir_to_files
             .into_iter()
-            .map(|(dir, mut files)| {
-                files.sort();
+            .map(|(dir, mut filenames)| {
+                filenames.sort();
                 DirectoryGroup {
                     display_path: dir,
-                    filenames: files,
+                    filenames,
                 }
             })
             .collect();
 
         log_general(format!(
             "IntakeConfirmation: gathered {} files ({} bytes) from {} directories",
-            all_paths.len(),
+            files.len(),
             total_bytes,
             directories.len()
         ));
 
         Some(Self {
-            file_count: all_paths.len(),
+            file_count: files.len(),
             total_bytes,
-            paths: all_paths,
+            files,
             source: source.to_string(),
             _directory_count: directories.len(),
             grouped_files,
@@ -200,14 +210,14 @@ impl IntakeConfirmationState {
 
     /// Create IndexFileFromPath mutations for all unindexed files.
     ///
-    /// These mutations just contain the path - metadata extraction happens
+    /// These mutations contain the absolute path - metadata extraction happens
     /// on the worker thread, not the UI thread.
     pub fn create_index_mutations(&self) -> Vec<Mutation> {
         let mutations: Vec<Mutation> = self
-            .paths
+            .files
             .iter()
-            .map(|path| Mutation::IndexFileFromPath {
-                path: path.clone(),
+            .map(|entry| Mutation::IndexFileFromPath {
+                path: entry.abs_path.clone(),
                 source: self.source.clone(),
             })
             .collect();

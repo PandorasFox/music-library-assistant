@@ -12,8 +12,8 @@
 //!
 //! ## Computations
 //!
-//! - `ScheduleSecondLevelDerivations` - Orchestrator: spawns per-directory work
-//! - `DeriveDirectorySignals` - Derive signals for a single directory
+//! - `ScheduleSecondLevelDerivations` - Orchestrator: spawns global corpus derivation
+//! - `DeriveCorpusSignals` - Global inode comparison for corpus signals
 //! - `UpdateCorpusFileSignals` - Lightweight per-file corpus signal update (post-mutation)
 //! - `UpdateLibraryFileSignals` - Lightweight per-file library signal update (post-mutation)
 //! - `WalkLibrary` - Enumerate library directories for scanning
@@ -43,18 +43,12 @@ pub enum Computation {
 
     /// Derive corpus signals via global inode set comparison.
     ///
-    /// Replaces per-directory DeriveDirectorySignals with a single-pass
+    /// Replaces per-directory derivation with a single-pass
     /// global comparison of disk inodes (FileInCorpus signals) vs indexed inodes:
     /// - disk_only (disk - indexed) → UnindexedFile signals
     /// - index_only (indexed - disk) → MissingFile signals
     /// - both (disk ∩ indexed) → check OOB, emit HealthyFile or spawn verification
     DeriveCorpusSignals,
-
-    /// Derive second-level signals for a single directory.
-    ///
-    /// DEPRECATED: Use DeriveCorpusSignals instead for global inode comparison.
-    /// Retained for reference during transition.
-    DeriveDirectorySignals { directory: PathBuf },
 
     /// Update corpus signals for a single file after mutation.
     ///
@@ -107,7 +101,6 @@ impl Computation {
         match self {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
             Computation::DeriveCorpusSignals => "Deriving corpus signals",
-            Computation::DeriveDirectorySignals { .. } => "Deriving signals (deprecated)",
             Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
             Computation::WalkLibrary { .. } => "Walking library",

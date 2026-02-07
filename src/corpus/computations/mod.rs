@@ -208,9 +208,6 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awakening::Computation::DeriveCorpusSignals => {
                         awakening::execute_derive_corpus_signals(read_only_db, &witness, start)
                     }
-                    awakening::Computation::DeriveDirectorySignals { directory } => {
-                        awakening::execute_derive_directory_signals(read_only_db, directory, &witness, start)
-                    }
                     awakening::Computation::UpdateCorpusFileSignals { path } => {
                         awakening::execute_update_corpus_file_signals(read_only_db, path, &witness, start)
                     }

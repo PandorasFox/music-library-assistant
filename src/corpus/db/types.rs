@@ -665,6 +665,15 @@ impl AggregateSignalType {
 ///
 /// Signals are created by computations and deleted when stale. They record
 /// file health, duplicate detection, missing tags, deploy conflicts, etc.
+///
+/// ## Key Types
+///
+/// - **File signals** (FileInCorpus, UnindexedFile, HealthyFile, MissingFile, etc.):
+///   `issue_key` stores the inode as a string. Path is in `metadata_json.path`.
+/// - **Library signals** (LibraryStale, LibraryLeftover):
+///   `issue_key` uses compound format like `"library_leftover:{name}:{path}"`.
+/// - **Aggregate signals** (FingerprintOverlap, TagCanonicity, etc.):
+///   `issue_key` uses semantic string keys.
 #[derive(Debug, Clone)]
 pub struct Signal {
     pub id: Option<i64>,
@@ -673,6 +682,11 @@ pub struct Signal {
     pub discovered_at: Option<String>,
     pub metadata_json: Option<String>,
 }
+
+// NOTE: When UI code needs to display inode-keyed signals, add these helpers:
+// - Signal::inode() -> Option<i64> - parse inode from issue_key
+// - Signal::path() -> Option<String> - extract path from metadata_json
+// - Signal::display_path() -> String - path if available, else issue_key
 
 impl From<FileSignal> for Signal {
     fn from(sig: FileSignal) -> Self {

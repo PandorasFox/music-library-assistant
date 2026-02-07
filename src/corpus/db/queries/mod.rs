@@ -606,6 +606,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_corpus_inodes()
     }
 
+    /// Get all FileInCorpus signal inodes with their paths.
+    pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
+        self.db.get_file_in_corpus_inodes()
+    }
+
     /// Get the corpus path for a single inode.
     pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
         self.db.get_corpus_path_for_inode(inode)
@@ -614,16 +619,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get all tags ordered by inode and tag name (for metadata duplicate detection).
     pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
         self.db.get_all_tags_ordered()
-    }
-
-    /// Get distinct parent directories from tracks table.
-    pub fn get_distinct_track_directories(&self) -> Result<Vec<std::path::PathBuf>> {
-        self.db.get_distinct_track_directories()
-    }
-
-    /// Get distinct parent directories from FileInCorpus signals.
-    pub fn get_distinct_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
-        self.db.get_distinct_corpus_directories()
     }
 
     /// Get indexed corpus directories (directories stored in files table).

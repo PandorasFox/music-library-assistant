@@ -38,15 +38,22 @@ pub use executors::*;
 pub enum Computation {
     /// Schedule second-level signal derivations.
     ///
-    /// Orchestrator that spawns per-directory computations after eyeballing.
+    /// Orchestrator that spawns global corpus derivation and library walks.
     ScheduleSecondLevelDerivations,
+
+    /// Derive corpus signals via global inode set comparison.
+    ///
+    /// Replaces per-directory DeriveDirectorySignals with a single-pass
+    /// global comparison of disk inodes (FileInCorpus signals) vs indexed inodes:
+    /// - disk_only (disk - indexed) → UnindexedFile signals
+    /// - index_only (indexed - disk) → MissingFile signals
+    /// - both (disk ∩ indexed) → check OOB, emit HealthyFile or spawn verification
+    DeriveCorpusSignals,
 
     /// Derive second-level signals for a single directory.
     ///
-    /// Compares FileInCorpus signals against indexed tracks:
-    /// - FileInCorpus without track → UnindexedFile
-    /// - Track without FileInCorpus → MissingFile
-    /// - Track with FileInCorpus → HealthyFile
+    /// DEPRECATED: Use DeriveCorpusSignals instead for global inode comparison.
+    /// Retained for reference during transition.
     DeriveDirectorySignals { directory: PathBuf },
 
     /// Update corpus signals for a single file after mutation.
@@ -99,7 +106,8 @@ impl Computation {
     pub fn label(&self) -> &'static str {
         match self {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
-            Computation::DeriveDirectorySignals { .. } => "Deriving signals",
+            Computation::DeriveCorpusSignals => "Deriving corpus signals",
+            Computation::DeriveDirectorySignals { .. } => "Deriving signals (deprecated)",
             Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
             Computation::WalkLibrary { .. } => "Walking library",

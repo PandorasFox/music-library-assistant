@@ -10,8 +10,9 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
-    ensure_file_signal_if_missing, ensure_file_signal_with_metadata_if_missing,
-    drop_stale_file_signal,
+    ensure_inode_signal_if_missing, ensure_inode_signal_with_metadata_if_missing,
+    drop_stale_inode_signal,
+    ensure_file_signal_with_metadata_if_missing,
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{CorpusFileSignalType, FileSource};
@@ -28,7 +29,7 @@ use super::{Computation, Result};
 /// Phase 0: Clear all FileInCorpus signals before a fresh corpus scan.
 ///
 /// This ensures deleted files don't retain stale signals that would cause them
-/// to appear as "healthy" instead of "missing" in DeriveDirectorySignals.
+/// to appear as "healthy" instead of "missing" in DeriveCorpusSignals.
 pub fn execute_clear_existing_observation_state(
     _read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -199,9 +200,9 @@ pub fn execute_scan_corpus_directory(
         };
         let relative_path_str = relative_path.to_string_lossy().to_string();
 
-        // Create FileInCorpus signal for every file on disk (with relative key)
+        // Create FileInCorpus signal for every file on disk (keyed by inode, path in metadata)
         // (ClearExistingObservationState cleared all stale signals at start of observation)
-        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &relative_path_str, witness);
+        ensure_inode_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), *inode, &relative_path_str, witness);
 
         // Check if file is indexed and needs verification
         // indexed_by_inode returns HashMap<inode, (mtime_secs, mtime_nanos)>
@@ -210,17 +211,17 @@ pub fn execute_scan_corpus_directory(
             if let Some(db_path) = indexed_paths.get(inode) {
                 if db_path != &relative_path_str {
                     // Same inode but different path - file was moved
-                    let metadata = serde_json::json!({
-                        "inode": inode,
+                    // Signal keyed by inode, with old_path and new_path in metadata
+                    let extra_metadata = serde_json::json!({
                         "old_path": db_path,
-                        "new_path": relative_path_str,
                     });
-                    ensure_file_signal_with_metadata_if_missing(
+                    ensure_inode_signal_with_metadata_if_missing(
                         read_only_db,
                         &sender,
                         CorpusFileSignalType::MovedFile.into(),
-                        &relative_path_str,
-                        &metadata.to_string(),
+                        *inode,
+                        &relative_path_str, // new_path stored as "path" in metadata
+                        extra_metadata,
                         witness,
                     );
                 }
@@ -495,6 +496,7 @@ pub fn execute_verify_tags(
     match indexing::execute_verify_tags(read_only_db, inode, path) {
         Ok(verify_result) => {
             // Full classification based on TagVerifyResult
+            // All signals are now keyed by inode with path in metadata
             if verify_result.is_clean() {
                 // Tags match exactly - but we need to check if mtime actually differs
                 // (in force_check mode, VerifyTags runs even when mtime matches)
@@ -506,26 +508,27 @@ pub fn execute_verify_tags(
                         "[COMPUTE] VerifyTags: mtime-only change for inode {} ({})",
                         inode, path.display()
                     ));
-                    ensure_file_signal_if_missing(
+                    ensure_inode_signal_if_missing(
                         read_only_db,
                         &sender,
                         CorpusFileSignalType::MtimeOnlyMismatch.into(),
+                        inode,
                         &rel_str,
                         witness,
                     );
                     // Clear mutually exclusive signals
-                    drop_stale_file_signal(
+                    drop_stale_inode_signal(
                         read_only_db,
                         &sender,
                         CorpusFileSignalType::OutOfBandTagConflict.into(),
-                        &rel_str,
+                        inode,
                         witness,
                     );
-                    drop_stale_file_signal(
+                    drop_stale_inode_signal(
                         read_only_db,
                         &sender,
                         CorpusFileSignalType::OutOfBandTagSync.into(),
-                        &rel_str,
+                        inode,
                         witness,
                     );
                 } else {
@@ -534,25 +537,25 @@ pub fn execute_verify_tags(
                         "[COMPUTE] VerifyTags: file healthy for inode {} ({})",
                         inode, path.display()
                     ));
-                    drop_stale_file_signal(
+                    drop_stale_inode_signal(
                         read_only_db,
                         &sender,
                         CorpusFileSignalType::MtimeOnlyMismatch.into(),
-                        &rel_str,
+                        inode,
                         witness,
                     );
-                    drop_stale_file_signal(
+                    drop_stale_inode_signal(
                         read_only_db,
                         &sender,
                         CorpusFileSignalType::OutOfBandTagConflict.into(),
-                        &rel_str,
+                        inode,
                         witness,
                     );
-                    drop_stale_file_signal(
+                    drop_stale_inode_signal(
                         read_only_db,
                         &sender,
                         CorpusFileSignalType::OutOfBandTagSync.into(),
-                        &rel_str,
+                        inode,
                         witness,
                     );
                 }
@@ -562,37 +565,39 @@ pub fn execute_verify_tags(
                     "[COMPUTE] VerifyTags: tag conflict for inode {} ({})",
                     inode, path.display()
                 ));
-                // Serialize mismatches as JSON for the resolution UI
-                let metadata_json = serde_json::json!({
-                    "mismatches": verify_result.mismatches
-                }).to_string();
                 // Clear all OOB signals first (including target type to refresh metadata)
-                drop_stale_file_signal(
+                drop_stale_inode_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagConflict.into(),
-                    &rel_str,
+                    inode,
                     witness,
                 );
-                drop_stale_file_signal(
+                drop_stale_inode_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagSync.into(),
-                    &rel_str,
+                    inode,
                     witness,
                 );
-                drop_stale_file_signal(
+                drop_stale_inode_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::MtimeOnlyMismatch.into(),
-                    &rel_str,
+                    inode,
                     witness,
                 );
-                // Create fresh signal with current mismatch metadata
-                sender.ensure_file_signal_with_metadata(
+                // Create fresh signal with mismatch metadata (keyed by inode)
+                let extra_metadata = serde_json::json!({
+                    "mismatches": verify_result.mismatches
+                });
+                ensure_inode_signal_with_metadata_if_missing(
+                    read_only_db,
+                    &sender,
                     CorpusFileSignalType::OutOfBandTagConflict.into(),
+                    inode,
                     &rel_str,
-                    Some(&metadata_json),
+                    extra_metadata,
                     witness,
                 );
             } else {
@@ -601,37 +606,39 @@ pub fn execute_verify_tags(
                     "[COMPUTE] VerifyTags: syncable tag diff for inode {} ({})",
                     inode, path.display()
                 ));
-                // Serialize mismatches as JSON for the resolution UI
-                let metadata_json = serde_json::json!({
-                    "mismatches": verify_result.mismatches
-                }).to_string();
                 // Clear all OOB signals first (including target type to refresh metadata)
-                drop_stale_file_signal(
+                drop_stale_inode_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagSync.into(),
-                    &rel_str,
+                    inode,
                     witness,
                 );
-                drop_stale_file_signal(
+                drop_stale_inode_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::OutOfBandTagConflict.into(),
-                    &rel_str,
+                    inode,
                     witness,
                 );
-                drop_stale_file_signal(
+                drop_stale_inode_signal(
                     read_only_db,
                     &sender,
                     CorpusFileSignalType::MtimeOnlyMismatch.into(),
-                    &rel_str,
+                    inode,
                     witness,
                 );
-                // Create fresh signal with current mismatch metadata
-                sender.ensure_file_signal_with_metadata(
+                // Create fresh signal with mismatch metadata (keyed by inode)
+                let extra_metadata = serde_json::json!({
+                    "mismatches": verify_result.mismatches
+                });
+                ensure_inode_signal_with_metadata_if_missing(
+                    read_only_db,
+                    &sender,
                     CorpusFileSignalType::OutOfBandTagSync.into(),
+                    inode,
                     &rel_str,
-                    Some(&metadata_json),
+                    extra_metadata,
                     witness,
                 );
             }
@@ -651,33 +658,34 @@ pub fn execute_verify_tags(
             );
             log_general(&err_msg);
             crate::logging::log_error(&err_msg);
-            ensure_file_signal_if_missing(
+            ensure_inode_signal_if_missing(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::CorruptFile.into(),
+                inode,
                 &rel_str,
                 witness,
             );
             // Clear OOB signals on parse error - we can't classify what we can't read
-            drop_stale_file_signal(
+            drop_stale_inode_signal(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::OutOfBandTagConflict.into(),
-                &rel_str,
+                inode,
                 witness,
             );
-            drop_stale_file_signal(
+            drop_stale_inode_signal(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::OutOfBandTagSync.into(),
-                &rel_str,
+                inode,
                 witness,
             );
-            drop_stale_file_signal(
+            drop_stale_inode_signal(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::MtimeOnlyMismatch.into(),
-                &rel_str,
+                inode,
                 witness,
             );
             // Return success so computation continues processing other files
@@ -739,12 +747,12 @@ pub fn execute_verify_audio(
     // Verify audio integrity by decoding the entire file
     match crate::corpus::metadata::verify_audio_integrity(path) {
         Ok(()) => {
-            // Audio is valid - clear any stale CorruptFile signal
-            drop_stale_file_signal(
+            // Audio is valid - clear any stale CorruptFile signal (keyed by inode)
+            drop_stale_inode_signal(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::CorruptFile.into(),
-                &rel_str,
+                inode,
                 witness,
             );
             Result::success(
@@ -762,10 +770,11 @@ pub fn execute_verify_audio(
             );
             log_general(&err_msg);
             crate::logging::log_error(&err_msg);
-            ensure_file_signal_if_missing(
+            ensure_inode_signal_if_missing(
                 read_only_db,
                 &sender,
                 CorpusFileSignalType::CorruptFile.into(),
+                inode,
                 &rel_str,
                 witness,
             );

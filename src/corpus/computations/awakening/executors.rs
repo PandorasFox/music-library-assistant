@@ -9,9 +9,10 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::corpus::computations::helpers::{
-    drop_stale_file_signal, ensure_file_signal_if_missing,
-    ensure_file_signal_with_metadata_if_missing, enumerate_all_directories,
-    get_configured_library_names, is_audio_file,
+    drop_stale_file_signal, drop_stale_inode_signal,
+    ensure_file_signal_if_missing, ensure_file_signal_with_metadata_if_missing,
+    ensure_inode_signal_if_missing,
+    enumerate_all_directories, get_configured_library_names, is_audio_file,
 };
 use crate::corpus::computations::types::ComputationWitness;
 use crate::corpus::db::types::{CorpusFileSignalType, LibraryFileSignalType};
@@ -92,38 +93,12 @@ pub fn execute_schedule_second_level_derivations(
     ));
 
     // ========================================================================
-    // Schedule Per-Directory Signal Derivations
+    // Schedule Global Corpus Signal Derivation
     // ========================================================================
-    // Get all directories that have:
-    // 1. FileInCorpus signals (corpus directories with audio files)
-    // 2. Indexed tracks (may be missing from corpus now)
-    let corpus_dirs = read_only_db.get_distinct_corpus_directories().unwrap_or_default();
-    log_general(format!(
-        "[COMPUTE] Found {} directories with FileInCorpus signals",
-        corpus_dirs.len()
-    ));
+    // Single global DeriveCorpusSignals replaces per-directory derivation
+    log_general("[COMPUTE] ScheduleSecondLevelDerivations: spawning global DeriveCorpusSignals");
 
-    let index_dirs = read_only_db.get_distinct_track_directories().unwrap_or_default();
-    log_general(format!(
-        "[COMPUTE] Found {} directories with indexed tracks",
-        index_dirs.len()
-    ));
-
-    // Union of all directories that need second-level signal derivation
-    let all_dirs: HashSet<PathBuf> = corpus_dirs.into_iter()
-        .chain(index_dirs.into_iter())
-        .collect();
-
-    log_general(format!(
-        "[COMPUTE] ScheduleSecondLevelDerivations: spawning {} directory computations",
-        all_dirs.len()
-    ));
-
-    // Spawn a DeriveDirectorySignals computation for each directory
-    let mut spawn: Vec<Computation> = all_dirs
-        .into_iter()
-        .map(|directory| Computation::DeriveDirectorySignals { directory })
-        .collect();
+    let mut spawn: Vec<Computation> = vec![Computation::DeriveCorpusSignals];
 
     // Also spawn library health computations for each configured library
     if let Ok(config) = crate::config::load_config() {
@@ -151,7 +126,181 @@ pub fn execute_schedule_second_level_derivations(
     )
 }
 
+// ============================================================================
+// Global Corpus Signal Derivation
+// ============================================================================
+
+/// Derive corpus signals via global inode set comparison.
+///
+/// Compares disk inodes (from FileInCorpus signals) against indexed inodes:
+/// - disk_only = disk - indexed → UnindexedFile signals
+/// - index_only = indexed - disk → MissingFile signals
+/// - both = disk ∩ indexed → check OOB, emit HealthyFile
+pub fn execute_derive_corpus_signals(
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    log_general("[COMPUTE] DeriveCorpusSignals: starting global inode comparison");
+
+    // Get signal sender for async writes
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                Computation::DeriveCorpusSignals,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Get disk state: FileInCorpus signals (inode -> path)
+    let disk_inodes = match read_only_db.get_file_in_corpus_inodes() {
+        Ok(inodes) => inodes,
+        Err(e) => {
+            return Result::failure(
+                Computation::DeriveCorpusSignals,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to get FileInCorpus inodes: {}", e),
+            );
+        }
+    };
+
+    // Get indexed state: files table (inode -> path)
+    let indexed_inodes = match read_only_db.get_all_corpus_inodes() {
+        Ok(inodes) => inodes,
+        Err(e) => {
+            return Result::failure(
+                Computation::DeriveCorpusSignals,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to get indexed inodes: {}", e),
+            );
+        }
+    };
+
+    log_general(format!(
+        "[COMPUTE] DeriveCorpusSignals: {} disk inodes, {} indexed inodes",
+        disk_inodes.len(),
+        indexed_inodes.len()
+    ));
+
+    // Compute set operations
+    let disk_set: HashSet<i64> = disk_inodes.keys().copied().collect();
+    let indexed_set: HashSet<i64> = indexed_inodes.keys().copied().collect();
+
+    let disk_only: Vec<i64> = disk_set.difference(&indexed_set).copied().collect();
+    let index_only: Vec<i64> = indexed_set.difference(&disk_set).copied().collect();
+    let both: Vec<i64> = disk_set.intersection(&indexed_set).copied().collect();
+
+    log_general(format!(
+        "[COMPUTE] DeriveCorpusSignals: {} unindexed, {} missing, {} present",
+        disk_only.len(),
+        index_only.len(),
+        both.len()
+    ));
+
+    // Emit UnindexedFile signals for files on disk but not indexed
+    for inode in &disk_only {
+        if let Some(path) = disk_inodes.get(inode) {
+            ensure_inode_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::UnindexedFile.into(),
+                *inode,
+                path,
+                witness,
+            );
+        }
+    }
+
+    // Emit MissingFile signals for indexed files not on disk
+    for inode in &index_only {
+        if let Some(path) = indexed_inodes.get(inode) {
+            ensure_inode_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::MissingFile.into(),
+                *inode,
+                path,
+                witness,
+            );
+            // Clear any stale HealthyFile signal
+            drop_stale_inode_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::HealthyFile.into(),
+                *inode,
+                witness,
+            );
+        }
+    }
+
+    // Process files present in both disk and index
+    for inode in &both {
+        let path = disk_inodes.get(inode).or_else(|| indexed_inodes.get(inode));
+        let path_str = path.map(|p| p.as_str()).unwrap_or("");
+
+        // Clear any stale MissingFile/UnindexedFile signals
+        drop_stale_inode_signal(
+            read_only_db,
+            &sender,
+            CorpusFileSignalType::MissingFile.into(),
+            *inode,
+            witness,
+        );
+        drop_stale_inode_signal(
+            read_only_db,
+            &sender,
+            CorpusFileSignalType::UnindexedFile.into(),
+            *inode,
+            witness,
+        );
+
+        // Check if file has any OOB signal - if so, don't mark as HealthyFile
+        let inode_key = inode.to_string();
+        let has_oob_signal =
+            read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagConflict.into(), &inode_key) ||
+            read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagSync.into(), &inode_key) ||
+            read_only_db.file_signal_exists(CorpusFileSignalType::MtimeOnlyMismatch.into(), &inode_key);
+
+        if has_oob_signal {
+            // File has OOB signal - NOT healthy
+            drop_stale_inode_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::HealthyFile.into(),
+                *inode,
+                witness,
+            );
+        } else {
+            ensure_inode_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::HealthyFile.into(),
+                *inode,
+                path_str,
+                witness,
+            );
+        }
+    }
+
+    log_general("[COMPUTE] DeriveCorpusSignals: complete");
+
+    Result::success(
+        Computation::DeriveCorpusSignals,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+    )
+}
+
+// ============================================================================
+// Per-Directory Signal Derivation (Deprecated)
+// ============================================================================
+
 /// Derive second-level signals for files in a single directory.
+///
+/// DEPRECATED: Use DeriveCorpusSignals for global inode comparison.
 pub fn execute_derive_directory_signals(
     read_only_db: &ReadOnlyDb<'_>,
     directory: &Path,
@@ -264,6 +413,7 @@ pub fn execute_derive_directory_signals(
 /// Update corpus signals for a single file after a mutation.
 ///
 /// Only valid for paths within the corpus directory.
+/// Uses inode-keyed signals consistent with the global observation system.
 pub fn execute_update_corpus_file_signals(
     read_only_db: &ReadOnlyDb<'_>,
     path: &Path,
@@ -285,7 +435,7 @@ pub fn execute_update_corpus_file_signals(
         }
     };
 
-    // Convert absolute path to relative for DB queries and signal keys
+    // Convert absolute path to relative for DB queries
     let resolver = paths::get_resolver();
     let relative_path = resolver
         .to_relative(path)
@@ -293,44 +443,134 @@ pub fn execute_update_corpus_file_signals(
     let path_str = relative_path.to_string_lossy().to_string();
 
     let file_exists = path.exists() && is_audio_file(path);
-    let is_indexed = read_only_db.get_audio_file_by_path(&path_str).ok().flatten().is_some();
+
+    // Get inode from disk or database
+    let disk_inode = if file_exists {
+        std::fs::metadata(path)
+            .ok()
+            .map(|m| m.ino() as i64)
+    } else {
+        None
+    };
+
+    // Check if path is indexed (and get the indexed inode)
+    let indexed_info = read_only_db.get_audio_file_by_path(&path_str).ok().flatten();
+    let indexed_inode = indexed_info.as_ref().map(|af| af.inode());
 
     if file_exists {
-        ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
+        let inode = disk_inode.expect("file exists but no inode");
 
-        if is_indexed {
-            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
-            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
+        // FileInCorpus: keyed by inode, path in metadata
+        ensure_inode_signal_if_missing(
+            read_only_db,
+            &sender,
+            CorpusFileSignalType::FileInCorpus.into(),
+            inode,
+            &path_str,
+            witness,
+        );
 
-            // Check if file has any OOB signal - if so, don't mark as HealthyFile
+        if indexed_info.is_some() {
+            // File is indexed - clear unindexed/missing
+            drop_stale_inode_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::UnindexedFile.into(),
+                inode,
+                witness,
+            );
+            drop_stale_inode_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::MissingFile.into(),
+                inode,
+                witness,
+            );
+
+            // Check if file has any OOB signal (keyed by inode)
+            let inode_key = inode.to_string();
             let has_oob_signal =
-                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagConflict.into(), &path_str) ||
-                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagSync.into(), &path_str) ||
-                read_only_db.file_signal_exists(CorpusFileSignalType::MtimeOnlyMismatch.into(), &path_str);
+                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagConflict.into(), &inode_key) ||
+                read_only_db.file_signal_exists(CorpusFileSignalType::OutOfBandTagSync.into(), &inode_key) ||
+                read_only_db.file_signal_exists(CorpusFileSignalType::MtimeOnlyMismatch.into(), &inode_key);
 
             if has_oob_signal {
                 // File has OOB signal - NOT healthy
-                drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+                drop_stale_inode_signal(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::HealthyFile.into(),
+                    inode,
+                    witness,
+                );
             } else {
-                ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
+                ensure_inode_signal_if_missing(
+                    read_only_db,
+                    &sender,
+                    CorpusFileSignalType::HealthyFile.into(),
+                    inode,
+                    &path_str,
+                    witness,
+                );
             }
         } else {
-            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
-            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
+            // File not indexed - mark as unindexed
+            drop_stale_inode_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::HealthyFile.into(),
+                inode,
+                witness,
+            );
+            drop_stale_inode_signal(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::MissingFile.into(),
+                inode,
+                witness,
+            );
+            ensure_inode_signal_if_missing(
+                read_only_db,
+                &sender,
+                CorpusFileSignalType::UnindexedFile.into(),
+                inode,
+                &path_str,
+                witness,
+            );
         }
-    } else {
-        drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::FileInCorpus.into(), &path_str, witness);
-        drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::UnindexedFile.into(), &path_str, witness);
-
-        if is_indexed {
-            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
-            ensure_file_signal_if_missing(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
-        } else {
-            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::HealthyFile.into(), &path_str, witness);
-            drop_stale_file_signal(read_only_db, &sender, CorpusFileSignalType::MissingFile.into(), &path_str, witness);
-        }
+    } else if let Some(inode) = indexed_inode {
+        // File doesn't exist but was indexed - clear disk signals, mark missing
+        drop_stale_inode_signal(
+            read_only_db,
+            &sender,
+            CorpusFileSignalType::FileInCorpus.into(),
+            inode,
+            witness,
+        );
+        drop_stale_inode_signal(
+            read_only_db,
+            &sender,
+            CorpusFileSignalType::UnindexedFile.into(),
+            inode,
+            witness,
+        );
+        drop_stale_inode_signal(
+            read_only_db,
+            &sender,
+            CorpusFileSignalType::HealthyFile.into(),
+            inode,
+            witness,
+        );
+        ensure_inode_signal_if_missing(
+            read_only_db,
+            &sender,
+            CorpusFileSignalType::MissingFile.into(),
+            inode,
+            &path_str,
+            witness,
+        );
     }
+    // If file doesn't exist and isn't indexed, there's nothing to do
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

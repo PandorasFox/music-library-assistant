@@ -157,8 +157,73 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 }
 
 // ============================================================================
-// Signal Emission Helpers (with freshness checks)
+// Signal Emission Helpers (Inode-Keyed)
 // ============================================================================
+
+/// Ensure an inode-keyed file signal exists, with path stored in metadata.
+///
+/// Uses inode as the signal key (stored as string) and stores the path in
+/// metadata_json for display purposes. This is the primary signal emission
+/// pattern for corpus file signals.
+///
+/// Uses the read-only DB to check freshness before queueing to the write thread.
+pub(crate) fn ensure_inode_signal_if_missing(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &db_thread::SignalWriteSender,
+    signal_type: FileSignalType,
+    inode: i64,
+    path: &str,
+    witness: &impl SignalWitness,
+) {
+    let key = inode.to_string();
+    if !read_only_db.file_signal_exists(signal_type, &key) {
+        let metadata = serde_json::json!({ "path": path });
+        sender.ensure_file_signal_with_metadata(signal_type, &key, Some(&metadata.to_string()), witness);
+    }
+}
+
+/// Ensure an inode-keyed signal with additional metadata fields.
+///
+/// Merges the path into the provided extra_metadata and uses inode as the key.
+pub(crate) fn ensure_inode_signal_with_metadata_if_missing(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &db_thread::SignalWriteSender,
+    signal_type: FileSignalType,
+    inode: i64,
+    path: &str,
+    extra_metadata: serde_json::Value,
+    witness: &impl SignalWitness,
+) {
+    let key = inode.to_string();
+    if !read_only_db.file_signal_exists(signal_type, &key) {
+        let mut metadata = extra_metadata;
+        metadata["path"] = serde_json::json!(path);
+        sender.ensure_file_signal_with_metadata(signal_type, &key, Some(&metadata.to_string()), witness);
+    }
+}
+
+/// Drop a stale inode-keyed file signal.
+///
+/// Use when a computation determines the signal should not exist for this inode.
+pub(crate) fn drop_stale_inode_signal(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &db_thread::SignalWriteSender,
+    signal_type: FileSignalType,
+    inode: i64,
+    witness: &impl SignalWitness,
+) {
+    let key = inode.to_string();
+    if read_only_db.file_signal_exists(signal_type, &key) {
+        sender.clear_file_signal(signal_type, &key, witness);
+    }
+}
+
+// ============================================================================
+// Signal Emission Helpers (Path-Keyed - Legacy)
+// ============================================================================
+// These helpers use path as the key. They are retained for:
+// - Library signals (which use compound keys)
+// - Transition period while migrating to inode-keyed signals
 
 /// Ensure a file signal exists, but only queue the write if it doesn't already exist.
 ///
@@ -179,13 +244,13 @@ pub(crate) fn ensure_file_signal_if_missing(
 /// Ensure a file signal with metadata, only queue if it doesn't exist.
 ///
 /// For signals like LibraryStale that need extra context in metadata_json.
-pub(super) fn ensure_file_signal_with_metadata_if_missing(
+pub(crate) fn ensure_file_signal_with_metadata_if_missing(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     signal_type: FileSignalType,
     key: &str,
     metadata_json: &str,
-    witness: &ComputationWitness,
+    witness: &impl SignalWitness,
 ) {
     if !read_only_db.file_signal_exists(signal_type, key) {
         sender.ensure_file_signal_with_metadata(signal_type, key, Some(metadata_json), witness);

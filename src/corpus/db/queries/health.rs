@@ -228,7 +228,8 @@ impl Database {
 
     /// Fast existence check for a file signal type.
     ///
-    /// Convenience wrapper using FileSignalType's string representation.
+    /// For inode-keyed signals, pass `inode.to_string()` as the key.
+    /// For path-keyed signals (library signals, etc.), pass the key directly.
     pub fn file_signal_exists(&self, signal_type: FileSignalType, key: &str) -> bool {
         self.conn
             .query_row(
@@ -239,7 +240,7 @@ impl Database {
             .is_ok()
     }
 
-    /// Delete all signals for a specific path.
+    /// Delete all signals for a specific path (for path-keyed signals like library signals).
     ///
     /// Used during track deletion to clear all associated signals.
     pub fn delete_signals_for_path(&self, path: &str, _witness: &impl SignalWitness) -> Result<usize> {
@@ -563,34 +564,8 @@ impl Database {
     }
 
     // ========================================================================
-    // Directory-Level Queries (for chunked computations)
+    // Directory-Level Queries
     // ========================================================================
-
-    /// Get distinct parent directories from corpus audio files (files + audio_info).
-    pub fn get_distinct_track_directories(&self) -> Result<Vec<std::path::PathBuf>> {
-        use std::path::PathBuf;
-
-        // Fetch all corpus audio file paths and compute parent directories in Rust
-        let mut stmt = self.conn.prepare(
-            r#"SELECT DISTINCT f.path FROM files f
-               JOIN audio_info a ON f.inode = a.inode
-               WHERE f.is_dir = 0 AND f.source = 'corpus'"#
-        )?;
-        let rows = stmt.query_map(params![], |row| {
-            let path: String = row.get(0)?;
-            Ok(path)
-        })?;
-
-        let mut directories = std::collections::HashSet::new();
-        for row in rows {
-            let path = row?;
-            if let Some(parent) = PathBuf::from(&path).parent() {
-                directories.insert(parent.to_path_buf());
-            }
-        }
-
-        Ok(directories.into_iter().collect())
-    }
 
     /// Get indexed corpus directories (directories stored in files table).
     ///
@@ -631,34 +606,39 @@ impl Database {
         Ok(paths)
     }
 
-    /// Get distinct parent directories from FileInCorpus signals.
+    /// Get all FileInCorpus signal inodes with their paths.
     ///
-    /// FileInCorpus signals use the file path as issue_key.
-    /// This extracts and deduplicates the parent directories.
-    pub fn get_distinct_corpus_directories(&self) -> Result<Vec<std::path::PathBuf>> {
-        use std::path::PathBuf;
-
-        // FileInCorpus signals use file path as issue_key
+    /// FileInCorpus signals are keyed by inode (stored as string in issue_key)
+    /// with the path stored in metadata_json.path.
+    ///
+    /// Returns HashMap<inode, path> for set comparison operations.
+    pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT DISTINCT issue_key FROM signals
+            r#"SELECT issue_key, metadata_json FROM signals
                WHERE issue_type = 'file_in_corpus'"#
         )?;
 
         let rows = stmt.query_map(params![], |row| {
-            let path: String = row.get(0)?;
-            Ok(path)
+            let key: String = row.get(0)?;
+            let metadata: Option<String> = row.get(1)?;
+            Ok((key, metadata))
         })?;
 
-        let mut directories = std::collections::HashSet::new();
+        let mut result = std::collections::HashMap::new();
         for row in rows {
-            let path = row?;
-            // Extract parent directory from file path
-            if let Some(parent) = PathBuf::from(&path).parent() {
-                directories.insert(parent.to_path_buf());
+            let (key, metadata) = row?;
+            // Parse inode from issue_key
+            if let Ok(inode) = key.parse::<i64>() {
+                // Extract path from metadata_json
+                let path = metadata
+                    .and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok())
+                    .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(String::from))
+                    .unwrap_or_default();
+                result.insert(inode, path);
             }
         }
 
-        Ok(directories.into_iter().collect())
+        Ok(result)
     }
 
     /// Get signals in a specific directory.
@@ -1239,11 +1219,14 @@ impl Database {
 
     /// Get all corpus paths with MissingFile signals.
     ///
-    /// Returns the issue_key (corpus path) for each missing_file signal.
+    /// Returns the path from metadata_json for each missing_file signal.
     /// Used by the missing file resolution modal to categorize files.
+    /// MissingFile signals are keyed by inode with path in metadata.
     pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT issue_key FROM signals WHERE issue_type = 'missing_file' ORDER BY issue_key"
+            r#"SELECT COALESCE(json_extract(metadata_json, '$.path'), '')
+               FROM signals WHERE issue_type = 'missing_file'
+               ORDER BY json_extract(metadata_json, '$.path')"#
         )?;
 
         let results = stmt
@@ -1259,11 +1242,14 @@ impl Database {
 
     /// Get all corpus paths with CorruptFile signals.
     ///
-    /// Returns the issue_key (corpus path) for each corrupt_file signal.
+    /// Returns the path from metadata_json for each corrupt_file signal.
     /// Used by the corrupt file resolution modal.
+    /// CorruptFile signals are keyed by inode with path in metadata.
     pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT issue_key FROM signals WHERE issue_type = 'corrupt_file' ORDER BY issue_key"
+            r#"SELECT COALESCE(json_extract(metadata_json, '$.path'), '')
+               FROM signals WHERE issue_type = 'corrupt_file'
+               ORDER BY json_extract(metadata_json, '$.path')"#
         )?;
 
         let results = stmt
@@ -1279,15 +1265,17 @@ impl Database {
 
     /// Get all corpus paths with ShitFormat signals.
     ///
-    /// Returns (issue_key, file_type) for each shit_format signal.
-    /// The file_type is extracted from metadata_json.
+    /// Returns (path, file_type) for each shit_format signal.
+    /// Both values are extracted from metadata_json.
     /// Used by the shit format resolution modal.
+    /// ShitFormat signals are keyed by inode with path in metadata.
     pub fn get_shit_format_files(&self) -> Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT issue_key, COALESCE(json_extract(metadata_json, '$.file_type'), '')
+            r#"SELECT COALESCE(json_extract(metadata_json, '$.path'), ''),
+                      COALESCE(json_extract(metadata_json, '$.file_type'), '')
                FROM signals
                WHERE issue_type = 'shit_format'
-               ORDER BY issue_key"#
+               ORDER BY json_extract(metadata_json, '$.path')"#
         )?;
 
         let results = stmt

@@ -205,6 +205,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
                     awakening::Computation::ScheduleSecondLevelDerivations => {
                         awakening::execute_schedule_second_level_derivations(read_only_db, &witness, start)
                     }
+                    awakening::Computation::DeriveCorpusSignals => {
+                        awakening::execute_derive_corpus_signals(read_only_db, &witness, start)
+                    }
                     awakening::Computation::DeriveDirectorySignals { directory } => {
                         awakening::execute_derive_directory_signals(read_only_db, directory, &witness, start)
                     }

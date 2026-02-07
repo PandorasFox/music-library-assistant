@@ -20,7 +20,7 @@ use ratatui::{
 };
 
 use super::types::{SubparDuplicateModalData, SelectedButton};
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::{render_pane, truncate_left};
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -214,8 +214,7 @@ impl SubparDuplicatePreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if list_focused { Color::Cyan } else { Color::DarkGray }));
 
-        let inner = block.inner(chunks[1]);
-        f.render_widget(block, chunks[1]);
+        let inner = render_pane(f, chunks[1], block);
 
         if self.cached_data.files.is_empty() {
             let empty = Paragraph::new("No subpar duplicates found")
@@ -287,8 +286,7 @@ impl SubparDuplicatePreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         // Get current file if any
         let current_file = self.cached_data.files.get(self.scroll);

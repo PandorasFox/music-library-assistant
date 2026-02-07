@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use super::types::{MovedFileButton, MovedFileState};
+use crate::ui::helpers::render_pane;
 use crate::ui::widgets::FocusPane;
 
 /// Render the moved file acknowledgement modal.
@@ -60,8 +61,7 @@ fn render_file_list(state: &MovedFileState, f: &mut Frame, area: Rect) {
         .title("Files")
         .border_style(border_style);
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     if state.files.is_empty() {
         let empty = Paragraph::new("No moved files to acknowledge");
@@ -100,8 +100,7 @@ fn render_details(state: &MovedFileState, f: &mut Frame, area: Rect) {
         .title("Details")
         .border_style(Style::default().fg(Color::DarkGray));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     if state.files.is_empty() {
         return;
@@ -139,8 +138,7 @@ fn render_buttons(state: &MovedFileState, f: &mut Frame, area: Rect) {
             Style::default().fg(Color::DarkGray)
         });
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Button layout
     let button_chunks = Layout::default()

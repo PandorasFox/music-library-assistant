@@ -11,6 +11,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::helpers::render_pane;
+
 // Note: Span is used in render_list for selection highlighting
 
 /// The active tab in the deploy signal view.
@@ -186,7 +188,7 @@ impl<'a> TabbedSignalList<'a> {
             .borders(Borders::ALL)
             .title(format!("{} Files", self.active_tab.label()));
 
-        let inner = block.inner(area);
+        let inner = render_pane(f, area, block);
         let visible_height = inner.height as usize;
 
         // Calculate scroll bounds
@@ -213,7 +215,6 @@ impl<'a> TabbedSignalList<'a> {
 
         let list = List::new(items);
 
-        f.render_widget(block, area);
         f.render_widget(list, inner);
     }
 }

@@ -285,8 +285,7 @@ fn render_edit_input(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Render the text input
     let input_text = state.part_input.value();

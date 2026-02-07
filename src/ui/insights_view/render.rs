@@ -16,6 +16,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 use super::{BucketEntry, FocusedBucket, InsightType, InsightsViewState};
@@ -55,8 +56,7 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &mut InsightsViewState
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Clear and set up click targets
     state.click_targets.clear();
@@ -265,8 +265,7 @@ fn render_insight_details(f: &mut Frame, area: Rect, state: &InsightsViewState) 
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     let lines = match state.selected_entry() {
         Some(entry) => detail_lines_for_entry(entry, state, busy),

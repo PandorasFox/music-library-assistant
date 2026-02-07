@@ -298,8 +298,7 @@ fn render_input(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
         .borders(Borders::ALL)
         .border_style(input_style);
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Render text with cursor at proper position
     let value = state.canonical_input.value();

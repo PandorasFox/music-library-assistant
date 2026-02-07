@@ -20,7 +20,7 @@ use ratatui::{
 };
 
 use super::types::{ShitFormatModalData, SelectedButton};
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::{render_pane, truncate_left};
 
 /// Actions returned from the shit format preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,8 +229,7 @@ impl ShitFormatPreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         if !has_files {
             let empty = Paragraph::new("No lossless files")
@@ -274,8 +273,7 @@ impl ShitFormatPreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         if !has_files {
             let empty = Paragraph::new("No lossy files")
@@ -326,8 +324,7 @@ impl ShitFormatPreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         if total == 0 {
             let empty = Paragraph::new("No shit format files found")

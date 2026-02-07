@@ -17,7 +17,7 @@ use ratatui::{
 };
 
 use super::MissingDirectoryModalData;
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::{render_pane, truncate_left};
 
 /// Actions returned from the missing directory preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,8 +181,7 @@ impl MissingDirectoryPreviewState {
             .borders(Borders::ALL)
             .border_style(border_style);
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         if self.cached_data.directories.is_empty() {
             let empty = Paragraph::new("No missing directories")

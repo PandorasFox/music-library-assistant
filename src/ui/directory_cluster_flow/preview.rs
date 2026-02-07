@@ -20,7 +20,7 @@ use ratatui::{
 };
 
 use super::types::{ClusterResolutionOption, DirectoryClusterModalData, SelectedButton};
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::{render_pane, truncate_left};
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -339,8 +339,7 @@ impl DirectoryClusterPreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         if cluster.is_none() {
             let empty = Paragraph::new("No clusters to display")
@@ -389,8 +388,7 @@ impl DirectoryClusterPreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if focused { Color::Cyan } else { Color::DarkGray }));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         if self.current_options.is_empty() {
             let empty = Paragraph::new("No options available")

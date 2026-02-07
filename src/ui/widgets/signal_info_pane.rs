@@ -11,6 +11,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::helpers::render_pane;
+
 use super::tabbed_signal_list::DeployTab;
 
 /// Information about a deploy signal for display in the info pane.
@@ -71,8 +73,7 @@ impl<'a> SignalInfoPane<'a> {
             .title(self.title())
             .border_style(Style::default().fg(Color::White));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         let lines = self.build_content();
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });

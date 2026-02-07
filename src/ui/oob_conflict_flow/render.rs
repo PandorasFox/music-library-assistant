@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::corpus::db::types::ConflictBucket;
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::{render_pane, truncate_left};
 use crate::ui::widgets::{FocusPane, ResolutionLayout};
 
 use super::types::{OobConflictState, ResolutionButton};
@@ -57,8 +57,7 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Split inner: tab bar + path line
     let chunks = Layout::default()
@@ -120,8 +119,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     if bucket_state.files.is_empty() {
         let empty = Paragraph::new("No files in this bucket")
@@ -199,8 +197,7 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
         .title("Tag Diff (DB vs Disk)")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     if state.active_bucket_state().files.is_empty() {
         return;
@@ -264,8 +261,7 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Clear stored button rects
     state.button_rects.clear();

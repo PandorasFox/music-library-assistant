@@ -20,6 +20,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use crate::ui::helpers::render_pane;
+
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::ui::widgets::{LateralView, UnifiedTitleBar};
@@ -260,8 +262,7 @@ impl TagSearchState {
             .borders(Borders::ALL)
             .title("Tag Query Builder");
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         // Layout conditions vertically
         let mut y = inner.y;
@@ -464,8 +465,7 @@ impl TagSearchState {
     fn render_results_list(&self, f: &mut Frame, area: Rect) {
         let title = format!("Results ({} tracks)", self.results.len());
         let block = Block::default().borders(Borders::ALL).title(title);
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         // Render track list sorted by path
         // TODO: Re-enable deployment path display when corpus::deploy is available
@@ -498,8 +498,7 @@ impl TagSearchState {
 
     fn render_results_info(&self, f: &mut Frame, area: Rect) {
         let block = Block::default().borders(Borders::ALL).title("Track Info");
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         let lines: Vec<Line> = if let Some(twt) = self.selected_result() {
             vec![

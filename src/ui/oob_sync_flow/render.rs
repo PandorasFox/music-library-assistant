@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::corpus::db::types::OobSyncDirection;
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::{render_pane, truncate_left};
 use crate::ui::widgets::{FocusPane, ResolutionLayout};
 
 use super::types::{OobSyncButton, OobSyncState};
@@ -59,8 +59,7 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobSyncState) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Show full untruncated path of selected file
     if let Some(file) = state.files.get(state.current_file) {
@@ -88,8 +87,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobSyncState) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     let visible_height = inner.height as usize;
     let max_width = inner.width as usize;
@@ -173,8 +171,7 @@ fn render_mismatch_details(f: &mut Frame, area: Rect, state: &OobSyncState) {
         .title("Tag Mismatches")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     let Some(file) = state.files.get(state.current_file) else {
         return;
@@ -248,8 +245,7 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = render_pane(f, area, block);
 
     // Clear stored button rects
     state.button_rects.clear();

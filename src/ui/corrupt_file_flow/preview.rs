@@ -18,7 +18,7 @@ use ratatui::{
 };
 
 use super::types::{CorruptFileModalData, SelectedButton};
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::{render_pane, truncate_left};
 
 /// Actions returned from the corrupt file preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,8 +154,7 @@ impl CorruptFilePreviewState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Red));
 
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let inner = render_pane(f, area, block);
 
         if self.cached_data.files.is_empty() {
             let empty = Paragraph::new("No corrupt files found")

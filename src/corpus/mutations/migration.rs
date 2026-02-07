@@ -3,6 +3,15 @@
 //! Provides versioned, forward-only migrations that run at startup.
 //! Each migration transforms the schema from one version to the next.
 //!
+//! ## Idempotency Requirement
+//!
+//! **All migrations MUST be idempotent.** A migration may run on a database
+//! where the schema changes have already been applied (e.g., via initialize_schema
+//! or a previous partial run). Use patterns like:
+//! - `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`
+//! - Check column existence via `pragma_table_info` before `ALTER TABLE ADD COLUMN`
+//! - Guard other operations with existence checks
+//!
 //! ## Current State
 //!
 //! Schema v1 is the inode-based files/audio_info/corpus_tags schema.
@@ -45,12 +54,23 @@ impl MigrationRegistry {
             to_version: 2,
             description: "Add tags_version column and dirty_inodes table for incremental computation",
             apply: |db| {
+                // Check if tags_version column already exists (idempotent)
+                let has_tags_version: bool = db.conn().query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('audio_info') WHERE name = 'tags_version'",
+                    [],
+                    |row| row.get(0),
+                )?;
+
+                if !has_tags_version {
+                    db.conn().execute(
+                        "ALTER TABLE audio_info ADD COLUMN tags_version INTEGER NOT NULL DEFAULT 0",
+                        [],
+                    )?;
+                }
+
+                // Create dirty_inodes table (IF NOT EXISTS is already idempotent)
                 db.conn().execute_batch(
                     r#"
-                    -- Add tags_version column for tracking tag changes
-                    ALTER TABLE audio_info ADD COLUMN tags_version INTEGER NOT NULL DEFAULT 0;
-
-                    -- Create dirty_inodes table for incremental computation tracking
                     CREATE TABLE IF NOT EXISTS dirty_inodes (
                         inode INTEGER NOT NULL,
                         computation_type TEXT NOT NULL,
@@ -104,6 +124,8 @@ impl MigrationRegistry {
     }
 
     /// Apply a specific migration by ID.
+    ///
+    /// The migration SQL and schema version update run in a single transaction.
     pub fn apply_migration(
         &self,
         db: &Database,
@@ -116,7 +138,21 @@ impl MigrationRegistry {
             .find(|m| m.to_version == migration_id)
             .context(format!("Migration {} not found", migration_id))?;
 
-        (migration.apply)(db)
+        // Run migration and schema version update in a transaction
+        db.conn().execute("BEGIN IMMEDIATE", [])?;
+
+        if let Err(e) = (migration.apply)(db) {
+            let _ = db.conn().execute("ROLLBACK", []);
+            return Err(e);
+        }
+
+        if let Err(e) = db.set_schema_version(migration_id) {
+            let _ = db.conn().execute("ROLLBACK", []);
+            return Err(e.context("Failed to update schema version"));
+        }
+
+        db.conn().execute("COMMIT", [])?;
+        Ok(())
     }
 }
 

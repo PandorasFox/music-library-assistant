@@ -671,12 +671,22 @@ impl Witch {
                 // If no mutations, stay Awake (normal work completion)
             }
 
-            // Invalid: cannot have non-observing work complete while Closed
+            // Migrations can complete while Closed - this is valid, just NOP
             (false, EyeState::Closed) => {
-                panic!(
-                    "Invalid state: non-observing work completed while eye is Closed. \
-                     The only work while Closed should be observing."
-                );
+                let had_migrations = self.task_counts.keys().any(|k| k.starts_with("Migration"));
+                if had_migrations {
+                    crate::logging::log_general(format!(
+                        "[STATE] Migrations complete while Closed. Staying Closed. \
+                         Processed {} tasks.",
+                        self.total_processed
+                    ));
+                    // NOP: stay Closed, let session reset happen normally
+                } else {
+                    panic!(
+                        "Invalid state: non-observing, non-migration work completed while eye is Closed. \
+                         The only work while Closed should be observing or migrations."
+                    );
+                }
             }
         }
 

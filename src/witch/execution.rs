@@ -263,19 +263,12 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
         Err(result) => return result,
     };
 
-    // Apply the specific migration
+    // Apply the migration (includes schema version update in same transaction)
     let registry = MigrationRegistry::new();
     let result = registry.apply_migration(&db, migration.to_version, &witness);
 
     let (success, error) = match &result {
-        Ok(()) => {
-            // Update schema version after successful migration
-            if let Err(e) = db.set_schema_version(migration.to_version) {
-                (false, Some(format!("Migration succeeded but failed to update schema version: {:#}", e)))
-            } else {
-                (true, None)
-            }
-        }
+        Ok(()) => (true, None),
         Err(e) => (false, Some(format!("{:#}", e))),
     };
 

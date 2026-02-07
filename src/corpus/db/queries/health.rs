@@ -546,9 +546,11 @@ impl Database {
     /// all split parts existing in corpus (matching_parts.len() == split_parts.len()).
     /// If false, returns only signals that need review (some/all parts are new).
     pub fn get_compound_signals_by_safety(&self, safe_only: bool) -> Result<Vec<AggregateSignal>> {
+        // Note: Uses 'compound_tag' (per-file signal) not 'compound_tag_value' (aggregate)
+        // The per-file CompoundTag signals are emitted by DetectCompoundTagsForInode
         let mut stmt = self.conn.prepare(
             r#"SELECT id, issue_type, issue_key, discovered_at, metadata_json
-               FROM signals WHERE issue_type = 'compound_tag_value'
+               FROM signals WHERE issue_type = 'compound_tag'
                ORDER BY discovered_at DESC"#,
         )?;
 
@@ -902,9 +904,10 @@ impl Database {
     /// existing in the corpus (matching_parts.len() == split_parts.len()).
     /// Returns (safe_count, review_count).
     fn count_compound_signals_by_safety(&self) -> Result<(usize, usize)> {
-        // Get all compound_tag_value signals and classify them
+        // Note: Uses 'compound_tag' (per-file signal) not 'compound_tag_value' (aggregate)
+        // The per-file CompoundTag signals are emitted by DetectCompoundTagsForInode
         let mut stmt = self.conn.prepare(
-            r#"SELECT metadata_json FROM signals WHERE issue_type = 'compound_tag_value'"#,
+            r#"SELECT metadata_json FROM signals WHERE issue_type = 'compound_tag'"#,
         )?;
 
         let mut safe_count = 0usize;

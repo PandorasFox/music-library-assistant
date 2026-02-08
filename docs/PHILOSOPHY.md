@@ -4,6 +4,8 @@ This document captures the conceptual foundations of MLA - the principles that g
 
 There are several guiding metaphors for different facets of MLA. The most important metaphor is that of the Librarian (the user) and their Library (their music library).
 
+DRAGON'S NOTE: I need to touch up the language in this / align a few of the metaphors a bit
+
 ## The Librarian Metaphor
 
 The tool-user is the Librarian, and MLA is the librarian's assisstant. MLA's purpose is to be the librarian's primary interface for surfacing information from their music library,
@@ -69,99 +71,7 @@ Lastly, MLA itself is a largely machine-written toolkit for librarians. It itsel
 - low-level corpus operations should be organized into a corpus library
 - corpus operation flows (scanning, dedup/tagging flows, deploying) should have their logic organized in individual operations modules
 
-### Misc notes
-- insights and reports should be able to be computed during scans, and have the latest report summaries displayed in the menu for them, rather than needing generation
-- librarian should be nudged into the next steps of different flows. E.g. upon scan completion, reports should be generated/finalized and summaries should be given, with prompts to enter relevant flows for resolving corpus health issues.
-- I, specifically the architect, need to enumerate more concepts about library health that we care about.
 
-### Why Algebraic?
+### Other tooling
 
-Traditional file managers apply changes immediately and irreversibly. MLA instead:
-
-1. **Records intent**: "Move file A to B" becomes a data structure
-2. **Accumulates changes**: Multiple operations queue up
-3. **Previews effects**: Show what would happen before committing
-4. **Applies atomically**: All-or-nothing execution
-5. **Supports reversal**: Committed changes can be undone
-
-### Change Types
-
-```rust
-enum ChangeType {
-    Move,       // Relocate within corpus
-    Delete,     // Remove from corpus (to lost-files)
-    TagEdit,    // Modify embedded metadata
-    Deploy,     // Create library hard link
-    Undeploy,   // Remove library hard link
-}
-```
-
-### Change Composition
-
-Changes compose naturally:
-
-- `Move(A→B) + Move(B→C) = Move(A→C)`
-- `Delete(A) + Create(A) = NoOp`
-- `TagEdit(field=X) + TagEdit(field=Y) = TagEdit(field=Y)`
-
-This allows optimization and conflict detection before execution.
-
-### Change Sessions
-
-Related changes group into sessions:
-
-```
-Session: "Deduplicate Artist X discography"
-├── Delete: album1/track1.flac (keeping album2/track1.flac)
-├── Delete: album1/track2.flac (keeping album3/track2.flac)
-├── TagEdit: album2/track1.flac (inherit genre from deleted)
-└── Deploy: album2/* → music library
-```
-
-Sessions can be committed, rolled back, or exported as a script.
-
-## Well-Tested Atomic Operations
-
-The philosophy: **design operations carefully, test them thoroughly, then apply them in bulk without fear**.
-
-### The Atomic Operation Library
-
-Each operation type has:
-
-1. **Precondition checks**: What must be true before execution?
-2. **Execution logic**: The actual filesystem/database changes
-3. **Postcondition verification**: Did it work correctly?
-4. **Reversal logic**: How to undo this specific change
-5. **Test suite**: Covering edge cases and failure modes
-
-### Bulk Application
-
-Once an operation is trusted, it can be applied to thousands of files:
-
-```
-Applying "Remove duplicate lower-bitrate versions"
-├── 847 files identified
-├── Preconditions: ✓ all passed
-├── Dry run: ✓ no conflicts
-├── Execute: [████████████████████] 847/847
-└── Verification: ✓ all postconditions satisfied
-```
-
-Users review patterns, not individual files. The system handles the tedious enumeration.
-
-
-## Design Principles Summary
-
-1. **Operator-driven**: MLA never mutates autonomously; all Mutations trace to operator Decisions
-2. **Read-only by default**: Observation never mutates
-3. **Explicit confirmation**: No silent changes to corpus
-4. **Consistency, Safety, Predictablity, Observability**: We value consistent use of our handful of systems highly.
-
-## Anti-Patterns to Avoid
-
-- **Autonomous mutation**: Never mutate corpus without an attributable operator Decision
-- **Immediate execution**: Don't apply changes without preview
-- **Silent failures**: Don't swallow errors, surface them clearly
-- **Modal complexity**: Don't nest modes deeply, keep paths flat
-- **Clever inference**: Don't guess operator intent, ask
-- **Hidden state**: Don't accumulate changes invisibly
+I've started also having Claude hand me some scripts that spit out src/ tree analytics, to help with my own at-a-glance health-checks of MLA's source tree itself -> drive refactorings and cleanup.

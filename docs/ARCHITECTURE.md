@@ -2,19 +2,9 @@
 
 This document describes the major subsystems of MLA and how they interact. For the conceptual foundations and design principles, see [PHILOSOPHY.md](PHILOSOPHY.md).
 
-## Core Event Loop: ratatui
-
-Ratatui's event loop should:
-- tick the Witch (MLA's background task system)
-- tick the UI modal that is currently active
-- render
-- process inputs
-
-(exact ordering on those last three might need to be re-evaluated).
-
-General library, corpus, and operational state do not exist in UI code. UI code is for user-interaction-logic only.
-
 ## The Witch
+
+The core orchestrator of all the subsystems that make up MLA. All Data Flows Through Her.
 
 The Witch is named such because She enforces orderliness in her domain, and provides all guarantees for data which flows properly through Her. She is where all operational logic flows through. To begin:
 
@@ -39,13 +29,13 @@ Signals are the computed health state of the corpus (as well as deployed librari
 
 Anyways, signals can represent a variety of things:
 
-- files that are present in corpus
-- files that were present in corpus, but are still in index (missing now)
-- files that are present in corpus, but have been modified since we last indexed them
-- files with fingerprint duplicates
-- files with identical overlaps
-- files that can be deployed, but aren't
-- files that are hard-linked into a library, but shouldn't be
+- inodes that are present in corpus
+- inodes that were present in corpus, but are still in index (missing now)
+- inodes that are present in corpus, but have been modified since we last indexed them
+- inodes with fingerprint duplicates
+- inodes with identical overlaps
+- inodes that can be deployed, but aren't
+- inodes that are hard-linked into a library, but shouldn't be
 - and more....
 
 Basically, signals can also reference other signals. It is up to the UI logic (basically, human-driven dashboard queries) to present meaningful signals to the user that are actionable, with a handful of dynamic operational tools that take signal sets, clump together files based on common signals and tags/fingerprints/etc (other signals, potentially!), and then present the user with succinct Decisions.
@@ -58,23 +48,10 @@ The corpus is the files on disk. They are sacred; MLA shall not mutate them with
 
 ## The Mutation Engine
 
-One of the concepts underlying all this is that Mutations are expressed as basic algebraic operations that we can accumulate, and 'sum' to calculate the expected end state after they all execute and perform their mutations.
-This is what enables the transactions flow and the confirmation review processes.
+All mutations are modelled as instantiable/preparable objects that we can accumulate, and then schedule for execution in bulk.
 
-We combine this with rust's type system (namely, Sealed Traits, to only allow for some interfaces to be invoked from certain callsites or modules) so that we have compile-time guarantees that an enter keypress has happened when we're adding a decision to a transaction/confirming a decision. We additionally have other sets of compile-time guarantees that the actual corpus/index mutating function implementations are only invoked from the Task execution callsite (in their new thread).
+For example, edits are roughly `edit(inode, tag_name, old_value, new_value)` - we can generate lots of those, hang onto them, and then send em off for execution, easily aggregated by inode!
 
-The combination of all these is what enables the Witch to guarantee all of our operational sanity requirements.
+## The UI Layer
 
-## The corpus browser/search and tag editor
-
-These are two fundamental tools for any Librarian, as one-off corpus introspection needs nice tools. Additionally, we need them for our own development cycle.
-
-Because the tag editor also *must* use the Witch for dispatching its edits etc, we both *get to leverage* the transaction UX for our UI state machine, and *have to validate* the mutations under a lens, as well. Thus, the tag editor and browsers/searchers are invaluable tools for validating functionality and correctness of mutations and computations in a small and verifiable context before applying them in bulk.
-
-Additionally, all the UI components we make for the tag editor are necessary for our other UI modals, so the widgets and stuff there are just handy as well.
-
-## Insights
-
-Ultimately, all these systems exist to serve one thing: the Corpus Insights dashboard that presents signals to the user in a meaningful manner, to let them jump into precise guided Flows to resovle sets of signals in bulk.
-
-This part will require planning for each individual flow on their own to make them each as powerful as possible while not duplicating unneccesary amounts of UI code. It is *the* reason everything else in MLA is so engineered.
+Everything else is fundamentally at the UI layer - all resolution flows, the corpus browser, the search interface, the tag editor.... they all just use the underlying architecture we've built up.

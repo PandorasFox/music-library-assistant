@@ -19,28 +19,13 @@ This is still alpha~beta software; breaking changes are encouraged - stop focusi
 MLA enforces strict separation between read-only UI queries and write mutations:
 
 **Read-Only Access (UI Code):**
-- All UI code uses `witch.read_db()` which returns `ReadOnlyDb<'_>`
-- Use `read_db.inner()` to access query methods on the underlying `Database`
-- Variables should be named `read_db` to make read-only nature clear
-- The Witch caches a single read-only connection (`PRAGMA query_only = ON`)
-- This provides compile-time and runtime protection against accidental writes
+- can use the Witch's exposed read-only DB connection, or the UiCache for expensive queries
 
 **Write Access (Worker Threads Only):**
-- Only the Witch's worker threads create write connections via `Database::open()`
-- Mutations require `MutationExecutionWitness` tokens (zero-sized proof types)
-- Migrations require `DecisionWitness` via explicit operator confirmation
-- Write connections are created inside `execute_mutation()` and `execute_migration()`
+- only accessible via db_thread send channel, from within the Mutation and Computation execution closures.
+- worker threads also have their own thread-local read-only db connections to avoid read/write lock contention in bulk work.
 
-**Exceptions:**
-- First-time setup (`startup/first_time_setup.rs`) creates new database with write access
-- Pre-App startup migrations (`check_and_run_migrations`) need write access before the Witch exists
-
-**Anti-patterns:**
-- Never call `Database::open()` directly in UI code
-- Never pass write connections from UI to mutation contexts
-- Never create Database connections in rendering/display code
-
-This pattern ensures all mutations are properly witnessed and attributable to operator decisions, enforcing the "operator-driven" principle from PHILOSOPHY.md.
+There Shall Not be any other ways to interface with the DB. We have very nice read-only wrappers.
 
 ### Corpus vs Library File Queries
 
@@ -161,12 +146,6 @@ Prefer isolated helper functions in `ui/helpers.rs` for string operations, espec
 
 Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing strings.
 
-### Operator Decisions
-
-**Core invariant: MLA never makes Decisions or Mutations autonomously.** All corpus Mutations must be attributable to explicit operator Decisions. See `docs/PHILOSOPHY.md` for full rationale.
-
-DecisionWitness and ExecutionWitnesses are our methods of guaranteeing this.
-
 ### DecisionWitness - SEALED ACCESS PATTERN
 
 `DecisionWitness` can ONLY be created via `Witch::with_operator_decision()`, which should ONLY be called from `ui/operator_decisions.rs`. This module is the **operator confirmation boundary**.
@@ -191,6 +170,10 @@ DecisionWitness and ExecutionWitnesses are our methods of guaranteeing this.
 **Exception:** Database creation in `first_time_setup.rs` doesn't need a witness - it's infrastructure setup, not a corpus mutation. Only mutations that alter indexed corpus data require DecisionWitness.
 
 ### Signal Design Principles
+
+NOTE: slightly stale section. We now have a 'dirty inodes' table that we use for flagging inodes as dirty after a mutation => re-compute inode level signals next stage.
+
+Most signals key off of inodes, or are otherwise tag-y/corpus-aggregate signals that usually benefit from reasoning about the full state of the corpus rather than the single-inode level.
 
 **Signals must be small and individual.** Each signal should correspond to exactly one file, track, or piece of metadata - never aggregate/macro-level state.
 

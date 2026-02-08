@@ -1786,23 +1786,10 @@ impl App {
 
     /// Show the transaction review screen for tag canonicity.
     fn show_transaction_review_for_canonicity(&mut self) {
-        // Check if there are any decisions staged
-        let has_decisions = self.witch.as_ref()
-            .map(|w| !w.decision_indices().is_empty())
-            .unwrap_or(false);
-
-        if !has_decisions {
-            // No decisions staged - just return to insights
-            self.tag_canonicity_state = None;
-            self.tag_canonicity_clusters = None;
-            self.start_insights_view();
-            return;
-        }
-
         // Clear the resolution modal state (but keep clusters for Cancel navigation)
         self.tag_canonicity_state = None;
 
-        // Transition to standardized review modal
+        // Always proceed to review - it will show "No changes" if empty
         self.start_transaction_review(transaction_review::TransactionReviewSource::TagCanonicityResolution);
     }
 
@@ -2082,23 +2069,10 @@ impl App {
 
     /// Show the transaction review screen for compound tag splits.
     fn show_transaction_review_for_compound_split(&mut self) {
-        // Check if there are any decisions staged
-        let has_decisions = self.witch.as_ref()
-            .map(|w| !w.decision_indices().is_empty())
-            .unwrap_or(false);
-
-        if !has_decisions {
-            // No decisions staged - just return to insights
-            self.compound_split_state = None;
-            self.compound_split_clusters = None;
-            self.start_insights_view();
-            return;
-        }
-
         // Clear the resolution modal state (but keep clusters for Cancel navigation)
         self.compound_split_state = None;
 
-        // Transition to standardized review modal
+        // Always proceed to review - it will show "No changes" if empty
         self.start_transaction_review(transaction_review::TransactionReviewSource::CompoundTagSplit);
     }
 

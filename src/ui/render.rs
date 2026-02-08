@@ -14,9 +14,8 @@ use ratatui::{
 };
 
 use super::app::{EyeAnimation, EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
-use super::helpers::format_duration;
-use super::widgets::{control_presets, Modal, ModalButton, ModalStyle};
-use super::{compound_split_v2, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser};
+use super::widgets::{status_bar, Modal, ModalButton, ModalStyle};
+use super::{compound_split_v2, corrupt_file_flow, deploy_flow, directory_cluster_flow, filter_popup, insights_view, missing_file_flow, oob_conflict_flow, oob_sync_flow, progressive_worker, shit_format_flow, subpar_duplicate_flow, tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser};
 
 /// Display context passed to rendering functions.
 /// Contains all the state needed to render the UI.
@@ -44,11 +43,14 @@ pub struct RenderContext<'a> {
     pub shit_format_preview: Option<&'a shit_format_flow::ShitFormatPreviewState>,
     pub subpar_duplicate_preview: Option<&'a subpar_duplicate_flow::SubparDuplicatePreviewState>,
     pub directory_cluster_preview: Option<&'a directory_cluster_flow::DirectoryClusterPreviewState>,
+    pub progressive_worker: Option<&'a progressive_worker::ProgressiveWorkerState>,
     pub eye: &'a EyeAnimation,
     pub witch_status: Option<crate::witch::DaemonStatus>,
     pub corpus_summary: Option<crate::corpus::db::types::CorpusSummary>,
     pub db_stats: Option<crate::db_thread::DbThreadStats>,
     pub filter_popup_state: Option<&'a filter_popup::FilterPopupState>,
+    /// Transaction summary for status bar (label, decision_count, mutation_count)
+    pub transaction_summary: Option<(&'a str, usize, usize)>,
 }
 
 /// Main render entry point - dispatches to sub-renderers based on mode.
@@ -91,12 +93,12 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
     );
 
     if uses_unified_titlebar {
-        // Two-part layout: content (with unified titlebar) + footer
+        // Two-part layout: content (with unified titlebar) + status bar
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10), // Content with unified titlebar
-                Constraint::Length(10), // Footer
+                Constraint::Min(10),   // Content with unified titlebar
+                Constraint::Length(2), // Status bar
             ])
             .split(f.area());
 
@@ -105,7 +107,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         let content_time = start.elapsed();
 
         let start = Instant::now();
-        render_footer(f, chunks[1], ctx);
+        render_status_bar(f, chunks[1], ctx);
         let footer_time = start.elapsed();
 
         if content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
@@ -117,13 +119,13 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
             ));
         }
     } else {
-        // Standard three-part layout: header + content + footer
+        // Standard three-part layout: header + content + status bar
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Header
-                Constraint::Min(10),    // Content
-                Constraint::Length(10), // Footer
+                Constraint::Length(3), // Header
+                Constraint::Min(10),   // Content
+                Constraint::Length(2), // Status bar
             ])
             .split(f.area());
 
@@ -136,7 +138,7 @@ pub fn render(f: &mut Frame, ctx: &mut RenderContext) {
         let content_time = start.elapsed();
 
         let start = Instant::now();
-        render_footer(f, chunks[2], ctx);
+        render_status_bar(f, chunks[2], ctx);
         let footer_time = start.elapsed();
 
         if header_time.as_millis() > 16 || content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
@@ -155,6 +157,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext
     // Get mode-specific suffix (if any)
     let suffix = match ctx.mode {
         super::UiMode::Progress => None, // Never reached - handled separately
+        super::UiMode::ProgressiveWork => Some("Processing"),
         super::UiMode::DeploymentPreview => Some("Deployment Preview"),
         super::UiMode::ExitConfirmModal => Some("Exit Confirmation"),
         super::UiMode::CorpusBrowser => Some("Corpus Browser"),
@@ -197,6 +200,12 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::Progress => {
             // Never reached - handled separately in render() before this function
             view_name = "progress";
+        }
+        super::UiMode::ProgressiveWork => {
+            view_name = "progressive_work";
+            if let Some(ref state) = ctx.progressive_worker {
+                progressive_worker::render(f, area, state);
+            }
         }
         super::UiMode::DeploymentPreview => {
             view_name = "deployment_preview";
@@ -462,337 +471,33 @@ fn render_exit_confirm_modal(
     }
 }
 
-fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    // Two-row layout: full-width corpus health on top, task/controls side-by-side below
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(4), // Corpus health (slim)
-            Constraint::Min(5),    // Task + Controls
-        ])
-        .split(area);
-
-    // Bottom row: Task and Controls side-by-side
-    let bottom_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50), // Task
-            Constraint::Percentage(50), // Controls
-        ])
-        .split(rows[1]);
-
-    let start = Instant::now();
-    render_corpus_status(f, rows[0], ctx);
-    let corpus_time = start.elapsed();
-
-    let start = Instant::now();
-    render_operation_status(f, bottom_cols[0], ctx);
-    let operation_time = start.elapsed();
-
-    let start = Instant::now();
-    render_controls(f, bottom_cols[1], ctx);
-    let controls_time = start.elapsed();
-
-    if corpus_time.as_millis() > 16
-        || operation_time.as_millis() > 16
-        || controls_time.as_millis() > 16
-    {
-        crate::logging::log_perf(format!(
-            "[RENDER DEBUG] footer: corpus={}ms operation={}ms controls={}ms",
-            corpus_time.as_millis(),
-            operation_time.as_millis(),
-            controls_time.as_millis()
-        ));
-    }
-}
-
-fn render_corpus_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    // Only split if db_stats is available (timing_instrumentation enabled)
-    let (corpus_area, db_area) = if ctx.db_stats.is_some() {
-        let split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-        (split[0], Some(split[1]))
+/// Render the minimal 2-line status bar.
+fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderContext) {
+    // Get selected path from the tree browser if in corpus browser mode
+    let selected_path: Option<String> = if ctx.mode == super::UiMode::CorpusBrowser {
+        ctx.tree_browser
+            .as_ref()
+            .and_then(|b| b.selected_path())
+            .map(|p| p.to_string_lossy().to_string())
     } else {
-        // No DB stats - give full width to corpus
-        (area, None)
+        None
     };
 
-    // Corpus stats
-    let corpus_lines = if let Some(ref summary) = ctx.corpus_summary {
-        let mut lines = Vec::new();
-
-        // File-level stats: "N files (M indexed, Y missing, X new, Z relocated)"
-        let mut file_parts: Vec<Span> = vec![
-            Span::styled(
-                summary.files_in_corpus.to_string(),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::raw(" files ("),
-            Span::styled(
-                summary.healthy_files.to_string(),
-                Style::default().fg(Color::Green),
-            ),
-            Span::raw(" indexed"),
-        ];
-
-        // Only show non-zero counts for file-level issues
-        if summary.missing_files > 0 {
-            file_parts.push(Span::raw(", "));
-            file_parts.push(Span::styled(
-                summary.missing_files.to_string(),
-                Style::default().fg(Color::Red),
-            ));
-            file_parts.push(Span::raw(" missing"));
+    // Convert transaction summary to status_bar's type
+    let txn_summary = ctx.transaction_summary.map(|(label, dec, mut_)| {
+        status_bar::TransactionSummary {
+            label: label.to_string(),
+            decision_count: dec,
+            mutation_count: mut_,
         }
-        if summary.unindexed_files > 0 {
-            file_parts.push(Span::raw(", "));
-            file_parts.push(Span::styled(
-                summary.unindexed_files.to_string(),
-                Style::default().fg(Color::Yellow),
-            ));
-            file_parts.push(Span::raw(" new"));
-        }
-        if summary.moved_files > 0 {
-            file_parts.push(Span::raw(", "));
-            file_parts.push(Span::styled(
-                summary.moved_files.to_string(),
-                Style::default().fg(Color::Yellow),
-            ));
-            file_parts.push(Span::raw(" relocated"));
-        }
-        file_parts.push(Span::raw(")"));
+    });
 
-        lines.push(Line::from(file_parts));
-
-        // Signal breakdown (all remaining signals)
-        let hs = &summary.signal_summary;
-        let total_signals = hs.metadata_duplicates
-            + hs.canonicalization_issues
-            + hs.missing_tag_issues
-            + summary.deploy_conflicts
-            + summary.library_stale
-            + summary.library_leftover
-            + summary.oob_tag_sync
-            + summary.oob_tag_conflict
-            + summary.mtime_only_mismatch
-            + summary.duplicate_inodes;
-
-        if total_signals > 0 {
-            let mut signal_parts: Vec<Span> = Vec::new();
-            let mut first = true;
-
-            // Helper macro to reduce repetition
-            macro_rules! add_signal {
-                ($count:expr, $label:expr, $color:expr) => {
-                    if $count > 0 {
-                        if !first { signal_parts.push(Span::raw(", ")); }
-                        signal_parts.push(Span::styled(
-                            $count.to_string(),
-                            Style::default().fg($color),
-                        ));
-                        signal_parts.push(Span::raw(concat!(" ", $label)));
-                        #[allow(unused_assignments)]
-                        { first = false; }
-                    }
-                };
-            }
-
-            add_signal!(summary.library_stale, "stale", Color::Yellow);
-            add_signal!(summary.library_leftover, "leftover", Color::Yellow);
-            add_signal!(hs.missing_tag_issues, "missing-tags", Color::Yellow);
-            add_signal!(summary.deploy_conflicts, "conflicts", Color::Red);
-            add_signal!(hs.metadata_duplicates, "meta-dups", Color::Yellow);
-            add_signal!(hs.canonicalization_issues, "canon", Color::Yellow);
-            add_signal!(summary.oob_tag_sync, "tags-sync", Color::Yellow);
-            add_signal!(summary.oob_tag_conflict, "tags-conflict", Color::Red);
-            add_signal!(summary.mtime_only_mismatch, "mtime-ack", Color::Yellow);
-            add_signal!(summary.duplicate_inodes, "dup-inodes", Color::Yellow);
-
-            lines.push(Line::from(signal_parts));
-        }
-
-        lines
-    } else {
-        vec![Line::from("No data").style(Style::default().fg(Color::DarkGray))]
-    };
-
-    let corpus_para = Paragraph::new(corpus_lines)
-        .block(Block::default().borders(Borders::ALL).title("Corpus"));
-    f.render_widget(corpus_para, corpus_area);
-
-    // Right: DB thread stats (only if timing_instrumentation is enabled)
-    if let Some(db_area) = db_area {
-        if let Some(ref stats) = ctx.db_stats {
-            let rate_str = if stats.writes_per_sec >= 1.0 {
-                format!("{:.0}/s", stats.writes_per_sec)
-            } else if stats.writes_per_sec > 0.0 {
-                format!("{:.1}/s", stats.writes_per_sec)
-            } else {
-                "0/s".to_string()
-            };
-
-            let latency_str = if stats.avg_latency_us > 1000 {
-                format!("{}ms", stats.avg_latency_us / 1000)
-            } else {
-                format!("{}µs", stats.avg_latency_us)
-            };
-
-            let db_lines = vec![
-                Line::from(vec![
-                    Span::raw("Writes: "),
-                    Span::styled(
-                        stats.total_writes.to_string(),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::raw("Rate: "),
-                    Span::styled(rate_str, Style::default().fg(Color::Green)),
-                    Span::raw(" • "),
-                    Span::styled(latency_str, Style::default().fg(Color::Yellow)),
-                ]),
-                Line::from(vec![
-                    Span::raw("Queue: "),
-                    Span::styled(
-                        stats.queue_depth.to_string(),
-                        if stats.queue_depth > 100 {
-                            Style::default().fg(Color::Red)
-                        } else if stats.queue_depth > 0 {
-                            Style::default().fg(Color::Yellow)
-                        } else {
-                            Style::default().fg(Color::Green)
-                        },
-                    ),
-                ]),
-            ];
-
-            let db_para = Paragraph::new(db_lines)
-                .block(Block::default().borders(Borders::ALL).title("DB Thread"));
-            f.render_widget(db_para, db_area);
-        }
-    }
-}
-
-fn render_operation_status(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    let mut lines = Vec::new();
-
-    let has_witch_work = ctx.witch_status.as_ref().map(|s| s.pending > 0).unwrap_or(false);
-    let has_completed_session = ctx.witch_status.as_ref()
-        .and_then(|s| s.completed_session.as_ref())
-        .is_some();
-
-    if has_witch_work {
-        // Show active Witch status
-        if let Some(ref status) = ctx.witch_status {
-            // Build task type summary
-            let task_summary: String = if !status.task_counts.is_empty() {
-                status.task_counts.iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            } else {
-                "Processing...".to_string()
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled("The Witch ", Style::default().fg(Color::Cyan)),
-                Span::styled(task_summary, Style::default().fg(Color::White)),
-            ]));
-
-            // Show elapsed time
-            let elapsed_str = status.elapsed.map(|d| format_duration(d)).unwrap_or_default();
-            lines.push(Line::from(format!(
-                "Pending: {} | Processed: {}{}",
-                status.pending,
-                status.total_processed,
-                if !elapsed_str.is_empty() { format!(" | {}", elapsed_str) } else { String::new() }
-            )));
-
-            if !status.recent_errors.is_empty() {
-                lines.push(Line::from(
-                    status.recent_errors.last().unwrap_or(&String::new()).clone()
-                ).style(Style::default().fg(Color::Red)));
-            }
-        }
-    } else if has_completed_session {
-        // Show lingering completed session summary
-        if let Some(ref status) = ctx.witch_status {
-            if let Some(ref session) = status.completed_session {
-                // Build task type breakdown
-                let task_breakdown: String = session.task_counts.iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let status_color = if session.failed > 0 { Color::Yellow } else { Color::Green };
-                lines.push(Line::from(vec![
-                    Span::styled("Completed ", Style::default().fg(status_color)),
-                    Span::styled(task_breakdown, Style::default().fg(Color::White)),
-                ]));
-
-                let duration_str = format_duration(session.duration);
-                let failed_str = if session.failed > 0 {
-                    format!(" | {} failed", session.failed)
-                } else {
-                    String::new()
-                };
-                lines.push(Line::from(format!(
-                    "{} tasks in {}{}",
-                    session.total_processed,
-                    duration_str,
-                    failed_str
-                )).style(Style::default().fg(Color::DarkGray)));
-            }
-        }
-    } else {
-        // No active work
-        lines.push(
-            Line::from("No operation in progress").style(Style::default().fg(Color::DarkGray)),
-        );
-    }
-
-    let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Task"));
-    f.render_widget(para, area);
-}
-
-fn render_controls(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
-    let mut lines = Vec::new();
-
-    // Show any status message first
-    if let Some(msg) = ctx.status_message {
-        lines.push(Line::from(msg.to_string()).style(Style::default().fg(Color::Yellow)));
-    }
-
-    // Get mode-specific controls hint
-    let controls = match ctx.mode {
-        super::UiMode::Progress => control_presets::empty(), // No controls during loading/analysis
-        super::UiMode::DeploymentPreview => control_presets::deployment_preview(),
-        super::UiMode::ExitConfirmModal => control_presets::exit_confirm_modal(),
-        super::UiMode::CorpusBrowser => control_presets::corpus_browser(),
-        super::UiMode::Insights => control_presets::insights_view(),
-        super::UiMode::TagSearch => control_presets::tag_search(),
-        super::UiMode::IntakeConfirmation => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::UnifiedTagEditor => control_presets::tag_editor(), // Reuse same controls
-        super::UiMode::MissingFileResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::MissingDirectoryResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::TagCanonicityResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::CompoundTagSplit => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::OobSyncResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::OobConflictInspection => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::MovedFileAcknowledge => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::TransactionReview => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::CorruptFileResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::ShitFormatResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::SubparDuplicateResolution => control_presets::empty(), // Modal handles its own hints
-        super::UiMode::DirectoryClusterResolution => control_presets::empty(), // Modal handles its own hints
-    };
-    lines.push(controls.render_line());
-
-    let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Controls"));
-    f.render_widget(para, area);
+    status_bar::render(
+        f,
+        area,
+        selected_path.as_deref(),
+        ctx.status_message,
+        txn_summary.as_ref(),
+    );
 }
 

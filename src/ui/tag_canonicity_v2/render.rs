@@ -338,11 +338,27 @@ fn render_input(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
 
 /// Render the controls hint bar.
 fn render_controls(f: &mut Frame, area: Rect) {
-    let hints = "[^/v] navigate  [</> pane]  [Space] toggle  [F] fill  [Enter] confirm  [Tab] next  [^R] review  [Esc] cancel";
+    use crate::ui::widgets::control_colors as cc;
 
-    let hint = Paragraph::new(hints)
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
+    let hints = Line::from(vec![
+        cc::nav("[^/v]"),
+        cc::text(" nav  "),
+        cc::nav("[</>]"),
+        cc::text(" pane  "),
+        cc::toggle("[Space]"),
+        cc::text(" toggle  "),
+        cc::edit("[F]"),
+        cc::text(" fill  "),
+        cc::confirm("[Enter]"),
+        cc::text(" confirm  "),
+        cc::nav("[Tab]"),
+        cc::text(" next  "),
+        cc::review("[^R]"),
+        cc::text(" review  "),
+        cc::cancel("[Esc]"),
+        cc::text(" cancel"),
+    ]);
 
+    let hint = Paragraph::new(hints).alignment(Alignment::Center);
     f.render_widget(hint, area);
 }

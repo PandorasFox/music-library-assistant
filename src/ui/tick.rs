@@ -1,9 +1,19 @@
 //! Per-Frame Update Logic
 //!
 //! Tick functions run each frame for views that need continuous updates
-//! (progress screen, tag search).
+//! (progress screen, tag search, progressive worker).
 
-use crate::ui::{progress_screen::{ProgressPhase, ProgressScreen}, startup, types::UiMode};
+use std::time::{Duration, Instant};
+use crossterm::event;
+
+use crate::ui::{
+    compound_split_v2,
+    progress_screen::{ProgressPhase, ProgressScreen},
+    progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
+    startup,
+    transaction_review,
+    types::UiMode,
+};
 use super::App;
 
 impl App {
@@ -132,5 +142,220 @@ impl App {
         ));
 
         result
+    }
+
+    // =========================================================================
+    // Progressive Worker Tick
+    // =========================================================================
+
+    /// Tick the progressive worker - process items in timed chunks.
+    ///
+    /// Called each frame while progressive_worker is Some. Processes work items
+    /// until the time budget (~50ms) is exhausted, then returns to allow render.
+    /// On completion, drains input buffer and invokes the completion handler.
+    pub(super) fn tick_progressive_worker(&mut self) {
+        // Take worker temporarily to avoid borrow conflicts
+        let mut worker = match self.progressive_worker.take() {
+            Some(w) => w,
+            None => return,
+        };
+
+        let start = Instant::now();
+        let time_budget = Duration::from_millis(50);
+
+        // Process items until time budget exhausted or queue empty
+        while start.elapsed() < time_budget {
+            let Some(item) = worker.work_queue.pop_front() else {
+                // Done! Drain input buffer, build summary, invoke callback
+                drain_input_buffer();
+
+                let summary = worker.build_summary();
+                let on_complete = worker.on_complete.clone();
+                let is_safe_mode = worker.is_safe_mode;
+
+                // Clear worker state (already taken)
+                self.handle_progressive_complete(on_complete, summary, is_safe_mode);
+                return;
+            };
+
+            // Process single item
+            self.process_work_item(&item, &mut worker);
+            worker.processed += 1;
+        }
+
+        // Time budget exhausted - put worker back for next frame
+        self.progressive_worker = Some(worker);
+    }
+
+    /// Process a single work item.
+    fn process_work_item(&mut self, item: &WorkItem, worker: &mut ProgressiveWorkerState) {
+        match item {
+            WorkItem::StageCompoundSplit { signal_id, idx } => {
+                self.process_compound_split_item(*signal_id, *idx, worker);
+            }
+            WorkItem::StageTagCanonicality { signal_id, idx } => {
+                self.process_tag_canonicity_item(*signal_id, *idx, worker);
+            }
+        }
+    }
+
+    /// Process a single compound split work item.
+    fn process_compound_split_item(
+        &mut self,
+        signal_id: i64,
+        idx: usize,
+        worker: &mut ProgressiveWorkerState,
+    ) {
+        use crate::corpus::db::types::{AggregateSignal, AggregateSignalType};
+
+        let is_safe_mode = worker.is_safe_mode;
+        let total = worker.total;
+
+        // Query signal and parse data (scoped borrow)
+        let data = {
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => {
+                    worker.nops_elided += 1;
+                    return;
+                }
+            };
+
+            // Get signal by ID
+            let signal = match read_db.get_signal_by_id(signal_id) {
+                Ok(Some(s)) => s,
+                _ => {
+                    worker.nops_elided += 1;
+                    return;
+                }
+            };
+
+            // Convert to AggregateSignal
+            let agg_signal = AggregateSignal {
+                id: signal.id,
+                signal_type: match AggregateSignalType::from_str(signal.issue_type.as_str()) {
+                    Some(t) => t,
+                    None => {
+                        worker.nops_elided += 1;
+                        return;
+                    }
+                },
+                key: signal.issue_key,
+                discovered_at: signal.discovered_at,
+                metadata_json: signal.metadata_json,
+            };
+
+            // Skip if wrong type
+            if agg_signal.signal_type != AggregateSignalType::CompoundTagValue {
+                worker.nops_elided += 1;
+                return;
+            }
+
+            // Parse data using v2
+            match compound_split_v2::CompoundSplitDataV2::from_signal_with_files(&agg_signal, &read_db) {
+                Some(d) => d,
+                None => {
+                    worker.nops_elided += 1;
+                    return;
+                }
+            }
+        }; // db borrow ends here
+
+        // Update current label for display
+        worker.current_label = Some(format!(
+            "Split \"{}\" in {}",
+            data.compound.compound_value,
+            data.compound.tag_name,
+        ));
+
+        // Create temporary state to generate mutations
+        let state = compound_split_v2::CompoundSplitStateV2::new(
+            data.clone(),
+            is_safe_mode,
+            idx,
+            total,
+        );
+        let mutations = state.mutations();
+
+        if mutations.is_empty() {
+            worker.nops_elided += 1;
+            return;
+        }
+
+        // Stage via operator_decisions
+        let description = format!(
+            "Split \"{}\" in {} → [{}]",
+            data.compound.compound_value,
+            data.compound.tag_name,
+            data.compound.split_parts.join(", ")
+        );
+
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::operator_decisions::stage_decision(witch, idx, &description, mutations);
+            worker.mutations_generated += 1;
+        } else {
+            worker.nops_elided += 1;
+        }
+    }
+
+    /// Process a single tag canonicity work item.
+    fn process_tag_canonicity_item(
+        &mut self,
+        _signal_id: i64,
+        _idx: usize,
+        worker: &mut ProgressiveWorkerState,
+    ) {
+        // Tag canonicity staging - placeholder for future implementation
+        // For now, just count as NOP
+        worker.nops_elided += 1;
+    }
+
+    /// Handle completion of progressive work.
+    fn handle_progressive_complete(
+        &mut self,
+        on_complete: OnComplete,
+        summary: WorkSummary,
+        _is_safe_mode: bool,
+    ) {
+        match on_complete {
+            OnComplete::CompoundSplitStaging => {
+                // Set status message with summary
+                if summary.nops_elided > 0 {
+                    self.status_message = Some(format!(
+                        "Staged {} compound tag splits ({} skipped)",
+                        summary.mutations_generated,
+                        summary.nops_elided,
+                    ));
+                } else {
+                    self.status_message = Some(format!(
+                        "Staged {} compound tag splits",
+                        summary.mutations_generated,
+                    ));
+                }
+
+                // Transition to transaction review
+                self.show_transaction_review_for_compound_split();
+            }
+            OnComplete::TagCanonicalityStaging => {
+                self.status_message = Some(format!(
+                    "Staged {} tag canonicity decisions",
+                    summary.mutations_generated,
+                ));
+                self.start_transaction_review(
+                    transaction_review::TransactionReviewSource::TagCanonicityResolution,
+                );
+            }
+        }
+    }
+
+}
+
+/// Drain any pending input events from the terminal buffer.
+///
+/// Call this after slow operations to prevent buffered keypresses from
+/// being processed as if they were intentional input.
+fn drain_input_buffer() {
+    while event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
     }
 }

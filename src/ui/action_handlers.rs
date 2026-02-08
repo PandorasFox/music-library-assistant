@@ -1831,9 +1831,8 @@ impl App {
                 self.show_transaction_review_for_compound_split();
             }
             compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
-                // Ctrl+A - stage ALL splits and go to review
-                self.stage_all_compound_splits();
-                self.show_transaction_review_for_compound_split();
+                // Ctrl+A - stage ALL splits progressively with progress bar
+                self.start_progressive_compound_split_staging();
             }
         }
     }
@@ -1896,7 +1895,38 @@ impl App {
         }
     }
 
+    /// Start progressive worker to stage ALL compound splits.
+    ///
+    /// Called when user presses Ctrl+A in the compound split modal.
+    /// Uses the progressive worker to process items in timed chunks with progress bar.
+    fn start_progressive_compound_split_staging(&mut self) {
+        let Some(ref clusters) = self.compound_split_clusters else {
+            self.status_message = Some("No compound splits to stage".to_string());
+            return;
+        };
+
+        let signal_ids = clusters.all_signal_ids().to_vec();
+        if signal_ids.is_empty() {
+            self.status_message = Some("No compound splits to stage".to_string());
+            return;
+        }
+
+        let is_safe_mode = self.compound_split_safe_mode;
+
+        // Start progressive worker
+        let worker = super::progressive_worker::ProgressiveWorkerState::for_compound_splits(
+            signal_ids,
+            is_safe_mode,
+        );
+        self.progressive_worker = Some(worker);
+        self.mode = super::types::UiMode::ProgressiveWork;
+    }
+
     /// Stage ALL compound split decisions at once (v2).
+    ///
+    /// NOTE: This synchronous version is kept for backwards compatibility but
+    /// should be avoided for large corpora. Use start_progressive_compound_split_staging()
+    /// instead, which processes items in timed chunks with progress feedback.
     fn stage_all_compound_splits(&mut self) {
         use crate::corpus::db::types::{AggregateSignal, AggregateSignalType};
         use crate::corpus::mutations::Mutation;
@@ -1979,8 +2009,8 @@ impl App {
 
     /// Confirm all safe compound splits directly from insights (Ctrl+A shortcut).
     ///
-    /// This is a one-shot flow: loads safe compound signals, stages all splits,
-    /// and immediately shows the transaction review screen.
+    /// This is a one-shot flow: loads safe compound signals, starts the progressive
+    /// worker to stage all splits, then shows the transaction review screen.
     /// If `tag_filter` is Some, only processes signals for that specific tag.
     fn confirm_all_safe_compound_splits_from_insights(&mut self, tag_filter: Option<&str>) {
         let read_db = match self.witch.as_mut() {
@@ -2001,7 +2031,7 @@ impl App {
 
         // Store signal IDs for cluster tracking
         let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        self.compound_split_clusters = Some(compound_split_v2::CompoundSplitClustersV2::new(signal_ids));
+        self.compound_split_clusters = Some(compound_split_v2::CompoundSplitClustersV2::new(signal_ids.clone()));
         self.compound_split_safe_mode = true;
 
         // Start transaction
@@ -2009,11 +2039,13 @@ impl App {
             let _ = witch.start_transaction("Compound tag split (safe bulk)");
         }
 
-        // Stage all splits at once
-        self.stage_all_compound_splits();
-
-        // Go directly to review screen
-        self.show_transaction_review_for_compound_split();
+        // Start progressive worker to stage all splits
+        let worker = super::progressive_worker::ProgressiveWorkerState::for_compound_splits(
+            signal_ids,
+            true, // safe mode
+        );
+        self.progressive_worker = Some(worker);
+        self.mode = super::types::UiMode::ProgressiveWork;
     }
 
     /// Navigate to next/prev compound split signal without staging.
@@ -2068,7 +2100,7 @@ impl App {
     }
 
     /// Show the transaction review screen for compound tag splits.
-    fn show_transaction_review_for_compound_split(&mut self) {
+    pub(super) fn show_transaction_review_for_compound_split(&mut self) {
         // Clear the resolution modal state (but keep clusters for Cancel navigation)
         self.compound_split_state = None;
 

@@ -314,58 +314,60 @@ fn render_edit_input(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 
 /// Render the controls hint bar.
 fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
+    use crate::ui::widgets::control_colors as cc;
+
     let mut hints = Vec::new();
 
     if state.is_editing() {
         // Editing mode controls
         hints.extend([
-            Span::styled("[Enter]", Style::default().fg(Color::Green)),
-            Span::raw(" Save  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Red)),
-            Span::raw(" Cancel"),
+            cc::confirm("[Enter]"),
+            cc::text(" Save  "),
+            cc::cancel("[Esc]"),
+            cc::text(" Cancel"),
         ]);
     } else {
         // Normal mode controls
         hints.extend([
-            Span::styled("[^/v]", Style::default().fg(Color::Cyan)),
-            Span::raw(" nav  "),
-            Span::styled("[</>]", Style::default().fg(Color::Cyan)),
-            Span::raw(" pane  "),
+            cc::nav("[^/v]"),
+            cc::text(" nav  "),
+            cc::nav("[</>]"),
+            cc::text(" pane  "),
         ]);
 
         if state.focus_pane == FocusPaneV2::Files {
             hints.extend([
-                Span::styled("[Space]", Style::default().fg(Color::Magenta)),
-                Span::raw(" toggle  "),
+                cc::toggle("[Space]"),
+                cc::text(" toggle  "),
             ]);
         }
 
         if !state.is_safe_mode && state.focus_pane == FocusPaneV2::Parts {
             hints.extend([
-                Span::styled("[E]", Style::default().fg(Color::Yellow)),
-                Span::raw(" edit  "),
+                cc::edit("[E]"),
+                cc::text(" edit  "),
             ]);
         }
 
         hints.extend([
-            Span::styled("[Enter]", Style::default().fg(Color::Green)),
-            Span::raw(" split  "),
-            Span::styled("[^Q]", Style::default().fg(Color::Yellow)),
-            Span::raw(" keep  "),
+            cc::confirm("[Enter]"),
+            cc::text(" split  "),
+            cc::action("[^Q]"),
+            cc::text(" keep  "),
         ]);
 
         if state.is_safe_mode {
             hints.extend([
-                Span::styled("[^A]", Style::default().fg(Color::Green)),
-                Span::raw(" all  "),
+                cc::confirm("[^A]"),
+                cc::text(" all  "),
             ]);
         }
 
         hints.extend([
-            Span::styled("[^R]", Style::default().fg(Color::Blue)),
-            Span::raw(" review  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Red)),
-            Span::raw(" cancel"),
+            cc::review("[^R]"),
+            cc::text(" review  "),
+            cc::cancel("[Esc]"),
+            cc::text(" cancel"),
         ]);
     }
 

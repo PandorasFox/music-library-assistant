@@ -53,6 +53,7 @@ pub mod tag_search;
 pub mod tree_browser;
 pub mod wait_state;
 pub mod widgets;
+pub mod progressive_worker;
 
 // Re-export types for convenience
 pub(crate) use types::{UiMode, ExitConfirmModalState};
@@ -189,6 +190,8 @@ pub(crate) struct App {
     pub(super) subpar_duplicate_preview: Option<subpar_duplicate_flow::SubparDuplicatePreviewState>,
     // Directory overlap cluster resolution modal
     pub(super) directory_cluster_preview: Option<directory_cluster_flow::DirectoryClusterPreviewState>,
+    // Progressive work modal (timed bulk operations with progress bar)
+    pub(super) progressive_worker: Option<progressive_worker::ProgressiveWorkerState>,
 
     // The Witch - enforcer of orderliness, handles all mutations and background work
     pub(super) witch: Option<crate::witch::Witch>,
@@ -242,6 +245,7 @@ impl App {
             shit_format_preview: None,
             subpar_duplicate_preview: None,
             directory_cluster_preview: None,
+            progressive_worker: None,
             witch: Some(witch),
             log_rx: None,  // Already consumed by Witch
             _throughput_samples: VecDeque::with_capacity(100),
@@ -486,6 +490,10 @@ impl App {
                     self.handle_directory_cluster_preview_action(action);
                 }
             }
+            UiMode::ProgressiveWork => {
+                // Progressive work modal ignores ALL keys - purely displays progress
+                // Input is drained when work completes
+            }
         }
     }
 
@@ -642,6 +650,9 @@ fn render(f: &mut Frame, app: &mut App) {
         Vec::new()
     };
 
+    // Get transaction summary for status bar
+    let transaction_summary = app.witch.as_ref().and_then(|w| w.transaction_summary());
+
     let mut ctx = render::RenderContext {
         mode: app.mode,
         status_message: app.status_message.as_deref(),
@@ -665,12 +676,14 @@ fn render(f: &mut Frame, app: &mut App) {
         shit_format_preview: app.shit_format_preview.as_ref(),
         subpar_duplicate_preview: app.subpar_duplicate_preview.as_ref(),
         directory_cluster_preview: app.directory_cluster_preview.as_ref(),
+        progressive_worker: app.progressive_worker.as_ref(),
         unified_tag_editor: app.unified_tag_editor.as_mut(),
         eye: &app.eye,
         witch_status,
         corpus_summary,
         db_stats,
         filter_popup_state: app.filter_popup_state.as_ref(),
+        transaction_summary,
     };
     render::render(f, &mut ctx);
 }
@@ -791,6 +804,11 @@ fn run_app<B: ratatui::backend::Backend>(
         // Tick progress screen if active (startup eyeballing, content analysis, etc.)
         if app.progress_screen.is_some() {
             app.tick_progress_screen();
+        }
+
+        // Tick progressive worker if active (bulk operations with progress bar)
+        if app.progressive_worker.is_some() {
+            app.tick_progressive_worker();
         }
 
         // Flag demand for cached UI data (the Witch spawns background refresh if needed)

@@ -78,6 +78,8 @@ pub(crate) enum UiMode {
     SubparDuplicateResolution,
     /// Directory overlap cluster resolution modal (keep one directory, stash others)
     DirectoryClusterResolution,
+    /// Progressive work modal - timed bulk operations with progress bar
+    ProgressiveWork,
 }
 
 // ============================================================================

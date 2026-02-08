@@ -301,10 +301,21 @@ pub fn render(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisio
     render_buttons(f, chunks[2], state.button_focus);
 
     // Render hints
-    let hints = "[<>] select  [Enter] activate  [Y] confirm  [Ctrl+D] discard  [Esc] cancel";
-    let hint = Paragraph::new(hints)
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
+    use crate::ui::widgets::control_colors as cc;
+
+    let hints = Line::from(vec![
+        cc::nav("[<>]"),
+        cc::text(" select  "),
+        cc::confirm("[Enter]"),
+        cc::text(" activate  "),
+        cc::action("[Y]"),
+        cc::text(" confirm  "),
+        cc::cancel("[Ctrl+D]"),
+        cc::text(" discard  "),
+        cc::cancel("[Esc]"),
+        cc::text(" cancel"),
+    ]);
+    let hint = Paragraph::new(hints).alignment(Alignment::Center);
     f.render_widget(hint, chunks[3]);
 }
 

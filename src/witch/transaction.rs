@@ -117,6 +117,15 @@ impl super::Witch {
         self.pending_transaction.is_some()
     }
 
+    /// Get a summary of the pending transaction for UI display.
+    ///
+    /// Returns None if no transaction is active.
+    pub fn transaction_summary(&self) -> Option<(&str, usize, usize)> {
+        self.pending_transaction.as_ref().map(|txn| {
+            (txn.label.as_str(), txn.decision_count(), txn.mutation_count())
+        })
+    }
+
     /// Add a witnessed decision to the transaction.
     ///
     /// - `idx`: UI-provided index (may have gaps, largely sequential)

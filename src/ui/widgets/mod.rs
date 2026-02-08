@@ -12,11 +12,13 @@
 //! - **Focus-aware**: Widgets know when they're focused and style accordingly
 
 mod controls;
+pub mod control_colors;
 mod layout;
 mod list_click_targets;
 mod modal;
 mod resolution_layout;
 pub mod signal_info_pane;
+pub mod status_bar;
 pub mod tabbed_signal_list;
 mod text_input;
 mod titlebar;
@@ -29,8 +31,7 @@ pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout};
 // Modal widgets
 pub use modal::{centered_rect, centered_rect_fixed, Modal, ModalButton, ModalStyle};
 
-// Controls hint widgets
-pub use controls::presets as control_presets;
+// Controls hint widgets (legacy presets - now mostly unused, modals handle their own hints)
 
 // Title bar widgets
 pub use titlebar::{LateralView, UnifiedTitleBar};

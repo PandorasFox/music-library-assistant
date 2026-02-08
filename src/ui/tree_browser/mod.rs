@@ -153,4 +153,8 @@ impl TreeBrowserState {
         self.navigator.clear_path_filter();
     }
 
+    /// Get the path of the currently selected entry (if any).
+    pub fn selected_path(&self) -> Option<&std::path::Path> {
+        self.navigator.current_entry().map(|e| e.path.as_path())
+    }
 }

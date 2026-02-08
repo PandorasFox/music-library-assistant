@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::state::UnifiedTagEditorState;
 use super::types::{
-    FieldEditState, NavigationDirection, TagEditorButton, UnifiedTagEditorAction,
+    FieldEditState, TagEditorButton, UnifiedTagEditorAction,
     UnifiedTagEditorFocus, UnifiedTagEditorModal, UnsavedChangesButton,
 };
 
@@ -26,61 +26,7 @@ impl UnifiedTagEditorState {
     }
 
     fn handle_modal_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
-        // Handle ChangePreview Enter/Esc separately to avoid borrow conflicts
-        if let Some(UnifiedTagEditorModal::ChangePreview { direction, .. }) = &self.modal {
-            let dir = *direction;
-            match key.code {
-                KeyCode::Enter => {
-                    // Confirm changes -> stage decision for current item
-                    let mutations = self.generate_mutations_for_current_item();
-                    self.modal = None;
-
-                    // If there are multiple items to navigate, go in the requested direction.
-                    // Otherwise (aggregated mode or single item), go directly to review.
-                    if self.has_multiple_items() {
-                        match dir {
-                            NavigationDirection::Forward => {
-                                return UnifiedTagEditorAction::StageDecisionAndNext {
-                                    index: self.current_item_idx,
-                                    mutations,
-                                };
-                            }
-                            NavigationDirection::Backward => {
-                                return UnifiedTagEditorAction::StageDecisionAndPrev {
-                                    index: self.current_item_idx,
-                                    mutations,
-                                };
-                            }
-                        }
-                    } else {
-                        return UnifiedTagEditorAction::StageDecisionAndReview {
-                            index: self.current_item_idx,
-                            mutations,
-                        };
-                    }
-                }
-                KeyCode::Esc => {
-                    self.modal = None;
-                    return UnifiedTagEditorAction::CloseModal;
-                }
-                _ => {} // Fall through to mutable match for scroll handling
-            }
-        }
-
         match &mut self.modal {
-            Some(UnifiedTagEditorModal::ChangePreview { scroll, .. }) => {
-                match key.code {
-                    KeyCode::Up => {
-                        *scroll = scroll.saturating_sub(1);
-                        UnifiedTagEditorAction::None
-                    }
-                    KeyCode::Down => {
-                        *scroll += 1;
-                        UnifiedTagEditorAction::None
-                    }
-                    _ => UnifiedTagEditorAction::None,
-                }
-            }
             Some(UnifiedTagEditorModal::UnsavedChanges { selected_button }) => {
                 match key.code {
                     KeyCode::Enter => {
@@ -267,33 +213,33 @@ impl UnifiedTagEditorState {
                 UnifiedTagEditorAction::None
             }
             KeyCode::Tab => {
-                // Tab: advance to next item (show change preview if current item has changes)
-                // Skip confirmation if changes match what's already staged
-                if self.has_changes_for_current_item() && !self.changes_match_staged() {
-                    let (grouped, single) = self.get_changes_for_current_item_preview();
-                    self.modal = Some(UnifiedTagEditorModal::ChangePreview {
-                        changes: grouped,
-                        single_changes: single,
-                        scroll: 0,
-                        direction: NavigationDirection::Forward,
-                    });
+                // Tab: advance to next item (individual mode only)
+                // In aggregated mode, Tab does nothing - use Confirm button to stage
+                if self.is_aggregated_mode() {
                     UnifiedTagEditorAction::None
+                } else if self.has_changes_for_current_item() && !self.changes_match_staged() {
+                    // Stage decision and navigate forward
+                    let mutations = self.generate_mutations_for_current_item();
+                    UnifiedTagEditorAction::StageDecisionAndNext {
+                        index: self.current_item_idx,
+                        mutations,
+                    }
                 } else {
                     UnifiedTagEditorAction::NextItem
                 }
             }
             KeyCode::BackTab => {
-                // Shift-Tab: go to previous item (show change preview if current item has changes)
-                // Skip confirmation if current item's changes match what's already staged
-                if self.has_changes_for_current_item() && !self.changes_match_staged() {
-                    let (grouped, single) = self.get_changes_for_current_item_preview();
-                    self.modal = Some(UnifiedTagEditorModal::ChangePreview {
-                        changes: grouped,
-                        single_changes: single,
-                        scroll: 0,
-                        direction: NavigationDirection::Backward,
-                    });
+                // Shift-Tab: go to previous item (individual mode only)
+                // In aggregated mode, Shift-Tab does nothing - use Confirm button to stage
+                if self.is_aggregated_mode() {
                     UnifiedTagEditorAction::None
+                } else if self.has_changes_for_current_item() && !self.changes_match_staged() {
+                    // Stage decision and navigate backward
+                    let mutations = self.generate_mutations_for_current_item();
+                    UnifiedTagEditorAction::StageDecisionAndPrev {
+                        index: self.current_item_idx,
+                        mutations,
+                    }
                 } else {
                     UnifiedTagEditorAction::PrevItem
                 }
@@ -361,17 +307,15 @@ impl UnifiedTagEditorState {
             KeyCode::Enter => {
                 match self.selected_button {
                     TagEditorButton::Confirm => {
-                        let (grouped, single) = self.get_changes_for_current_item_preview();
-                        if grouped.is_empty() && single.is_empty() {
-                            UnifiedTagEditorAction::StatusMessage("No changes to save".to_string())
+                        // Stage decision and go to review
+                        if self.has_changes_for_current_item() {
+                            let mutations = self.generate_mutations_for_current_item();
+                            UnifiedTagEditorAction::StageDecisionAndReview {
+                                index: self.current_item_idx,
+                                mutations,
+                            }
                         } else {
-                            self.modal = Some(UnifiedTagEditorModal::ChangePreview {
-                                changes: grouped,
-                                single_changes: single,
-                                scroll: 0,
-                                direction: NavigationDirection::Forward,
-                            });
-                            UnifiedTagEditorAction::None
+                            UnifiedTagEditorAction::StatusMessage("No changes to save".to_string())
                         }
                     }
                     TagEditorButton::DropChanges => {

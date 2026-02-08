@@ -11,11 +11,11 @@ use crate::corpus::mutations::Mutation;
 
 use super::mutations::{
     aggregate_tags_across_audio_files, audio_file_to_tag_fields, changes_to_mutations,
-    compute_changes, group_common_changes,
+    compute_changes,
 };
 use super::types::{
-    AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, GroupedChange,
-    TagChange, TagEditContext, TagEditorButton, TagEditorMode, TagEditorSource, TagField,
+    AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, TagChange,
+    TagEditContext, TagEditorButton, TagEditorMode, TagEditorSource, TagField,
     UnifiedTagEditorFocus, UnifiedTagEditorModal,
 };
 
@@ -222,11 +222,6 @@ impl UnifiedTagEditorState {
         self.mode == TagEditorMode::Aggregated
     }
 
-    /// Check if there are multiple items to navigate between
-    pub fn has_multiple_items(&self) -> bool {
-        self.total_items > 1
-    }
-
     // ========================================================================
     // Query Methods
     // ========================================================================
@@ -271,23 +266,6 @@ impl UnifiedTagEditorState {
             agg_fields.iter().any(|f| matches!(f.value, AggregatedValue::Edited(_)))
         } else {
             false
-        }
-    }
-
-    /// Get changes for preview (all items)
-    /// Get changes for preview (current item only)
-    pub fn get_changes_for_current_item_preview(&self) -> (Vec<GroupedChange>, Vec<TagChange>) {
-        if self.is_aggregated_mode() {
-            // In aggregated mode, changes apply to all tracks - show them all
-            let changes = self.compute_aggregated_changes();
-            group_common_changes(&changes)
-        } else {
-            let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
-            let current_changes: Vec<_> = all_changes
-                .into_iter()
-                .filter(|c| c.track_idx == self.current_item_idx)
-                .collect();
-            group_common_changes(&current_changes)
         }
     }
 

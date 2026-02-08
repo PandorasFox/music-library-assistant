@@ -15,7 +15,7 @@ use crate::ui::widgets::{PaneConfig, ThreePaneLayout};
 use super::mutations::compute_changes;
 use super::state::UnifiedTagEditorState;
 use super::types::{
-    AggregatedTagField, AggregatedValue, FieldEditState, GroupedChange, TagChange,
+    AggregatedTagField, AggregatedValue, FieldEditState,
     TagEditContext, TagEditorButton, TagEditorSource, UnifiedTagEditorFocus,
     UnifiedTagEditorModal, UnsavedChangesButton,
 };
@@ -567,9 +567,6 @@ impl UnifiedTagEditorState {
 
     fn render_modal(&self, f: &mut Frame, area: Rect, modal: &UnifiedTagEditorModal) {
         match modal {
-            UnifiedTagEditorModal::ChangePreview { changes, single_changes, scroll, direction: _ } => {
-                self.render_change_preview_modal(f, area, changes, single_changes, *scroll);
-            }
             UnifiedTagEditorModal::UnsavedChanges { selected_button } => {
                 self.render_unsaved_changes_modal(f, area, *selected_button);
             }
@@ -585,97 +582,6 @@ impl UnifiedTagEditorState {
                 );
             }
         }
-    }
-
-    fn render_change_preview_modal(
-        &self,
-        f: &mut Frame,
-        area: Rect,
-        grouped_changes: &[GroupedChange],
-        single_changes: &[TagChange],
-        scroll_offset: usize,
-    ) {
-        let modal_area = crate::ui::helpers::centered_rect(80, 80, area);
-        f.render_widget(Clear, modal_area);
-
-        let modal_block = Block::default()
-            .borders(Borders::ALL)
-            .title("Review Changes")
-            .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(Color::Black));
-
-        let inner = modal_block.inner(modal_area);
-        f.render_widget(modal_block, modal_area);
-
-        let mut lines = Vec::new();
-
-        let total_changes = grouped_changes
-            .iter()
-            .map(|g| g.track_indices.len())
-            .sum::<usize>()
-            + single_changes.len();
-
-        lines.push(
-            Line::from(format!("Total changes: {}", total_changes))
-                .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
-        );
-        lines.push(Line::from(""));
-
-        if !grouped_changes.is_empty() {
-            lines.push(
-                Line::from("Common Changes:")
-                    .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Green)),
-            );
-            for group in grouped_changes {
-                let track_list = if group.track_indices.len() <= 5 {
-                    group.track_indices.iter().map(|i| (i + 1).to_string()).collect::<Vec<_>>().join(", ")
-                } else {
-                    format!("{} tracks", group.track_indices.len())
-                };
-                lines.push(Line::from(format!(
-                    "  [{}] {}: '{}' -> '{}'",
-                    track_list,
-                    group.field_name,
-                    if group.old_value.is_empty() { "(empty)" } else { &group.old_value },
-                    if group.new_value.is_empty() { "(empty)" } else { &group.new_value }
-                )).style(Style::default().fg(Color::Cyan)));
-            }
-            lines.push(Line::from(""));
-        }
-
-        if !single_changes.is_empty() {
-            lines.push(
-                Line::from("Individual Changes:")
-                    .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow)),
-            );
-            for change in single_changes {
-                lines.push(Line::from(format!(
-                    "  Track {}: {}: '{}' -> '{}'",
-                    change.track_idx + 1,
-                    change.field_name,
-                    if change.old_value.is_empty() { "(empty)" } else { &change.old_value },
-                    if change.new_value.is_empty() { "(empty)" } else { &change.new_value }
-                )).style(Style::default().fg(Color::White)));
-            }
-            lines.push(Line::from(""));
-        }
-
-        lines.push(Line::from(""));
-        lines.push(
-            Line::from("Enter = Stage to transaction | Esc = Cancel")
-                .style(Style::default().fg(Color::DarkGray)),
-        );
-
-        let max_scroll = lines.len().saturating_sub(inner.height as usize);
-        let clamped_offset = scroll_offset.min(max_scroll);
-        let visible_lines: Vec<Line> = lines
-            .into_iter()
-            .skip(clamped_offset)
-            .take(inner.height as usize)
-            .collect();
-
-        let paragraph = Paragraph::new(visible_lines).style(Style::default().bg(Color::Black));
-        f.render_widget(paragraph, inner);
     }
 
     fn render_unsaved_changes_modal(

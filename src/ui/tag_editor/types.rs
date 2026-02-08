@@ -109,27 +109,9 @@ pub enum UnifiedTagEditorAction {
     RequestTransactionReview,
 }
 
-/// Navigation direction for change preview modal
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum NavigationDirection {
-    /// Moving to next item (Tab)
-    #[default]
-    Forward,
-    /// Moving to previous item (Shift-Tab)
-    Backward,
-}
-
 /// Modal dialogs for the unified tag editor
 #[derive(Debug)]
 pub enum UnifiedTagEditorModal {
-    /// Preview changes for current item before staging
-    ChangePreview {
-        changes: Vec<GroupedChange>,
-        single_changes: Vec<TagChange>,
-        scroll: usize,
-        /// Which direction to navigate after staging
-        direction: NavigationDirection,
-    },
     /// Warn about unsaved changes when trying to exit
     UnsavedChanges {
         /// Selected button (defaults to KeepEditing for safety)
@@ -194,15 +176,6 @@ pub struct TagChange {
     pub field_name: String,
     pub old_value: String,
     pub new_value: String,
-}
-
-/// Multiple tracks with the same change (for preview display)
-#[derive(Debug, Clone)]
-pub struct GroupedChange {
-    pub field_name: String,
-    pub old_value: String,
-    pub new_value: String,
-    pub track_indices: Vec<usize>,
 }
 
 // ============================================================================

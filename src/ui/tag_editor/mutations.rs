@@ -10,9 +10,7 @@ use crate::corpus::db::types::AudioFile;
 use crate::corpus::mutations::{Mutation, TagOp};
 use crate::corpus::paths;
 
-use super::types::{
-    AggregatedTagField, AggregatedValue, GroupedChange, TagChange, TagField,
-};
+use super::types::{AggregatedTagField, AggregatedValue, TagChange, TagField};
 
 // ============================================================================
 // Tag Loading
@@ -172,47 +170,6 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
     }
 
     changes
-}
-
-/// Group changes that are identical across multiple tracks
-pub fn group_common_changes(changes: &[TagChange]) -> (Vec<GroupedChange>, Vec<TagChange>) {
-    // Group by (field_name, old_value, new_value)
-    let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
-
-    for change in changes {
-        let key = (
-            change.field_name.clone(),
-            change.old_value.clone(),
-            change.new_value.clone(),
-        );
-        groups.entry(key).or_default().push(change.track_idx);
-    }
-
-    // Split into grouped (2+ tracks) and single-track changes
-    let mut grouped = Vec::new();
-    let mut singles = Vec::new();
-
-    for ((field_name, old_value, new_value), track_indices) in groups {
-        if track_indices.len() > 1 {
-            grouped.push(GroupedChange {
-                field_name,
-                old_value,
-                new_value,
-                track_indices,
-            });
-        } else {
-            // Find the original TagChange for this single track
-            let track_idx = track_indices[0];
-            if let Some(change) = changes
-                .iter()
-                .find(|c| c.track_idx == track_idx && c.field_name == field_name)
-            {
-                singles.push(change.clone());
-            }
-        }
-    }
-
-    (grouped, singles)
 }
 
 // ============================================================================

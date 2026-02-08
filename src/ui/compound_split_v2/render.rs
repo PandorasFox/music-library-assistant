@@ -352,6 +352,16 @@ fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
             Span::raw(" split  "),
             Span::styled("[^Q]", Style::default().fg(Color::Yellow)),
             Span::raw(" keep  "),
+        ]);
+
+        if state.is_safe_mode {
+            hints.extend([
+                Span::styled("[^A]", Style::default().fg(Color::Green)),
+                Span::raw(" all  "),
+            ]);
+        }
+
+        hints.extend([
             Span::styled("[^R]", Style::default().fg(Color::Blue)),
             Span::raw(" review  "),
             Span::styled("[Esc]", Style::default().fg(Color::Red)),

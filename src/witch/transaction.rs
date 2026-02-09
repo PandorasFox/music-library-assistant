@@ -8,7 +8,7 @@ use super::types::{
     CommitSummary, DecisionWitness, DiscardSummary, PendingTransaction,
     TransactionError, WitnessedDecision,
 };
-use crate::corpus::mutations::{Mutation, TagOp};
+use crate::meta::mutations::{Mutation, TagOp};
 
 /// Coalesce ApplyTagOps mutations into a single mutation.
 ///

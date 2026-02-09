@@ -7,9 +7,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::corpus::db::types::{AggregateSignalType, FileSource};
+use crate::corpus::db::types::FileSource;
+use crate::meta::signals::AggregateSignalType;
 use crate::corpus::db::ReadOnlyDb;
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 use crate::corpus::paths;
 
 /// A source directory within an overlap cluster.

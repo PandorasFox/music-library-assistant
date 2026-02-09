@@ -24,10 +24,10 @@ use std::os::unix::fs::MetadataExt;
 use std::time::Instant;
 
 use crate::config;
-use crate::corpus::computations::{Computation, awakening, with_read_only_db};
-use crate::corpus::db::types::CorpusFileSignalType;
+use crate::meta::computations::{Computation, awakening, with_read_only_db};
+use crate::meta::signals::CorpusFileSignalType;
 use crate::corpus::db::{Database, ReadOnlyDb};
-use crate::corpus::mutations::{Mutation, PendingSignal, SignalClearScope, SignalToClear};
+use crate::meta::mutations::{Mutation, PendingSignal, SignalClearScope, SignalToClear};
 use crate::corpus::paths;
 use crate::db_thread;
 
@@ -84,7 +84,7 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
 /// All writes go through `db_thread::signal_sender()`. Read operations use
 /// the same thread-local cached connection as computations.
 pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> TaskResult {
-    use crate::corpus::mutations::{file_ops, tag_edit, indexing};
+    use crate::meta::mutations::{file_ops, tag_edit, indexing};
 
     let start = Instant::now();
 
@@ -139,7 +139,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
             // Transcode
             Mutation::Transcode { .. } => {
-                let r = crate::corpus::mutations::transcode::execute_single(
+                let r = crate::meta::mutations::transcode::execute_single(
                     read_db, &mutation, stash_root.as_deref(), &witness,
                 );
                 (r.success, r.error, r.spawn_mutations, r.pending_signals)
@@ -231,7 +231,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
 /// Execute a single computation. Uses thread-local DB connection.
 pub(super) fn execute_computation(computation: Computation, label: String, queue_wait_ms: u64) -> TaskResult {
-    use crate::corpus::computations;
+    use crate::meta::computations;
 
     let result = computations::execute_single(&computation);
 
@@ -255,7 +255,7 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
 
 /// Execute a single migration. Opens DB connection and runs the migration.
 pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_ms: u64) -> TaskResult {
-    use crate::corpus::mutations::MigrationRegistry;
+    use crate::meta::mutations::MigrationRegistry;
 
     let start = Instant::now();
 

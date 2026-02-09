@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use crate::corpus::db::types::AudioFile;
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 
 use super::mutations::{
     aggregate_tags_across_audio_files, audio_file_to_tag_fields, changes_to_mutations,

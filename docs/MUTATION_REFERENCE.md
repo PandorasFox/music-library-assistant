@@ -3,6 +3,17 @@
 > **Maintenance Requirement**: Any changes to mutation behavior, spawned computations, or
 > signal operations MUST be reflected in this document. Update the tables before or alongside code changes.
 
+## Source Location
+
+All mutation code lives in `src/meta/mutations/`:
+- **Enum & dispatch**: `mod.rs` (Mutation enum, MutationToken sealed module)
+- **Types**: `types.rs` (TagOp, PendingSignal, SignalClearScope, MutationResult, etc.)
+- **Tag editing**: `tag_edit.rs` (ApplyTagOps, ApplyDbTagsToDisk, AssimilateDiskTagsToDb)
+- **Indexing**: `indexing.rs` (IndexTrack, IndexFileFromPath, DropFromIndex, DropDirectoryFromIndex)
+- **File operations**: `file_ops.rs` (Move, Copy, MoveToStash, HardLink, LibraryMove, etc.)
+- **Transcoding**: `transcode.rs` (Transcode executor)
+- **Migrations**: `migration.rs` (MigrationRegistry)
+
 ## Overview
 
 Mutations are operator-confirmed changes to the corpus or index. All mutations:

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, CorpusFileSignalType};
+use crate::meta::signals::{AggregateSignal, AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread::{self, SignalWitness};
 

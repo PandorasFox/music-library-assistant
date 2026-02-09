@@ -46,7 +46,7 @@ pub struct RenderContext<'a> {
     pub progressive_worker: Option<&'a progressive_worker::ProgressiveWorkerState>,
     pub eye: &'a EyeAnimation,
     pub witch_status: Option<crate::witch::DaemonStatus>,
-    pub corpus_summary: Option<crate::corpus::db::types::CorpusSummary>,
+    pub corpus_summary: Option<crate::meta::signals::CorpusSummary>,
     pub db_stats: Option<crate::db_thread::DbThreadStats>,
     pub filter_popup_state: Option<&'a filter_popup::FilterPopupState>,
     /// Transaction summary for status bar (label, decision_count, mutation_count)

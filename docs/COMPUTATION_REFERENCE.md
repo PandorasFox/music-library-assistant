@@ -3,6 +3,17 @@
 > **Maintenance Requirement**: Any changes to computation logic, signal emission, or spawn
 > behavior MUST be reflected in this document. Update the tables before or alongside code changes.
 
+## Source Location
+
+All computation code lives in `src/meta/computations/`:
+- **Enum & dispatch**: `mod.rs` (Computation enum, `execute_single()`)
+- **Witness**: `types.rs` (ComputationWitness sealed module)
+- **Helpers**: `helpers.rs` (signal emission/clearing helpers)
+- **Stats**: `stats.rs` (thread-local stats + read-only DB connections)
+- **Asleep phase**: `asleep/mod.rs`, `asleep/executors.rs`
+- **Awakening phase**: `awakening/mod.rs`, `awakening/executors.rs`
+- **Awake phase**: `awake/mod.rs`, `awake/schedule.rs`, `awake/duplicates.rs`, `awake/tags.rs`, `awake/deploy.rs`, `awake/formats.rs`
+
 ## Phase Overview
 
 MLA uses three-phase computations with compile-time enforced boundaries:

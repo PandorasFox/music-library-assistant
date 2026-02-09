@@ -27,8 +27,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::corpus::db::types::CorpusFileSignalType;
-use crate::corpus::mutations::MutationToken;
+use crate::meta::signals::CorpusFileSignalType;
+use crate::meta::mutations::MutationToken;
 use crate::corpus::paths;
 use crate::db_thread;
 use crate::witch::MutationExecutionWitness;

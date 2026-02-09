@@ -22,7 +22,7 @@ MLA enforces strict separation between read-only UI queries and write mutations:
 - can use the Witch's exposed read-only DB connection, or the UiCache for expensive queries
 
 **Write Access (Worker Threads Only):**
-- only accessible via db_thread send channel, from within the Mutation and Computation execution closures.
+- only accessible via db_thread send channel, from within the Mutation (`meta::mutations`) and Computation (`meta::computations`) execution closures.
 - worker threads also have their own thread-local read-only db connections to avoid read/write lock contention in bulk work.
 
 There Shall Not be any other ways to interface with the DB. We have very nice read-only wrappers.
@@ -203,7 +203,7 @@ Most signals key off of inodes, or are otherwise tag-y/corpus-aggregate signals 
 
 ### Documentation Requirements
 
-When modifying computations, mutations, or signals, you MUST update the corresponding reference documentation:
+When modifying computations (`meta::computations`), mutations (`meta::mutations`), or signals (`meta::signals`), you MUST update the corresponding reference documentation:
 
 | Changed | Update |
 |---------|--------|

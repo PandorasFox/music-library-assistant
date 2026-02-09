@@ -29,12 +29,20 @@
 //! `VerifyTags` which directly emits OutOfBandTagSync, OutOfBandTagConflict,
 //! or MtimeOnlyMismatch signals.
 
-mod executors;
+mod schedule;
+mod duplicates;
+mod tags;
+mod deploy;
+mod formats;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub use executors::*;
+pub use schedule::*;
+pub use duplicates::*;
+pub use tags::*;
+pub use deploy::*;
+pub use formats::*;
 
 // ============================================================================
 // Awake Computation Enum

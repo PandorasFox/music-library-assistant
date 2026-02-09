@@ -74,7 +74,7 @@ impl App {
     /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
     fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection) {
         use crate::corpus::db::types::OobSyncDirection;
-        use crate::corpus::mutations::Mutation;
+        use crate::meta::mutations::Mutation;
 
         let Some(ref state) = self.oob_sync_state else {
             return;
@@ -240,7 +240,7 @@ impl App {
     /// - ApplyDbTagsToDisk: writes DB tags to disk files
     /// - AssimilateDiskTagsToDb: reads disk tags into DB index
     fn stage_oob_bucket_resolution(&mut self) {
-        use crate::corpus::mutations::Mutation;
+        use crate::meta::mutations::Mutation;
         use crate::ui::oob_conflict_flow::types::ResolutionButton;
 
         let (files_data, button) = match self.oob_conflict_state.as_ref() {
@@ -310,7 +310,7 @@ impl App {
     /// If selection is active, only selected files are included.
     /// Otherwise, all files in the bucket are included.
     fn stage_oob_mtime_acknowledgement(&mut self) {
-        use crate::corpus::mutations::Mutation;
+        use crate::meta::mutations::Mutation;
 
         let resolver = paths::get_resolver();
 
@@ -417,7 +417,7 @@ impl App {
 
     /// Stage mutations for moved file acknowledgement.
     fn stage_moved_file_acknowledge(&mut self) {
-        use crate::corpus::mutations::Mutation;
+        use crate::meta::mutations::Mutation;
         use std::path::PathBuf;
 
         let Some(ref state) = self.moved_file_state else {

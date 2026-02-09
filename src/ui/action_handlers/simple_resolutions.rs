@@ -369,7 +369,7 @@ impl App {
     }
 
     /// Stage directory cluster mutations for transaction review.
-    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::meta::mutations::Mutation>, label: &str) {
         let Some(ref mut witch) = self.witch else {
             return;
         };

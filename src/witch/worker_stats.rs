@@ -15,7 +15,7 @@ use super::types::{TaskResult, WorkerStats};
 /// Inner data for SharedWorkerStats protected by mutex.
 struct WorkerStatsInner {
     max_task_label: String,
-    thread_stats_map: HashMap<u64, crate::corpus::computations::ThreadStats>,
+    thread_stats_map: HashMap<u64, crate::meta::computations::ThreadStats>,
 }
 
 /// Thread-safe worker statistics, isolated from Witch struct.

@@ -8,13 +8,14 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::logging::log_general;
-use crate::corpus::computations::helpers::{
+use crate::meta::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
     ensure_corpus_signal, ensure_corpus_signal_with_metadata,
     drop_stale_corpus_signal,
 };
-use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{CorpusFileSignalType, FileSource, SignalType};
+use crate::meta::computations::types::ComputationWitness;
+use crate::corpus::db::types::FileSource;
+use crate::meta::signals::{CorpusFileSignalType, SignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -457,7 +458,7 @@ pub fn execute_verify_tags(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::mutations::indexing;
+    use crate::meta::mutations::indexing;
 
     let computation = Computation::VerifyTags {
         inode,

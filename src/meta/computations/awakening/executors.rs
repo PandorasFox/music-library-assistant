@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::logging::log_general;
-use crate::corpus::computations::helpers::{
+use crate::meta::computations::helpers::{
     drop_stale_corpus_signal, ensure_corpus_signal, ensure_corpus_signal_with_metadata,
     enumerate_all_directories, get_configured_library_names, is_audio_file,
 };
-use crate::corpus::computations::types::ComputationWitness;
-use crate::corpus::db::types::{AggregateSignalType, CorpusFileSignalType};
+use crate::meta::computations::types::ComputationWitness;
+use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;

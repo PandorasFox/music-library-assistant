@@ -7,16 +7,18 @@
 //!
 //! - `db/` - Database layer (types, queries)
 //! - `health/` - Health issue detection, filtering, and library health
-//! - `mutations/` - Standardized mutation interface for all corpus changes
-//! - `computations/` - Read-only operations that derive facts (tag verification, etc.)
+//!
+//! ## Moved to `meta/`
+//!
+//! - `meta::mutations/` - Standardized mutation interface for all corpus changes
+//! - `meta::computations/` - Read-only operations that derive facts
+//! - `meta::signals/` - Signal types (formerly in `corpus::db::types`)
 
 pub mod codecs;
-pub mod computations;
 pub mod db;
 pub mod deploy;
 pub mod health;
 pub mod metadata;
-pub mod mutations;
 pub mod paths;
 pub mod tags;
 pub mod transcode;

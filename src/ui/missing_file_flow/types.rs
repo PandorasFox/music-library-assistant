@@ -133,7 +133,7 @@ impl MissingFileModalData {
     /// - library_path: relative to libraries_root
     /// - corpus_path: relative to corpus_root
     /// These must be resolved to absolute for HardLink filesystem operations.
-    pub fn restore_mutations(&self) -> Vec<crate::corpus::mutations::Mutation> {
+    pub fn restore_mutations(&self) -> Vec<crate::meta::mutations::Mutation> {
         let resolver = paths::get_resolver();
         self.restorable
             .iter()
@@ -141,7 +141,7 @@ impl MissingFileModalData {
                 // Resolve relative paths to absolute
                 let source = resolver.resolve(std::path::Path::new(&f.library_path));
                 let destination = resolver.resolve(std::path::Path::new(&f.corpus_path));
-                Some(crate::corpus::mutations::Mutation::HardLink {
+                Some(crate::meta::mutations::Mutation::HardLink {
                     source,
                     destination,
                 })
@@ -150,10 +150,10 @@ impl MissingFileModalData {
     }
 
     /// Generate DropFromIndex mutations for non-restorable files.
-    pub fn drop_mutations(&self) -> Vec<crate::corpus::mutations::Mutation> {
+    pub fn drop_mutations(&self) -> Vec<crate::meta::mutations::Mutation> {
         self.non_restorable
             .iter()
-            .map(|f| crate::corpus::mutations::Mutation::DropFromIndex {
+            .map(|f| crate::meta::mutations::Mutation::DropFromIndex {
                 path: PathBuf::from(&f.corpus_path),
                 inode: f.inode,
                 source: Some("corpus".to_string()),

@@ -300,7 +300,7 @@ impl App {
     /// Load the compound split signal at the current cluster index into modal state.
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_compound_split_signal(&mut self) -> bool {
-        use crate::corpus::db::types::{AggregateSignal, AggregateSignalType};
+        use crate::meta::signals::{AggregateSignal, AggregateSignalType};
 
         let Some(ref clusters) = self.compound_split_clusters else {
             return false;

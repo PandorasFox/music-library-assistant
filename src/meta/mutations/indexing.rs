@@ -6,7 +6,8 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::corpus::db::types::{CorpusFileSignalType, FileSource};
+use crate::corpus::db::types::FileSource;
+use crate::meta::signals::CorpusFileSignalType;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
@@ -202,7 +203,7 @@ pub fn execute_drop_directory_from_index(
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db_thread;
-    use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::meta::signals::CorpusFileSignalType;
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
@@ -441,7 +442,7 @@ pub fn execute_acknowledge_mtime_only(
     tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
-    use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::meta::signals::CorpusFileSignalType;
     use crate::db_thread;
     use std::time::UNIX_EPOCH;
 
@@ -557,7 +558,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::corpus::db::types::CorpusFileSignalType;
+    use crate::meta::signals::CorpusFileSignalType;
     use crate::corpus::paths;
     use crate::corpus::tags::TagSet;
     use crate::db_thread;
@@ -656,7 +657,7 @@ pub fn execute_emit_canonical_tag(
     canonical_value: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::corpus::db::types::AggregateSignalType;
+    use crate::meta::signals::AggregateSignalType;
     use crate::db_thread;
 
     let sender = db_thread::signal_sender()

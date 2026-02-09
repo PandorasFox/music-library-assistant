@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::corpus::db::Database;
-use crate::corpus::mutations::MigrationRegistry;
+use crate::meta::mutations::MigrationRegistry;
 
 /// Initial state the Witch determines at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

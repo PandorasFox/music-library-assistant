@@ -27,7 +27,8 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::corpus::db::types::{CorpusSummary, InsightsData};
+use crate::corpus::db::types::InsightsData;
+use crate::meta::signals::CorpusSummary;
 use crate::corpus::db::Database;
 
 // ============================================================================

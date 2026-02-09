@@ -206,7 +206,7 @@ impl App {
         idx: usize,
         worker: &mut ProgressiveWorkerState,
     ) {
-        use crate::corpus::db::types::{AggregateSignal, AggregateSignalType};
+        use crate::meta::signals::{AggregateSignal, AggregateSignalType};
 
         let is_safe_mode = worker.is_safe_mode;
         let total = worker.total;

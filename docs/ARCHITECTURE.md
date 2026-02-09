@@ -2,6 +2,47 @@
 
 This document describes the major subsystems of MLA and how they interact. For the conceptual foundations and design principles, see [PHILOSOPHY.md](PHILOSOPHY.md).
 
+## Module Organization
+
+```
+src/
+├── main.rs                         # Entry point
+├── config.rs                       # Configuration
+├── db_thread.rs                    # DB write thread
+├── logging.rs                      # Logging
+├── corpus/                         # Corpus filesystem, DB, codecs, tags, deploy
+│   ├── db/                         # Database schema, queries, types
+│   ├── health/                     # Health assessment logic
+│   └── ...                         # codecs, metadata, paths, tags, transcode
+├── meta/                           # Signals, Mutations, Computations
+│   ├── signals/
+│   │   ├── mod.rs
+│   │   └── types.rs                # SignalType, Signal, AggregateSignal, CorpusSummary
+│   ├── mutations/
+│   │   ├── mod.rs                  # Mutation enum, MutationToken sealed module
+│   │   ├── types.rs                # TagOp, PendingSignal, MutationResult, etc.
+│   │   ├── tag_edit.rs             # ApplyTagOps executor
+│   │   ├── indexing.rs             # Indexing executors
+│   │   ├── file_ops.rs             # File operation executors
+│   │   ├── transcode.rs            # Transcoding executor
+│   │   └── migration.rs            # MigrationRegistry
+│   └── computations/
+│       ├── mod.rs                  # Computation enum, execute_single()
+│       ├── types.rs                # ComputationWitness sealed module
+│       ├── helpers.rs              # Signal emission/clearing helpers
+│       ├── stats.rs                # Thread-local stats + read-only DB connections
+│       ├── asleep/                 # Filesystem observation (no inference)
+│       ├── awakening/              # First-level derivations
+│       └── awake/                  # Full-corpus analysis
+│           ├── schedule.rs         # ScheduleContentAnalysis
+│           ├── duplicates.rs       # Fingerprint overlaps, metadata dupes, cross-source
+│           ├── tags.rs             # Missing tags, canonicalization, compounds
+│           ├── deploy.rs           # Deploy conflicts, health signals
+│           └── formats.rs          # Shit format detection
+├── witch/                          # The Witch orchestrator
+└── ui/                             # Terminal UI layer
+```
+
 ## The Witch
 
 The core orchestrator of all the subsystems that make up MLA. All Data Flows Through Her.

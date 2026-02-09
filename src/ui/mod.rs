@@ -512,7 +512,7 @@ impl App {
     /// Stage a decision to the Witch's transaction and update editor state.
     ///
     /// Helper for StageDecision, StageDecisionAndNext, and StageDecisionAndReview actions.
-    pub(super) fn stage_decision(&mut self, index: usize, mutations: Vec<crate::corpus::mutations::Mutation>) {
+    pub(super) fn stage_decision(&mut self, index: usize, mutations: Vec<crate::meta::mutations::Mutation>) {
         if let Some(the_witch) = self.witch.as_mut() {
             let label = self.unified_tag_editor
                 .as_ref()

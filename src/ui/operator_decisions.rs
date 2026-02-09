@@ -37,7 +37,7 @@
 //! The result: a clear, auditable boundary between "user confirmed the operation"
 //! and "mutations were queued for execution".
 
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 use crate::witch::{CommitSummary, DiscardSummary, TransactionError, Witch};
 
 // =============================================================================

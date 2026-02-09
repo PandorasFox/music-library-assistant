@@ -66,7 +66,7 @@ impl App {
     ///
     /// These must be resolved to absolute for filesystem mutations.
     fn stage_deploy_mutations(&mut self, data: &deploy_flow::DeployModalData) -> usize {
-        use crate::corpus::mutations::Mutation;
+        use crate::meta::mutations::Mutation;
 
         let Some(ref mut witch) = self.witch else {
             return 0;

@@ -17,6 +17,9 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 
 use crate::config;
+use crate::meta::signals::{
+    AggregateSignal, AggregateSignalType, CorpusFileSignalType, Signal, SignalType,
+};
 
 // Types are re-exported from db/mod.rs, not here.
 // This module only exposes the Database struct.
@@ -446,27 +449,27 @@ impl<'a> ReadOnlyDb<'a> {
     // =========================================================================
 
     /// Get signals, optionally filtered by type.
-    pub fn get_signals(&self, issue_type: Option<super::types::SignalType>) -> Result<Vec<super::types::Signal>> {
+    pub fn get_signals(&self, issue_type: Option<SignalType>) -> Result<Vec<Signal>> {
         self.db.get_signals(issue_type)
     }
 
     /// Get a signal by its ID.
-    pub fn get_signal_by_id(&self, signal_id: i64) -> Result<Option<super::types::Signal>> {
+    pub fn get_signal_by_id(&self, signal_id: i64) -> Result<Option<Signal>> {
         self.db.get_signal_by_id(signal_id)
     }
 
     /// Get aggregate signals, optionally filtered by type.
-    pub fn get_aggregate_signals(&self, signal_type: Option<super::types::AggregateSignalType>) -> Result<Vec<super::types::AggregateSignal>> {
+    pub fn get_aggregate_signals(&self, signal_type: Option<AggregateSignalType>) -> Result<Vec<AggregateSignal>> {
         self.db.get_aggregate_signals(signal_type)
     }
 
     /// Get compound tag signals filtered by safety classification and optional tag name.
-    pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<super::types::AggregateSignal>> {
+    pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<AggregateSignal>> {
         self.db.get_compound_signals_by_safety(safe_only, tag_filter)
     }
 
     /// Check if an aggregate signal exists (semantic-keyed).
-    pub fn aggregate_signal_exists(&self, signal_type: super::types::AggregateSignalType, key: &str) -> bool {
+    pub fn aggregate_signal_exists(&self, signal_type: AggregateSignalType, key: &str) -> bool {
         self.db.aggregate_signal_exists(signal_type, key)
     }
 
@@ -475,7 +478,7 @@ impl<'a> ReadOnlyDb<'a> {
     /// Uses the native `inode` column for efficient lookup.
     pub fn corpus_signal_exists_by_inode(
         &self,
-        signal_type: super::types::CorpusFileSignalType,
+        signal_type: CorpusFileSignalType,
         inode: i64,
     ) -> bool {
         self.db.corpus_signal_exists_by_inode(signal_type, inode)
@@ -484,7 +487,7 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get aggregate signal keys with metadata for a given type.
     pub fn get_aggregate_signal_keys_with_metadata(
         &self,
-        signal_type: super::types::AggregateSignalType,
+        signal_type: AggregateSignalType,
     ) -> Result<Vec<(String, Option<String>)>> {
         self.db.get_aggregate_signal_keys_with_metadata(signal_type)
     }

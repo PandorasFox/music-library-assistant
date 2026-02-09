@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config};
-use crate::corpus::computations::{Computation, asleep, awakening, awake};
+use crate::meta::computations::{Computation, asleep, awakening, awake};
 use crate::corpus::db::{Database, ReadOnlyDb};
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
 
 // Module declarations
@@ -1014,7 +1014,7 @@ impl Witch {
     ///
     /// Returns a list of human-readable descriptions of pending migrations.
     pub fn pending_migration_descriptions(&self) -> Vec<String> {
-        use crate::corpus::mutations::MigrationRegistry;
+        use crate::meta::mutations::MigrationRegistry;
 
         let db_path = match config::get_db_path() {
             Ok(p) => p,
@@ -1032,7 +1032,7 @@ impl Witch {
     /// Creates a DecisionWitness internally via with_operator_decision.
     /// Call this only after user approval of migrations.
     pub fn queue_pending_migrations(&mut self) {
-        use crate::corpus::mutations::MigrationRegistry;
+        use crate::meta::mutations::MigrationRegistry;
 
         let db_path = match config::get_db_path() {
             Ok(p) => p,
@@ -1226,7 +1226,7 @@ impl Drop for Witch {
         // Step 2: Close thread-local read-only connections on all rayon worker threads
         // These are cached per-thread and must be explicitly closed
         rayon::broadcast(|_| {
-            crate::corpus::computations::close_thread_local_connection();
+            crate::meta::computations::close_thread_local_connection();
         });
         crate::logging::log_general("[WITCH] Closed all rayon thread-local DB connections");
 

@@ -12,9 +12,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::corpus::db::types::AggregateSignal;
+use crate::meta::signals::AggregateSignal;
 use crate::corpus::db::ReadOnlyDb;
-use crate::corpus::mutations::{Mutation, TagOp};
+use crate::meta::mutations::{Mutation, TagOp};
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
 use crate::ui::widgets::TextInputState;

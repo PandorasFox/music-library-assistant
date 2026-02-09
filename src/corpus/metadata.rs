@@ -10,7 +10,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use crate::config::is_audio_extension;
-use crate::corpus::mutations::ExtractedMetadata;
+use crate::meta::mutations::ExtractedMetadata;
 use crate::corpus::tags::TagSet;
 
 pub struct AudioMetadata {

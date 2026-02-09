@@ -18,9 +18,10 @@ use rusqlite::{params, OptionalExtension};
 
 use super::Database;
 use crate::db_thread::SignalWitness;
-use crate::corpus::db::types::{
-    AggregateSignal, AggregateSignalType, CorpusSummary, FileSource, Signal,
-    SignalType, SignalSummary,
+use crate::corpus::db::types::FileSource;
+use crate::meta::signals::{
+    AggregateSignal, AggregateSignalType, CorpusFileSignalType, CorpusSummary,
+    Signal, SignalType, SignalSummary,
 };
 
 impl Database {
@@ -248,7 +249,7 @@ impl Database {
     /// Uses the native `inode` column for efficient lookup.
     pub fn corpus_signal_exists_by_inode(
         &self,
-        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        signal_type: CorpusFileSignalType,
         inode: i64,
     ) -> bool {
         self.conn
@@ -267,7 +268,7 @@ impl Database {
     /// for backwards compatibility.
     pub fn ensure_corpus_signal(
         &self,
-        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        signal_type: CorpusFileSignalType,
         inode: i64,
         path: &str,
         _witness: &impl SignalWitness,
@@ -293,7 +294,7 @@ impl Database {
     /// Merges the path into the provided metadata and stores the signal.
     pub fn ensure_corpus_signal_with_metadata(
         &self,
-        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        signal_type: CorpusFileSignalType,
         inode: i64,
         path: &str,
         mut extra_metadata: serde_json::Value,
@@ -318,7 +319,7 @@ impl Database {
     /// Clear an inode-keyed corpus signal (idempotent delete).
     pub fn clear_corpus_signal(
         &self,
-        signal_type: crate::corpus::db::types::CorpusFileSignalType,
+        signal_type: CorpusFileSignalType,
         inode: i64,
         _witness: &impl SignalWitness,
     ) -> Result<bool> {

@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::corpus::db::types::AudioFile;
-use crate::corpus::mutations::{Mutation, TagOp};
+use crate::meta::mutations::{Mutation, TagOp};
 use crate::corpus::paths;
 
 use super::types::{AggregatedTagField, AggregatedValue, TagChange, TagField};

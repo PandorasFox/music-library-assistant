@@ -14,7 +14,7 @@ use ratatui::Terminal;
 use std::path::Path;
 
 use crate::corpus::db::Database;
-use crate::corpus::mutations::MigrationRegistry;
+use crate::meta::mutations::MigrationRegistry;
 
 /// Handle first-time setup when no database exists.
 ///

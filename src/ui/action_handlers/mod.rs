@@ -31,7 +31,7 @@ impl App {
     /// Starts a transaction with the given label, stages the mutations as a
     /// single decision. Used by simple resolution flows that have a straightforward
     /// "collect mutations → review → commit" pattern.
-    pub(in crate::ui) fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::corpus::mutations::Mutation>, label: &str) {
+    pub(in crate::ui) fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str) {
         let Some(ref mut witch) = self.witch else { return };
         let _ = witch.start_transaction(label);
         let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);

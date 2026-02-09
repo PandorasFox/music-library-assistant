@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::corpus::db::ReadOnlyDb;
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 use crate::corpus::paths;
 
 /// A corrupt corpus file (tag parse error or waveform decode failure).

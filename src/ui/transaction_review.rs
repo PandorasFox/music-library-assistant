@@ -17,7 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 use crate::ui::widgets::centered_rect_fixed;
 use crate::witch::Witch;
 

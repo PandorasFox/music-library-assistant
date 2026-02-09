@@ -29,8 +29,8 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use crate::corpus::computations::ComputationWitness;
-use crate::corpus::db::types::{
+use crate::meta::computations::ComputationWitness;
+use crate::meta::signals::{
     AggregateSignal, AggregateSignalType, CorpusFileSignalType, SignalType,
 };
 use crate::corpus::db::Database;
@@ -282,7 +282,7 @@ enum SignalWriteOp {
     /// Used by ApplyTagOps for precise INSERT/DELETE operations.
     ApplyIndexTagOps {
         path: String,
-        ops: Vec<crate::corpus::mutations::TagOp>,
+        ops: Vec<crate::meta::mutations::TagOp>,
     },
 
     /// Update track path and file metadata (for transcode/format conversion).
@@ -750,7 +750,7 @@ impl SignalWriteSender {
     pub fn apply_index_tag_ops(
         &self,
         path: &str,
-        ops: Vec<crate::corpus::mutations::TagOp>,
+        ops: Vec<crate::meta::mutations::TagOp>,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -1111,7 +1111,7 @@ where
 fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
     // Note: We don't have a ComputationWitness here, but we need one for the db methods.
     // The witness was checked at the send site. We use a thread-local witness for execution.
-    let witness = crate::corpus::computations::ComputationWitness::new_for_db_thread();
+    let witness = crate::meta::computations::ComputationWitness::new_for_db_thread();
 
     match op {
         // Inode-keyed corpus signal operations
@@ -1721,7 +1721,7 @@ fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet) -> any
 fn execute_apply_index_tag_ops(
     db: &Database,
     path: &str,
-    ops: &[crate::corpus::mutations::TagOp],
+    ops: &[crate::meta::mutations::TagOp],
 ) -> anyhow::Result<()> {
     use rusqlite::params;
     use std::time::{SystemTime, UNIX_EPOCH};

@@ -69,8 +69,8 @@ pub mod sealed {
     impl MutationToken {
         /// Create a new mutation token.
         ///
-        /// This is only callable from within the `corpus::mutations` module hierarchy.
-        pub(in crate::corpus::mutations) fn new() -> Self {
+        /// This is only callable from within the `meta::mutations` module hierarchy.
+        pub(in crate::meta::mutations) fn new() -> Self {
             Self(())
         }
     }

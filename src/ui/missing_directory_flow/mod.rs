@@ -9,7 +9,7 @@ pub mod preview;
 pub use preview::{MissingDirectoryPreviewAction, MissingDirectoryPreviewState};
 
 use crate::corpus::db::ReadOnlyDb;
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 use std::path::PathBuf;
 
 /// Data for the missing directory resolution modal.

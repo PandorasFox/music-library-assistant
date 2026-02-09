@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::corpus::computations::Computation;
-use crate::corpus::mutations::Mutation;
+use crate::meta::computations::Computation;
+use crate::meta::mutations::Mutation;
 
 // ============================================================================
 // State Machine
@@ -154,7 +154,7 @@ pub mod sealed {
         /// of SpawnedMutation IS the proof - it can only be created here.
         ///
         /// Use case: `ApplyTagOps` spawns `ApplyDbTagsToDisk` after DB write succeeds.
-        pub fn spawn_mutation(&self, mutation: crate::corpus::mutations::Mutation) -> SpawnedMutation {
+        pub fn spawn_mutation(&self, mutation: crate::meta::mutations::Mutation) -> SpawnedMutation {
             SpawnedMutation { mutation }
         }
     }
@@ -168,12 +168,12 @@ pub mod sealed {
     /// Use case: `ApplyTagOps` spawns `ApplyDbTagsToDisk` after DB write succeeds.
     #[derive(Debug, Clone)]
     pub struct SpawnedMutation {
-        pub(super) mutation: crate::corpus::mutations::Mutation,
+        pub(super) mutation: crate::meta::mutations::Mutation,
     }
 
     impl SpawnedMutation {
         /// Extract the inner mutation, consuming the wrapper.
-        pub fn into_inner(self) -> crate::corpus::mutations::Mutation {
+        pub fn into_inner(self) -> crate::meta::mutations::Mutation {
             self.mutation
         }
     }
@@ -504,7 +504,7 @@ pub(super) struct TaskResult {
     /// Time task waited in queue before execution (milliseconds)
     pub queue_wait_ms: u64,
     /// Snapshot of thread stats after execution (for computations)
-    pub thread_stats: Option<crate::corpus::computations::ThreadStats>,
+    pub thread_stats: Option<crate::meta::computations::ThreadStats>,
 }
 
 // ============================================================================

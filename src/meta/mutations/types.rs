@@ -10,8 +10,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::corpus::computations::{Computation, awakening};
-use crate::corpus::db::types::{AggregateSignalType, CorpusFileSignalType};
+use crate::meta::computations::{Computation, awakening};
+use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::tags::TagSet;
 use crate::corpus::transcode::TranscodeTarget;
 

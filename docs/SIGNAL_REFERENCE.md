@@ -3,6 +3,15 @@
 > **Maintenance Requirement**: Adding, removing, or changing signal semantics MUST be
 > reflected in this document. Each signal type must have documented emitters and clearers.
 
+## Source Location
+
+Signal types are defined in `src/meta/signals/types.rs`:
+- `SignalType` - top-level enum (`CorpusFile(CorpusFileSignalType)`, `Aggregate(AggregateSignalType)`)
+- `CorpusFileSignalType` - per-file signal variants
+- `AggregateSignalType` - aggregate signal variants
+- `Signal`, `AggregateSignal` - signal data structs
+- `SignalSummary`, `CorpusSummary` - summary types for UI display
+
 ## Overview
 
 Signals are atomic facts about corpus state. They follow these principles:

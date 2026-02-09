@@ -24,6 +24,7 @@ mod config;
 mod corpus;
 mod db_thread;
 mod logging;
+mod meta;
 mod ui;
 mod witch;
 

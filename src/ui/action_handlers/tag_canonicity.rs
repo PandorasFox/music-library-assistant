@@ -16,7 +16,7 @@ impl App {
     ///
     /// Uses the V2 three-pane layout for tag canonicity resolution.
     pub(in crate::ui) fn start_tag_canonicity_resolution(&mut self) {
-        use crate::corpus::db::types::AggregateSignalType;
+        use crate::meta::signals::AggregateSignalType;
 
         // Get the selected insight type to determine what to load
         let insight_type = match self.insights_view.as_ref().and_then(|v| v.selected_insight_type()) {
@@ -234,7 +234,7 @@ impl App {
     /// Load the signal at the current cluster index into modal state.
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_cluster_signal(&mut self) -> bool {
-        use crate::corpus::db::types::AggregateSignalType;
+        use crate::meta::signals::AggregateSignalType;
 
         let Some(ref clusters) = self.tag_canonicity_clusters else {
             return false;
@@ -267,9 +267,9 @@ impl App {
         };
 
         // Convert to AggregateSignal for modal data loading
-        let agg_signal = crate::corpus::db::types::AggregateSignal {
+        let agg_signal = crate::meta::signals::AggregateSignal {
             id: signal.id,
-            signal_type: match crate::corpus::db::types::AggregateSignalType::from_str(signal.issue_type.as_str()) {
+            signal_type: match crate::meta::signals::AggregateSignalType::from_str(signal.issue_type.as_str()) {
                 Some(t) => t,
                 None => {
                     self.status_message = Some("Invalid signal type".to_string());

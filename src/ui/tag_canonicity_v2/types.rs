@@ -13,9 +13,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::types::{AggregateSignal, AggregateSignalType, FileSource};
+use crate::corpus::db::types::FileSource;
+use crate::meta::signals::{AggregateSignal, AggregateSignalType};
 use crate::corpus::db::ReadOnlyDb;
-use crate::corpus::mutations::{Mutation, TagOp};
+use crate::meta::mutations::{Mutation, TagOp};
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
 use crate::ui::widgets::TextInputState;

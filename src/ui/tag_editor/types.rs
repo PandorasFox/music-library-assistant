@@ -3,7 +3,7 @@
 //! Core type definitions for the tag editor workflow.
 
 use crate::corpus::db::types::AudioFile;
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 
 // ============================================================================
 // Unified Types (New)

@@ -19,9 +19,9 @@ use ratatui::Frame;
 
 use crate::ui::widgets::centered_rect_fixed;
 
-use crate::corpus::db::types::SignalType;
+use crate::meta::signals::SignalType;
 use crate::corpus::db::ReadOnlyDb;
-use crate::corpus::mutations::Mutation;
+use crate::meta::mutations::Mutation;
 use crate::corpus::paths;
 use crate::logging::log_general;
 

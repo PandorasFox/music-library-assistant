@@ -117,8 +117,10 @@ impl DeployModalData {
 
         // Library before: all files currently in library = healthy + stale + leftover
         let library_before = healthy + stale + leftover;
-        // Library after: post-deploy = healthy + new + stale (fixed) + conflicts (resolved)
-        let library_after = healthy + new + stale + conflicts;
+        // Library after: healthy stay, new get deployed, stale get moved (already in
+        // library_before and re-deployed via "new"), leftovers removed.
+        // Conflict losers are a small subset of "new" that won't deploy, ignored here.
+        let library_after = healthy + new;
 
         DeploySummary {
             new_count: new,

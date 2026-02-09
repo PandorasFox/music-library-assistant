@@ -280,6 +280,12 @@ pub fn execute_derive_corpus_deploy_status(
         }
     };
 
+    // Bulk clear all existing deploy status signals before recomputing.
+    // This prevents stale signals from prior runs (with outdated metadata)
+    // from persisting and inflating counts.
+    sender.clear_corpus_signals_by_type(CorpusFileSignalType::DeployReady, witness);
+    sender.clear_corpus_signals_by_type(CorpusFileSignalType::DeployedHealthy, witness);
+
     // Get all HealthyFile signals
     let healthy_signals = read_only_db
         .get_signals(Some(SignalType::HealthyFile))
@@ -332,17 +338,8 @@ pub fn execute_derive_corpus_deploy_status(
         // Skip files not in a configured source directory
         if !config.is_path_in_source(corpus_path_buf) {
             skipped_not_configured += 1;
-            // Clear any stale deploy signals for unconfigured files
-            sender.clear_corpus_signal(CorpusFileSignalType::DeployReady, inode, witness);
-            sender.clear_corpus_signal(CorpusFileSignalType::DeployedHealthy, inode, witness);
             continue;
         }
-
-        // Always clear both signal types first, then write the correct one.
-        // Old signals use INSERT OR IGNORE which would silently skip updates
-        // if stale signals already exist.
-        sender.clear_corpus_signal(CorpusFileSignalType::DeployReady, inode, witness);
-        sender.clear_corpus_signal(CorpusFileSignalType::DeployedHealthy, inode, witness);
 
         // Compute expected deploy path from tags
         let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();

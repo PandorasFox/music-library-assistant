@@ -243,6 +243,10 @@ enum SignalWriteOp {
     ClearSignalsByType {
         issue_type: SignalType,
     },
+    /// Clear all corpus file signals of a specific type (for bulk re-computation).
+    ClearCorpusSignalsByType {
+        signal_type: CorpusFileSignalType,
+    },
     /// Update file mtime in files table (after OOB verification).
     /// Uses (source, inode) as the unique key for reliable updates.
     UpdateFileMtime {
@@ -669,6 +673,16 @@ impl SignalWriteSender {
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ClearSignalsByType { issue_type });
+    }
+
+    /// Clear all corpus file signals of a specific type (for bulk re-computation).
+    pub fn clear_corpus_signals_by_type(
+        &self,
+        signal_type: CorpusFileSignalType,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearCorpusSignalsByType { signal_type });
     }
 
     /// Update file mtime in files table (after OOB verification).
@@ -1209,6 +1223,19 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     .execute(
                         "DELETE FROM signals WHERE issue_type = ?1",
                         params![issue_type_str],
+                    )
+                    .map(|_| ())
+                    .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
+            });
+        }
+        SignalWriteOp::ClearCorpusSignalsByType { signal_type } => {
+            let signal_type_str = signal_type.as_str();
+            with_retry("clear_corpus_signals_by_type", signal_type_str, || {
+                use rusqlite::params;
+                db.conn()
+                    .execute(
+                        "DELETE FROM signals WHERE issue_type = ?1",
+                        params![signal_type_str],
                     )
                     .map(|_| ())
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))

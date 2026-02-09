@@ -1105,6 +1105,403 @@ where
     }
 }
 
+// ============================================================================
+// Typed Table Dual-Write Helpers
+// ============================================================================
+//
+// These write to the new per-signal typed tables alongside the old `signals` table.
+// During the transition period, both tables are kept in sync. Once reads are
+// switched to typed tables (Step B5), the old-table writes will be removed.
+
+use crate::meta::signals::data::*;
+use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
+
+/// Write a simple corpus signal (no extra metadata) to its typed table.
+fn typed_write_corpus_signal(db: &Database, signal_type: CorpusFileSignalType, inode: i64, path: &str) {
+    let conn = db.conn();
+    let _ = match signal_type {
+        CorpusFileSignalType::FileInCorpus =>
+            FileInCorpusSignal { inode, path: path.to_string() }.insert(conn),
+        CorpusFileSignalType::UnindexedFile =>
+            UnindexedFileSignal { inode, path: path.to_string() }.insert(conn),
+        CorpusFileSignalType::HealthyFile =>
+            HealthyFileSignal { inode, path: path.to_string() }.insert(conn),
+        CorpusFileSignalType::MissingFile =>
+            // No replaced_by_inode available in simple path — use None
+            MissingFileSignal { inode, path: path.to_string(), replaced_by_inode: None }.insert(conn),
+        CorpusFileSignalType::MissingDirectory =>
+            MissingDirectorySignal { inode, path: path.to_string() }.insert(conn),
+        CorpusFileSignalType::MtimeOnlyMismatch =>
+            MtimeOnlyMismatchSignal { inode, path: path.to_string() }.insert(conn),
+        CorpusFileSignalType::CorruptFile =>
+            CorruptFileSignal { inode, path: path.to_string() }.insert(conn),
+        // These types always have metadata — should go through typed_write_corpus_signal_with_metadata
+        CorpusFileSignalType::MovedFile
+        | CorpusFileSignalType::ShitFormat
+        | CorpusFileSignalType::SubparDuplicate
+        | CorpusFileSignalType::CompoundTag
+        | CorpusFileSignalType::DeployReady
+        | CorpusFileSignalType::DeployedHealthy
+        | CorpusFileSignalType::OutOfBandTagSync
+        | CorpusFileSignalType::OutOfBandTagConflict => {
+            // Called without metadata for a type that normally has it — emit with defaults
+            return;
+        }
+    };
+}
+
+/// Write a corpus signal with extra metadata to its typed table.
+/// Parses the JSON metadata to extract type-specific fields.
+fn typed_write_corpus_signal_with_metadata(
+    db: &Database,
+    signal_type: CorpusFileSignalType,
+    inode: i64,
+    path: &str,
+    extra_metadata: &str,
+) {
+    let conn = db.conn();
+    let meta: serde_json::Value = match serde_json::from_str(extra_metadata) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let _ = match signal_type {
+        CorpusFileSignalType::MovedFile => {
+            let old_path = meta["old_path"].as_str().unwrap_or("").to_string();
+            MovedFileSignal { inode, path: path.to_string(), old_path }.insert(conn)
+        }
+        CorpusFileSignalType::MissingFile => {
+            let replaced_by_inode = meta["replaced_by_inode"].as_i64();
+            MissingFileSignal { inode, path: path.to_string(), replaced_by_inode }.insert(conn)
+        }
+        CorpusFileSignalType::ShitFormat => {
+            let file_type = meta["file_type"].as_str().unwrap_or("unknown").to_string();
+            ShitFormatSignal { inode, path: path.to_string(), file_type }.insert(conn)
+        }
+        CorpusFileSignalType::DeployReady => {
+            let deploy_path = meta["deploy_path"].as_str().unwrap_or("").to_string();
+            DeployReadySignal { inode, path: path.to_string(), deploy_path }.insert(conn)
+        }
+        CorpusFileSignalType::DeployedHealthy => {
+            let library_path = meta["library_path"].as_str().unwrap_or("").to_string();
+            DeployedHealthySignal { inode, path: path.to_string(), library_path }.insert(conn)
+        }
+        CorpusFileSignalType::OutOfBandTagSync => {
+            let mismatches = parse_tag_mismatches(&meta);
+            OutOfBandTagSyncSignal { inode, path: path.to_string(), mismatches }.insert(conn)
+        }
+        CorpusFileSignalType::OutOfBandTagConflict => {
+            let mismatches = parse_tag_mismatches(&meta);
+            OutOfBandTagConflictSignal { inode, path: path.to_string(), mismatches }.insert(conn)
+        }
+        CorpusFileSignalType::SubparDuplicate => {
+            let data = SubparDuplicateData {
+                reason: meta["reason"].as_str().unwrap_or("").to_string(),
+                superior_inode: meta["superior_inode"].as_i64().unwrap_or(0),
+                superior_path: meta["superior_path"].as_str().unwrap_or("").to_string(),
+                dupe_group_fingerprint: meta["dupe_group_fingerprint"].as_str().unwrap_or("").to_string(),
+                quality_score: meta["quality_score"].as_i64().unwrap_or(0) as i32,
+                superior_quality_score: meta["superior_quality_score"].as_i64().unwrap_or(0) as i32,
+            };
+            SubparDuplicateSignal { inode, path: path.to_string(), data }.insert(conn)
+        }
+        CorpusFileSignalType::CompoundTag => {
+            let compounds = parse_compound_tag_entries(&meta);
+            CompoundTagSignal { inode, path: path.to_string(), compounds }.insert(conn)
+        }
+        // Simple types — delegate to the no-metadata path
+        _ => {
+            typed_write_corpus_signal(db, signal_type, inode, path);
+            return;
+        }
+    };
+}
+
+/// Write an aggregate signal to its typed table.
+fn typed_write_aggregate_signal(
+    db: &Database,
+    signal_type: AggregateSignalType,
+    key: &str,
+    metadata_json: Option<&str>,
+) {
+    let conn = db.conn();
+    let meta: serde_json::Value = metadata_json
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let _ = match signal_type {
+        AggregateSignalType::CanonicalTag => {
+            CanonicalTagSignal {
+                key: key.to_string(),
+                tag_name: meta["tag_name"].as_str().unwrap_or("").to_string(),
+                canonical_value: meta["canonical_value"].as_str().unwrap_or("").to_string(),
+                created_at: meta["created_at"].as_str().unwrap_or("").to_string(),
+            }.insert(conn)
+        }
+        AggregateSignalType::LibraryLeftover => {
+            LibraryLeftoverSignal { key: key.to_string() }.insert(conn)
+        }
+        AggregateSignalType::LibraryStale => {
+            LibraryStaleSignal {
+                key: key.to_string(),
+                library_path: meta["library_path"].as_str().unwrap_or("").to_string(),
+                expected_path: meta["expected_path"].as_str().unwrap_or("").to_string(),
+                corpus_path: meta["corpus_path"].as_str().unwrap_or("").to_string(),
+                inode: meta["inode"].as_i64().unwrap_or(0),
+            }.insert(conn)
+        }
+        AggregateSignalType::FingerprintOverlap => {
+            let inodes = parse_inodes_array(&meta);
+            FingerprintOverlapSignal { key: key.to_string(), inodes }.insert(conn)
+        }
+        AggregateSignalType::MetadataDuplicate => {
+            let data = MetadataDuplicateData {
+                tag_signature: meta["tag_signature"].as_str().unwrap_or("").to_string(),
+                inodes: parse_inodes_array(&meta),
+            };
+            MetadataDuplicateSignal { key: key.to_string(), data }.insert(conn)
+        }
+        AggregateSignalType::DuplicateInode => {
+            let inode_val = meta["inode"].as_i64().unwrap_or(0);
+            let inodes = parse_inodes_array(&meta);
+            DuplicateInodeSignal { key: key.to_string(), inode: inode_val, inodes }.insert(conn)
+        }
+        AggregateSignalType::MissingTag => {
+            let data = MissingTagData {
+                missing_tags: meta["missing_tags"].as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                inodes: parse_inodes_array(&meta),
+            };
+            MissingTagSignal { key: key.to_string(), data }.insert(conn)
+        }
+        AggregateSignalType::DeployConflict => {
+            let deploy_path = meta["deploy_path"].as_str().unwrap_or("").to_string();
+            let inodes = parse_inodes_array(&meta);
+            DeployConflictSignal { key: key.to_string(), deploy_path, inodes }.insert(conn)
+        }
+        AggregateSignalType::TagCanonicity => {
+            let data = TagCanonicityData {
+                variants: parse_variants_map(&meta),
+                inodes: parse_inodes_array(&meta),
+            };
+            TagCanonicitySignal {
+                key: key.to_string(),
+                tag_name: meta["tag_name"].as_str().unwrap_or("").to_string(),
+                data,
+            }.insert(conn)
+        }
+        AggregateSignalType::InconsistentAlbumArtist => {
+            let data = InconsistentAlbumArtistData {
+                album: meta["album"].as_str().unwrap_or("").to_string(),
+                artist_variants: parse_variants_map_from(&meta, "artist_variants"),
+                album_artist_variants: parse_variants_map_from(&meta, "album_artist_variants"),
+                inodes: parse_inodes_array(&meta),
+            };
+            InconsistentAlbumArtistSignal { key: key.to_string(), data }.insert(conn)
+        }
+        AggregateSignalType::CompoundTagValue => {
+            let data = CompoundTagValueData {
+                compound_value: meta["compound_value"].as_str().unwrap_or("").to_string(),
+                split_parts: meta["split_parts"].as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                separator: meta["separator"].as_str().unwrap_or("").to_string(),
+                inodes: parse_inodes_array(&meta),
+            };
+            CompoundTagValueSignal {
+                key: key.to_string(),
+                tag_name: meta["tag_name"].as_str().unwrap_or("").to_string(),
+                data,
+            }.insert(conn)
+        }
+        AggregateSignalType::CrossSourceOverlap => {
+            let data = CrossSourceOverlapData {
+                source_a: meta["source_a"].as_str().unwrap_or("").to_string(),
+                source_b: meta["source_b"].as_str().unwrap_or("").to_string(),
+                source_a_can_stash: meta["source_a_can_stash"].as_bool().unwrap_or(false),
+                source_b_can_stash: meta["source_b_can_stash"].as_bool().unwrap_or(false),
+                overlap_count: meta["overlap_count"].as_u64().unwrap_or(0) as usize,
+                fingerprint_count: meta["fingerprint_count"].as_u64().unwrap_or(0) as usize,
+                fingerprint_keys: meta["fingerprint_keys"].as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                track_pairs: parse_cross_source_track_pairs(&meta),
+            };
+            CrossSourceOverlapSignal { key: key.to_string(), data }.insert(conn)
+        }
+    };
+}
+
+/// Clear a corpus signal from its typed table.
+fn typed_clear_corpus_signal(db: &Database, signal_type: CorpusFileSignalType, inode: i64) {
+    let conn = db.conn();
+    let _ = match signal_type {
+        CorpusFileSignalType::FileInCorpus => FileInCorpusSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::UnindexedFile => UnindexedFileSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::HealthyFile => HealthyFileSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::MissingFile => MissingFileSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::MissingDirectory => MissingDirectorySignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::MovedFile => MovedFileSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::OutOfBandTagSync => OutOfBandTagSyncSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::OutOfBandTagConflict => OutOfBandTagConflictSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::MtimeOnlyMismatch => MtimeOnlyMismatchSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::CorruptFile => CorruptFileSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::ShitFormat => ShitFormatSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::SubparDuplicate => SubparDuplicateSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::CompoundTag => CompoundTagSignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::DeployReady => DeployReadySignal::clear_by_inode(conn, inode),
+        CorpusFileSignalType::DeployedHealthy => DeployedHealthySignal::clear_by_inode(conn, inode),
+    };
+}
+
+/// Clear ALL corpus signals for an inode from typed tables.
+fn typed_clear_all_corpus_signals(db: &Database, inode: i64) {
+    let conn = db.conn();
+    let _ = FileInCorpusSignal::clear_by_inode(conn, inode);
+    let _ = UnindexedFileSignal::clear_by_inode(conn, inode);
+    let _ = HealthyFileSignal::clear_by_inode(conn, inode);
+    let _ = MissingFileSignal::clear_by_inode(conn, inode);
+    let _ = MissingDirectorySignal::clear_by_inode(conn, inode);
+    let _ = MovedFileSignal::clear_by_inode(conn, inode);
+    let _ = OutOfBandTagSyncSignal::clear_by_inode(conn, inode);
+    let _ = OutOfBandTagConflictSignal::clear_by_inode(conn, inode);
+    let _ = MtimeOnlyMismatchSignal::clear_by_inode(conn, inode);
+    let _ = CorruptFileSignal::clear_by_inode(conn, inode);
+    let _ = ShitFormatSignal::clear_by_inode(conn, inode);
+    let _ = SubparDuplicateSignal::clear_by_inode(conn, inode);
+    let _ = CompoundTagSignal::clear_by_inode(conn, inode);
+    let _ = DeployReadySignal::clear_by_inode(conn, inode);
+    let _ = DeployedHealthySignal::clear_by_inode(conn, inode);
+}
+
+/// Clear an aggregate signal from its typed table.
+fn typed_clear_aggregate_signal(db: &Database, signal_type: AggregateSignalType, key: &str) {
+    let conn = db.conn();
+    let _ = match signal_type {
+        AggregateSignalType::FingerprintOverlap => FingerprintOverlapSignal::clear_by_key(conn, key),
+        AggregateSignalType::MetadataDuplicate => MetadataDuplicateSignal::clear_by_key(conn, key),
+        AggregateSignalType::DuplicateInode => DuplicateInodeSignal::clear_by_key(conn, key),
+        AggregateSignalType::MissingTag => MissingTagSignal::clear_by_key(conn, key),
+        AggregateSignalType::DeployConflict => DeployConflictSignal::clear_by_key(conn, key),
+        AggregateSignalType::TagCanonicity => TagCanonicitySignal::clear_by_key(conn, key),
+        AggregateSignalType::InconsistentAlbumArtist => InconsistentAlbumArtistSignal::clear_by_key(conn, key),
+        AggregateSignalType::CompoundTagValue => CompoundTagValueSignal::clear_by_key(conn, key),
+        AggregateSignalType::CrossSourceOverlap => CrossSourceOverlapSignal::clear_by_key(conn, key),
+        AggregateSignalType::CanonicalTag => CanonicalTagSignal::clear_by_key(conn, key),
+        AggregateSignalType::LibraryLeftover => LibraryLeftoverSignal::clear_by_key(conn, key),
+        AggregateSignalType::LibraryStale => LibraryStaleSignal::clear_by_key(conn, key),
+    };
+}
+
+/// Clear all signals of a given type from typed tables.
+fn typed_clear_signals_by_type(db: &Database, issue_type: &SignalType) {
+    let conn = db.conn();
+    let _ = match issue_type {
+        SignalType::FileInCorpus => FileInCorpusSignal::clear_all(conn),
+        SignalType::UnindexedFile => UnindexedFileSignal::clear_all(conn),
+        SignalType::HealthyFile => HealthyFileSignal::clear_all(conn),
+        SignalType::MissingFile => MissingFileSignal::clear_all(conn),
+        SignalType::MissingDirectory => MissingDirectorySignal::clear_all(conn),
+        SignalType::MovedFile => MovedFileSignal::clear_all(conn),
+        SignalType::OutOfBandTagSync => OutOfBandTagSyncSignal::clear_all(conn),
+        SignalType::OutOfBandTagConflict => OutOfBandTagConflictSignal::clear_all(conn),
+        SignalType::MtimeOnlyMismatch => MtimeOnlyMismatchSignal::clear_all(conn),
+        SignalType::CorruptFile => CorruptFileSignal::clear_all(conn),
+        SignalType::ShitFormat => ShitFormatSignal::clear_all(conn),
+        SignalType::SubparDuplicate => SubparDuplicateSignal::clear_all(conn),
+        SignalType::CompoundTagValue => CompoundTagValueSignal::clear_all(conn),
+        SignalType::DeployConflict => DeployConflictSignal::clear_all(conn),
+        SignalType::FingerprintOverlap => FingerprintOverlapSignal::clear_all(conn),
+        SignalType::MetadataDuplicate => MetadataDuplicateSignal::clear_all(conn),
+        SignalType::DuplicateInode => DuplicateInodeSignal::clear_all(conn),
+        SignalType::MissingTag => MissingTagSignal::clear_all(conn),
+        SignalType::TagCanonicity => TagCanonicitySignal::clear_all(conn),
+        SignalType::InconsistentAlbumArtist => InconsistentAlbumArtistSignal::clear_all(conn),
+        SignalType::CrossSourceOverlap => CrossSourceOverlapSignal::clear_all(conn),
+        SignalType::LibraryStale => LibraryStaleSignal::clear_all(conn),
+        SignalType::LibraryLeftover => LibraryLeftoverSignal::clear_all(conn),
+    };
+}
+
+/// Clear all corpus signals of a specific corpus file type from typed tables.
+fn typed_clear_corpus_signals_by_type(db: &Database, signal_type: &CorpusFileSignalType) {
+    let conn = db.conn();
+    let _ = match signal_type {
+        CorpusFileSignalType::FileInCorpus => FileInCorpusSignal::clear_all(conn),
+        CorpusFileSignalType::UnindexedFile => UnindexedFileSignal::clear_all(conn),
+        CorpusFileSignalType::HealthyFile => HealthyFileSignal::clear_all(conn),
+        CorpusFileSignalType::MissingFile => MissingFileSignal::clear_all(conn),
+        CorpusFileSignalType::MissingDirectory => MissingDirectorySignal::clear_all(conn),
+        CorpusFileSignalType::MovedFile => MovedFileSignal::clear_all(conn),
+        CorpusFileSignalType::OutOfBandTagSync => OutOfBandTagSyncSignal::clear_all(conn),
+        CorpusFileSignalType::OutOfBandTagConflict => OutOfBandTagConflictSignal::clear_all(conn),
+        CorpusFileSignalType::MtimeOnlyMismatch => MtimeOnlyMismatchSignal::clear_all(conn),
+        CorpusFileSignalType::CorruptFile => CorruptFileSignal::clear_all(conn),
+        CorpusFileSignalType::ShitFormat => ShitFormatSignal::clear_all(conn),
+        CorpusFileSignalType::SubparDuplicate => SubparDuplicateSignal::clear_all(conn),
+        CorpusFileSignalType::CompoundTag => CompoundTagSignal::clear_all(conn),
+        CorpusFileSignalType::DeployReady => DeployReadySignal::clear_all(conn),
+        CorpusFileSignalType::DeployedHealthy => DeployedHealthySignal::clear_all(conn),
+    };
+}
+
+// --- JSON parsing helpers for typed table dual-write ---
+
+fn parse_inodes_array(meta: &serde_json::Value) -> Vec<i64> {
+    meta["inodes"].as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default()
+}
+
+fn parse_tag_mismatches(meta: &serde_json::Value) -> Vec<TagMismatchEntry> {
+    meta["mismatches"].as_array()
+        .map(|arr| arr.iter().map(|m| TagMismatchEntry {
+            tag_name: m["tag_name"].as_str().unwrap_or("").to_string(),
+            disk_value: m["disk_value"].as_str().map(|s| s.to_string()),
+            db_value: m["db_value"].as_str().map(|s| s.to_string()),
+        }).collect())
+        .unwrap_or_default()
+}
+
+fn parse_compound_tag_entries(meta: &serde_json::Value) -> Vec<CompoundTagEntry> {
+    meta["compounds"].as_array()
+        .map(|arr| arr.iter().map(|c| CompoundTagEntry {
+            tag_name: c["tag_name"].as_str().unwrap_or("").to_string(),
+            compound_value: c["compound_value"].as_str().unwrap_or("").to_string(),
+            split_parts: c["split_parts"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default(),
+            separator: c["separator"].as_str().unwrap_or("").to_string(),
+            matching_parts: c["matching_parts"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default(),
+        }).collect())
+        .unwrap_or_default()
+}
+
+fn parse_variants_map(meta: &serde_json::Value) -> Vec<(String, usize)> {
+    parse_variants_map_from(meta, "variants")
+}
+
+fn parse_variants_map_from(meta: &serde_json::Value, field: &str) -> Vec<(String, usize)> {
+    meta[field].as_object()
+        .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap_or(0) as usize)).collect())
+        .unwrap_or_default()
+}
+
+fn parse_cross_source_track_pairs(meta: &serde_json::Value) -> Vec<CrossSourceTrackPair> {
+    meta["track_pairs"].as_array()
+        .map(|arr| arr.iter().map(|p| CrossSourceTrackPair {
+            fingerprint_key: p["fingerprint_key"].as_str().unwrap_or("").to_string(),
+            source_a_inode: p["source_a_inode"].as_i64().unwrap_or(0),
+            source_a_path: p["source_a_path"].as_str().unwrap_or("").to_string(),
+            source_b_inode: p["source_b_inode"].as_i64().unwrap_or(0),
+            source_b_path: p["source_b_path"].as_str().unwrap_or("").to_string(),
+        }).collect())
+        .unwrap_or_default()
+}
+
 /// Execute a single signal write operation.
 #[allow(deprecated)]
 fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
@@ -1122,6 +1519,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             with_retry("ensure_corpus_signal", path, || {
                 db.ensure_corpus_signal(*signal_type, *inode, path, &witness).map(|_| ())
             });
+            typed_write_corpus_signal(db, *signal_type, *inode, path);
         }
         SignalWriteOp::EnsureCorpusSignalWithMetadata {
             signal_type,
@@ -1134,16 +1532,19 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     .unwrap_or_else(|_| serde_json::json!({}));
                 db.ensure_corpus_signal_with_metadata(*signal_type, *inode, path, metadata, &witness).map(|_| ())
             });
+            typed_write_corpus_signal_with_metadata(db, *signal_type, *inode, path, extra_metadata);
         }
         SignalWriteOp::ClearCorpusSignal { signal_type, inode } => {
             with_retry("clear_corpus_signal", &inode.to_string(), || {
                 db.clear_corpus_signal(*signal_type, *inode, &witness).map(|_| ())
             });
+            typed_clear_corpus_signal(db, *signal_type, *inode);
         }
         SignalWriteOp::ClearAllCorpusSignals { inode } => {
             with_retry("clear_all_corpus_signals", &inode.to_string(), || {
                 db.clear_all_corpus_signals_for_inode(*inode, &witness).map(|_| ())
             });
+            typed_clear_all_corpus_signals(db, *inode);
         }
 
         // Aggregate signal operations
@@ -1155,16 +1556,19 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             with_retry("ensure_aggregate_signal", key, || {
                 db.ensure_aggregate_signal(*signal_type, key, metadata_json.as_deref(), &witness).map(|_| ())
             });
+            typed_write_aggregate_signal(db, *signal_type, key, metadata_json.as_deref());
         }
         SignalWriteOp::ReplaceAggregateSignal { signal } => {
             with_retry("replace_aggregate_signal", &signal.key, || {
                 db.replace_aggregate_signal(signal, &witness).map(|_| ())
             });
+            typed_write_aggregate_signal(db, signal.signal_type, &signal.key, signal.metadata_json.as_deref());
         }
         SignalWriteOp::ClearAggregateSignal { signal_type, key } => {
             with_retry("clear_aggregate_signal", key, || {
                 db.clear_aggregate_signal(*signal_type, key, &witness).map(|_| ())
             });
+            typed_clear_aggregate_signal(db, *signal_type, key);
         }
 
         // Library file operations (Awakening phase)
@@ -1212,6 +1616,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     .map(|_| ())
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
             });
+            typed_clear_signals_by_type(db, issue_type);
         }
         SignalWriteOp::ClearCorpusSignalsByType { signal_type } => {
             let signal_type_str = signal_type.as_str();
@@ -1225,6 +1630,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     .map(|_| ())
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
             });
+            typed_clear_corpus_signals_by_type(db, signal_type);
         }
         SignalWriteOp::UpdateFileMtime {
             source,

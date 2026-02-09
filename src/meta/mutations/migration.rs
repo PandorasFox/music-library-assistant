@@ -147,6 +147,17 @@ impl MigrationRegistry {
             },
         });
 
+        // v3→v4: Create per-signal typed tables (replacing single signals + metadata_json)
+        registry.register(Migration {
+            from_version: 3,
+            to_version: 4,
+            description: "Create per-signal typed tables for all corpus and aggregate signal types",
+            apply: |db| {
+                crate::meta::signals::store::create_all_signal_tables(db.conn())?;
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -235,12 +246,15 @@ mod tests {
 
         // v1→v2: tags_version + dirty_inodes
         // v2→v3: inode column in signals table
-        assert_eq!(registry.latest_version(), 3);
-        // From v1, there should be 2 pending migrations
-        assert_eq!(registry.pending_migrations(1).len(), 2);
-        // From v2, there should be 1 pending migration
-        assert_eq!(registry.pending_migrations(2).len(), 1);
-        // From v3, no pending migrations
-        assert!(registry.pending_migrations(3).is_empty());
+        // v3→v4: per-signal typed tables
+        assert_eq!(registry.latest_version(), 4);
+        // From v1, there should be 3 pending migrations
+        assert_eq!(registry.pending_migrations(1).len(), 3);
+        // From v2, there should be 2 pending migrations
+        assert_eq!(registry.pending_migrations(2).len(), 2);
+        // From v3, there should be 1 pending migration
+        assert_eq!(registry.pending_migrations(3).len(), 1);
+        // From v4, no pending migrations
+        assert!(registry.pending_migrations(4).is_empty());
     }
 }

@@ -95,18 +95,15 @@ impl Database {
 
     /// Get files with purely one-directional tag mismatches (sync-eligible).
     ///
-    /// NOTE: tag_mismatches table is removed. This now extracts mismatch info
-    /// from signal metadata_json (field 'mismatches' array).
+    /// Reads from typed signal_oob_tag_sync table with bincode BLOB for mismatches.
     pub fn get_oob_sync_files(&self) -> Result<Vec<crate::corpus::db::types::OobSyncFile>> {
         use crate::corpus::db::types::{OobSyncDirection, OobSyncFile, TagMismatchEntry};
+        use crate::meta::signals::data::TagMismatchEntry as TypedEntry;
 
-        // Get all files with oob_tag_sync signals
-        // Inode-keyed signals: join on s.inode = f.inode, extract path from metadata_json
         let mut stmt = self.conn.prepare(
-            "SELECT f.inode, f.path, s.metadata_json
-             FROM signals s
-             INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
-             WHERE s.issue_type = 'oob_tag_sync'"
+            "SELECT s.inode, s.path, s.data
+             FROM signal_oob_tag_sync s
+             INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'"
         )?;
 
         let mut files = Vec::new();
@@ -115,39 +112,29 @@ impl Database {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Vec<u8>>(2)?,
             ))
         })?;
 
         for row in rows {
-            let (inode, path, metadata_json) = row?;
+            let (inode, path, blob) = row?;
 
-            // Parse mismatches from metadata_json
-            let mismatches: Vec<TagMismatchEntry> = if let Some(json) = metadata_json {
-                serde_json::from_str::<serde_json::Value>(&json)
-                    .ok()
-                    .and_then(|v| v.get("mismatches").cloned())
-                    .and_then(|arr| {
-                        arr.as_array().map(|items| {
-                            items.iter().filter_map(|item| {
-                                Some(TagMismatchEntry {
-                                    field: item.get("field")?.as_str()?.to_string(),
-                                    db_value: item.get("db_value").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    disk_value: item.get("disk_value").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                    _db_values: Vec::new(),
-                                    _disk_values: Vec::new(),
-                                })
-                            }).collect()
-                        })
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+            let typed_mismatches: Vec<TypedEntry> =
+                bincode::deserialize(&blob).unwrap_or_default();
 
-            if mismatches.is_empty() {
+            if typed_mismatches.is_empty() {
                 continue;
             }
+
+            let mismatches: Vec<TagMismatchEntry> = typed_mismatches.into_iter().map(|m| {
+                TagMismatchEntry {
+                    field: m.tag_name,
+                    db_value: m.db_value,
+                    disk_value: m.disk_value,
+                    _db_values: Vec::new(),
+                    _disk_values: Vec::new(),
+                }
+            }).collect();
 
             // Determine direction: all db NULL → DiskToIndex, all disk NULL → IndexToDisk
             let all_db_null = mismatches.iter().all(|m| m.db_value.is_none());
@@ -175,84 +162,89 @@ impl Database {
 
     /// Get ALL OOB signal files classified into resolution buckets.
     ///
-    /// NOTE: tag_mismatches table is removed. Classification now comes from
-    /// signal metadata_json (field 'bucket' or parsed from 'mismatches').
+    /// Reads from typed tables and classifies by mismatch direction.
     /// - Bucket 0 (MtimeOnly): mtime_only_mismatch signal
     /// - Bucket 1 (DbOnly): all mismatches have disk_value NULL
     /// - Bucket 2 (DiskOnly): all mismatches have db_value NULL
     /// - Bucket 3 (Conflict): mismatches in both directions
     pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::corpus::db::types::BucketedOobFile>> {
         use crate::corpus::db::types::{BucketedOobFile, ConflictBucket};
-
-        // Inode-keyed signals: join on s.inode = f.inode, use f.path for display
-        let mut stmt = self.conn.prepare(
-            "SELECT f.inode, f.path, s.issue_type, s.metadata_json
-             FROM signals s
-             INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
-             WHERE s.issue_type IN ('mtime_only_mismatch', 'oob_tag_conflict', 'oob_tag', 'oob_tag_sync')
-             ORDER BY f.path"
-        )?;
+        use crate::meta::signals::data::TagMismatchEntry as TypedEntry;
 
         let mut files = Vec::new();
-        let rows = stmt.query_map(params![], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?;
 
-        for row in rows {
-            let (inode, path, issue_type, metadata_json) = row?;
-
-            let bucket = if issue_type == "mtime_only_mismatch" {
-                ConflictBucket::MtimeOnly
-            } else if let Some(json) = &metadata_json {
-                // Try to parse bucket from metadata, or infer from mismatches
-                let parsed: Option<ConflictBucket> = serde_json::from_str::<serde_json::Value>(json)
-                    .ok()
-                    .and_then(|v| {
-                        // Check for explicit bucket field
-                        if let Some(b) = v.get("bucket").and_then(|b| b.as_i64()) {
-                            return Some(ConflictBucket::from_int(b as i32));
-                        }
-                        // Infer from mismatches
-                        v.get("mismatches").and_then(|arr| arr.as_array()).map(|items| {
-                            let all_db_null = items.iter().all(|i| i.get("db_value").map_or(true, |v| v.is_null()));
-                            let all_disk_null = items.iter().all(|i| i.get("disk_value").map_or(true, |v| v.is_null()));
-                            if all_db_null { ConflictBucket::DiskOnly }
-                            else if all_disk_null { ConflictBucket::DbOnly }
-                            else { ConflictBucket::Conflict }
-                        })
-                    });
-                parsed.unwrap_or(ConflictBucket::Conflict)
-            } else {
-                ConflictBucket::Conflict
-            };
-
-            files.push(BucketedOobFile {
-                inode,
-                path,
-                bucket,
-            });
+        // MtimeOnly signals
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT s.inode, s.path FROM signal_mtime_only_mismatch s
+                 INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
+                 ORDER BY s.path"
+            )?;
+            let rows = stmt.query_map(params![], |row| {
+                Ok(BucketedOobFile {
+                    inode: row.get(0)?,
+                    path: row.get(1)?,
+                    bucket: ConflictBucket::MtimeOnly,
+                })
+            })?;
+            for row in rows { files.push(row?); }
         }
 
+        // OOB tag sync signals — infer direction from mismatches
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT s.inode, s.path, s.data FROM signal_oob_tag_sync s
+                 INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
+                 ORDER BY s.path"
+            )?;
+            let rows = stmt.query_map(params![], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (inode, path, blob) = row?;
+                let mismatches: Vec<TypedEntry> = bincode::deserialize(&blob).unwrap_or_default();
+                let all_db_null = mismatches.iter().all(|m| m.db_value.is_none());
+                let all_disk_null = mismatches.iter().all(|m| m.disk_value.is_none());
+                let bucket = if all_db_null { ConflictBucket::DiskOnly }
+                    else if all_disk_null { ConflictBucket::DbOnly }
+                    else { ConflictBucket::Conflict };
+                files.push(BucketedOobFile { inode, path, bucket });
+            }
+        }
+
+        // OOB tag conflict signals — always Conflict bucket
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT s.inode, s.path FROM signal_oob_tag_conflict s
+                 INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
+                 ORDER BY s.path"
+            )?;
+            let rows = stmt.query_map(params![], |row| {
+                Ok(BucketedOobFile {
+                    inode: row.get(0)?,
+                    path: row.get(1)?,
+                    bucket: ConflictBucket::Conflict,
+                })
+            })?;
+            for row in rows { files.push(row?); }
+        }
+
+        files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
     }
 
     /// Get files with MovedFile signals (same inode, different path).
+    ///
+    /// Reads from typed signal_moved_file table: inode, path (new), old_path.
     pub fn get_moved_files(&self) -> Result<Vec<crate::corpus::db::types::MovedFileInfo>> {
         use crate::corpus::db::types::MovedFileInfo;
 
         let mut stmt = self.conn.prepare(
-            "SELECT
-                json_extract(s.metadata_json, '$.inode') as inode,
-                json_extract(s.metadata_json, '$.old_path') as old_path,
-                json_extract(s.metadata_json, '$.new_path') as new_path
-             FROM signals s
-             WHERE s.issue_type = 'moved_file'
-             ORDER BY s.issue_key"
+            "SELECT inode, old_path, path FROM signal_moved_file ORDER BY path"
         )?;
 
         let files: Vec<MovedFileInfo> = stmt.query_map(params![], |row| {

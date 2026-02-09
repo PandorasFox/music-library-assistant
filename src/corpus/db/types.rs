@@ -349,15 +349,6 @@ pub enum ConflictBucket {
 }
 
 impl ConflictBucket {
-    pub fn from_int(i: i32) -> Self {
-        match i {
-            0 => Self::MtimeOnly,
-            1 => Self::DbOnly,
-            2 => Self::DiskOnly,
-            _ => Self::Conflict,
-        }
-    }
-
     pub fn label(&self) -> &'static str {
         match self {
             Self::MtimeOnly => "Mtime Only",

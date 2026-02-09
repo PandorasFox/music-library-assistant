@@ -106,6 +106,30 @@ impl Computation {
             Computation::VerifyAudio { .. } => "Audio verification",
         }
     }
+
+    /// Execute this computation.
+    pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
+        match self {
+            Computation::ClearExistingObservationState => {
+                execute_clear_existing_observation_state(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::WalkCorpus { root, source, force_check } => {
+                execute_walk_corpus(ctx.read_db, root, source, *force_check, ctx.start)
+            }
+            Computation::ScanCorpusDirectory { directory, source, force_check } => {
+                execute_scan_corpus_directory(ctx.read_db, directory, source, *force_check, ctx.witness, ctx.start)
+            }
+            Computation::VerifyMtime { inode, path, expected_mtime_secs, expected_mtime_nanos } => {
+                execute_verify_mtime(ctx.read_db, *inode, path, *expected_mtime_secs, *expected_mtime_nanos, ctx.start)
+            }
+            Computation::VerifyTags { inode, path } => {
+                execute_verify_tags(ctx.read_db, *inode, path, ctx.witness, ctx.start)
+            }
+            Computation::VerifyAudio { inode, path } => {
+                execute_verify_audio(ctx.read_db, *inode, path, ctx.witness, ctx.start)
+            }
+        }
+    }
 }
 
 // ============================================================================

@@ -9,6 +9,7 @@ use super::types::{
     TransactionError, WitnessedDecision,
 };
 use crate::meta::mutations::{Mutation, TagOp};
+use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 
 /// Coalesce ApplyTagOps mutations into a single mutation.
 ///
@@ -26,7 +27,7 @@ fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
 
     for mutation in mutations {
         match mutation {
-            Mutation::ApplyTagOps { ops } => all_ops.extend(ops),
+            Mutation::ApplyTagOps(m) => all_ops.extend(m.ops),
             m => other.push(m),
         }
     }
@@ -63,7 +64,7 @@ fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
     }
 
     // Single coalesced mutation at the start (tag ops before other mutations)
-    let mut result = vec![Mutation::ApplyTagOps { ops: final_ops }];
+    let mut result = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops: final_ops })];
     result.extend(other);
     result
 }

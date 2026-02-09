@@ -2,15 +2,27 @@
 //!
 //! Handles execution of indexing-related mutations:
 //! - IndexFileFromPath: Extract metadata and index a file
+//! - UpdateFilePath: Update file path for relocated file
+//! - DropFromIndex: Remove track from index
+//! - DropDirectoryFromIndex: Remove directory and contents from index
+//! - AcknowledgeMtimeOnly: Acknowledge mtime-only change
+//! - ApplyDbTagsToDisk: Apply DB tags to disk file
+//! - AssimilateDiskTagsToDb: Assimilate disk tags into DB
+//! - EmitCanonicalTag: Emit CanonicalTag signal
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 use crate::corpus::db::types::FileSource;
 use crate::meta::signals::CorpusFileSignalType;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
+use crate::witch::MutationExecutionWitness;
+
+use super::traits::{MutationContext, MutationExecutor};
+use super::types::{ExtractedMetadata, Mutation, MutationResult, PendingSignal, SignalClearScope};
 
 /// File types that should trigger ShitFormat signal (non-Vorbis containers).
 /// Includes lossy formats with poor metadata and lossless needing remux.
@@ -21,9 +33,305 @@ fn is_shit_format(file_type: &str) -> bool {
     let file_type_lower = file_type.to_lowercase();
     SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str())
 }
-use crate::witch::MutationExecutionWitness;
 
-use super::types::{ExtractedMetadata, Mutation, MutationResult, PendingSignal};
+// ============================================================================
+// Mutation Structs
+// ============================================================================
+
+/// Index a file from path only - extracts metadata during execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexFileFromPathMutation {
+    pub path: PathBuf,
+    pub source: String,
+}
+
+/// Update file path in files table (for relocated files).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateFilePathMutation {
+    pub source: String,
+    pub inode: i64,
+    pub new_path: PathBuf,
+}
+
+/// Drop file from index (for missing files or orphaned signals).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DropFromIndexMutation {
+    pub path: PathBuf,
+    /// Inode to also remove from files table (None for orphaned signals)
+    pub inode: Option<i64>,
+    pub source: Option<String>,
+}
+
+/// Drop a directory and all its contents from the index.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DropDirectoryFromIndexMutation {
+    /// Relative path of the directory
+    pub directory_path: PathBuf,
+}
+
+/// Acknowledge mtime-only change - update file mtime, clear MtimeOnlyMismatch signal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcknowledgeMtimeOnlyMutation {
+    /// Inodes with their absolute paths: (inode, abs_path)
+    pub tracks: Vec<(i64, PathBuf)>,
+}
+
+/// Apply DB tags to disk file (defer to db / reject disk changes).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyDbTagsToDiskMutation {
+    pub inode: i64,
+    pub path: PathBuf,
+}
+
+/// Assimilate disk tags into DB (defer to corpus / accept disk changes).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssimilateDiskTagsToDbMutation {
+    pub inode: i64,
+    pub path: PathBuf,
+}
+
+/// Emit a CanonicalTag signal to whitelist a tag value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmitCanonicalTagMutation {
+    pub tag_name: String,
+    pub canonical_value: String,
+}
+
+// ============================================================================
+// MutationExecutor Implementations
+// ============================================================================
+
+impl MutationExecutor for IndexFileFromPathMutation {
+    fn label(&self) -> &'static str { "Indexing" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        match execute_index_file_from_path(ctx.read_db, &self.path, &self.source, ctx.witness) {
+            Ok(pending_signals) => MutationResult {
+                _mutation: Mutation::IndexFileFromPath(self.clone()),
+                success: true,
+                error: None,
+                _duration_ms: start.elapsed().as_millis() as u64,
+                spawn_mutations: Vec::new(),
+                pending_signals,
+                discovered_inodes: Vec::new(),
+            },
+            Err(e) => MutationResult {
+                _mutation: Mutation::IndexFileFromPath(self.clone()),
+                success: false,
+                error: Some(format!("{:#}", e)),
+                _duration_ms: start.elapsed().as_millis() as u64,
+                spawn_mutations: Vec::new(),
+                pending_signals: Vec::new(),
+                discovered_inodes: Vec::new(),
+            },
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+}
+
+impl MutationExecutor for UpdateFilePathMutation {
+    fn label(&self) -> &'static str { "Path update" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_update_file_path(ctx.read_db, &self.source, self.inode, &self.new_path, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::UpdateFilePath(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.new_path.clone()] }
+}
+
+impl MutationExecutor for DropFromIndexMutation {
+    fn label(&self) -> &'static str { "Drop from index" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_drop_from_index(ctx.read_db, &self.path, self.inode, self.source.as_deref(), ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::DropFromIndex(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+}
+
+impl MutationExecutor for DropDirectoryFromIndexMutation {
+    fn label(&self) -> &'static str { "Drop directory from index" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_drop_directory_from_index(ctx.read_db, &self.directory_path, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::DropDirectoryFromIndex(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.directory_path.clone()] }
+}
+
+impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
+    fn label(&self) -> &'static str { "Acknowledge mtime" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_acknowledge_mtime_only(ctx.read_db, &self.tracks, ctx.witness);
+        let (success, error) = match result {
+            Ok(_) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::AcknowledgeMtimeOnly(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> {
+        self.tracks.iter().map(|(_, path)| path.clone()).collect()
+    }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        self.tracks.iter().map(|(_, path)| path.clone()).collect()
+    }
+}
+
+impl MutationExecutor for ApplyDbTagsToDiskMutation {
+    fn label(&self) -> &'static str { "Tag sync (DB→disk)" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_apply_db_tags_to_disk(ctx.read_db, self.inode, &self.path, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::ApplyDbTagsToDisk(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+
+    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+}
+
+impl MutationExecutor for AssimilateDiskTagsToDbMutation {
+    fn label(&self) -> &'static str { "Tag sync (disk→DB)" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_assimilate_disk_tags_to_db(ctx.read_db, self.inode, &self.path, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::AssimilateDiskTagsToDb(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+
+    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+}
+
+impl MutationExecutor for EmitCanonicalTagMutation {
+    fn label(&self) -> &'static str { "Mark canonical" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_emit_canonical_tag(&self.tag_name, &self.canonical_value, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::EmitCanonicalTag(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+}
 
 /// Index a track from extracted metadata (internal helper).
 ///
@@ -696,105 +1004,6 @@ pub fn execute_emit_canonical_tag(
     ));
 
     Ok(())
-}
-
-// ============================================================================
-// Single Mutation Dispatch
-// ============================================================================
-
-/// Execute a single indexing mutation.
-///
-/// Convenience function for executing individual mutations.
-/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
-pub fn execute_single(
-    db: &ReadOnlyDb<'_>,
-    mutation: &Mutation,
-    witness: &MutationExecutionWitness,
-) -> MutationResult {
-    let start = std::time::Instant::now();
-
-    // IndexFileFromPath returns pending signals; other mutations don't.
-    // Handle it specially to capture the signals.
-    if let Mutation::IndexFileFromPath { path, source } = mutation {
-        return match execute_index_file_from_path(db, path, source, witness) {
-            Ok(pending_signals) => MutationResult {
-                _mutation: mutation.clone(),
-                success: true,
-                error: None,
-                _duration_ms: start.elapsed().as_millis() as u64,
-                spawn_mutations: Vec::new(),
-                pending_signals,
-            },
-            Err(e) => MutationResult {
-                _mutation: mutation.clone(),
-                success: false,
-                error: Some(format!("{:#}", e)),
-                _duration_ms: start.elapsed().as_millis() as u64,
-                spawn_mutations: Vec::new(),
-                pending_signals: Vec::new(),
-            },
-        };
-    }
-
-    let result = match mutation {
-        // Already handled above with early return
-        Mutation::IndexFileFromPath { .. } => unreachable!(),
-
-        // Signal resolution mutations
-        Mutation::UpdateFilePath {
-            source,
-            inode,
-            new_path,
-        } => execute_update_file_path(db, source, *inode, new_path, witness),
-
-        Mutation::DropFromIndex {
-            path,
-            inode,
-            source,
-        } => execute_drop_from_index(db, path, *inode, source.as_deref(), witness),
-
-        Mutation::DropDirectoryFromIndex { directory_path } => {
-            execute_drop_directory_from_index(db, directory_path, witness)
-        }
-
-        // OOB resolution mutations (batch, for legacy support)
-        Mutation::AcknowledgeMtimeOnly { tracks } => {
-            execute_acknowledge_mtime_only(db, tracks, witness).map(|_| ())
-        }
-
-        // Single-file tag sync mutations
-        Mutation::ApplyDbTagsToDisk { inode, path } => {
-            execute_apply_db_tags_to_disk(db, *inode, path, witness)
-        }
-
-        Mutation::AssimilateDiskTagsToDb { inode, path } => {
-            execute_assimilate_disk_tags_to_db(db, *inode, path, witness)
-        }
-
-        // Signal emission mutations
-        Mutation::EmitCanonicalTag { tag_name, canonical_value } => {
-            execute_emit_canonical_tag(tag_name, canonical_value, witness)
-        }
-
-        // Note: ApplyTagOps is handled by tag_edit.rs (spawns ApplyDbTagsToDisk)
-        // Note: VerifyTags is now a Computation, not a Mutation.
-
-        _ => Err(anyhow::anyhow!("Not an indexing mutation")),
-    };
-
-    let (success, error) = match result {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(format!("{:#}", e))),
-    };
-
-    MutationResult {
-        _mutation: mutation.clone(),
-        success,
-        error,
-        _duration_ms: start.elapsed().as_millis() as u64,
-        spawn_mutations: Vec::new(), // Non-spawning indexing mutations
-        pending_signals: Vec::new(), // Only IndexFileFromPath carries pending signals
-    }
 }
 
 #[cfg(test)]

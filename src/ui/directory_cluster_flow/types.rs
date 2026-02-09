@@ -11,6 +11,8 @@ use crate::corpus::db::types::FileSource;
 use crate::meta::signals::AggregateSignalType;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
+use crate::meta::mutations::file_ops::MoveToStashMutation;
+use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
 
 /// A source directory within an overlap cluster.
@@ -276,19 +278,19 @@ impl DirectoryClusterModalData {
                 let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
 
                 // MoveToStash mutation
-                mutations.push(Mutation::MoveToStash {
+                mutations.push(Mutation::MoveToStash(MoveToStashMutation {
                     path: abs_path,
                     stash_name: "overlaps".to_string(),
-                });
+                }));
 
                 // DropFromIndex mutation
                 let inode = dir.inodes.get(idx).copied();
 
-                mutations.push(Mutation::DropFromIndex {
+                mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
                     path: PathBuf::from(corpus_path),
                     inode,
                     source: Some("corpus".to_string()),
-                });
+                }));
             }
         }
 

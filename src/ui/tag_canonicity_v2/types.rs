@@ -17,6 +17,7 @@ use crate::corpus::db::types::FileSource;
 use crate::meta::signals::{AggregateSignal, AggregateSignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
+use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
 use crate::ui::widgets::TextInputState;
@@ -258,7 +259,7 @@ impl TagCanonicalityStateV2 {
         let ops: Vec<&TagOp> = mutations
             .iter()
             .filter_map(|m| match m {
-                Mutation::ApplyTagOps { ops } => Some(ops.iter()),
+                Mutation::ApplyTagOps(ref m) => Some(m.ops.iter()),
                 _ => None,
             })
             .flatten()
@@ -444,7 +445,7 @@ impl TagCanonicalityStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps { ops }]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops })]
         }
     }
 }

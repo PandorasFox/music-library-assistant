@@ -22,6 +22,7 @@ use crate::ui::widgets::centered_rect_fixed;
 use crate::meta::signals::SignalType;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
+use crate::meta::mutations::indexing::IndexFileFromPathMutation;
 use crate::corpus::paths;
 use crate::logging::log_general;
 
@@ -216,10 +217,10 @@ impl IntakeConfirmationState {
         let mutations: Vec<Mutation> = self
             .files
             .iter()
-            .map(|entry| Mutation::IndexFileFromPath {
+            .map(|entry| Mutation::IndexFileFromPath(IndexFileFromPathMutation {
                 path: entry.abs_path.clone(),
                 source: self.source.clone(),
-            })
+            }))
             .collect();
 
         log_general(format!(

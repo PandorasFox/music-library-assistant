@@ -10,6 +10,7 @@ pub use preview::{MissingDirectoryPreviewAction, MissingDirectoryPreviewState};
 
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
+use crate::meta::mutations::indexing::DropDirectoryFromIndexMutation;
 use std::path::PathBuf;
 
 /// Data for the missing directory resolution modal.
@@ -35,9 +36,9 @@ impl MissingDirectoryModalData {
     pub fn drop_mutations(&self) -> Vec<Mutation> {
         self.directories
             .iter()
-            .map(|dir| Mutation::DropDirectoryFromIndex {
+            .map(|dir| Mutation::DropDirectoryFromIndex(DropDirectoryFromIndexMutation {
                 directory_path: PathBuf::from(dir),
-            })
+            }))
             .collect()
     }
 }

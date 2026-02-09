@@ -13,6 +13,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 use crate::corpus::db::types::FileSource;
 use crate::corpus::db::ReadOnlyDb;
@@ -20,7 +21,54 @@ use crate::corpus::paths;
 use crate::db_thread;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
-use super::types::{Mutation, MutationResult, TagOp};
+use super::indexing::ApplyDbTagsToDiskMutation;
+use super::traits::{MutationContext, MutationExecutor};
+use super::types::{Mutation, MutationResult, SignalClearScope, TagOp};
+
+// ============================================================================
+// Mutation Struct
+// ============================================================================
+
+/// Apply a set of incremental tag operations to tracks.
+///
+/// Operations are pre-coalesced by inode. At execution time:
+/// 1. Group ops by inode
+/// 2. For each inode: read current tags, validate expected old_values
+/// 3. If ANY validation fails for an inode, that inode's ops fail (others continue)
+/// 4. Apply tag ops directly via apply_index_tag_ops (INSERT/UPDATE/DELETE)
+/// 5. Spawn ApplyDbTagsToDisk for each modified inode
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyTagOpsMutation {
+    pub ops: Vec<TagOp>,
+}
+
+impl MutationExecutor for ApplyTagOpsMutation {
+    fn label(&self) -> &'static str { "Tag edit" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let (result, spawn_mutations) = match execute_apply_tag_ops(ctx.read_db, &self.ops, ctx.witness) {
+            Ok(spawned) => (Ok(()), spawned),
+            Err(e) => (Err(e), Vec::new()),
+        };
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::ApplyTagOps(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations,
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+}
 
 /// Execute ApplyTagOps: apply incremental tag operations with validation.
 ///
@@ -107,7 +155,7 @@ fn execute_apply_tag_ops(
         // Spawn disk sync
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(file_path));
-        spawned.push(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk { inode, path: abs_path }));
+        spawned.push(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path: abs_path })));
     }
 
     // Report errors but don't fail entire mutation (partial success)
@@ -118,59 +166,22 @@ fn execute_apply_tag_ops(
     Ok(spawned)
 }
 
-/// Execute a single tag edit mutation.
-///
-/// Returns MutationResult with spawn_mutations populated for chaining.
-/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
-pub fn execute_single(
-    db: &ReadOnlyDb<'_>,
-    mutation: &Mutation,
-    _session_id: &str,
-    witness: &MutationExecutionWitness,
-) -> MutationResult {
-    let start = std::time::Instant::now();
-
-    let (result, spawn_mutations) = match mutation {
-        Mutation::ApplyTagOps { ops } => {
-            match execute_apply_tag_ops(db, ops, witness) {
-                Ok(spawned) => (Ok(()), spawned),
-                Err(e) => (Err(e), Vec::new()),
-            }
-        }
-
-        _ => (Err(anyhow::anyhow!("Not a tag edit mutation")), Vec::new()),
-    };
-
-    let (success, error) = match result {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(format!("{:#}", e))),
-    };
-
-    MutationResult {
-        _mutation: mutation.clone(),
-        success,
-        error,
-        _duration_ms: start.elapsed().as_millis() as u64,
-        spawn_mutations,
-        pending_signals: Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::file_ops::MoveMutation;
     use std::path::PathBuf;
 
     #[test]
     fn test_mutation_dispatch() {
         // Test that execute_single returns appropriate error for non-tag mutations
-        let move_mutation = Mutation::Move {
+        let move_mutation = Mutation::Move(MoveMutation {
             source: PathBuf::from("/a"),
             destination: PathBuf::from("/b"),
-        };
+        });
 
         // We can't actually execute without a DB, but we can verify the structure
-        assert!(matches!(move_mutation, Mutation::Move { .. }));
+        assert!(matches!(move_mutation, Mutation::Move(_)));
     }
 
     #[test]

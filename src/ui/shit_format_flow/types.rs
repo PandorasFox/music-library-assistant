@@ -9,6 +9,7 @@ use anyhow::Result;
 
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
+use crate::meta::mutations::transcode::TranscodeMutation;
 use crate::corpus::paths;
 use crate::corpus::transcode::TranscodeTarget;
 
@@ -193,12 +194,12 @@ impl ShitFormatModalData {
             .map(|file| {
                 let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
 
-                Mutation::Transcode {
+                Mutation::Transcode(TranscodeMutation {
                     inode: file.inode,
                     source_path: abs_path,
                     target_format: TranscodeTarget::Flac,
                     stash_name: "originals".to_string(),
-                }
+                })
             })
             .collect()
     }
@@ -212,14 +213,14 @@ impl ShitFormatModalData {
             .map(|file| {
                 let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
 
-                Mutation::Transcode {
+                Mutation::Transcode(TranscodeMutation {
                     inode: file.inode,
                     source_path: abs_path,
                     target_format: TranscodeTarget::Opus {
                         bitrate_kbps: self.opus_bitrate_kbps,
                     },
                     stash_name: "originals".to_string(),
-                }
+                })
             })
             .collect()
     }

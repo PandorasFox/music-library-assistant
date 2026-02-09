@@ -2,18 +2,220 @@
 //!
 //! Handles execution of file-related mutations:
 //! - Move: Move a file from source to destination
-//! - Copy: Copy a file to a new location
 //! - MoveToStash: Move a file to the stash directory
 //! - HardLink: Create a hard link (for deployment)
 //! - LibraryMove: Move a file within a library
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::witch::MutationExecutionWitness;
+use crate::meta::computations::{Computation, awakening};
+use crate::meta::signals::AggregateSignalType;
 
-use super::types::{Mutation, MutationResult};
+use super::traits::{MutationContext, MutationExecutor};
+use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
+
+// ============================================================================
+// Mutation Structs
+// ============================================================================
+
+/// Move a file from source to destination.
+///
+/// NOTE: This mutation is fully plumbed but intentionally not yet utilized in UI.
+/// It will be used by the inbox intake flow for moving files from inbox to corpus.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MoveMutation {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+}
+
+/// Move a file to the stash directory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MoveToStashMutation {
+    pub path: PathBuf,
+    pub stash_name: String,
+}
+
+/// Create a hard link from source to destination (for deployment).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HardLinkMutation {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+}
+
+/// Move a file within a library (e.g., stale file to correct location).
+///
+/// Unlike corpus Move, this operates only on library paths and triggers
+/// library signal updates (clears LibraryStale for old path).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryMoveMutation {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+}
+
+// ============================================================================
+// MutationExecutor Implementations
+// ============================================================================
+
+impl MutationExecutor for MoveMutation {
+    fn label(&self) -> &'static str { "File move" }
+
+    fn execute(&self, _ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_move(&self.source, &self.destination);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::Move(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> {
+        vec![self.source.clone(), self.destination.clone()]
+    }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        vec![self.source.clone(), self.destination.clone()]
+    }
+}
+
+impl MutationExecutor for MoveToStashMutation {
+    fn label(&self) -> &'static str { "File move" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = match ctx.stash_root {
+            Some(root) => execute_move_to_stash(&self.path, &self.stash_name, root),
+            None => Err(anyhow::anyhow!(
+                "Stash directory not configured. File: {}",
+                self.path.display()
+            )),
+        };
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::MoveToStash(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> {
+        vec![self.path.clone()]
+    }
+
+    // MoveToStash: no signal updates needed (file is gone)
+}
+
+impl MutationExecutor for HardLinkMutation {
+    fn label(&self) -> &'static str { "Hard link" }
+
+    fn execute(&self, _ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_hard_link(&self.source, &self.destination);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::HardLink(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> {
+        vec![self.source.clone(), self.destination.clone()]
+    }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        vec![self.source.clone(), self.destination.clone()]
+    }
+
+    fn additional_computations(&self) -> Vec<Computation> {
+        vec![Computation::Awakening(awakening::Computation::UpdateDeploySignals {
+            corpus_path: self.source.clone(),
+            library_path: self.destination.clone(),
+        })]
+    }
+}
+
+impl MutationExecutor for LibraryMoveMutation {
+    fn label(&self) -> &'static str { "Library move" }
+
+    fn execute(&self, _ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_library_move_impl(&self.source, &self.destination);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::LibraryMove(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn affected_paths(&self) -> Vec<PathBuf> {
+        vec![self.source.clone(), self.destination.clone()]
+    }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        vec![self.source.clone(), self.destination.clone()]
+    }
+
+    fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
+        vec![SignalToClear {
+            signal_type: AggregateSignalType::LibraryStale,
+            key_pattern: self.source.to_string_lossy().to_string(),
+        }]
+    }
+}
+
+// ============================================================================
+// Execution Helpers (unchanged filesystem operations)
+// ============================================================================
 
 /// Execute a Move mutation.
 ///
@@ -95,7 +297,7 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
 /// - Same inode: File already correctly deployed, nothing to do (caller should
 ///   handle stale source path via separate MoveToStash if cleanup needed)
 /// - Different inode: Conflict - fails so caller can stash the conflicting file first
-fn execute_library_move(source: &Path, destination: &Path) -> Result<()> {
+fn execute_library_move_impl(source: &Path, destination: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     // Check if destination already exists
@@ -145,18 +347,17 @@ fn execute_library_move(source: &Path, destination: &Path) -> Result<()> {
 /// where `relative_path` is the path within corpus/ or libraries/, preserving structure.
 ///
 /// If the destination already exists, appends underscores to the filename stem until
-/// a unique path is found (e.g., `track.flac` → `track_.flac` → `track__.flac`).
+/// a unique path is found (e.g., `track.flac` -> `track_.flac` -> `track__.flac`).
 ///
 /// Examples:
-/// - `/archive/corpus/Artist/Album/track.flac` → `stash/overlaps/Artist/Album/track.flac`
-/// - `/archive/libraries/music/Artist/track.mp3` → `stash/leftovers/music/Artist/track.mp3`
+/// - `/archive/corpus/Artist/Album/track.flac` -> `stash/overlaps/Artist/Album/track.flac`
+/// - `/archive/libraries/music/Artist/track.mp3` -> `stash/leftovers/music/Artist/track.mp3`
 pub fn execute_move_to_stash(
     path: &Path,
     stash_name: &str,
     stash_root: &Path,
 ) -> Result<()> {
     use crate::corpus::paths;
-    use std::path::PathBuf;
 
     if !path.exists() {
         return Err(anyhow::anyhow!(
@@ -226,82 +427,27 @@ pub fn execute_move_to_stash(
     Ok(())
 }
 
-/// Execute a single file operation mutation.
-///
-/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
-pub fn execute_single(
-    mutation: &Mutation,
-    stash_root: Option<&Path>,
-    _witness: &MutationExecutionWitness,
-) -> MutationResult {
-    let start = std::time::Instant::now();
-
-    let result = match mutation {
-        Mutation::Move {
-            source,
-            destination,
-        } => execute_move(source, destination),
-
-        Mutation::MoveToStash { path, stash_name, .. } => {
-            match stash_root {
-                Some(root) => execute_move_to_stash(path, stash_name, root),
-                None => Err(anyhow::anyhow!(
-                    "Stash directory not configured. File: {}",
-                    path.display()
-                )),
-            }
-        }
-
-        Mutation::HardLink {
-            source,
-            destination,
-        } => execute_hard_link(source, destination),
-
-        Mutation::LibraryMove {
-            source,
-            destination,
-        } => execute_library_move(source, destination),
-
-        _ => Err(anyhow::anyhow!("Not a file operation mutation")),
-    };
-
-    let (success, error) = match result {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(format!("{:#}", e))),
-    };
-
-    MutationResult {
-        _mutation: mutation.clone(),
-        success,
-        error,
-        _duration_ms: start.elapsed().as_millis() as u64,
-        spawn_mutations: Vec::new(), // File ops don't spawn
-        pending_signals: Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_move_mutation_structure() {
-        let mutation = Mutation::Move {
+        let mutation = Mutation::Move(MoveMutation {
             source: PathBuf::from("/src/file.flac"),
             destination: PathBuf::from("/dst/file.flac"),
-        };
+        });
 
-        assert!(matches!(mutation, Mutation::Move { .. }));
+        assert!(matches!(mutation, Mutation::Move(_)));
     }
 
     #[test]
     fn test_hard_link_mutation_structure() {
-        let mutation = Mutation::HardLink {
+        let mutation = Mutation::HardLink(HardLinkMutation {
             source: PathBuf::from("/corpus/file.flac"),
             destination: PathBuf::from("/library/file.flac"),
-        };
+        });
 
-        assert!(matches!(mutation, Mutation::HardLink { .. }));
+        assert!(matches!(mutation, Mutation::HardLink(_)));
     }
 }

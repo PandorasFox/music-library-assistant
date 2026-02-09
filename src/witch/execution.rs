@@ -12,10 +12,11 @@
 //! ## Post-Execution Pipeline
 //!
 //! After a mutation executes successfully, `apply_post_execution()` runs a 5-phase
-//! pipeline defined by exhaustive match methods on `Mutation`:
+//! pipeline. Each mutation struct implements `MutationExecutor` (in `meta/mutations/traits.rs`)
+//! which defines its post-execution behavior:
 //!
 //! 1. **Signal clearing** - Clear signals for affected paths (scope from `signal_clear_scope()`)
-//! 2. **File-inherent signals** - Emit CorruptFile/ShitFormat (from `checks_*` methods)
+//! 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
 //! 3. **Signal update spawning** - Spawn UpdateFileSignals (from `paths_for_signal_updates()`)
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
 //! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
@@ -84,7 +85,7 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
 /// All writes go through `db_thread::signal_sender()`. Read operations use
 /// the same thread-local cached connection as computations.
 pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> TaskResult {
-    use crate::meta::mutations::{file_ops, tag_edit, indexing};
+    use crate::meta::mutations::traits::MutationContext;
 
     let start = Instant::now();
 
@@ -102,51 +103,22 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     let session_id = "witch";
 
-    // Execute mutation using thread-local read-only DB connection.
+    // Execute mutation via MutationExecutor trait dispatch.
     // All writes go through db_thread::signal_sender() (fire-and-forget).
-    // Result tuple: (success, error, spawn_mutations, pending_signals)
-    //
-    // Route directly by variant to the appropriate executor module.
     let result = with_read_only_db(|read_db| {
-        match &mutation {
-            // Tag edit: incremental operations with validation, spawns disk sync
-            Mutation::ApplyTagOps { .. } => {
-                let r = tag_edit::execute_single(read_db, &mutation, session_id, &witness);
+        match mutation.as_executor() {
+            Some(executor) => {
+                let ctx = MutationContext {
+                    read_db,
+                    witness: &witness,
+                    stash_root: stash_root.as_deref(),
+                    session_id,
+                };
+                let r = executor.execute(&ctx);
                 (r.success, r.error, r.spawn_mutations, r.pending_signals)
             }
-
-            // Indexing operations (including OOB tag sync which does disk I/O)
-            Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateFilePath { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. }
-            | Mutation::EmitCanonicalTag { .. } => {
-                let r = indexing::execute_single(read_db, &mutation, &witness);
-                (r.success, r.error, r.spawn_mutations, r.pending_signals)
-            }
-
-            // File operations
-            Mutation::Move { .. }
-            | Mutation::MoveToStash { .. }
-            | Mutation::HardLink { .. }
-            | Mutation::LibraryMove { .. } => {
-                let r = file_ops::execute_single(&mutation, stash_root.as_deref(), &witness);
-                (r.success, r.error, r.spawn_mutations, r.pending_signals)
-            }
-
-            // Transcode
-            Mutation::Transcode { .. } => {
-                let r = crate::meta::mutations::transcode::execute_single(
-                    read_db, &mutation, stash_root.as_deref(), &witness,
-                );
-                (r.success, r.error, r.spawn_mutations, r.pending_signals)
-            }
-
-            // Migrations are handled separately (require write DB connection)
-            Mutation::DbMigration { .. } => {
+            None => {
+                // DbMigration - handled separately via execute_migration()
                 (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new(), Vec::new())
             }
         }
@@ -190,7 +162,8 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         // Emit CorruptFile signal for failed IndexFileFromPath mutations.
         // These files failed to index (corrupt metadata/audio), so they should
         // be flagged for stashing rather than remaining as mere UnindexedFile signals.
-        if let Mutation::IndexFileFromPath { path, .. } = &mutation {
+        if let Mutation::IndexFileFromPath(ref m) = &mutation {
+            let path = &m.path;
             if let Some(sender) = db_thread::signal_sender() {
                 // Get inode from filesystem (file exists but failed to parse)
                 if let Ok(metadata) = std::fs::metadata(path) {
@@ -347,7 +320,8 @@ fn apply_post_execution(
     // Phase 1b: Drop files table entry for MoveToStash
     // When stashing a file, we must also remove it from the files table (not just signals).
     // Otherwise DeriveDirectorySignals will emit MissingFile for the stashed path.
-    if let Mutation::MoveToStash { path, .. } = mutation {
+    if let Mutation::MoveToStash(ref m) = mutation {
+        let path = &m.path;
         if let Some(sender) = db_thread::signal_sender() {
             let rel_path = if path.is_absolute() {
                 resolver.to_relative(path)
@@ -471,7 +445,7 @@ fn emit_file_inherent_signals(
     witness: &MutationExecutionWitness,
 ) {
     // Only IndexFileFromPath emits file-inherent signals
-    if let Mutation::IndexFileFromPath { .. } = mutation {
+    if let Mutation::IndexFileFromPath(_) = mutation {
         if let Some(sender) = db_thread::signal_sender() {
             emit_pending_signals(pending_signals, &sender, witness);
         }

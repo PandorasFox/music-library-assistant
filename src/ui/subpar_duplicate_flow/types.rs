@@ -10,6 +10,8 @@ use anyhow::Result;
 
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
+use crate::meta::mutations::file_ops::MoveToStashMutation;
+use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
 
 /// A subpar duplicate file ready for stashing.
@@ -109,17 +111,17 @@ impl SubparDuplicateModalData {
             let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
 
             // MoveToStash mutation
-            mutations.push(Mutation::MoveToStash {
+            mutations.push(Mutation::MoveToStash(MoveToStashMutation {
                 path: abs_path.clone(),
                 stash_name: "subpar".to_string(),
-            });
+            }));
 
             // DropFromIndex mutation
-            mutations.push(Mutation::DropFromIndex {
+            mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
                 path: PathBuf::from(&file.corpus_path),
                 inode: Some(file.inode),
                 source: Some("corpus".to_string()),
-            });
+            }));
         }
 
         mutations

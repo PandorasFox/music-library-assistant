@@ -166,6 +166,57 @@ impl Computation {
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
         }
     }
+
+    /// Execute this computation.
+    pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
+        match self {
+            Computation::ScheduleContentAnalysis => {
+                execute_schedule_content_analysis(ctx.read_db, ctx.start)
+            }
+            Computation::DetectFingerprintOverlaps => {
+                execute_detect_fingerprint_overlaps(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectDuplicateInodes => {
+                execute_detect_duplicate_inodes(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectMissingTags => {
+                execute_detect_missing_tags(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectMetadataDuplicates => {
+                execute_detect_metadata_duplicates(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectTagCanonicalizations => {
+                execute_detect_tag_canonicalizations(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectInconsistentAlbumArtist => {
+                execute_detect_inconsistent_album_artist(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectCompoundTagValues => {
+                execute_detect_compound_tag_values(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectCompoundTagsForInode { inode } => {
+                execute_detect_compound_tags_for_inode(ctx.read_db, *inode, ctx.witness, ctx.start)
+            }
+            Computation::DetectShitFormats => {
+                execute_detect_shit_formats(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::AnalyzeFingerprintOverlaps => {
+                execute_analyze_fingerprint_overlaps(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectCrossSourceOverlaps => {
+                execute_detect_cross_source_overlaps(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectDeployConflicts => {
+                execute_detect_deploy_conflicts(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DeriveDeployHealthSignals { library_name, library_root, corpus_path_prefixes } => {
+                execute_derive_deploy_health_signals(ctx.read_db, library_name, library_root, corpus_path_prefixes, ctx.witness, ctx.start)
+            }
+            Computation::DeriveCorpusDeployStatus => {
+                execute_derive_corpus_deploy_status(ctx.read_db, ctx.witness, ctx.start)
+            }
+        }
+    }
 }
 
 // ============================================================================

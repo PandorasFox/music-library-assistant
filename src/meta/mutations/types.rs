@@ -10,10 +10,18 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::meta::computations::{Computation, awakening};
+use crate::meta::computations::Computation;
 use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
 use crate::corpus::tags::TagSet;
-use crate::corpus::transcode::TranscodeTarget;
+
+use super::file_ops::{MoveMutation, MoveToStashMutation, HardLinkMutation, LibraryMoveMutation};
+use super::indexing::{
+    IndexFileFromPathMutation, UpdateFilePathMutation, DropFromIndexMutation,
+    DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
+    AssimilateDiskTagsToDbMutation, EmitCanonicalTagMutation,
+};
+use super::tag_edit::ApplyTagOpsMutation;
+use super::transcode::TranscodeMutation;
 
 // ============================================================================
 // TagOp - Incremental Tag Operations
@@ -178,83 +186,40 @@ impl ExtractedMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mutation {
     // ========================================================================
-    // Tag Operations (Incremental with Validation)
+    // Tag Operations (struct-backed — see tag_edit.rs for trait impl)
     // ========================================================================
     /// Apply a set of incremental tag operations to tracks.
-    ///
-    /// Operations are pre-coalesced by inode. At execution time:
-    /// 1. Group ops by inode
-    /// 2. For each inode: read current tags, validate expected old_values
-    /// 3. If ANY validation fails for an inode → that inode's ops fail (others continue)
-    /// 4. Apply tag ops directly via apply_index_tag_ops (INSERT/UPDATE/DELETE)
-    /// 5. Spawn ApplyDbTagsToDisk for each modified inode
-    ApplyTagOps {
-        ops: Vec<TagOp>,
-    },
+    ApplyTagOps(ApplyTagOpsMutation),
 
     // ========================================================================
-    // Indexing Operations
+    // Indexing Operations (struct-backed — see indexing.rs for trait impls)
     // ========================================================================
     /// Index a file from path only - extracts metadata during execution.
-    ///
-    /// This is the worker-thread-safe way to index files. Metadata extraction
-    /// happens on the worker thread, not the UI thread.
-    IndexFileFromPath {
-        path: PathBuf,
-        source: String,
-    },
+    IndexFileFromPath(IndexFileFromPathMutation),
 
     // ========================================================================
-    // File Operations
+    // File Operations (struct-backed — see file_ops.rs for trait impls)
     // ========================================================================
     /// Move a file from source to destination.
-    ///
-    /// NOTE: This mutation is fully plumbed but intentionally not yet utilized in UI.
-    /// It will be used by the inbox intake flow for moving files from inbox to corpus.
-    /// This is an exception to our "don't add unused code" policy - we need to stop
-    /// adding infrastructure too early in general.
-    Move {
-        source: PathBuf,
-        destination: PathBuf,
-    },
+    Move(MoveMutation),
 
     /// Move a file to the stash directory.
-    MoveToStash {
-        path: PathBuf,
-        stash_name: String,
-    },
+    MoveToStash(MoveToStashMutation),
 
     // ========================================================================
-    // Transcode Operations
+    // Transcode Operations (struct-backed — see transcode.rs for trait impl)
     // ========================================================================
     /// Transcode a file to a different container/codec format.
-    ///
-    /// On success: creates new file at same path with different extension,
-    /// stashes original under stash_name, and updates the track record.
-    Transcode {
-        inode: i64,
-        source_path: PathBuf,
-        target_format: TranscodeTarget,
-        stash_name: String,
-    },
+    Transcode(TranscodeMutation),
 
     // ========================================================================
-    // Deployment Operations
+    // Deployment Operations (struct-backed — see file_ops.rs for trait impls)
     // ========================================================================
     /// Create a hard link from source to destination.
-    HardLink {
-        source: PathBuf,
-        destination: PathBuf,
-    },
+    HardLink(HardLinkMutation),
 
     /// Move a file within a library (e.g., stale file to correct location).
-    ///
-    /// Unlike corpus Move, this operates only on library paths and triggers
-    /// library signal updates (clears LibraryStale for old path).
-    LibraryMove {
-        source: PathBuf,
-        destination: PathBuf,
-    },
+    LibraryMove(LibraryMoveMutation),
 
     // ========================================================================
     // Database Migration Operations
@@ -266,113 +231,66 @@ pub enum Mutation {
     },
 
     // ========================================================================
-    // Signal Resolution Operations
+    // Signal Resolution Operations (struct-backed — see indexing.rs for trait impls)
     // ========================================================================
     /// Update file path in files table (for relocated files).
-    UpdateFilePath {
-        source: String,
-        inode: i64,
-        new_path: PathBuf,
-    },
+    UpdateFilePath(UpdateFilePathMutation),
 
     /// Drop file from index (for missing files or orphaned signals).
-    DropFromIndex {
-        path: PathBuf,
-        /// Inode to also remove from files table (None for orphaned signals)
-        inode: Option<i64>,
-        source: Option<String>,
-    },
+    DropFromIndex(DropFromIndexMutation),
 
     /// Drop a directory and all its contents from the index.
-    ///
-    /// Used when an entire directory is deleted externally and acknowledged.
-    /// - Removes directory entry from files table
-    /// - Removes all file entries under the directory from files table
-    /// - Removes all audio_info entries for those files
-    /// - Clears MissingDirectory signal for the directory
-    /// - Clears MissingFile signals for files within
-    DropDirectoryFromIndex {
-        /// Relative path of the directory
-        directory_path: PathBuf,
-    },
+    DropDirectoryFromIndex(DropDirectoryFromIndexMutation),
 
     // ========================================================================
-    // OOB Resolution Operations
+    // OOB Resolution Operations (struct-backed — see indexing.rs for trait impls)
     // ========================================================================
     /// Acknowledge mtime-only change - update file mtime, clear MtimeOnlyMismatch signal.
-    ///
-    /// Used when disk file mtime changed but tags are identical. Updates file mtime
-    /// to match current disk mtime so file is considered synced.
-    AcknowledgeMtimeOnly {
-        /// Inodes with their absolute paths: (inode, abs_path)
-        tracks: Vec<(i64, PathBuf)>,
-    },
+    AcknowledgeMtimeOnly(AcknowledgeMtimeOnlyMutation),
 
     /// Apply DB tags to disk file (defer to db / reject disk changes).
-    ///
-    /// - Reads tags from database (source of truth)
-    /// - Writes to disk via write_file_tags()
-    /// - Updates file mtime after write
-    /// - Clears needs_disk_flush flag
-    /// - Clears OOB signals
-    ///
-    /// Used for:
-    /// - OOB sync resolution (reject disk changes)
-    /// - Spawned from ApplyTagOps (incremental tag edit step 2)
-    ApplyDbTagsToDisk {
-        inode: i64,
-        path: PathBuf,
-    },
+    ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation),
 
     /// Assimilate disk tags into DB (defer to corpus / accept disk changes).
-    ///
-    /// - Reads tags from disk file
-    /// - Writes to database, overwriting DB values
-    /// - Updates file mtime to match disk
-    /// - Clears OOB signals
-    ///
-    /// Used for OOB sync resolution (accept disk changes).
-    AssimilateDiskTagsToDb {
-        inode: i64,
-        path: PathBuf,
-    },
+    AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation),
 
     // ========================================================================
-    // Signal Emission Operations
+    // Signal Emission Operations (struct-backed — see indexing.rs for trait impl)
     // ========================================================================
     /// Emit a CanonicalTag signal to whitelist a tag value.
-    ///
-    /// Used when operator confirms a compound-looking value is actually
-    /// a single canonical entity (e.g., "Rinse & Repeat" is a band name,
-    /// not a collaboration). The signal prevents future detection as
-    /// a compound value.
-    EmitCanonicalTag {
-        tag_name: String,
-        canonical_value: String,
-    },
-
-    // Note: VerifyTags has been moved to corpus::computations::Computation.
-    // Computations don't alter state - they only emit signals.
+    EmitCanonicalTag(EmitCanonicalTagMutation),
 }
 
 impl Mutation {
+    /// Get the inner struct as a trait object.
+    ///
+    /// Returns `None` for `DbMigration` which uses a separate execution path.
+    /// All other variants return their inner `MutationExecutor` implementor.
+    pub fn as_executor(&self) -> Option<&dyn super::traits::MutationExecutor> {
+        match self {
+            Mutation::ApplyTagOps(m) => Some(m),
+            Mutation::IndexFileFromPath(m) => Some(m),
+            Mutation::Move(m) => Some(m),
+            Mutation::MoveToStash(m) => Some(m),
+            Mutation::Transcode(m) => Some(m),
+            Mutation::HardLink(m) => Some(m),
+            Mutation::LibraryMove(m) => Some(m),
+            Mutation::UpdateFilePath(m) => Some(m),
+            Mutation::DropFromIndex(m) => Some(m),
+            Mutation::DropDirectoryFromIndex(m) => Some(m),
+            Mutation::AcknowledgeMtimeOnly(m) => Some(m),
+            Mutation::ApplyDbTagsToDisk(m) => Some(m),
+            Mutation::AssimilateDiskTagsToDb(m) => Some(m),
+            Mutation::EmitCanonicalTag(m) => Some(m),
+            Mutation::DbMigration { .. } => None,
+        }
+    }
+
     /// Human-readable label for this mutation (for logging/display).
     pub fn label(&self) -> &'static str {
-        match self {
-            Mutation::ApplyTagOps { .. } => "Tag edit",
-            Mutation::ApplyDbTagsToDisk { .. } => "Tag sync (DB→disk)",
-            Mutation::AssimilateDiskTagsToDb { .. } => "Tag sync (disk→DB)",
-            Mutation::IndexFileFromPath { .. } => "Indexing",
-            Mutation::UpdateFilePath { .. } => "Path update",
-            Mutation::DropFromIndex { .. } => "Drop from index",
-            Mutation::DropDirectoryFromIndex { .. } => "Drop directory from index",
-            Mutation::AcknowledgeMtimeOnly { .. } => "Acknowledge mtime",
-            Mutation::Move { .. } | Mutation::MoveToStash { .. } => "File move",
-            Mutation::HardLink { .. } => "Hard link",
-            Mutation::LibraryMove { .. } => "Library move",
-            Mutation::DbMigration { .. } => "Migration",
-            Mutation::Transcode { .. } => "Transcode",
-            Mutation::EmitCanonicalTag { .. } => "Mark canonical",
+        match self.as_executor() {
+            Some(e) => e.label(),
+            None => "Migration", // DbMigration
         }
     }
 
@@ -381,13 +299,13 @@ impl Mutation {
     pub fn is_db_only(&self) -> bool {
         matches!(
             self,
-            Mutation::ApplyTagOps { .. }
+            Mutation::ApplyTagOps(_)
                 | Mutation::DbMigration { .. }
-                | Mutation::UpdateFilePath { .. }
-                | Mutation::DropFromIndex { .. }
-                | Mutation::AcknowledgeMtimeOnly { .. }
-                | Mutation::AssimilateDiskTagsToDb { .. }
-                | Mutation::EmitCanonicalTag { .. }
+                | Mutation::UpdateFilePath(_)
+                | Mutation::DropFromIndex(_)
+                | Mutation::AcknowledgeMtimeOnly(_)
+                | Mutation::AssimilateDiskTagsToDb(_)
+                | Mutation::EmitCanonicalTag(_)
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
         )
     }
@@ -404,23 +322,23 @@ impl Mutation {
     #[cfg(test)]
     pub fn affected_inode(&self) -> Option<i64> {
         match self {
-            Mutation::Transcode { inode, .. }
-            | Mutation::ApplyDbTagsToDisk { inode, .. }
-            | Mutation::AssimilateDiskTagsToDb { inode, .. } => Some(*inode),
+            Mutation::Transcode(ref m) => Some(m.inode),
+            Mutation::ApplyDbTagsToDisk(ref m) => Some(m.inode),
+            Mutation::AssimilateDiskTagsToDb(ref m) => Some(m.inode),
 
             // These don't have a single inode directly (batch operations or no inode)
-            Mutation::ApplyTagOps { .. }
-            | Mutation::IndexFileFromPath { .. }
-            | Mutation::UpdateFilePath { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::Move { .. }
-            | Mutation::MoveToStash { .. }
-            | Mutation::HardLink { .. }
-            | Mutation::LibraryMove { .. }
+            Mutation::ApplyTagOps(_)
+            | Mutation::IndexFileFromPath(_)
+            | Mutation::UpdateFilePath(_)
+            | Mutation::DropFromIndex(_)
+            | Mutation::Move(_)
+            | Mutation::MoveToStash(_)
+            | Mutation::HardLink(_)
+            | Mutation::LibraryMove(_)
             | Mutation::DbMigration { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::EmitCanonicalTag { .. } => None,
+            | Mutation::AcknowledgeMtimeOnly(_)
+            | Mutation::DropDirectoryFromIndex(_)
+            | Mutation::EmitCanonicalTag(_) => None,
         }
     }
 
@@ -434,58 +352,62 @@ impl Mutation {
 
         match self {
             // DB-only tag operations don't change file presence
-            Mutation::ApplyTagOps { .. } => {}
+            Mutation::ApplyTagOps(_) => {}
 
             // Single-track tag sync operations affect the file's directory
-            Mutation::ApplyDbTagsToDisk { path, .. }
-            | Mutation::AssimilateDiskTagsToDb { path, .. } => {
-                if let Some(parent) = path.parent() {
+            Mutation::ApplyDbTagsToDisk(m) => {
+                if let Some(parent) = m.path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::AssimilateDiskTagsToDb(m) => {
+                if let Some(parent) = m.path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
 
             // Indexing operations affect the file's directory
-            Mutation::IndexFileFromPath { path, .. } => {
-                if let Some(parent) = path.parent() {
+            Mutation::IndexFileFromPath(m) => {
+                if let Some(parent) = m.path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
 
             // File operations affect source and destination directories
-            Mutation::Move { source, destination, .. } => {
-                if let Some(parent) = source.parent() {
+            Mutation::Move(m) => {
+                if let Some(parent) = m.source.parent() {
                     dirs.push(parent.to_path_buf());
                 }
-                if let Some(parent) = destination.parent() {
+                if let Some(parent) = m.destination.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
-            Mutation::MoveToStash { path, .. } => {
-                if let Some(parent) = path.parent() {
+            Mutation::MoveToStash(m) => {
+                if let Some(parent) = m.path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
 
             // Deployment operations happen outside corpus, don't affect corpus signals
-            Mutation::HardLink { .. } | Mutation::LibraryMove { .. } => {}
+            Mutation::HardLink(_) | Mutation::LibraryMove(_) => {}
 
             // UpdateFilePath only has new_path (old path not tracked)
-            Mutation::UpdateFilePath { new_path, .. } => {
-                if let Some(parent) = new_path.parent() {
+            Mutation::UpdateFilePath(m) => {
+                if let Some(parent) = m.new_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
 
             // Index drops affect the file's directory
-            Mutation::DropFromIndex { path, .. } => {
-                if let Some(parent) = path.parent() {
+            Mutation::DropFromIndex(m) => {
+                if let Some(parent) = m.path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
 
             // Transcode: affects the source file's directory (output is same dir, new extension)
-            Mutation::Transcode { source_path, .. } => {
-                if let Some(parent) = source_path.parent() {
+            Mutation::Transcode(ref m) => {
+                if let Some(parent) = m.source_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
@@ -494,15 +416,15 @@ impl Mutation {
             Mutation::DbMigration { .. } => {}
 
             // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
-            Mutation::AcknowledgeMtimeOnly { .. } => {}
+            Mutation::AcknowledgeMtimeOnly(_) => {}
 
             // Directory drops: the directory itself is affected
-            Mutation::DropDirectoryFromIndex { directory_path, .. } => {
-                dirs.push(directory_path.clone());
+            Mutation::DropDirectoryFromIndex(m) => {
+                dirs.push(m.directory_path.clone());
             }
 
             // Signal emission: DB-only, no directories affected
-            Mutation::EmitCanonicalTag { .. } => {}
+            Mutation::EmitCanonicalTag(_) => {}
         }
 
         // Deduplicate directories
@@ -517,191 +439,45 @@ impl Mutation {
     /// this returns the actual file paths that need signal updates.
     /// Used to spawn per-file `UpdateFileSignals` computations.
     pub fn affected_paths(&self) -> Vec<PathBuf> {
-        match self {
-            // Indexing: the file being indexed
-            Mutation::IndexFileFromPath { path, .. } => vec![path.clone()],
-
-            // Tag operations: single-track mutations with path
-            Mutation::ApplyDbTagsToDisk { path, .. }
-            | Mutation::AssimilateDiskTagsToDb { path, .. } => vec![path.clone()],
-
-            // File operations: source and destination
-            Mutation::Move { source, destination, .. }
-            | Mutation::HardLink { source, destination }
-            | Mutation::LibraryMove { source, destination } => {
-                vec![source.clone(), destination.clone()]
-            }
-
-            Mutation::MoveToStash { path, .. } => {
-                vec![path.clone()]
-            }
-
-            // Drop: the path being dropped
-            Mutation::DropFromIndex { path, .. } => vec![path.clone()],
-
-            // Directory drop: the directory path
-            Mutation::DropDirectoryFromIndex { directory_path } => vec![directory_path.clone()],
-
-            // Transcode: source path and new output path
-            Mutation::Transcode { source_path, target_format, .. } => {
-                let mut paths = vec![source_path.clone()];
-                let new_path = source_path.with_extension(target_format.extension());
-                paths.push(new_path);
-                paths
-            }
-
-            // Batch OOB resolution: paths are stored in the mutation
-            Mutation::AcknowledgeMtimeOnly { tracks } => {
-                tracks.iter().map(|(_, path)| path.clone()).collect()
-            }
-
-            // Path update (for moved files) - return new path for signal clearing
-            Mutation::UpdateFilePath { new_path, .. } => vec![new_path.clone()],
-
-            // Operations without specific file paths that need signal updates
-            Mutation::ApplyTagOps { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
+        match self.as_executor() {
+            Some(e) => e.affected_paths(),
+            None => Vec::new(), // DbMigration
         }
     }
 
     // ========================================================================
-    // Post-Execution Behavior Methods (Exhaustive Matches)
+    // Post-Execution Behavior Methods (delegated to MutationExecutor trait)
     // ========================================================================
-    //
-    // These methods define post-execution behavior for each mutation variant.
-    // **Compile-time guarantee**: Adding a new variant forces you to specify
-    // its behavior in each function (exhaustive match, no `_ =>` fallthrough).
 
-    /// Signal clearing scope. Exhaustive: adding a variant requires specifying its scope.
-    ///
-    /// Determines whether to clear all signals (file is gone/replaced), only mutable
-    /// signals (file modified but exists), or no signals (DB-only operation).
+    /// Signal clearing scope after successful mutation.
     pub fn signal_clear_scope(&self) -> SignalClearScope {
-        match self {
-            // Clear ALL signals (file is gone or replaced entirely)
-            Mutation::MoveToStash { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::Transcode { .. } => SignalClearScope::All,
-
-            // Clear mutable signals only (preserve CorruptFile, ShitFormat)
-            Mutation::IndexFileFromPath { .. }
-            | Mutation::Move { .. }
-            | Mutation::HardLink { .. }
-            | Mutation::LibraryMove { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::UpdateFilePath { .. } => SignalClearScope::MutableOnly,
-
-            // No signal clearing (DB-only or no file impact)
-            Mutation::ApplyTagOps { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::EmitCanonicalTag { .. } => SignalClearScope::None,
+        match self.as_executor() {
+            Some(e) => e.signal_clear_scope(),
+            None => SignalClearScope::None, // DbMigration
         }
     }
 
     /// Paths to spawn signal update computations for.
-    ///
-    /// May differ from `affected_paths()` (e.g., Transcode only spawns for new path
-    /// because source is stashed and would race with MissingFile emission).
     pub fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        match self {
-            // Transcode: only spawn for NEW path (source is stashed, would race)
-            Mutation::Transcode { source_path, target_format, .. } => {
-                vec![source_path.with_extension(target_format.extension())]
-            }
-
-            // Most mutations: use affected_paths equivalent
-            Mutation::IndexFileFromPath { path, .. }
-            | Mutation::ApplyDbTagsToDisk { path, .. }
-            | Mutation::AssimilateDiskTagsToDb { path, .. } => vec![path.clone()],
-
-            Mutation::Move { source, destination, .. }
-            | Mutation::HardLink { source, destination }
-            | Mutation::LibraryMove { source, destination } => {
-                vec![source.clone(), destination.clone()]
-            }
-
-            Mutation::AcknowledgeMtimeOnly { tracks } => {
-                tracks.iter().map(|(_, path)| path.clone()).collect()
-            }
-
-            // No signal updates needed (file is gone or DB-only)
-            // MoveToStash/DropFromIndex: file removed, signal updates would race with index drop
-            Mutation::ApplyTagOps { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. }
-            | Mutation::MoveToStash { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
+        match self.as_executor() {
+            Some(e) => e.paths_for_signal_updates(),
+            None => Vec::new(), // DbMigration
         }
     }
 
     /// Additional computations to spawn (beyond path-based signal updates).
-    ///
-    /// Exhaustive match - every variant must be handled.
     pub fn additional_computations(&self) -> Vec<Computation> {
-        match self {
-            Mutation::HardLink { source, destination } => vec![
-                Computation::Awakening(awakening::Computation::UpdateDeploySignals {
-                    corpus_path: source.clone(),
-                    library_path: destination.clone(),
-                })
-            ],
-
-            // Explicit: all other variants spawn no additional computations
-            Mutation::IndexFileFromPath { .. }
-            | Mutation::MoveToStash { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::Transcode { .. }
-            | Mutation::Move { .. }
-            | Mutation::LibraryMove { .. }
-            | Mutation::ApplyTagOps { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. }
-            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
+        match self.as_executor() {
+            Some(e) => e.additional_computations(),
+            None => Vec::new(), // DbMigration
         }
     }
 
     /// Specific signals to clear by type+key (beyond path-based clearing).
-    ///
-    /// Exhaustive match - every variant must be handled.
-    /// Used for targeted clearing like LibraryStale after moves, aggregate tag
-    /// signals after tag edits, etc.
     pub fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
-        match self {
-            Mutation::LibraryMove { source, .. } => vec![
-                SignalToClear {
-                    signal_type: AggregateSignalType::LibraryStale,
-                    key_pattern: source.to_string_lossy().to_string(),
-                }
-            ],
-
-            // TODO: Tag mutations may need to clear aggregate tag signals here
-            // e.g., ApplyTagOps could clear MissingTag signals for affected tag types
-
-            // Explicit: all other variants clear no specific signals
-            Mutation::IndexFileFromPath { .. }
-            | Mutation::MoveToStash { .. }
-            | Mutation::DropFromIndex { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::Transcode { .. }
-            | Mutation::Move { .. }
-            | Mutation::HardLink { .. }
-            | Mutation::ApplyTagOps { .. }
-            | Mutation::ApplyDbTagsToDisk { .. }
-            | Mutation::AssimilateDiskTagsToDb { .. }
-            | Mutation::AcknowledgeMtimeOnly { .. }
-            | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. }
-            | Mutation::EmitCanonicalTag { .. } => Vec::new(),
+        match self.as_executor() {
+            Some(e) => e.specific_signals_to_clear(),
+            None => Vec::new(), // DbMigration
         }
     }
 }
@@ -719,6 +495,10 @@ pub struct MutationResult {
     /// Signals to emit post-execution.
     /// Avoids race with async DB writes by carrying signal data from execution time.
     pub pending_signals: Vec<PendingSignal>,
+    /// Inodes discovered during execution (e.g., IndexFileFromPath discovers
+    /// the inode during metadata extraction). Combined with the trait's
+    /// `affected_inodes()` for post-execution signal clearing + dirty marking.
+    pub discovered_inodes: Vec<i64>,
 }
 
 #[cfg(test)]
@@ -727,23 +507,23 @@ mod tests {
 
     #[test]
     fn test_mutation_labels() {
-        let apply_tag_ops = Mutation::ApplyTagOps {
+        let apply_tag_ops = Mutation::ApplyTagOps(ApplyTagOpsMutation {
             ops: vec![TagOp::add_tag(1, "artist", "New")],
-        };
+        });
         assert_eq!(apply_tag_ops.label(), "Tag edit");
         assert!(apply_tag_ops.is_db_only());
 
-        let apply_tags = Mutation::ApplyDbTagsToDisk {
+        let apply_tags = Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation {
             inode: 1,
             path: PathBuf::from("/test/file.flac"),
-        };
+        });
         assert_eq!(apply_tags.label(), "Tag sync (DB→disk)");
         assert!(!apply_tags.is_db_only());
 
-        let file_move = Mutation::Move {
+        let file_move = Mutation::Move(MoveMutation {
             source: PathBuf::from("/a"),
             destination: PathBuf::from("/b"),
-        };
+        });
         assert_eq!(file_move.label(), "File move");
 
         let migration = Mutation::DbMigration {

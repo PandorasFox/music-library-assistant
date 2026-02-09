@@ -12,8 +12,9 @@
 //! 6. Spawn AssimilateDiskTagsToDb to sync tags from new file to index
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::corpus::db::types::FileSource;
 use crate::corpus::db::ReadOnlyDb;
@@ -22,13 +23,88 @@ use crate::corpus::transcode::{self, TranscodeTarget};
 use crate::witch::MutationExecutionWitness;
 
 use super::file_ops;
-use super::types::{Mutation, MutationResult};
+use super::indexing::AssimilateDiskTagsToDbMutation;
+use super::traits::{MutationContext, MutationExecutor};
+use super::types::{Mutation, MutationResult, SignalClearScope};
+
+/// Transcode a file to a different container/codec format.
+///
+/// On success: creates new file at same path with different extension,
+/// stashes original under stash_name, and updates the track record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscodeMutation {
+    pub inode: i64,
+    pub source_path: PathBuf,
+    pub target_format: TranscodeTarget,
+    pub stash_name: String,
+}
+
+impl MutationExecutor for TranscodeMutation {
+    fn label(&self) -> &'static str { "Transcode" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+
+        let result = execute_transcode_impl(
+            ctx.read_db,
+            self.inode,
+            &self.source_path,
+            self.target_format,
+            &self.stash_name,
+            ctx.stash_root,
+            ctx.witness,
+        );
+
+        let (success, error, spawn_mutations) = match result {
+            Ok(()) => {
+                // On success, spawn AssimilateDiskTagsToDb to read tags from the new file
+                // and update the index. This picks up any encoder tags added by ffmpeg
+                // while preserving the original metadata that ffmpeg copies.
+                let new_path = self.source_path.with_extension(self.target_format.extension());
+                let spawn = vec![ctx.witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
+                    inode: self.inode,
+                    path: new_path,
+                }))];
+                (true, None, spawn)
+            }
+            Err(e) => (false, Some(format!("{:#}", e)), Vec::new()),
+        };
+
+        MutationResult {
+            _mutation: Mutation::Transcode(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations,
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+
+    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+
+    fn affected_paths(&self) -> Vec<PathBuf> {
+        let new_path = self.source_path.with_extension(self.target_format.extension());
+        vec![self.source_path.clone(), new_path]
+    }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        // Transcode: only spawn for NEW path (source is stashed, would race)
+        vec![self.source_path.with_extension(self.target_format.extension())]
+    }
+}
+
+// ============================================================================
+// Execution Helper (unchanged)
+// ============================================================================
 
 /// Execute a Transcode mutation.
 ///
 /// Transcodes the source file to the target format, stashes the original,
 /// and updates the audio file record in the database.
-fn execute_transcode(
+fn execute_transcode_impl(
     db: &ReadOnlyDb<'_>,
     inode: i64,
     source_path: &Path,
@@ -170,70 +246,5 @@ fn execute_transcode(
     Ok(())
 }
 
-/// Execute a single transcode mutation.
-///
-/// Requires a MutationExecutionWitness to prove execution is inside the daemon.
-/// On success, spawns AssimilateDiskTagsToDb to sync tags from the new file.
-pub fn execute_single(
-    db: &ReadOnlyDb<'_>,
-    mutation: &Mutation,
-    stash_root: Option<&Path>,
-    witness: &MutationExecutionWitness,
-) -> MutationResult {
-    let start = std::time::Instant::now();
-
-    // Extract mutation parameters before execution for spawn_mutations
-    let (inode, source_path, target_format) = match mutation {
-        Mutation::Transcode {
-            inode,
-            source_path,
-            target_format,
-            ..
-        } => (*inode, source_path.clone(), *target_format),
-        _ => {
-            return MutationResult {
-                _mutation: mutation.clone(),
-                success: false,
-                error: Some("Not a transcode mutation".to_string()),
-                _duration_ms: start.elapsed().as_millis() as u64,
-                spawn_mutations: Vec::new(),
-                pending_signals: Vec::new(),
-            };
-        }
-    };
-
-    let result = match mutation {
-        Mutation::Transcode {
-            inode,
-            source_path,
-            target_format,
-            stash_name,
-        } => execute_transcode(db, *inode, source_path, *target_format, stash_name, stash_root, witness),
-
-        _ => Err(anyhow::anyhow!("Not a transcode mutation")),
-    };
-
-    let (success, error, spawn_mutations) = match result {
-        Ok(()) => {
-            // On success, spawn AssimilateDiskTagsToDb to read tags from the new file
-            // and update the index. This picks up any encoder tags added by ffmpeg
-            // while preserving the original metadata that ffmpeg copies.
-            let new_path = source_path.with_extension(target_format.extension());
-            let spawn = vec![witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb {
-                inode,
-                path: new_path,
-            })];
-            (true, None, spawn)
-        }
-        Err(e) => (false, Some(format!("{:#}", e)), Vec::new()),
-    };
-
-    MutationResult {
-        _mutation: mutation.clone(),
-        success,
-        error,
-        _duration_ms: start.elapsed().as_millis() as u64,
-        spawn_mutations,
-        pending_signals: Vec::new(),
-    }
-}
+// ============================================================================
+// (execute_single removed — trait dispatch via MutationExecutor::execute())

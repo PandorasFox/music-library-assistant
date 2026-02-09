@@ -190,39 +190,44 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
     for m in mutations {
         match m {
             // ApplyTagOps - count unique inodes from all ops
-            Mutation::ApplyTagOps { ops } => {
-                inodes.extend(ops.iter().map(|op| op.inode));
+            Mutation::ApplyTagOps(ref m) => {
+                inodes.extend(m.ops.iter().map(|op| op.inode));
             }
 
             // Mutations with single inode
-            Mutation::ApplyDbTagsToDisk { inode, .. }
-            | Mutation::AssimilateDiskTagsToDb { inode, .. }
-            | Mutation::Transcode { inode, .. } => {
-                inodes.insert(*inode);
+            Mutation::ApplyDbTagsToDisk(ref m) => {
+                inodes.insert(m.inode);
+            }
+            Mutation::AssimilateDiskTagsToDb(ref m) => {
+                inodes.insert(m.inode);
+            }
+
+            Mutation::Transcode(ref m) => {
+                inodes.insert(m.inode);
             }
 
             // DropFromIndex - count via inode if available
-            Mutation::DropFromIndex { inode, .. } => {
-                if let Some(i) = inode {
-                    inodes.insert(*i);
+            Mutation::DropFromIndex(ref m) => {
+                if let Some(i) = m.inode {
+                    inodes.insert(i);
                 }
             }
 
             // OOB resolution mutations with multiple (inode, path) pairs
-            Mutation::AcknowledgeMtimeOnly { tracks } => {
-                inodes.extend(tracks.iter().map(|(id, _)| *id));
+            Mutation::AcknowledgeMtimeOnly(ref m) => {
+                inodes.extend(m.tracks.iter().map(|(id, _)| *id));
             }
 
             // Mutations without inodes
-            Mutation::MoveToStash { .. }
-            | Mutation::Move { .. }
-            | Mutation::IndexFileFromPath { .. }
-            | Mutation::HardLink { .. }
-            | Mutation::LibraryMove { .. }
+            Mutation::MoveToStash(_)
+            | Mutation::Move(_)
+            | Mutation::IndexFileFromPath(_)
+            | Mutation::HardLink(_)
+            | Mutation::LibraryMove(_)
             | Mutation::DbMigration { .. }
-            | Mutation::UpdateFilePath { .. }
-            | Mutation::DropDirectoryFromIndex { .. }
-            | Mutation::EmitCanonicalTag { .. } => {}
+            | Mutation::UpdateFilePath(_)
+            | Mutation::DropDirectoryFromIndex(_)
+            | Mutation::EmitCanonicalTag(_) => {}
         }
     }
 

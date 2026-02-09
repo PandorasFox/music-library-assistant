@@ -4,4 +4,6 @@
 //! AggregateSignalType, Signal, AggregateSignal, SignalSummary, CorpusSummary.
 
 pub mod types;
+pub mod data;
+pub mod store;
 pub use types::*;

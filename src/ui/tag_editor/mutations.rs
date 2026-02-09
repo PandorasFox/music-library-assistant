@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::corpus::db::types::AudioFile;
 use crate::meta::mutations::{Mutation, TagOp};
+use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::corpus::paths;
 
 use super::types::{AggregatedTagField, AggregatedValue, TagChange, TagField};
@@ -219,7 +220,7 @@ pub fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], _a
     if ops.is_empty() {
         Vec::new()
     } else {
-        vec![Mutation::ApplyTagOps { ops }]
+        vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops })]
     }
 }
 

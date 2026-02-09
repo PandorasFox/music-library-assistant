@@ -21,14 +21,13 @@
 //! Witch.queue_mutations()
 //!     │
 //!     ▼
-//! Parallel Worker executes:
-//!     ├── tag_edit::execute_single()
-//!     ├── indexing::execute_single()
-//!     ├── file_ops::execute_single()
-//!     └── transcode::execute_single()
+//! Parallel Worker:
+//!     mutation.as_executor().execute(&MutationContext { ... })
+//!     └── Each struct's MutationExecutor::execute() impl
 //! ```
 //!
 mod types;
+pub mod traits;
 mod migration;
 pub mod tag_edit;
 pub mod indexing;
@@ -36,6 +35,7 @@ pub mod file_ops;
 pub mod transcode;
 
 pub use types::*;
+// MutationContext and MutationExecutor accessible via crate::meta::mutations::traits::{...}
 pub use migration::MigrationRegistry;
 
 /// Access control for corpus-mutating operations.
@@ -92,7 +92,7 @@ mod tests {
         ];
 
         // Create a single ApplyTagOps mutation containing all ops
-        let mutation = Mutation::ApplyTagOps { ops };
+        let mutation = Mutation::ApplyTagOps(tag_edit::ApplyTagOpsMutation { ops });
 
         // Verify ApplyTagOps mutation
         assert_eq!(mutation.label(), "Tag edit");

@@ -15,6 +15,8 @@ use std::path::Path;
 use crate::meta::signals::AggregateSignal;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
+use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
+use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
 use crate::ui::widgets::TextInputState;
@@ -172,10 +174,10 @@ impl CompoundSplitDataV2 {
 
     /// Create a CanonicalTag signal emission mutation.
     pub fn create_canonical_signal(&self) -> Mutation {
-        Mutation::EmitCanonicalTag {
+        Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
             tag_name: self.compound.tag_name.clone(),
             canonical_value: self.compound.compound_value.clone(),
-        }
+        })
     }
 }
 
@@ -270,7 +272,7 @@ impl CompoundSplitStateV2 {
     /// Returns true if the mutations indicate the user chose to mark this value
     /// as canonical rather than split it.
     pub fn is_canonicalize_decision(mutations: &[Mutation]) -> bool {
-        mutations.iter().any(|m| matches!(m, Mutation::EmitCanonicalTag { .. }))
+        mutations.iter().any(|m| matches!(m, Mutation::EmitCanonicalTag(_)))
     }
 
     /// Restore UI state from a previously staged decision's mutations.
@@ -286,7 +288,7 @@ impl CompoundSplitStateV2 {
         let ops: Vec<&TagOp> = mutations
             .iter()
             .filter_map(|m| match m {
-                Mutation::ApplyTagOps { ops } => Some(ops.iter()),
+                Mutation::ApplyTagOps(ref m) => Some(m.ops.iter()),
                 _ => None,
             })
             .flatten()
@@ -464,7 +466,7 @@ impl CompoundSplitStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps { ops }]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops })]
         }
     }
 }

@@ -37,6 +37,7 @@
 
 // Module declarations
 mod types;
+pub mod traits;
 mod stats;
 mod helpers;
 pub mod asleep;
@@ -173,111 +174,16 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
     let result = with_read_only_db(|read_only_db| {
         let db_access_ms = db_access_start.elapsed().as_millis();
 
+        let ctx = traits::ComputationContext {
+            read_db: read_only_db,
+            witness: &witness,
+            start,
+        };
+
         let compute_result = match computation {
-            // Asleep phase computations
-            Computation::Asleep(c) => {
-                let result = match c {
-                    asleep::Computation::ClearExistingObservationState => {
-                        asleep::execute_clear_existing_observation_state(read_only_db, &witness, start)
-                    }
-                    asleep::Computation::WalkCorpus { root, source, force_check } => {
-                        asleep::execute_walk_corpus(read_only_db, root, source, *force_check, start)
-                    }
-                    asleep::Computation::ScanCorpusDirectory { directory, source, force_check } => {
-                        asleep::execute_scan_corpus_directory(read_only_db, directory, source, *force_check, &witness, start)
-                    }
-                    asleep::Computation::VerifyMtime { inode, path, expected_mtime_secs, expected_mtime_nanos } => {
-                        asleep::execute_verify_mtime(read_only_db, *inode, path, *expected_mtime_secs, *expected_mtime_nanos, start)
-                    }
-                    asleep::Computation::VerifyTags { inode, path } => {
-                        asleep::execute_verify_tags(read_only_db, *inode, path, &witness, start)
-                    }
-                    asleep::Computation::VerifyAudio { inode, path } => {
-                        asleep::execute_verify_audio(read_only_db, *inode, path, &witness, start)
-                    }
-                };
-                ComputationResult::from_asleep(result)
-            }
-
-            // Awakening phase computations
-            Computation::Awakening(c) => {
-                let result = match c {
-                    awakening::Computation::ScheduleSecondLevelDerivations => {
-                        awakening::execute_schedule_second_level_derivations(read_only_db, &witness, start)
-                    }
-                    awakening::Computation::DeriveCorpusSignals => {
-                        awakening::execute_derive_corpus_signals(read_only_db, &witness, start)
-                    }
-                    awakening::Computation::UpdateCorpusFileSignals { path } => {
-                        awakening::execute_update_corpus_file_signals(read_only_db, path, &witness, start)
-                    }
-                    awakening::Computation::UpdateLibraryFileSignals { path } => {
-                        awakening::execute_update_library_file_signals(read_only_db, path, &witness, start)
-                    }
-                    awakening::Computation::WalkLibrary { library_root, library_name, corpus_path_prefixes } => {
-                        awakening::execute_walk_library(read_only_db, library_root, library_name, corpus_path_prefixes, &witness, start)
-                    }
-                    awakening::Computation::ScanLibraryDirectory { directory, library_name, library_root, corpus_path_prefixes } => {
-                        awakening::execute_scan_library_directory(read_only_db, directory, library_name, library_root, corpus_path_prefixes, &witness, start)
-                    }
-                    awakening::Computation::UpdateDeploySignals { corpus_path, library_path } => {
-                        awakening::execute_update_deploy_signals(read_only_db, corpus_path, library_path, &witness, start)
-                    }
-                };
-                ComputationResult::from_awakening(result)
-            }
-
-            // Awake phase computations
-            Computation::Awake(c) => {
-                let result = match c {
-                    awake::Computation::ScheduleContentAnalysis => {
-                        awake::execute_schedule_content_analysis(read_only_db, start)
-                    }
-                    awake::Computation::DetectFingerprintOverlaps => {
-                        awake::execute_detect_fingerprint_overlaps(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectDuplicateInodes => {
-                        awake::execute_detect_duplicate_inodes(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectMissingTags => {
-                        awake::execute_detect_missing_tags(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectMetadataDuplicates => {
-                        awake::execute_detect_metadata_duplicates(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectTagCanonicalizations => {
-                        awake::execute_detect_tag_canonicalizations(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectInconsistentAlbumArtist => {
-                        awake::execute_detect_inconsistent_album_artist(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectCompoundTagValues => {
-                        awake::execute_detect_compound_tag_values(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectCompoundTagsForInode { inode } => {
-                        awake::execute_detect_compound_tags_for_inode(read_only_db, *inode, &witness, start)
-                    }
-                    awake::Computation::DetectShitFormats => {
-                        awake::execute_detect_shit_formats(read_only_db, &witness, start)
-                    }
-                    awake::Computation::AnalyzeFingerprintOverlaps => {
-                        awake::execute_analyze_fingerprint_overlaps(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectCrossSourceOverlaps => {
-                        awake::execute_detect_cross_source_overlaps(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DetectDeployConflicts => {
-                        awake::execute_detect_deploy_conflicts(read_only_db, &witness, start)
-                    }
-                    awake::Computation::DeriveDeployHealthSignals { library_name, library_root, corpus_path_prefixes } => {
-                        awake::execute_derive_deploy_health_signals(read_only_db, library_name, library_root, corpus_path_prefixes, &witness, start)
-                    }
-                    awake::Computation::DeriveCorpusDeployStatus => {
-                        awake::execute_derive_corpus_deploy_status(read_only_db, &witness, start)
-                    }
-                };
-                ComputationResult::from_awake(result)
-            }
+            Computation::Asleep(c) => ComputationResult::from_asleep(c.execute(&ctx)),
+            Computation::Awakening(c) => ComputationResult::from_awakening(c.execute(&ctx)),
+            Computation::Awake(c) => ComputationResult::from_awake(c.execute(&ctx)),
         };
 
         // Log timing (only on first access when connection is opened, and only if timing instrumentation enabled)

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::corpus::db::ReadOnlyDb;
+use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
 
 /// A missing corpus file that can be restored from library.
@@ -141,10 +142,12 @@ impl MissingFileModalData {
                 // Resolve relative paths to absolute
                 let source = resolver.resolve(std::path::Path::new(&f.library_path));
                 let destination = resolver.resolve(std::path::Path::new(&f.corpus_path));
-                Some(crate::meta::mutations::Mutation::HardLink {
-                    source,
-                    destination,
-                })
+                Some(crate::meta::mutations::Mutation::HardLink(
+                    crate::meta::mutations::file_ops::HardLinkMutation {
+                        source,
+                        destination,
+                    }
+                ))
             })
             .collect()
     }
@@ -153,11 +156,11 @@ impl MissingFileModalData {
     pub fn drop_mutations(&self) -> Vec<crate::meta::mutations::Mutation> {
         self.non_restorable
             .iter()
-            .map(|f| crate::meta::mutations::Mutation::DropFromIndex {
+            .map(|f| crate::meta::mutations::Mutation::DropFromIndex(DropFromIndexMutation {
                 path: PathBuf::from(&f.corpus_path),
                 inode: f.inode,
                 source: Some("corpus".to_string()),
-            })
+            }))
             .collect()
     }
 }

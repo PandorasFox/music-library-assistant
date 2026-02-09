@@ -8,12 +8,12 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::corpus::db::types::ConflictBucket;
-use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::{FocusPane, ResolutionLayout};
+use crate::ui::helpers::render_pane;
+use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, ResolutionLayout};
 
 use super::types::{OobConflictState, ResolutionButton};
 
@@ -129,67 +129,35 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         return;
     }
 
-    let visible_height = inner.height as usize;
-    let max_width = inner.width as usize;
-
-    // Calculate scroll to keep cursor visible
-    let scroll = if bucket_state.cursor >= bucket_state.scroll + visible_height {
-        bucket_state.cursor - visible_height + 1
-    } else if bucket_state.cursor < bucket_state.scroll {
-        bucket_state.cursor
-    } else {
-        bucket_state.scroll
-    };
-
     // Show selection indicators by default for resolvable buckets
     let show_selection = state.active_bucket.is_resolvable() || bucket_state.selection.is_active();
 
-    let items: Vec<ListItem> = bucket_state.files
+    let entries: Vec<PathEntry> = bucket_state.files
         .iter()
         .enumerate()
-        .skip(scroll)
-        .take(visible_height)
         .map(|(idx, file)| {
-            let is_cursor = idx == bucket_state.cursor;
-            let cursor_prefix = if is_cursor { "> " } else { "  " };
-            let selection_marker = if show_selection {
-                bucket_state.selection.marker(idx)
-            } else {
-                ""
-            };
-
-            // Calculate available path width
-            let prefix_len = cursor_prefix.len() + if show_selection { selection_marker.len() + 1 } else { 0 };
-            let path_max = max_width.saturating_sub(prefix_len);
-            let truncated_path = truncate_left(&file.path, path_max);
-
-            let marker_style = if bucket_state.selection.is_selected(idx) {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let path_style = if is_cursor {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            let mut spans = vec![Span::raw(cursor_prefix.to_string())];
-
+            let mut prefix = Vec::new();
             if show_selection {
-                spans.push(Span::styled(selection_marker.to_string(), marker_style));
-                spans.push(Span::raw(" "));
+                let marker_style = if bucket_state.selection.is_selected(idx) {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                prefix.push(Span::styled(
+                    format!("{} ", bucket_state.selection.marker(idx)),
+                    marker_style,
+                ));
             }
 
-            spans.push(Span::styled(truncated_path, path_style));
-
-            ListItem::new(Line::from(spans))
+            PathEntry {
+                path: &file.path,
+                prefix,
+                suffix: Vec::new(),
+            }
         })
         .collect();
 
-    let list = List::new(items);
-    f.render_widget(list, inner);
+    render_file_path_list(f, inner, &entries, bucket_state.cursor, bucket_state.scroll);
 }
 
 fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {

@@ -13,12 +13,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
 use super::types::{CorruptFileModalData, SelectedButton};
-use crate::ui::helpers::{render_pane, truncate_left};
+use crate::ui::helpers::render_pane;
+use crate::ui::widgets::{render_file_path_list, PathEntry};
 
 /// Actions returned from the corrupt file preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,24 +186,14 @@ impl CorruptFilePreviewState {
         .style(Style::default().fg(Color::DarkGray));
         f.render_widget(description, desc_area);
 
-        // Calculate visible lines based on list area height
-        let visible_lines = list_area.height as usize;
-        let scroll = self.scroll;
-
-        let items: Vec<ListItem> = self
+        let entries: Vec<PathEntry> = self
             .cached_data
             .files
             .iter()
-            .skip(scroll)
-            .take(visible_lines)
-            .map(|file| {
-                let path = truncate_left(&file.corpus_path, list_area.width.saturating_sub(2) as usize);
-                ListItem::new(path).style(Style::default().fg(Color::White))
-            })
+            .map(|file| PathEntry::plain(&file.corpus_path))
             .collect();
 
-        let list = List::new(items);
-        f.render_widget(list, list_area);
+        render_file_path_list(f, list_area, &entries, self.scroll, self.scroll);
     }
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {

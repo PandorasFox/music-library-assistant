@@ -4,12 +4,12 @@
 //! Dispatches to variant-specific layouts while sharing common tree rendering.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::widgets::{LateralView, UnifiedTitleBar};
+use crate::ui::widgets::{LateralView, UnifiedTitleBar, CURSOR_STYLE};
 
 use super::entry::TreeEntry;
 use super::navigator::TreeNavigator;
@@ -134,10 +134,7 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
     };
 
     let base_style = if is_cursor {
-        Style::default()
-            .bg(Color::DarkGray)
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
+        CURSOR_STYLE
     } else if entry.is_directory {
         Style::default().fg(Color::Blue)
     } else {

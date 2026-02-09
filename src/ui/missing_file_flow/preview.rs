@@ -14,12 +14,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
 use super::types::{MissingFileModalData, SelectedButton};
-use crate::ui::helpers::{render_pane, truncate_left};
+use crate::ui::helpers::render_pane;
+use crate::ui::widgets::{render_file_path_list, PathEntry};
 
 /// Actions returned from the missing file preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,24 +221,14 @@ impl MissingFilePreviewState {
             return;
         }
 
-        // Calculate visible lines based on inner area height
-        let visible_lines = inner.height as usize;
-        let scroll = self.scroll[0];
-
-        let items: Vec<ListItem> = self
+        let entries: Vec<PathEntry> = self
             .cached_data
             .restorable
             .iter()
-            .skip(scroll)
-            .take(visible_lines)
-            .map(|file| {
-                let path = truncate_left(&file.corpus_path, inner.width.saturating_sub(2) as usize);
-                ListItem::new(path).style(Style::default().fg(Color::White))
-            })
+            .map(|file| PathEntry::plain(&file.corpus_path))
             .collect();
 
-        let list = List::new(items);
-        f.render_widget(list, inner);
+        render_file_path_list(f, inner, &entries, self.scroll[0], self.scroll[0]);
     }
 
     fn render_non_restorable_list(&self, f: &mut Frame, area: Rect) {
@@ -266,24 +257,14 @@ impl MissingFilePreviewState {
             return;
         }
 
-        // Calculate visible lines based on inner area height
-        let visible_lines = inner.height as usize;
-        let scroll = self.scroll[1];
-
-        let items: Vec<ListItem> = self
+        let entries: Vec<PathEntry> = self
             .cached_data
             .non_restorable
             .iter()
-            .skip(scroll)
-            .take(visible_lines)
-            .map(|file| {
-                let path = truncate_left(&file.corpus_path, inner.width.saturating_sub(2) as usize);
-                ListItem::new(path).style(Style::default().fg(Color::White))
-            })
+            .map(|file| PathEntry::plain(&file.corpus_path))
             .collect();
 
-        let list = List::new(items);
-        f.render_widget(list, inner);
+        render_file_path_list(f, inner, &entries, self.scroll[1], self.scroll[1]);
     }
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {

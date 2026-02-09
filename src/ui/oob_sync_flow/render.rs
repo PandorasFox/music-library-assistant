@@ -8,12 +8,12 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::corpus::db::types::OobSyncDirection;
-use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::{FocusPane, ResolutionLayout};
+use crate::ui::helpers::render_pane;
+use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, ResolutionLayout};
 
 use super::types::{OobSyncButton, OobSyncState};
 
@@ -89,81 +89,43 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobSyncState) {
         .border_style(Style::default().fg(border_color));
     let inner = render_pane(f, area, block);
 
-    let visible_height = inner.height as usize;
-    let max_width = inner.width as usize;
-
-    // Calculate scroll to keep current file visible
-    let scroll = if state.current_file >= state.scroll + visible_height {
-        state.current_file - visible_height + 1
-    } else if state.current_file < state.scroll {
-        state.current_file
-    } else {
-        state.scroll
-    };
-
     let selection_active = state.selection.is_active();
 
-    let items: Vec<ListItem> = state.files
+    let entries: Vec<PathEntry> = state.files
         .iter()
         .enumerate()
-        .skip(scroll)
-        .take(visible_height)
         .map(|(idx, file)| {
-            let is_cursor = idx == state.current_file;
             let dir_indicator = match file.direction {
-                OobSyncDirection::DiskToIndex => "→I",
-                OobSyncDirection::IndexToDisk => "→D",
+                OobSyncDirection::DiskToIndex => " →I",
+                OobSyncDirection::IndexToDisk => " →D",
             };
             let dir_color = match file.direction {
                 OobSyncDirection::DiskToIndex => Color::Cyan,
                 OobSyncDirection::IndexToDisk => Color::Magenta,
             };
 
-            // Build prefix: cursor indicator + optional selection marker
-            let cursor_prefix = if is_cursor { "> " } else { "  " };
-            let selection_marker = if selection_active {
-                state.selection.marker(idx)
-            } else {
-                ""
-            };
-            let prefix = format!("{}{} ", cursor_prefix, selection_marker);
-
-            let suffix_len = dir_indicator.len() + 1; // " →I"
-            let path_max = max_width.saturating_sub(prefix.len() + suffix_len);
-            let truncated_path = truncate_left(&file.path, path_max);
-
-            let marker_style = if state.selection.is_selected(idx) {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let mut spans = vec![
-                Span::raw(cursor_prefix.to_string()),
-            ];
-
+            let mut prefix = Vec::new();
             if selection_active {
-                spans.push(Span::styled(selection_marker.to_string(), marker_style));
-                spans.push(Span::raw(" "));
+                let marker_style = if state.selection.is_selected(idx) {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                prefix.push(Span::styled(
+                    format!("{} ", state.selection.marker(idx)),
+                    marker_style,
+                ));
             }
 
-            spans.push(Span::styled(
-                truncated_path,
-                if is_cursor {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                },
-            ));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(dir_indicator, Style::default().fg(dir_color)));
-
-            ListItem::new(Line::from(spans))
+            PathEntry {
+                path: &file.path,
+                prefix,
+                suffix: vec![Span::styled(dir_indicator, Style::default().fg(dir_color))],
+            }
         })
         .collect();
 
-    let list = List::new(items);
-    f.render_widget(list, inner);
+    render_file_path_list(f, inner, &entries, state.current_file, state.scroll);
 }
 
 fn render_mismatch_details(f: &mut Frame, area: Rect, state: &OobSyncState) {

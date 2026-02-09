@@ -12,8 +12,7 @@ use ratatui::{
 };
 
 use crate::ui::helpers::render_pane;
-
-// Note: Span is used in render_list for selection highlighting
+use super::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
 /// The active tab in the deploy signal view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -205,9 +204,9 @@ impl<'a> TabbedSignalList<'a> {
             .map(|(idx, path)| {
                 let is_selected = idx == self.scroll;
                 let style = if is_selected {
-                    Style::default().fg(Color::White).bg(Color::DarkGray)
+                    CURSOR_STYLE
                 } else {
-                    Style::default().fg(Color::White)
+                    LIST_ITEM_STYLE
                 };
                 ListItem::new(Line::from(Span::styled(*path, style)))
             })

@@ -21,6 +21,7 @@ use ratatui::{
 
 use super::types::{ClusterResolutionOption, DirectoryClusterModalData, SelectedButton};
 use crate::ui::helpers::{render_pane, truncate_left};
+use crate::ui::widgets::CURSOR_STYLE;
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -406,7 +407,7 @@ impl DirectoryClusterPreviewState {
                 let is_selected = idx == self.selected_option_index;
                 let marker = if is_selected { "(•)" } else { "( )" };
                 let style = if is_selected && focused {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    CURSOR_STYLE
                 } else {
                     Style::default().fg(Color::White)
                 };

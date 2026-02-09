@@ -20,7 +20,8 @@ use ratatui::{
 };
 
 use super::types::{ShitFormatModalData, SelectedButton};
-use crate::ui::helpers::{render_pane, truncate_left};
+use crate::ui::helpers::render_pane;
+use crate::ui::widgets::{render_file_path_list, PathEntry};
 
 /// Actions returned from the shit format preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,29 +339,20 @@ impl ShitFormatPreviewState {
             .chain(self.cached_data.lossy_files.iter())
             .collect();
 
-        // Calculate visible lines based on inner area height
-        let visible_lines = inner.height as usize;
-        let scroll = self.scroll;
-
-        let items: Vec<ListItem> = all_files
+        let entries: Vec<PathEntry> = all_files
             .iter()
-            .skip(scroll)
-            .take(visible_lines)
             .map(|file| {
                 let type_tag = format!("[{}] ", file.file_type);
-                let is_lossless = file.is_lossless();
-                let tag_color = if is_lossless { Color::Green } else { Color::Cyan };
-                let max_path_len = inner.width.saturating_sub(type_tag.len() as u16 + 2) as usize;
-                let path = truncate_left(&file.corpus_path, max_path_len);
-                ListItem::new(Line::from(vec![
-                    Span::styled(type_tag, Style::default().fg(tag_color)),
-                    Span::styled(path, Style::default().fg(Color::White)),
-                ]))
+                let tag_color = if file.is_lossless() { Color::Green } else { Color::Cyan };
+                PathEntry {
+                    path: &file.corpus_path,
+                    prefix: vec![Span::styled(type_tag, Style::default().fg(tag_color))],
+                    suffix: Vec::new(),
+                }
             })
             .collect();
 
-        let list = List::new(items);
-        f.render_widget(list, inner);
+        render_file_path_list(f, inner, &entries, self.scroll, self.scroll);
     }
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {

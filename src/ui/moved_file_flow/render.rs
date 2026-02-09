@@ -10,7 +10,7 @@ use ratatui::{
 
 use super::types::{MovedFileButton, MovedFileState};
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::FocusPane;
+use crate::ui::widgets::{FocusPane, CURSOR_STYLE, LIST_ITEM_STYLE};
 
 /// Render the moved file acknowledgement modal.
 pub fn render(state: &MovedFileState, f: &mut Frame, area: Rect) {
@@ -76,14 +76,7 @@ fn render_file_list(state: &MovedFileState, f: &mut Frame, area: Rect) {
         .map(|(idx, file)| {
             let is_selected = idx == state.current_file;
             let indicator = if is_selected { "▶ " } else { "  " };
-            let style = if is_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
+            let style = if is_selected { CURSOR_STYLE } else { LIST_ITEM_STYLE };
 
             // Show the new path (current location)
             ListItem::new(Line::styled(format!("{}{}", indicator, file.new_path), style))

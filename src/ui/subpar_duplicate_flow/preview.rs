@@ -21,6 +21,7 @@ use ratatui::{
 
 use super::types::{SubparDuplicateModalData, SelectedButton};
 use crate::ui::helpers::{render_pane, truncate_left};
+use crate::ui::widgets::CURSOR_STYLE;
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -244,12 +245,12 @@ impl SubparDuplicatePreviewState {
                 // First visible item (visible_idx 0) is the selected one
                 let is_selected = visible_idx == 0;
                 let style = if is_selected && list_focused {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    CURSOR_STYLE
                 } else {
                     Style::default().fg(Color::White)
                 };
                 let reason_style = if is_selected && list_focused {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    CURSOR_STYLE
                 } else {
                     Style::default().fg(Color::Yellow)
                 };

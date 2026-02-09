@@ -677,15 +677,19 @@ impl Database {
     }
 
     /// Get missing directory signal paths (for UI resolution modal).
+    ///
+    /// The path is stored in metadata_json (issue_key contains the inode).
     pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT issue_key FROM signals WHERE issue_type = 'missing_directory' ORDER BY issue_key"
+            "SELECT json_extract(metadata_json, '$.path') FROM signals WHERE issue_type = 'missing_directory' ORDER BY json_extract(metadata_json, '$.path')"
         )?;
-        let rows = stmt.query_map(params![], |row| row.get(0))?;
+        let rows = stmt.query_map(params![], |row| row.get::<_, Option<String>>(0))?;
 
         let mut paths = Vec::new();
         for row in rows {
-            paths.push(row?);
+            if let Some(path) = row? {
+                paths.push(path);
+            }
         }
 
         Ok(paths)

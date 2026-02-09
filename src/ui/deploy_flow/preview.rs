@@ -407,6 +407,21 @@ impl DeploymentPreviewState {
             "Total operations: {}",
             summary.total_operations()
         )));
+
+        // Library size change overview
+        let delta = summary.library_after as isize - summary.library_before as isize;
+        let delta_str = if delta >= 0 {
+            format!("+{}", delta)
+        } else {
+            format!("{}", delta)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "Library: {} \u{2192} {} files (net {})",
+                summary.library_before, summary.library_after, delta_str
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
         lines.push(Line::from(""));
 
         // Button styles: selected gets highlighted, others are dim
@@ -436,7 +451,7 @@ impl DeploymentPreviewState {
             .style(Style::default().bg(Color::Black));
 
         // Calculate centered area (fixed size - won't shrink on small windows)
-        let popup_area = centered_rect_fixed(60, 18, area);
+        let popup_area = centered_rect_fixed(60, 20, area);
         f.render_widget(Clear, popup_area);
 
         let paragraph = Paragraph::new(lines).block(block);

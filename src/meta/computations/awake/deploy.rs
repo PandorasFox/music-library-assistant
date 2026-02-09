@@ -3,14 +3,13 @@
 //! Deploy conflict detection, deploy health signals, and corpus deploy status.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    drop_stale_aggregate_signal, drop_stale_corpus_signal,
-    ensure_aggregate_signal_if_missing, ensure_corpus_signal,
-    ensure_corpus_signal_with_metadata,
+    drop_stale_aggregate_signal,
+    ensure_aggregate_signal_if_missing,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, SignalType};
@@ -53,24 +52,30 @@ pub fn execute_detect_deploy_conflicts(
     let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
 
     for signal in &healthy_signals {
-        let corpus_path = &signal.issue_key;
-        if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
-            let inode = audio_file.inode();
-            let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
-            let tag_map: HashMap<String, String> = tags
-                .into_iter()
-                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-                .collect();
+        let inode = match signal.inode {
+            Some(i) => i,
+            None => continue,
+        };
+        let corpus_path = signal.metadata_json.as_ref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|v| v.get("path").and_then(|p| p.as_str().map(String::from)))
+            .unwrap_or_default();
+        if corpus_path.is_empty() { continue; }
 
-            let deploy_path = compute_deployment_path_with_tags(corpus_path, &tag_map)
-                .to_string_lossy()
-                .to_string();
+        let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+        let tag_map: HashMap<String, String> = tags
+            .into_iter()
+            .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+            .collect();
 
-            deploy_path_to_tracks
-                .entry(deploy_path)
-                .or_default()
-                .push(inode);
-        }
+        let deploy_path = compute_deployment_path_with_tags(&corpus_path, &tag_map)
+            .to_string_lossy()
+            .to_string();
+
+        deploy_path_to_tracks
+            .entry(deploy_path)
+            .or_default()
+            .push(inode);
     }
 
     let mut conflict_count = 0;
@@ -280,33 +285,16 @@ pub fn execute_derive_corpus_deploy_status(
         .get_signals(Some(SignalType::HealthyFile))
         .unwrap_or_default();
 
-    // Build set of deployed inodes from files table (source='library')
-    let deployed_inodes = read_only_db.get_all_library_inodes().unwrap_or_default();
-
-    // Get set of stale library paths (files in library but at wrong path)
-    // LibraryStale keys have format "library_stale:{library_name}:{library_path}"
-    let stale_signals = read_only_db
-        .get_signals(Some(SignalType::LibraryStale))
-        .unwrap_or_default();
-
-    // Build set of inodes that are deployed but stale
-    let mut stale_inodes: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    // Build inode → library paths map from files table (source='library')
+    // This replaces the old stale_signals/stale_inodes approach that had a race
+    // condition with DeriveDeployHealthSignals. We compute stale status inline.
+    let mut library_inode_to_paths: HashMap<i64, Vec<PathBuf>> = HashMap::new();
     if let Ok(all_library_files) = read_only_db.get_all_library_files() {
         for entry in all_library_files {
-            // Check if this library file has a stale signal
-            let is_stale = stale_signals.iter().any(|s| {
-                // Parse the stale key to get library_path
-                let parts: Vec<&str> = s.issue_key.splitn(3, ':').collect();
-                if parts.len() >= 3 {
-                    let stale_library_path = parts[2];
-                    entry.file_path.to_string_lossy() == stale_library_path
-                } else {
-                    false
-                }
-            });
-            if is_stale {
-                stale_inodes.insert(entry.inode);
-            }
+            library_inode_to_paths
+                .entry(entry.inode)
+                .or_default()
+                .push(entry.file_path);
         }
     }
 
@@ -327,90 +315,96 @@ pub fn execute_derive_corpus_deploy_status(
     let mut skipped_not_configured = 0usize;
 
     for signal in &healthy_signals {
-        let corpus_path = &signal.issue_key;
-        let corpus_path_buf = std::path::Path::new(corpus_path);
-
-        // Get the audio file (we need inode for signals and tags lookup)
-        let audio_file = match read_only_db.get_audio_file_by_path(corpus_path) {
-            Ok(Some(af)) => af,
-            _ => continue, // Skip if file not found
+        // Extract inode from signal's native inode column
+        let inode = match signal.inode {
+            Some(i) => i,
+            None => continue,
         };
-        let inode = audio_file.inode();
+        // Extract corpus path from metadata_json
+        let corpus_path = signal.metadata_json.as_ref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|v| v.get("path").and_then(|p| p.as_str().map(String::from)))
+            .unwrap_or_default();
+        if corpus_path.is_empty() { continue; }
+
+        let corpus_path_buf = Path::new(&corpus_path);
 
         // Skip files not in a configured source directory
         if !config.is_path_in_source(corpus_path_buf) {
             skipped_not_configured += 1;
             // Clear any stale deploy signals for unconfigured files
-            drop_stale_corpus_signal(
-                read_only_db,
-                &sender,
-                CorpusFileSignalType::DeployReady,
-                inode,
-                witness,
-            );
-            drop_stale_corpus_signal(
-                read_only_db,
-                &sender,
-                CorpusFileSignalType::DeployedHealthy,
-                inode,
-                witness,
-            );
+            sender.clear_corpus_signal(CorpusFileSignalType::DeployReady, inode, witness);
+            sender.clear_corpus_signal(CorpusFileSignalType::DeployedHealthy, inode, witness);
             continue;
         }
 
-        // Check if this inode is deployed anywhere and not stale
-        let is_deployed = deployed_inodes.contains(&inode);
-        let is_stale = stale_inodes.contains(&inode);
+        // Always clear both signal types first, then write the correct one.
+        // Old signals use INSERT OR IGNORE which would silently skip updates
+        // if stale signals already exist.
+        sender.clear_corpus_signal(CorpusFileSignalType::DeployReady, inode, witness);
+        sender.clear_corpus_signal(CorpusFileSignalType::DeployedHealthy, inode, witness);
 
-        if is_deployed && !is_stale {
-            // File is correctly deployed
-            deployed_healthy_count += 1;
-            ensure_corpus_signal(
-                read_only_db,
-                &sender,
-                CorpusFileSignalType::DeployedHealthy,
-                inode,
-                corpus_path,
-                witness,
-            );
-            drop_stale_corpus_signal(
-                read_only_db,
-                &sender,
-                CorpusFileSignalType::DeployReady,
-                inode,
-                witness,
-            );
-        } else {
-            // File is not deployed (or deployed but stale)
-            deploy_ready_count += 1;
+        // Compute expected deploy path from tags
+        let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+        let tag_map: HashMap<String, String> = tags
+            .into_iter()
+            .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+            .collect();
+        let expected_relative = compute_deployment_path_with_tags(&corpus_path, &tag_map);
 
-            // Compute the deploy path for this file (relative)
-            let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
-            let tag_map: HashMap<String, String> = tags
-                .into_iter()
-                .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
-                .collect();
-            // Compute relative deploy path (relative to library root)
-            let deploy_path = compute_deployment_path_with_tags(corpus_path, &tag_map);
-
-            // Store relative path in metadata
-            let metadata = serde_json::json!({
-                "deploy_path": deploy_path.to_string_lossy(),
+        // Check if this inode is deployed in any library
+        if let Some(library_paths) = library_inode_to_paths.get(&inode) {
+            // File is deployed — check if any library path matches expected
+            let matching_path = library_paths.iter().find(|lp| {
+                // Library paths are "{library_name}/{relative_path}"
+                // Strip library name prefix for comparison with expected_relative
+                let components: Vec<_> = lp.components().collect();
+                if components.len() > 1 {
+                    let suffix: PathBuf = components[1..].iter().collect();
+                    suffix == expected_relative
+                } else {
+                    false
+                }
             });
-            ensure_corpus_signal_with_metadata(
-                read_only_db,
-                &sender,
+
+            if let Some(lib_path) = matching_path {
+                // Correctly deployed
+                deployed_healthy_count += 1;
+                let metadata = serde_json::json!({
+                    "library_path": lib_path.to_string_lossy(),
+                });
+                sender.ensure_corpus_signal_with_metadata(
+                    CorpusFileSignalType::DeployedHealthy,
+                    inode,
+                    &corpus_path,
+                    metadata,
+                    witness,
+                );
+            } else {
+                // Deployed but at wrong path (stale) — mark as deploy-ready
+                deploy_ready_count += 1;
+                let metadata = serde_json::json!({
+                    "deploy_path": expected_relative.to_string_lossy(),
+                });
+                sender.ensure_corpus_signal_with_metadata(
+                    CorpusFileSignalType::DeployReady,
+                    inode,
+                    &corpus_path,
+                    metadata,
+                    witness,
+                );
+            }
+        } else {
+            // Not deployed at all — deploy-ready
+            deploy_ready_count += 1;
+            let metadata = serde_json::json!({
+                "deploy_path": expected_relative.to_string_lossy(),
+            });
+            sender.ensure_corpus_signal_with_metadata(
                 CorpusFileSignalType::DeployReady,
                 inode,
-                corpus_path,
+                &corpus_path,
                 metadata,
-                witness,
-            );
-            drop_stale_corpus_signal(
-                read_only_db,
-                &sender,
-                CorpusFileSignalType::DeployedHealthy,
-                inode,
                 witness,
             );
         }

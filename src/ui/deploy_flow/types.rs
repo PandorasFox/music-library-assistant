@@ -97,25 +97,37 @@ impl DeployModalData {
     }
 
     /// Get counts for each tab (for display in tab bar).
-    /// New and Leftover show directory counts, others show file counts.
     pub fn tab_counts(&self) -> [usize; 5] {
         [
             self.healthy.len(),
-            self.new_by_dir.len(),      // Directory count
+            self.new.len(),
             self.conflicts.len(),
-            self.leftover_by_dir.len(), // Directory count
+            self.leftover.len(),
             self.stale.len(),
         ]
     }
 
     /// Get summary for confirmation dialog.
     pub fn summary(&self) -> DeploySummary {
+        let healthy = self.healthy.len();
+        let stale = self.stale.len();
+        let leftover = self.leftover.len();
+        let new = self.new.len();
+        let conflicts = self.conflicts.len();
+
+        // Library before: all files currently in library = healthy + stale + leftover
+        let library_before = healthy + stale + leftover;
+        // Library after: post-deploy = healthy + new + stale (fixed) + conflicts (resolved)
+        let library_after = healthy + new + stale + conflicts;
+
         DeploySummary {
-            new_count: self.new.len(),
-            stale_count: self.stale.len(),
-            leftover_count: self.leftover.len(),
-            conflict_count: self.conflicts.len(),
-            healthy_count: self.healthy.len(),
+            new_count: new,
+            stale_count: stale,
+            leftover_count: leftover,
+            conflict_count: conflicts,
+            healthy_count: healthy,
+            library_before,
+            library_after,
         }
     }
 }
@@ -133,6 +145,10 @@ pub struct DeploySummary {
     pub conflict_count: usize,
     /// Already healthy (no action needed)
     pub healthy_count: usize,
+    /// Files currently in library (before deploy)
+    pub library_before: usize,
+    /// Files in library after deploy
+    pub library_after: usize,
 }
 
 impl DeploySummary {

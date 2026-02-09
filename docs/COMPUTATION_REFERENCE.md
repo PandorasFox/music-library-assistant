@@ -115,9 +115,9 @@ MLA uses three-phase computations with compile-time enforced boundaries:
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (all, then recreate) |
-| DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate) |
+| DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
-| DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy |
+| DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy. Computes stale status inline from library files table (no dependency on LibraryStale signals). Clears both signal types before writing to avoid INSERT OR IGNORE staleness. DeployedHealthy metadata includes `library_path`. |
 
 ### Fingerprinting Limitations
 

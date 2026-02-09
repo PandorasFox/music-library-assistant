@@ -3,8 +3,7 @@
 //! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement flows.
 
 use crate::corpus::paths;
-use crate::ui::{filter_popup, moved_file_flow, oob_sync_flow, oob_conflict_flow, transaction_review, FilterPopupContext};
-use crate::ui::types::UiMode;
+use crate::ui::{filter_popup, moved_file_flow, oob_sync_flow, oob_conflict_flow, transaction_review, ActiveView, FilterOverlay, FilterPopupContext};
 use super::super::App;
 
 impl App {
@@ -34,8 +33,7 @@ impl App {
         }
 
         let state = oob_sync_flow::OobSyncState::new(files);
-        self.oob_sync_state = Some(state);
-        self.mode = UiMode::OobSyncResolution;
+        self.view = ActiveView::OobSyncResolution(state);
     }
 
     /// Handle OOB sync resolution actions.
@@ -54,12 +52,13 @@ impl App {
             }
             oob_sync_flow::OobSyncAction::Cancel => {
                 self.cancel_and_return_to_insights("OOB sync resolution cancelled");
-                self.oob_sync_state = None;
             }
             oob_sync_flow::OobSyncAction::OpenFilter => {
                 // Open filter popup overlay
-                self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
-                self.filter_popup_context = Some(FilterPopupContext::OobSync);
+                self.filter_overlay = Some(FilterOverlay {
+                    state: filter_popup::FilterPopupState::new(),
+                    context: FilterPopupContext::OobSync,
+                });
             }
         }
     }
@@ -75,29 +74,34 @@ impl App {
     fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection) {
         use crate::corpus::db::types::OobSyncDirection;
         use crate::meta::mutations::Mutation;
+        use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
 
-        let Some(ref state) = self.oob_sync_state else {
-            return;
+        let (selected_indices, files_ref) = match &self.view {
+            ActiveView::OobSyncResolution(ref state) => {
+                let indices = if state.selection.is_active() {
+                    state.selection.selected_indices()
+                } else {
+                    (0..state.files.len()).collect()
+                };
+                // Collect the data we need before dropping the borrow
+                let files: Vec<_> = indices.iter()
+                    .filter_map(|&idx| state.files.get(idx))
+                    .filter(|file| file.direction == direction)
+                    .map(|file| (file.inode, file.path.clone()))
+                    .collect();
+                (indices, files)
+            }
+            _ => return,
         };
+        let _ = selected_indices; // used above for collecting
 
         let resolver = paths::get_resolver();
 
-        // Determine which indices to process
-        let selected_indices = if state.selection.is_active() {
-            state.selection.selected_indices()
-        } else {
-            // No selection - process all files matching direction
-            (0..state.files.len()).collect()
-        };
-
-        // Collect tracks matching the direction
-        let tracks: Vec<(i64, std::path::PathBuf)> = selected_indices
-            .iter()
-            .filter_map(|&idx| state.files.get(idx))
-            .filter(|file| file.direction == direction)
-            .map(|file| {
-                let abs_path = resolver.resolve(std::path::Path::new(&file.path));
-                (file.inode, abs_path)
+        let tracks: Vec<(i64, std::path::PathBuf)> = files_ref
+            .into_iter()
+            .map(|(inode, path)| {
+                let abs_path = resolver.resolve(std::path::Path::new(&path));
+                (inode, abs_path)
             })
             .collect();
 
@@ -109,15 +113,15 @@ impl App {
         // Generate individual single-file mutations for each file
         let (label, mutations): (&str, Vec<Mutation>) = match direction {
             OobSyncDirection::IndexToDisk => (
-                "Sync index tags → disk",
+                "Sync index tags \u{2192} disk",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk { inode, path })
+                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path }))
                     .collect(),
             ),
             OobSyncDirection::DiskToIndex => (
-                "Sync disk tags → index",
+                "Sync disk tags \u{2192} index",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb { inode, path })
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path }))
                     .collect(),
             ),
         };
@@ -179,8 +183,7 @@ impl App {
             }
         }
 
-        self.oob_conflict_state = Some(state);
-        self.mode = UiMode::OobConflictInspection;
+        self.view = ActiveView::OobConflictInspection(state);
     }
 
     /// Handle OOB conflict inspection actions.
@@ -188,9 +191,9 @@ impl App {
         match action {
             oob_conflict_flow::OobConflictAction::None => {}
             oob_conflict_flow::OobConflictAction::Navigate => {
-                // File or bucket selection changed — recompute diff for the new file
+                // File or bucket selection changed -- recompute diff for the new file
                 let diff = self.compute_current_conflict_diff();
-                if let Some(ref mut state) = self.oob_conflict_state {
+                if let ActiveView::OobConflictInspection(ref mut state) = self.view {
                     state.current_diff = diff;
                 }
             }
@@ -202,23 +205,27 @@ impl App {
             }
             oob_conflict_flow::OobConflictAction::Cancel => {
                 self.cancel_and_return_to_insights("OOB conflict inspection closed");
-                self.oob_conflict_state = None;
             }
             oob_conflict_flow::OobConflictAction::OpenFilter => {
                 // Open filter popup overlay
-                self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
-                self.filter_popup_context = Some(FilterPopupContext::OobConflict);
+                self.filter_overlay = Some(FilterOverlay {
+                    state: filter_popup::FilterPopupState::new(),
+                    context: FilterPopupContext::OobConflict,
+                });
             }
         }
     }
 
     /// Compute the tag diff for the currently selected conflict file.
     fn compute_current_conflict_diff(&mut self) -> Vec<crate::corpus::db::types::TagMismatchEntry> {
-        let (inode, path) = match self.oob_conflict_state.as_ref()
-            .and_then(|s| s.active_bucket_state().current_file())
-        {
-            Some(file) => (file.inode, file.path.clone()),
-            None => return Vec::new(),
+        let (inode, path) = match &self.view {
+            ActiveView::OobConflictInspection(ref state) => {
+                match state.active_bucket_state().current_file() {
+                    Some(file) => (file.inode, file.path.clone()),
+                    None => return Vec::new(),
+                }
+            }
+            _ => return Vec::new(),
         };
 
         let read_db = match self.witch.as_mut() {
@@ -241,10 +248,11 @@ impl App {
     /// - AssimilateDiskTagsToDb: reads disk tags into DB index
     fn stage_oob_bucket_resolution(&mut self) {
         use crate::meta::mutations::Mutation;
+        use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
         use crate::ui::oob_conflict_flow::types::ResolutionButton;
 
-        let (files_data, button) = match self.oob_conflict_state.as_ref() {
-            Some(state) => {
+        let (files_data, button) = match &self.view {
+            ActiveView::OobConflictInspection(ref state) => {
                 let bucket_state = state.active_bucket_state();
 
                 // Determine which indices to process
@@ -262,7 +270,7 @@ impl App {
                     .collect();
                 (files, state.selected_button)
             }
-            None => return,
+            _ => return,
         };
 
         if files_data.is_empty() {
@@ -284,15 +292,15 @@ impl App {
         // Generate individual single-file mutations (batch scheduling at UI layer)
         let (label, mutations): (&str, Vec<Mutation>) = match button {
             ResolutionButton::ApplyDb => (
-                "Apply DB tags → files",
+                "Apply DB tags \u{2192} files",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk { inode, path })
+                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path }))
                     .collect(),
             ),
             ResolutionButton::AssimilateDisk => (
-                "Assimilate file tags → DB",
+                "Assimilate file tags \u{2192} DB",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb { inode, path })
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path }))
                     .collect(),
             ),
         };
@@ -301,7 +309,7 @@ impl App {
             let _ = super::super::operator_decisions::stage_decision(witch, 0, label, mutations);
         }
 
-        // Note: oob_conflict_state is NOT cleared - preserved for Cancel return
+        // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
         self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
     }
 
@@ -311,11 +319,12 @@ impl App {
     /// Otherwise, all files in the bucket are included.
     fn stage_oob_mtime_acknowledgement(&mut self) {
         use crate::meta::mutations::Mutation;
+        use crate::meta::mutations::indexing::AcknowledgeMtimeOnlyMutation;
 
         let resolver = paths::get_resolver();
 
-        let tracks = match self.oob_conflict_state.as_ref() {
-            Some(state) => {
+        let tracks = match &self.view {
+            ActiveView::OobConflictInspection(ref state) => {
                 let bucket_state = state.active_bucket_state();
 
                 // Determine which indices to process
@@ -335,7 +344,7 @@ impl App {
                     })
                     .collect::<Vec<_>>()
             }
-            None => return,
+            _ => return,
         };
 
         if tracks.is_empty() {
@@ -344,7 +353,7 @@ impl App {
         }
 
         // Create single mutation with all files as (inode, path) pairs
-        let mutations = vec![Mutation::AcknowledgeMtimeOnly { tracks }];
+        let mutations = vec![Mutation::AcknowledgeMtimeOnly(AcknowledgeMtimeOnlyMutation { tracks })];
 
         if let Some(ref mut witch) = self.witch {
             let _ = super::super::operator_decisions::stage_decision(
@@ -355,7 +364,7 @@ impl App {
             );
         }
 
-        // Note: oob_conflict_state is NOT cleared - preserved for Cancel return
+        // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
         self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
     }
 
@@ -395,8 +404,8 @@ impl App {
         // Start transaction for the acknowledgement
         let _ = witch.start_transaction("Moved file acknowledgement");
 
-        self.moved_file_state = Some(moved_file_flow::MovedFileState::new(files));
-        self.mode = UiMode::MovedFileAcknowledge;
+        let state = moved_file_flow::MovedFileState::new(files);
+        self.view = ActiveView::MovedFileAcknowledge(state);
     }
 
     /// Handle moved file acknowledgement actions.
@@ -410,7 +419,6 @@ impl App {
             }
             moved_file_flow::MovedFileAction::Cancel => {
                 self.cancel_and_return_to_insights("Moved file acknowledgement cancelled");
-                self.moved_file_state = None;
             }
         }
     }
@@ -418,31 +426,34 @@ impl App {
     /// Stage mutations for moved file acknowledgement.
     fn stage_moved_file_acknowledge(&mut self) {
         use crate::meta::mutations::Mutation;
+        use crate::meta::mutations::indexing::UpdateFilePathMutation;
         use std::path::PathBuf;
 
-        let Some(ref state) = self.moved_file_state else {
-            return;
+        let (mutations, label) = match &self.view {
+            ActiveView::MovedFileAcknowledge(ref state) => {
+                if state.files.is_empty() {
+                    return;
+                }
+
+                // Create UpdateFilePath mutations for each moved file
+                let mut mutations = Vec::new();
+                for (inode, new_path) in state.files_for_mutation() {
+                    mutations.push(Mutation::UpdateFilePath(UpdateFilePathMutation {
+                        source: "corpus".to_string(),
+                        inode,
+                        new_path: PathBuf::from(&new_path),
+                    }));
+                }
+
+                let label = format!(
+                    "Acknowledge {} moved file{}",
+                    mutations.len(),
+                    if mutations.len() == 1 { "" } else { "s" }
+                );
+                (mutations, label)
+            }
+            _ => return,
         };
-
-        if state.files.is_empty() {
-            return;
-        }
-
-        // Create UpdateFilePath mutations for each moved file
-        let mut mutations = Vec::new();
-        for (inode, new_path) in state.files_for_mutation() {
-            mutations.push(Mutation::UpdateFilePath {
-                source: "corpus".to_string(),
-                inode,
-                new_path: PathBuf::from(&new_path),
-            });
-        }
-
-        let label = format!(
-            "Acknowledge {} moved file{}",
-            mutations.len(),
-            if mutations.len() == 1 { "" } else { "s" }
-        );
 
         // Stage the UpdateFilePath mutations
         if let Some(ref mut witch) = self.witch {

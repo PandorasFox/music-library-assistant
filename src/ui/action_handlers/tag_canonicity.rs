@@ -3,8 +3,7 @@
 //! Handles the tag canonicity flow: loading signals, navigating between
 //! clusters, staging canonicalization decisions.
 
-use crate::ui::{insights_view, tag_canonicity_v2, transaction_review};
-use crate::ui::types::UiMode;
+use crate::ui::{insights_view, tag_canonicity_v2, transaction_review, ActiveView, TagCanonicityClusters};
 use super::super::App;
 
 impl App {
@@ -19,7 +18,11 @@ impl App {
         use crate::meta::signals::AggregateSignalType;
 
         // Get the selected insight type to determine what to load
-        let insight_type = match self.insights_view.as_ref().and_then(|v| v.selected_insight_type()) {
+        let insight_type = match &self.view {
+            ActiveView::Insights(v) => v.selected_insight_type(),
+            _ => None,
+        };
+        let insight_type = match insight_type {
             Some(t) => t,
             None => {
                 self.status_message = Some("No insight selected".to_string());
@@ -66,7 +69,7 @@ impl App {
 
         // Store signal IDs for cluster navigation
         let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        self.tag_canonicity_clusters = Some(super::super::TagCanonicityClusters::new(signal_ids));
+        let clusters = TagCanonicityClusters::new(signal_ids);
 
         // Start transaction ONCE for entire flow
         if let Some(ref mut witch) = self.witch {
@@ -80,7 +83,6 @@ impl App {
                 Some(w) => w.read_db(),
                 None => {
                     self.status_message = Some("Database not available".to_string());
-                    self.tag_canonicity_clusters = None;
                     return;
                 }
             };
@@ -91,7 +93,6 @@ impl App {
             Some(d) => d,
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
-                self.tag_canonicity_clusters = None;
                 // Discard the transaction we just started via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::super::operator_decisions::discard_transaction(witch);
@@ -100,15 +101,11 @@ impl App {
             }
         };
 
-        // Get group info from clusters (just set above)
-        let (group_index, total_groups) = self.tag_canonicity_clusters
-            .as_ref()
-            .map(|c| (c.current_index, c.signal_ids.len()))
-            .unwrap_or((0, 1));
+        // Get group info from clusters
+        let (group_index, total_groups) = (clusters.current_index, clusters.signal_ids.len());
 
         let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
-        self.tag_canonicity_state = Some(state);
-        self.mode = UiMode::TagCanonicityResolution;
+        self.view = ActiveView::TagCanonicityResolution { state, clusters };
     }
 
     /// Handle tag canonicity modal actions (three-pane layout).
@@ -126,8 +123,6 @@ impl App {
                     let _ = super::super::operator_decisions::discard_transaction(witch);
                 }
                 crate::logging::log_general("Tag canonicity resolution cancelled");
-                self.tag_canonicity_state = None;
-                self.tag_canonicity_clusters = None;
                 self.start_insights_view();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Navigate { forward } => {
@@ -144,25 +139,32 @@ impl App {
 
     /// Navigate to next/prev cluster without staging a decision.
     fn navigate_cluster(&mut self, forward: bool) {
-        let Some(ref mut clusters) = self.tag_canonicity_clusters else {
-            self.tag_canonicity_state = None;
+        let is_first = matches!(&self.view, ActiveView::TagCanonicityResolution { clusters, .. } if clusters.current_index == 0);
+        let is_last = matches!(&self.view, ActiveView::TagCanonicityResolution { clusters, .. } if clusters.is_last());
+
+        if !matches!(&self.view, ActiveView::TagCanonicityResolution { .. }) {
             self.start_insights_view();
             return;
-        };
+        }
 
-        if !forward && clusters.current_index == 0 {
+        if !forward && is_first {
             // Shift-Tab from first group = do nothing
             return;
         }
 
-        if forward && clusters.is_last() {
+        if forward && is_last {
             // Tab from last group = show review screen
             self.show_transaction_review_for_canonicity();
             return;
         }
 
         // Normal navigation
-        let moved = if forward { clusters.next() } else { clusters.prev() };
+        let moved = if let ActiveView::TagCanonicityResolution { ref mut clusters, .. } = self.view {
+            if forward { clusters.next() } else { clusters.prev() }
+        } else {
+            false
+        };
+
         if moved && !self.load_current_cluster_signal() {
             // Signal load failed - return to insights
             self.start_insights_view();
@@ -171,32 +173,38 @@ impl App {
 
     /// Advance to next cluster after confirming current one.
     fn advance_to_next_cluster(&mut self) {
-        let Some(ref mut clusters) = self.tag_canonicity_clusters else {
+        let is_last = matches!(&self.view, ActiveView::TagCanonicityResolution { clusters, .. } if clusters.is_last());
+
+        if !matches!(&self.view, ActiveView::TagCanonicityResolution { .. }) {
             self.show_transaction_review_for_canonicity();
             return;
-        };
+        }
 
-        if clusters.is_last() {
+        if is_last {
             // At last cluster - show review screen
             self.show_transaction_review_for_canonicity();
-        } else if clusters.next() {
-            // Load next signal
-            if !self.load_current_cluster_signal() {
-                // Signal load failed - show review with what we have
+        } else {
+            let advanced = if let ActiveView::TagCanonicityResolution { ref mut clusters, .. } = self.view {
+                clusters.next()
+            } else {
+                false
+            };
+
+            if advanced {
+                // Load next signal
+                if !self.load_current_cluster_signal() {
+                    // Signal load failed - show review with what we have
+                    self.show_transaction_review_for_canonicity();
+                }
+            } else {
+                // No more clusters - show review
                 self.show_transaction_review_for_canonicity();
             }
-        } else {
-            // No more clusters - show review
-            self.show_transaction_review_for_canonicity();
         }
     }
 
     /// Show the transaction review screen for tag canonicity.
     fn show_transaction_review_for_canonicity(&mut self) {
-        // Clear the resolution modal state (but keep clusters for Cancel navigation)
-        self.tag_canonicity_state = None;
-
-        // Always proceed to review - it will show "No changes" if empty
         self.start_transaction_review(transaction_review::TransactionReviewSource::TagCanonicityResolution);
     }
 
@@ -205,30 +213,23 @@ impl App {
     /// This adds the decision to the transaction but does NOT confirm it.
     /// The transaction is confirmed when the user completes the review screen.
     fn stage_canonicity_decision(&mut self) {
-        let Some(ref state) = self.tag_canonicity_state else {
-            return;
+        let (mutations, cluster_idx, tag_name) = match &self.view {
+            ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
+                let mutations = state.mutations();
+                if mutations.is_empty() {
+                    return;
+                }
+                (mutations, clusters.current_index, state.data.tag_name.clone())
+            }
+            _ => return,
         };
 
-        let Some(ref mut witch) = self.witch else {
-            return;
-        };
-
-        // Generate mutations using the V2 state's cached data
-        let mutations = state.mutations();
-        if mutations.is_empty() {
-            // No mutations for this cluster - that's OK, skip it
-            return;
-        }
-
-        let cluster_idx = self.tag_canonicity_clusters
-            .as_ref()
-            .map(|c| c.current_index)
-            .unwrap_or(0);
-
-        let label = format!("Canonicalize {}", state.data.tag_name);
+        let label = format!("Canonicalize {}", tag_name);
 
         // Add decision to existing transaction via sealed operator decision handler
-        let _ = super::super::operator_decisions::stage_decision(witch, cluster_idx, &label, mutations);
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::super::operator_decisions::stage_decision(witch, cluster_idx, &label, mutations);
+        }
     }
 
     /// Load the signal at the current cluster index into modal state.
@@ -236,23 +237,20 @@ impl App {
     pub(in crate::ui) fn load_current_cluster_signal(&mut self) -> bool {
         use crate::meta::signals::AggregateSignalType;
 
-        let Some(ref clusters) = self.tag_canonicity_clusters else {
-            return false;
-        };
-
-        let Some(signal_id) = clusters.current_signal_id() else {
-            self.tag_canonicity_state = None;
-            self.tag_canonicity_clusters = None;
-            return false;
+        // Extract cluster info from current view
+        let (signal_id, current_index, total) = match &self.view {
+            ActiveView::TagCanonicityResolution { clusters, .. } => {
+                match clusters.current_signal_id() {
+                    Some(id) => (id, clusters.current_index, clusters.signal_ids.len()),
+                    None => return false,
+                }
+            }
+            _ => return false,
         };
 
         let read_db = match self.witch.as_mut() {
             Some(w) => w.read_db(),
-            None => {
-                self.tag_canonicity_state = None;
-                self.tag_canonicity_clusters = None;
-                return false;
-            }
+            None => return false,
         };
 
         // Load signal by ID
@@ -260,8 +258,6 @@ impl App {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
-                self.tag_canonicity_state = None;
-                self.tag_canonicity_clusters = None;
                 return false;
             }
         };
@@ -292,22 +288,86 @@ impl App {
         // Determine pre-fill based on signal type
         let pre_fill = agg_signal.signal_type == AggregateSignalType::TagCanonicity;
 
-        // Get group info from clusters
-        let (group_index, total_groups) = self.tag_canonicity_clusters
-            .as_ref()
-            .map(|c| (c.current_index, c.signal_ids.len()))
-            .unwrap_or((0, 1));
-
-        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
+        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total);
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(group_index) {
+            if let Some(decision) = witch.get_decision(current_index) {
                 state.restore_from_mutations(&decision.mutations);
             }
         }
 
-        self.tag_canonicity_state = Some(state);
+        // Update state in existing view, or set view if called from restore path
+        if let ActiveView::TagCanonicityResolution { state: ref mut s, .. } = self.view {
+            *s = state;
+        }
+        true
+    }
+
+    /// Load cluster signal using provided clusters (for restoring from SuspendedView).
+    ///
+    /// Sets the view to TagCanonicityResolution with the provided clusters,
+    /// loading the current signal's state from the database.
+    pub(in crate::ui) fn load_current_cluster_signal_with_clusters(&mut self, clusters: TagCanonicityClusters) -> bool {
+        use crate::meta::signals::AggregateSignalType;
+
+        let signal_id = match clusters.current_signal_id() {
+            Some(id) => id,
+            None => return false,
+        };
+
+        let (current_index, total) = (clusters.current_index, clusters.signal_ids.len());
+
+        let read_db = match self.witch.as_mut() {
+            Some(w) => w.read_db(),
+            None => return false,
+        };
+
+        // Load signal by ID
+        let signal = match read_db.get_signal_by_id(signal_id) {
+            Ok(Some(s)) => s,
+            _ => {
+                self.status_message = Some("Signal not found".to_string());
+                return false;
+            }
+        };
+
+        // Convert to AggregateSignal for modal data loading
+        let agg_signal = crate::meta::signals::AggregateSignal {
+            id: signal.id,
+            signal_type: match crate::meta::signals::AggregateSignalType::from_str(signal.issue_type.as_str()) {
+                Some(t) => t,
+                None => {
+                    self.status_message = Some("Invalid signal type".to_string());
+                    return false;
+                }
+            },
+            key: signal.issue_key,
+            discovered_at: signal.discovered_at,
+            metadata_json: signal.metadata_json,
+        };
+
+        let data = match tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(&agg_signal, &read_db) {
+            Some(d) => d,
+            None => {
+                self.status_message = Some("Failed to parse signal data".to_string());
+                return false;
+            }
+        };
+
+        // Determine pre-fill based on signal type
+        let pre_fill = agg_signal.signal_type == AggregateSignalType::TagCanonicity;
+
+        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total);
+
+        // Back-fill UI state from staged decision if one exists for this cluster
+        if let Some(ref witch) = self.witch {
+            if let Some(decision) = witch.get_decision(current_index) {
+                state.restore_from_mutations(&decision.mutations);
+            }
+        }
+
+        self.view = ActiveView::TagCanonicityResolution { state, clusters };
         true
     }
 }

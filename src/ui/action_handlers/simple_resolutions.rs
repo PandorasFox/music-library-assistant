@@ -4,8 +4,7 @@
 //! subpar duplicate, and directory overlap resolution flows.
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
-use crate::ui::{corrupt_file_flow, missing_directory_flow, missing_file_flow, shit_format_flow, subpar_duplicate_flow, transaction_review};
-use crate::ui::types::UiMode;
+use crate::ui::{corrupt_file_flow, missing_directory_flow, missing_file_flow, shit_format_flow, subpar_duplicate_flow, transaction_review, ActiveView};
 use super::super::App;
 
 impl App {
@@ -30,8 +29,7 @@ impl App {
 
         // Create preview state with cached data
         let preview = missing_file_flow::MissingFilePreviewState::new(data);
-        self.missing_file_preview = Some(preview);
-        self.mode = UiMode::MissingFileResolution;
+        self.view = ActiveView::MissingFileResolution(preview);
     }
 
     /// Handle missing file preview actions.
@@ -40,33 +38,34 @@ impl App {
             missing_file_flow::MissingFilePreviewAction::None => {}
             missing_file_flow::MissingFilePreviewAction::ConfirmRestore => {
                 // Generate restore mutations (HardLink) and stage for review
-                if let Some(ref preview) = self.missing_file_preview {
-                    let mutations = preview.cached_data.restore_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Restore missing files");
-                        // Note: missing_file_preview state is NOT cleared - preserved for Cancel return
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
-                    } else {
-                        self.status_message = Some("No files to restore".to_string());
-                    }
+                let mutations = match &self.view {
+                    ActiveView::MissingFileResolution(ref preview) => preview.cached_data.restore_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Restore missing files");
+                    // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
+                } else {
+                    self.status_message = Some("No files to restore".to_string());
                 }
             }
             missing_file_flow::MissingFilePreviewAction::ConfirmDrop => {
                 // Generate drop mutations (DropFromIndex) and stage for review
-                if let Some(ref preview) = self.missing_file_preview {
-                    let mutations = preview.cached_data.drop_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Drop non-restorable files");
-                        // Note: missing_file_preview state is NOT cleared - preserved for Cancel return
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
-                    } else {
-                        self.status_message = Some("No files to drop".to_string());
-                    }
+                let mutations = match &self.view {
+                    ActiveView::MissingFileResolution(ref preview) => preview.cached_data.drop_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Drop non-restorable files");
+                    // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
+                } else {
+                    self.status_message = Some("No files to drop".to_string());
                 }
             }
             missing_file_flow::MissingFilePreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Missing file resolution cancelled");
-                self.missing_file_preview = None;
             }
         }
     }
@@ -92,8 +91,7 @@ impl App {
 
         // Create preview state with cached data
         let preview = missing_directory_flow::MissingDirectoryPreviewState::new(data);
-        self.missing_directory_preview = Some(preview);
-        self.mode = UiMode::MissingDirectoryResolution;
+        self.view = ActiveView::MissingDirectoryResolution(preview);
     }
 
     /// Handle missing directory preview actions.
@@ -102,20 +100,20 @@ impl App {
             missing_directory_flow::MissingDirectoryPreviewAction::None => {}
             missing_directory_flow::MissingDirectoryPreviewAction::ConfirmDrop => {
                 // Generate drop mutations (DropDirectoryFromIndex) and stage for review
-                if let Some(ref preview) = self.missing_directory_preview {
-                    let mutations = preview.cached_data.drop_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Drop missing directories");
-                        // Note: missing_directory_preview state is NOT cleared - preserved for Cancel return
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::MissingDirectoryResolution);
-                    } else {
-                        self.status_message = Some("No directories to drop".to_string());
-                    }
+                let mutations = match &self.view {
+                    ActiveView::MissingDirectoryResolution(ref preview) => preview.cached_data.drop_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Drop missing directories");
+                    // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::MissingDirectoryResolution);
+                } else {
+                    self.status_message = Some("No directories to drop".to_string());
                 }
             }
             missing_directory_flow::MissingDirectoryPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Missing directory resolution cancelled");
-                self.missing_directory_preview = None;
             }
         }
     }
@@ -141,8 +139,7 @@ impl App {
 
         // Create preview state with cached data
         let preview = corrupt_file_flow::CorruptFilePreviewState::new(data);
-        self.corrupt_file_preview = Some(preview);
-        self.mode = UiMode::CorruptFileResolution;
+        self.view = ActiveView::CorruptFileResolution(preview);
     }
 
     /// Handle corrupt file preview actions.
@@ -151,20 +148,20 @@ impl App {
             corrupt_file_flow::CorruptFilePreviewAction::None => {}
             corrupt_file_flow::CorruptFilePreviewAction::ConfirmStashAll => {
                 // Generate stash + drop mutations and stage for review
-                if let Some(ref preview) = self.corrupt_file_preview {
-                    let mutations = preview.cached_data.stash_and_drop_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Stash corrupt files");
-                        // Note: corrupt_file_preview state is NOT cleared - preserved for Cancel return
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::CorruptFileResolution);
-                    } else {
-                        self.status_message = Some("No files to stash".to_string());
-                    }
+                let mutations = match &self.view {
+                    ActiveView::CorruptFileResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Stash corrupt files");
+                    // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::CorruptFileResolution);
+                } else {
+                    self.status_message = Some("No files to stash".to_string());
                 }
             }
             corrupt_file_flow::CorruptFilePreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Corrupt file resolution cancelled");
-                self.corrupt_file_preview = None;
             }
         }
     }
@@ -190,8 +187,7 @@ impl App {
 
         // Create preview state with cached data
         let preview = shit_format_flow::ShitFormatPreviewState::new(data);
-        self.shit_format_preview = Some(preview);
-        self.mode = UiMode::ShitFormatResolution;
+        self.view = ActiveView::ShitFormatResolution(preview);
     }
 
     /// Handle shit format preview actions.
@@ -200,43 +196,45 @@ impl App {
             shit_format_flow::ShitFormatPreviewAction::None => {}
             shit_format_flow::ShitFormatPreviewAction::ConfirmRemuxLossless => {
                 // Generate FLAC remux mutations for lossless files only
-                if let Some(ref preview) = self.shit_format_preview {
-                    let mutations = preview.cached_data.lossless_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Remux to FLAC");
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
-                    } else {
-                        self.status_message = Some("No lossless files to remux".to_string());
-                    }
+                let mutations = match &self.view {
+                    ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossless_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Remux to FLAC");
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                } else {
+                    self.status_message = Some("No lossless files to remux".to_string());
                 }
             }
             shit_format_flow::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
                 // Generate Opus transcode mutations for lossy files only
-                if let Some(ref preview) = self.shit_format_preview {
-                    let mutations = preview.cached_data.lossy_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Transcode to Opus");
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
-                    } else {
-                        self.status_message = Some("No lossy files to transcode".to_string());
-                    }
+                let mutations = match &self.view {
+                    ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossy_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Transcode to Opus");
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                } else {
+                    self.status_message = Some("No lossy files to transcode".to_string());
                 }
             }
             shit_format_flow::ShitFormatPreviewAction::ConfirmConvertAll => {
-                // Generate mutations for all files (lossless → FLAC, lossy → Opus)
-                if let Some(ref preview) = self.shit_format_preview {
-                    let mutations = preview.cached_data.all_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Convert all formats");
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
-                    } else {
-                        self.status_message = Some("No files to convert".to_string());
-                    }
+                // Generate mutations for all files (lossless -> FLAC, lossy -> Opus)
+                let mutations = match &self.view {
+                    ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.all_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Convert all formats");
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                } else {
+                    self.status_message = Some("No files to convert".to_string());
                 }
             }
             shit_format_flow::ShitFormatPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Shit format resolution cancelled");
-                self.shit_format_preview = None;
             }
         }
     }
@@ -262,8 +260,7 @@ impl App {
 
         // Create preview state with cached data
         let preview = subpar_duplicate_flow::SubparDuplicatePreviewState::new(data);
-        self.subpar_duplicate_preview = Some(preview);
-        self.mode = UiMode::SubparDuplicateResolution;
+        self.view = ActiveView::SubparDuplicateResolution(preview);
     }
 
     /// Handle subpar duplicate preview actions.
@@ -272,20 +269,20 @@ impl App {
             subpar_duplicate_flow::SubparDuplicatePreviewAction::None => {}
             subpar_duplicate_flow::SubparDuplicatePreviewAction::ConfirmStashAll => {
                 // Generate stash + drop mutations and stage for review
-                if let Some(ref preview) = self.subpar_duplicate_preview {
-                    let mutations = preview.cached_data.stash_and_drop_mutations();
-                    if !mutations.is_empty() {
-                        self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates");
-                        // Note: subpar_duplicate_preview state is NOT cleared - preserved for Cancel return
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::SubparDuplicateResolution);
-                    } else {
-                        self.status_message = Some("No files to stash".to_string());
-                    }
+                let mutations = match &self.view {
+                    ActiveView::SubparDuplicateResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates");
+                    // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::SubparDuplicateResolution);
+                } else {
+                    self.status_message = Some("No files to stash".to_string());
                 }
             }
             subpar_duplicate_flow::SubparDuplicatePreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Subpar duplicate resolution cancelled");
-                self.subpar_duplicate_preview = None;
             }
         }
     }
@@ -313,8 +310,7 @@ impl App {
 
         // Create preview state with cached data
         let preview = directory_cluster_flow::DirectoryClusterPreviewState::new(data);
-        self.directory_cluster_preview = Some(preview);
-        self.mode = UiMode::DirectoryClusterResolution;
+        self.view = ActiveView::DirectoryClusterResolution(preview);
     }
 
     /// Handle directory cluster preview actions.
@@ -328,32 +324,41 @@ impl App {
             DirectoryClusterPreviewAction::None => {}
             DirectoryClusterPreviewAction::ConfirmCurrent => {
                 // Stage mutations for current cluster's selected option and advance
-                if let Some(ref preview) = self.directory_cluster_preview {
-                    if let Some(option) = preview.selected_option() {
-                        let mutations = preview.cached_data.mutations_for_resolution(
-                            preview.current_cluster_index,
-                            option,
-                        );
-                        if !mutations.is_empty() {
-                            self.stage_directory_cluster_mutations(preview.current_cluster_index, mutations, "Resolve directory overlap");
+                let (cluster_index, mutations) = match &self.view {
+                    ActiveView::DirectoryClusterResolution(ref preview) => {
+                        if let Some(option) = preview.selected_option() {
+                            let mutations = preview.cached_data.mutations_for_resolution(
+                                preview.current_cluster_index,
+                                option,
+                            );
+                            (preview.current_cluster_index, mutations)
+                        } else {
+                            (0, Vec::new())
                         }
                     }
+                    _ => (0, Vec::new()),
+                };
+                if !mutations.is_empty() {
+                    self.stage_directory_cluster_mutations(cluster_index, mutations, "Resolve directory overlap");
                 }
                 // Navigate to next cluster
-                if let Some(ref mut preview) = self.directory_cluster_preview {
-                    if !preview.navigate_next() {
-                        // Last cluster - go to review
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::DirectoryClusterResolution);
-                    }
+                let at_last = if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
+                    !preview.navigate_next()
+                } else {
+                    true
+                };
+                if at_last {
+                    // Last cluster - go to review
+                    self.start_transaction_review(transaction_review::TransactionReviewSource::DirectoryClusterResolution);
                 }
             }
             DirectoryClusterPreviewAction::NavigateNext => {
-                if let Some(ref mut preview) = self.directory_cluster_preview {
+                if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
                     preview.navigate_next();
                 }
             }
             DirectoryClusterPreviewAction::NavigatePrev => {
-                if let Some(ref mut preview) = self.directory_cluster_preview {
+                if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
                     preview.navigate_prev();
                 }
             }
@@ -363,7 +368,6 @@ impl App {
             }
             DirectoryClusterPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Directory overlap cluster resolution cancelled");
-                self.directory_cluster_preview = None;
             }
         }
     }

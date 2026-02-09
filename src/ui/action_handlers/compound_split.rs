@@ -3,7 +3,7 @@
 //! Handles the compound tag split flow: loading signals, navigating between
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
-use crate::ui::{compound_split_v2, transaction_review};
+use crate::ui::{compound_split_v2, progressive_worker, transaction_review, ActiveView, SuspendedView};
 use super::super::App;
 
 impl App {
@@ -37,8 +37,7 @@ impl App {
 
         // Store signal IDs for cluster navigation
         let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        self.compound_split_clusters = Some(compound_split_v2::CompoundSplitClustersV2::new(signal_ids));
-        self.compound_split_safe_mode = safe_only;
+        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_ids);
 
         // Start transaction ONCE for entire flow
         if let Some(ref mut witch) = self.witch {
@@ -57,7 +56,6 @@ impl App {
             Some(d) => d,
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
-                self.compound_split_clusters = None;
                 // Discard the transaction we just started
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::super::operator_decisions::discard_transaction(witch);
@@ -67,14 +65,10 @@ impl App {
         };
 
         // Get group info from clusters
-        let (group_index, total_groups) = self.compound_split_clusters
-            .as_ref()
-            .map(|c| (c.current_index(), c.total()))
-            .unwrap_or((0, 1));
+        let (group_index, total_groups) = (clusters.current_index(), clusters.total());
 
         let state = compound_split_v2::CompoundSplitStateV2::new(data, safe_only, group_index, total_groups);
-        self.compound_split_state = Some(state);
-        self.mode = super::super::types::UiMode::CompoundTagSplit;
+        self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode: safe_only };
     }
 
     /// Handle compound tag split modal actions (v2).
@@ -94,8 +88,6 @@ impl App {
             compound_split_v2::CompoundSplitActionV2::Cancelled => {
                 // Discard transaction if active
                 self.cancel_and_return_to_insights("Compound tag split cancelled");
-                self.compound_split_state = None;
-                self.compound_split_clusters = None;
             }
             compound_split_v2::CompoundSplitActionV2::Navigate { forward } => {
                 // Navigate to next/prev signal without staging
@@ -115,25 +107,32 @@ impl App {
 
     /// Navigate to next/prev compound split signal without staging.
     fn navigate_compound_split(&mut self, forward: bool) {
-        let Some(ref mut clusters) = self.compound_split_clusters else {
-            self.compound_split_state = None;
+        let is_first = matches!(&self.view, ActiveView::CompoundTagSplit { clusters, .. } if clusters.is_first());
+        let is_last = matches!(&self.view, ActiveView::CompoundTagSplit { clusters, .. } if clusters.is_last());
+
+        if !matches!(&self.view, ActiveView::CompoundTagSplit { .. }) {
             self.start_insights_view();
             return;
-        };
+        }
 
-        if !forward && clusters.is_first() {
+        if !forward && is_first {
             // Shift-Tab from first = do nothing
             return;
         }
 
-        if forward && clusters.is_last() {
+        if forward && is_last {
             // Tab from last = show review screen
             self.show_transaction_review_for_compound_split();
             return;
         }
 
         // Normal navigation
-        let moved = if forward { clusters.next() } else { clusters.prev() };
+        let moved = if let ActiveView::CompoundTagSplit { ref mut clusters, .. } = self.view {
+            if forward { clusters.next() } else { clusters.prev() }
+        } else {
+            false
+        };
+
         if moved && !self.load_current_compound_split_signal() {
             // Signal load failed - return to insights
             self.start_insights_view();
@@ -142,61 +141,61 @@ impl App {
 
     /// Advance to next compound split signal after confirming current (via Enter).
     fn advance_to_next_compound_split(&mut self) {
-        let Some(ref mut clusters) = self.compound_split_clusters else {
+        let is_last = matches!(&self.view, ActiveView::CompoundTagSplit { clusters, .. } if clusters.is_last());
+
+        if !matches!(&self.view, ActiveView::CompoundTagSplit { .. }) {
             self.show_transaction_review_for_compound_split();
             return;
-        };
+        }
 
-        if clusters.is_last() {
+        if is_last {
             // At last signal - show review
             self.show_transaction_review_for_compound_split();
-        } else if clusters.next() {
-            // Load next signal
-            if !self.load_current_compound_split_signal() {
-                // Signal load failed - show review with what we have
+        } else {
+            let advanced = if let ActiveView::CompoundTagSplit { ref mut clusters, .. } = self.view {
+                clusters.next()
+            } else {
+                false
+            };
+
+            if advanced {
+                // Load next signal
+                if !self.load_current_compound_split_signal() {
+                    // Signal load failed - show review with what we have
+                    self.show_transaction_review_for_compound_split();
+                }
+            } else {
+                // No more signals - show review
                 self.show_transaction_review_for_compound_split();
             }
-        } else {
-            // No more signals - show review
-            self.show_transaction_review_for_compound_split();
         }
     }
 
     /// Show the transaction review screen for compound tag splits.
     pub(in crate::ui) fn show_transaction_review_for_compound_split(&mut self) {
-        // Clear the resolution modal state (but keep clusters for Cancel navigation)
-        self.compound_split_state = None;
-
-        // Always proceed to review - it will show "No changes" if empty
         self.start_transaction_review(transaction_review::TransactionReviewSource::CompoundTagSplit);
     }
 
     /// Stage the current compound split decision (v2).
     fn stage_compound_split_decision(&mut self) {
-        let Some(ref state) = self.compound_split_state else {
-            return;
+        let (mutations, cluster_idx, description) = match &self.view {
+            ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
+                let mutations = state.mutations();
+                if mutations.is_empty() {
+                    return;
+                }
+                let desc = format!(
+                    "Split \"{}\" in {} \u{2192} [{}]",
+                    state.data.compound.compound_value,
+                    state.data.compound.tag_name,
+                    state.edited_parts.join(", ")
+                );
+                (mutations, clusters.current_index(), desc)
+            }
+            _ => return,
         };
 
-        let cluster_idx = self.compound_split_clusters
-            .as_ref()
-            .map(|c| c.current_index())
-            .unwrap_or(0);
-
-        // Generate mutations using v2 state
-        let mutations = state.mutations();
-
-        if mutations.is_empty() {
-            return;
-        }
-
         // Stage the decision via operator_decisions
-        let description = format!(
-            "Split \"{}\" in {} → [{}]",
-            state.data.compound.compound_value,
-            state.data.compound.tag_name,
-            state.edited_parts.join(", ")
-        );
-
         if let Some(ref mut witch) = self.witch {
             let _ = super::super::operator_decisions::stage_decision(witch, cluster_idx, &description, mutations);
         }
@@ -204,26 +203,20 @@ impl App {
 
     /// Stage a canonicalize decision (mark compound value as canonical, don't split).
     fn stage_compound_canonicalize_decision(&mut self) {
-        let Some(ref state) = self.compound_split_state else {
-            return;
+        let (mutations, cluster_idx, description) = match &self.view {
+            ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
+                let mutation = state.data.create_canonical_signal();
+                let desc = format!(
+                    "Keep \"{}\" in {} as canonical",
+                    state.data.compound.compound_value,
+                    state.data.compound.tag_name,
+                );
+                (vec![mutation], clusters.current_index(), desc)
+            }
+            _ => return,
         };
 
-        let cluster_idx = self.compound_split_clusters
-            .as_ref()
-            .map(|c| c.current_index())
-            .unwrap_or(0);
-
-        // Create the EmitCanonicalTag mutation
-        let mutation = state.data.create_canonical_signal();
-        let mutations = vec![mutation];
-
         // Stage the decision via operator_decisions
-        let description = format!(
-            "Keep \"{}\" in {} as canonical",
-            state.data.compound.compound_value,
-            state.data.compound.tag_name,
-        );
-
         if let Some(ref mut witch) = self.witch {
             let _ = super::super::operator_decisions::stage_decision(witch, cluster_idx, &description, mutations);
         }
@@ -234,26 +227,32 @@ impl App {
     /// Called when user presses Ctrl+A in the compound split modal.
     /// Uses the progressive worker to process items in timed chunks with progress bar.
     fn start_progressive_compound_split_staging(&mut self) {
-        let Some(ref clusters) = self.compound_split_clusters else {
-            self.status_message = Some("No compound splits to stage".to_string());
-            return;
+        // Extract clusters and safe_mode from current view, replacing with a temporary
+        let (signal_ids, is_safe_mode, clusters, safe_mode) = match &self.view {
+            ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
+                let ids = clusters.all_signal_ids().to_vec();
+                if ids.is_empty() {
+                    self.status_message = Some("No compound splits to stage".to_string());
+                    return;
+                }
+                (ids, *safe_mode, clusters.clone(), *safe_mode)
+            }
+            _ => {
+                self.status_message = Some("No compound splits to stage".to_string());
+                return;
+            }
         };
 
-        let signal_ids = clusters.all_signal_ids().to_vec();
-        if signal_ids.is_empty() {
-            self.status_message = Some("No compound splits to stage".to_string());
-            return;
-        }
-
-        let is_safe_mode = self.compound_split_safe_mode;
-
-        // Start progressive worker
-        let worker = super::super::progressive_worker::ProgressiveWorkerState::for_compound_splits(
+        // Start progressive worker with return context to restore compound split view
+        let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
             signal_ids,
             is_safe_mode,
         );
-        self.progressive_worker = Some(worker);
-        self.mode = super::super::types::UiMode::ProgressiveWork;
+        let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
+            clusters,
+            safe_mode,
+        });
+        self.view = ActiveView::ProgressiveWork { worker, return_context };
     }
 
     /// Confirm all safe compound splits directly from insights (Ctrl+A shortcut).
@@ -280,8 +279,7 @@ impl App {
 
         // Store signal IDs for cluster tracking
         let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        self.compound_split_clusters = Some(compound_split_v2::CompoundSplitClustersV2::new(signal_ids.clone()));
-        self.compound_split_safe_mode = true;
+        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_ids.clone());
 
         // Start transaction
         if let Some(ref mut witch) = self.witch {
@@ -289,12 +287,15 @@ impl App {
         }
 
         // Start progressive worker to stage all splits
-        let worker = super::super::progressive_worker::ProgressiveWorkerState::for_compound_splits(
+        let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
             signal_ids,
             true, // safe mode
         );
-        self.progressive_worker = Some(worker);
-        self.mode = super::super::types::UiMode::ProgressiveWork;
+        let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
+            clusters,
+            safe_mode: true,
+        });
+        self.view = ActiveView::ProgressiveWork { worker, return_context };
     }
 
     /// Load the compound split signal at the current cluster index into modal state.
@@ -302,23 +303,20 @@ impl App {
     pub(in crate::ui) fn load_current_compound_split_signal(&mut self) -> bool {
         use crate::meta::signals::{AggregateSignal, AggregateSignalType};
 
-        let Some(ref clusters) = self.compound_split_clusters else {
-            return false;
-        };
-
-        let Some(signal_id) = clusters.current_signal_id() else {
-            self.compound_split_state = None;
-            self.compound_split_clusters = None;
-            return false;
+        // Extract cluster info from current view
+        let (signal_id, group_index, total, safe_mode) = match &self.view {
+            ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
+                match clusters.current_signal_id() {
+                    Some(id) => (id, clusters.current_index(), clusters.total(), *safe_mode),
+                    None => return false,
+                }
+            }
+            _ => return false,
         };
 
         let read_db = match self.witch.as_mut() {
             Some(w) => w.read_db(),
-            None => {
-                self.compound_split_state = None;
-                self.compound_split_clusters = None;
-                return false;
-            }
+            None => return false,
         };
 
         // Fetch the signal by ID
@@ -326,8 +324,6 @@ impl App {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
-                self.compound_split_state = None;
-                self.compound_split_clusters = None;
                 return false;
             }
         };
@@ -367,14 +363,12 @@ impl App {
             return false;
         };
 
-        let group_index = clusters.current_index();
-
         // Create modal state
         let mut state = compound_split_v2::CompoundSplitStateV2::new(
             data,
-            self.compound_split_safe_mode,
+            safe_mode,
             group_index,
-            clusters.total(),
+            total,
         );
 
         // Back-fill UI state from staged decision if one exists for this cluster
@@ -384,7 +378,96 @@ impl App {
             }
         }
 
-        self.compound_split_state = Some(state);
+        // Update state in existing view
+        if let ActiveView::CompoundTagSplit { state: ref mut s, .. } = self.view {
+            *s = state;
+        }
+        true
+    }
+
+    /// Load compound split signal using provided clusters (for restoring from SuspendedView).
+    ///
+    /// Sets the view to CompoundTagSplit with the provided clusters,
+    /// loading the current signal's state from the database.
+    pub(in crate::ui) fn load_current_compound_split_signal_with_clusters(
+        &mut self,
+        clusters: compound_split_v2::CompoundSplitClustersV2,
+        safe_mode: bool,
+    ) -> bool {
+        use crate::meta::signals::{AggregateSignal, AggregateSignalType};
+
+        let signal_id = match clusters.current_signal_id() {
+            Some(id) => id,
+            None => return false,
+        };
+
+        let (group_index, total) = (clusters.current_index(), clusters.total());
+
+        let read_db = match self.witch.as_mut() {
+            Some(w) => w.read_db(),
+            None => return false,
+        };
+
+        // Fetch the signal by ID
+        let signal = match read_db.get_signal_by_id(signal_id) {
+            Ok(Some(s)) => s,
+            _ => {
+                self.status_message = Some("Signal not found".to_string());
+                return false;
+            }
+        };
+
+        // Convert to AggregateSignal
+        let agg_signal = AggregateSignal {
+            id: signal.id,
+            signal_type: match AggregateSignalType::from_str(signal.issue_type.as_str()) {
+                Some(t) => t,
+                None => {
+                    self.status_message = Some("Invalid signal type".to_string());
+                    return false;
+                }
+            },
+            key: signal.issue_key,
+            discovered_at: signal.discovered_at,
+            metadata_json: signal.metadata_json,
+        };
+
+        // Verify signal type
+        if agg_signal.signal_type != AggregateSignalType::CompoundTagValue {
+            self.status_message = Some(format!(
+                "Wrong signal type: expected compound_tag_value, got {:?}",
+                agg_signal.signal_type
+            ));
+            return false;
+        }
+
+        // Parse modal data from signal
+        let data = {
+            let read_db = self.witch.as_mut().unwrap().read_db();
+            compound_split_v2::CompoundSplitDataV2::from_signal_with_files(&agg_signal, &read_db)
+        };
+
+        let Some(data) = data else {
+            self.status_message = Some("Failed to parse signal data".to_string());
+            return false;
+        };
+
+        // Create modal state
+        let mut state = compound_split_v2::CompoundSplitStateV2::new(
+            data,
+            safe_mode,
+            group_index,
+            total,
+        );
+
+        // Back-fill UI state from staged decision if one exists for this cluster
+        if let Some(ref witch) = self.witch {
+            if let Some(decision) = witch.get_decision(group_index) {
+                state.restore_from_mutations(&decision.mutations);
+            }
+        }
+
+        self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode };
         true
     }
 }

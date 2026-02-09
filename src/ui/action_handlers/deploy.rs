@@ -4,8 +4,8 @@
 //! (leftovers, stale, new, conflicts), and the preview action handler.
 
 use crate::corpus::paths;
-use crate::ui::{deploy_flow, transaction_review};
-use crate::ui::types::UiMode;
+use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, MoveToStashMutation};
+use crate::ui::{deploy_flow, transaction_review, ActiveView};
 use super::super::App;
 
 impl App {
@@ -19,8 +19,7 @@ impl App {
             .unwrap_or_default();
 
         let preview = deploy_flow::DeploymentPreviewState::new(data);
-        self.deployment_preview = Some(preview);
-        self.mode = UiMode::DeploymentPreview;
+        self.view = ActiveView::DeploymentPreview(preview);
     }
 
     /// Handle deployment preview actions.
@@ -30,27 +29,26 @@ impl App {
             deploy_flow::DeploymentPreviewAction::Confirm => {
                 // Generate deploy mutations and stage for review
                 // Clone the cached data to avoid borrow issues
-                let cached_data = self.deployment_preview.as_ref()
-                    .map(|p| p.cached_data.clone());
+                let cached_data = match &self.view {
+                    ActiveView::DeploymentPreview(ref preview) => Some(preview.cached_data.clone()),
+                    _ => None,
+                };
                 if let Some(data) = cached_data {
                     let mutation_count = self.stage_deploy_mutations(&data);
                     if mutation_count > 0 {
-                        // Note: deployment_preview state is NOT cleared - preserved for Cancel return
+                        // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                         self.start_transaction_review(transaction_review::TransactionReviewSource::DeployPreview);
                     } else {
                         // No mutations (edge case) - go directly to Insights
-                        self.deployment_preview = None;
                         self.start_insights_view();
                         self.status_message = Some("No deploy operations needed".to_string());
                     }
                 } else {
-                    self.deployment_preview = None;
                     self.start_insights_view();
                 }
             }
             deploy_flow::DeploymentPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Deployment preview cancelled");
-                self.deployment_preview = None;
                 self.status_message = Some("Deployment cancelled".to_string());
             }
         }
@@ -87,10 +85,10 @@ impl App {
         for file in &data.leftover {
             let path_rel = std::path::Path::new("libraries").join(&file.library_path);
             let path = resolver.resolve(&path_rel);
-            mutations.push(Mutation::MoveToStash {
+            mutations.push(Mutation::MoveToStash(MoveToStashMutation {
                 path,
                 stash_name: "library_leftovers".to_string(),
-            });
+            }));
         }
 
         // 2. Stale files: move from wrong path to correct path
@@ -103,7 +101,7 @@ impl App {
             let dest_rel = std::path::Path::new("libraries").join(&file.expected_path);
             let destination = resolver.resolve(&dest_rel);
 
-            mutations.push(Mutation::LibraryMove { source, destination });
+            mutations.push(Mutation::LibraryMove(LibraryMoveMutation { source, destination }));
         }
 
         // 3. New files: create hard links
@@ -134,7 +132,7 @@ impl App {
                 continue;
             };
             let destination = resolver.resolve(&dest_rel);
-            mutations.push(Mutation::HardLink { source, destination });
+            mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
         }
 
         // 4. Conflicts: pick first alphabetical corpus path and deploy it
@@ -161,7 +159,7 @@ impl App {
                     continue; // Skip if no library mapping
                 };
                 let destination = resolver.resolve(&dest_rel);
-                mutations.push(Mutation::HardLink { source, destination });
+                mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
             }
         }
 

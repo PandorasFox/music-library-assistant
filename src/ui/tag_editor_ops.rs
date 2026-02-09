@@ -8,7 +8,7 @@ use crossterm::event;
 use crate::corpus::db::types::AudioFile;
 use crate::corpus::paths;
 use crate::ui::tag_editor;
-use crate::ui::types::UiMode;
+use crate::ui::ActiveView;
 use super::App;
 
 /// Drain any pending input events from the terminal buffer.
@@ -139,7 +139,6 @@ impl App {
         }
 
         // Use the unified tag editor for single-file editing
-        self.tree_browser = None;
         if audio_files.len() == 1 {
             // Single file - use single file mode
             self.open_unified_tag_editor_single(
@@ -156,7 +155,7 @@ impl App {
                 None,
             );
             // Position on the selected file
-            if let Some(editor) = self.unified_tag_editor.as_mut() {
+            if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
                 editor.current_item_idx = selected_idx;
             }
         }
@@ -190,8 +189,7 @@ impl App {
         // Drain any keypresses that accumulated during loading
         drain_input_buffer();
 
-        self.unified_tag_editor = Some(editor);
-        self.mode = UiMode::UnifiedTagEditor;
+        self.view = ActiveView::UnifiedTagEditor(editor);
     }
 
     /// Open the unified tag editor with multiple audio files
@@ -221,8 +219,7 @@ impl App {
         // Drain any keypresses that accumulated during loading
         drain_input_buffer();
 
-        self.unified_tag_editor = Some(editor);
-        self.mode = UiMode::UnifiedTagEditor;
+        self.view = ActiveView::UnifiedTagEditor(editor);
     }
 
     /// Open the unified tag editor for a directory path.
@@ -261,8 +258,6 @@ impl App {
             return;
         }
 
-        self.tree_browser = None;
-
         // Start transaction for directory edits
         if let Some(the_witch) = self.witch.as_mut() {
             let _ = the_witch.start_transaction("Directory tag edits");
@@ -275,8 +270,7 @@ impl App {
         // Drain any keypresses that accumulated during the slow loading
         drain_input_buffer();
 
-        self.unified_tag_editor = Some(editor);
-        self.mode = UiMode::UnifiedTagEditor;
+        self.view = ActiveView::UnifiedTagEditor(editor);
     }
 
     /// Start unified tag editor for a single audio file from tag search results
@@ -305,7 +299,6 @@ impl App {
         // Drain any keypresses that accumulated during loading
         drain_input_buffer();
 
-        self.unified_tag_editor = Some(editor);
-        self.mode = UiMode::UnifiedTagEditor;
+        self.view = ActiveView::UnifiedTagEditor(editor);
     }
 }

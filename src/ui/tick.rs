@@ -12,28 +12,40 @@ use crate::ui::{
     progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
     startup,
     transaction_review,
-    types::UiMode,
+    ActiveView,
+    active_view::SuspendedView,
 };
 use super::App;
+use super::eye::Eye;
+use super::insights_view;
 
 impl App {
     /// Tick the progress screen and check for completion.
     ///
-    /// Called each frame while progress_screen is Some. Handles all progress phases:
+    /// Called each frame while the active view is Progress. Handles all progress phases:
     /// - Eyeballing: checks for unindexed files, proceeds to intake or content analysis
     /// - ContentAnalysis: transitions to Insights view on completion
     /// - SignalRefresh: transitions to Insights view on completion
+    ///
+    /// Also drives the eye animation (moved here from run_app, scoped to Progress).
     pub(super) fn tick_progress_screen(&mut self) {
-        // Take progress_screen temporarily to avoid borrow conflicts
-        let mut progress = match self.progress_screen.take() {
-            Some(p) => p,
-            None => return,
-        };
+        if !matches!(self.view, ActiveView::Progress { .. }) { return; }
 
-        let phase = progress.phase();
+        // Take the progress view out temporarily via replace with a throwaway Insights.
+        let old = std::mem::replace(
+            &mut self.view,
+            ActiveView::Insights(insights_view::InsightsViewState::new()),
+        );
+        let ActiveView::Progress { mut screen, mut eye } = old else { unreachable!() };
+
+        let phase = screen.phase();
+
+        // Update eye animation (scoped to Progress view)
+        let can_animate = self.witch().eye_state() == crate::witch::EyeState::Awake;
+        eye.update(can_animate);
 
         // Tick progress screen - it checks daemon state for completion
-        let completed = progress.tick(self.witch());
+        let completed = screen.tick(self.witch());
         if completed {
             let status = self.witch().status();
             crate::logging::log_general(format!(
@@ -43,11 +55,10 @@ impl App {
         }
 
         // Update stats on progress screen (for optional display)
-        self.update_progress_stats(&mut progress);
+        self.update_progress_stats(&mut screen);
 
-        // Put it back or transition based on phase
-        if progress.is_complete() {
-            // Don't put it back - handle transition based on phase
+        // Handle completion or put the view back
+        if screen.is_complete() {
             match phase {
                 ProgressPhase::Eyeballing => {
                     // Check for unindexed files before deciding next phase
@@ -59,8 +70,7 @@ impl App {
                             check_duration.as_millis(),
                             intake_state.file_count
                         ));
-                        self.intake_confirmation = Some(intake_state);
-                        self.mode = UiMode::IntakeConfirmation;
+                        self.view = ActiveView::IntakeConfirmation(intake_state);
                     } else {
                         let check_duration = transition_start.elapsed();
                         // Check if the Witch has pending work (e.g., freshen latch triggered content analysis)
@@ -70,8 +80,10 @@ impl App {
                                 check_duration.as_millis()
                             ));
                             // Show content analysis progress screen for the pending work
-                            self.progress_screen = Some(ProgressScreen::new_content_analysis());
-                            self.mode = UiMode::Progress;
+                            self.view = ActiveView::Progress {
+                                screen: ProgressScreen::new_content_analysis(),
+                                eye: Eye::default(),
+                            };
                         } else {
                             crate::logging::log_general(format!(
                                 "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to Insights",
@@ -93,17 +105,20 @@ impl App {
                 }
             }
         } else {
-            self.progress_screen = Some(progress);
+            // Not complete yet - put the view back for next frame
+            self.view = ActiveView::Progress { screen, eye };
         }
     }
 
     /// Tick tag search - checks for pending bulk edit after modal has rendered.
     pub(super) fn tick_tag_search(&mut self) {
-        if let Some(ref mut search) = self.tag_search {
-            if let Some(audio_files) = search.take_pending_bulk_edit() {
-                self.tag_search = None;
-                self.start_unified_tag_editor_for_audio_files(audio_files);
-            }
+        let pending = if let ActiveView::TagSearch(ref mut search) = self.view {
+            search.take_pending_bulk_edit()
+        } else {
+            None
+        };
+        if let Some(audio_files) = pending {
+            self.start_unified_tag_editor_for_audio_files(audio_files);
         }
     }
 
@@ -150,15 +165,18 @@ impl App {
 
     /// Tick the progressive worker - process items in timed chunks.
     ///
-    /// Called each frame while progressive_worker is Some. Processes work items
+    /// Called each frame while the active view is ProgressiveWork. Processes work items
     /// until the time budget (~50ms) is exhausted, then returns to allow render.
     /// On completion, drains input buffer and invokes the completion handler.
     pub(super) fn tick_progressive_worker(&mut self) {
-        // Take worker temporarily to avoid borrow conflicts
-        let mut worker = match self.progressive_worker.take() {
-            Some(w) => w,
-            None => return,
-        };
+        if !matches!(self.view, ActiveView::ProgressiveWork { .. }) { return; }
+
+        // Take the progressive work view out temporarily
+        let old = std::mem::replace(
+            &mut self.view,
+            ActiveView::Insights(insights_view::InsightsViewState::new()),
+        );
+        let ActiveView::ProgressiveWork { mut worker, return_context } = old else { unreachable!() };
 
         let start = Instant::now();
         let time_budget = Duration::from_millis(50);
@@ -171,10 +189,8 @@ impl App {
 
                 let summary = worker.build_summary();
                 let on_complete = worker.on_complete.clone();
-                let is_safe_mode = worker.is_safe_mode;
 
-                // Clear worker state (already taken)
-                self.handle_progressive_complete(on_complete, summary, is_safe_mode);
+                self.handle_progressive_complete(on_complete, summary, return_context);
                 return;
             };
 
@@ -184,7 +200,7 @@ impl App {
         }
 
         // Time budget exhausted - put worker back for next frame
-        self.progressive_worker = Some(worker);
+        self.view = ActiveView::ProgressiveWork { worker, return_context };
     }
 
     /// Process a single work item.
@@ -311,15 +327,17 @@ impl App {
     }
 
     /// Handle completion of progressive work.
+    ///
+    /// Directly creates the TransactionReview view with the return_context as the
+    /// suspended view, since the progressive worker has already been consumed.
     fn handle_progressive_complete(
         &mut self,
         on_complete: OnComplete,
         summary: WorkSummary,
-        _is_safe_mode: bool,
+        return_context: Box<SuspendedView>,
     ) {
         match on_complete {
             OnComplete::CompoundSplitStaging => {
-                // Set status message with summary
                 if summary.nops_elided > 0 {
                     self.status_message = Some(format!(
                         "Staged {} compound tag splits ({} skipped)",
@@ -333,17 +351,25 @@ impl App {
                     ));
                 }
 
-                // Transition to transaction review
-                self.show_transaction_review_for_compound_split();
+                self.view = ActiveView::TransactionReview {
+                    review: transaction_review::TransactionReviewState::new(
+                        transaction_review::TransactionReviewSource::CompoundTagSplit,
+                    ),
+                    suspended: return_context,
+                };
             }
             OnComplete::TagCanonicalityStaging => {
                 self.status_message = Some(format!(
                     "Staged {} tag canonicity decisions",
                     summary.mutations_generated,
                 ));
-                self.start_transaction_review(
-                    transaction_review::TransactionReviewSource::TagCanonicityResolution,
-                );
+
+                self.view = ActiveView::TransactionReview {
+                    review: transaction_review::TransactionReviewState::new(
+                        transaction_review::TransactionReviewSource::TagCanonicityResolution,
+                    ),
+                    suspended: return_context,
+                };
             }
         }
     }

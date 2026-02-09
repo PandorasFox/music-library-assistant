@@ -17,8 +17,9 @@ mod oob_resolution;
 mod deploy;
 mod simple_resolutions;
 
-use crate::ui::{filter_popup, insights_view, oob_sync_flow, oob_conflict_flow, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets, FilterPopupContext};
-use crate::ui::types::{UiMode, ExitConfirmModalState};
+use crate::ui::{filter_popup, insights_view, oob_sync_flow, oob_conflict_flow, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
+use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, SuspendedView};
+use crate::ui::eye::Eye;
 use super::App;
 
 impl App {
@@ -40,8 +41,7 @@ impl App {
     /// Cancel the current flow: discard any active transaction and return to Insights.
     ///
     /// Logs the provided message, discards any open transaction, and navigates
-    /// back to the Insights view. Callers should clear their own modal state after
-    /// calling this.
+    /// back to the Insights view. The old view is dropped when we set self.view.
     pub(in crate::ui) fn cancel_and_return_to_insights(&mut self, log_message: &str) {
         crate::logging::log_general(log_message);
         if let Some(ref mut witch) = self.witch {
@@ -72,8 +72,7 @@ impl App {
             ProgressPhase::ContentAnalysis => progress_screen::ProgressScreen::new_content_analysis(),
             ProgressPhase::SignalRefresh => progress_screen::ProgressScreen::new_signal_refresh(),
         };
-        self.progress_screen = Some(screen);
-        self.mode = UiMode::Progress;
+        self.view = ActiveView::Progress { screen, eye: Eye::default() };
     }
 
     // =========================================================================
@@ -89,21 +88,23 @@ impl App {
                     self.status_message = Some("Cannot quit while operations are pending".to_string());
                 } else {
                     // Show exit confirmation modal
-                    self.exit_confirm_modal_state = Some(ExitConfirmModalState::default());
-                    self.mode = UiMode::ExitConfirmModal;
+                    self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
                 }
             }
             insights_view::InsightsAction::CycleNext => {
-                self.insights_view = None;
                 self.start_lateral_view(widgets::LateralView::Insights.next());
             }
             insights_view::InsightsAction::CyclePrev => {
-                self.insights_view = None;
                 self.start_lateral_view(widgets::LateralView::Insights.prev());
             }
             insights_view::InsightsAction::LaunchFlow => {
                 // Use selected_action() to dispatch to appropriate flow
-                match self.insights_view.as_ref().and_then(|v| v.selected_action()) {
+                let selected = if let ActiveView::Insights(ref v) = self.view {
+                    v.selected_action()
+                } else {
+                    None
+                };
+                match selected {
                     Some(insights_view::InsightAction::LaunchDeploymentPreview) => {
                         self.start_deployment_preview_from_insights();
                     }
@@ -115,22 +116,28 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitSafe) => {
                         // Extract tag name from selected insight type
-                        let tag_name = self.insights_view.as_ref()
-                            .and_then(|v| v.selected_insight_type())
-                            .and_then(|t| match t {
-                                insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
-                                _ => None,
-                            });
+                        let tag_name = if let ActiveView::Insights(ref v) = self.view {
+                            v.selected_insight_type()
+                                .and_then(|t| match t {
+                                    insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
+                                    _ => None,
+                                })
+                        } else {
+                            None
+                        };
                         self.start_compound_split_resolution(true, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitReview) => {
                         // Extract tag name from selected insight type
-                        let tag_name = self.insights_view.as_ref()
-                            .and_then(|v| v.selected_insight_type())
-                            .and_then(|t| match t {
-                                insights_view::InsightType::CompoundTagValueReview { tag_name } => Some(tag_name),
-                                _ => None,
-                            });
+                        let tag_name = if let ActiveView::Insights(ref v) = self.view {
+                            v.selected_insight_type()
+                                .and_then(|t| match t {
+                                    insights_view::InsightType::CompoundTagValueReview { tag_name } => Some(tag_name),
+                                    _ => None,
+                                })
+                        } else {
+                            None
+                        };
                         self.start_compound_split_resolution(false, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchOobTagSync) => {
@@ -170,12 +177,15 @@ impl App {
             }
             insights_view::InsightsAction::ConfirmAllSafeCompoundSplits => {
                 // Ctrl+A from insights: extract tag name and stage all for that tag
-                let tag_name = self.insights_view.as_ref()
-                    .and_then(|v| v.selected_insight_type())
-                    .and_then(|t| match t {
-                        insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
-                        _ => None,
-                    });
+                let tag_name = if let ActiveView::Insights(ref v) = self.view {
+                    v.selected_insight_type()
+                        .and_then(|t| match t {
+                            insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
+                            _ => None,
+                        })
+                } else {
+                    None
+                };
                 self.confirm_all_safe_compound_splits_from_insights(tag_name.as_deref());
             }
         }
@@ -193,8 +203,7 @@ impl App {
 
         match intake_state {
             Some(state) => {
-                self.intake_confirmation = Some(state);
-                self.mode = UiMode::IntakeConfirmation;
+                self.view = ActiveView::IntakeConfirmation(state);
             }
             None => {
                 self.status_message = Some("No unindexed files to process".to_string());
@@ -208,28 +217,25 @@ impl App {
             tag_search::TagSearchAction::None => {}
             tag_search::TagSearchAction::Cancel => {
                 // Return to Insights view
-                self.tag_search = None;
                 self.start_insights_view();
             }
             tag_search::TagSearchAction::CycleNext => {
-                self.tag_search = None;
                 self.start_lateral_view(widgets::LateralView::TagSearch.next());
             }
             tag_search::TagSearchAction::CyclePrev => {
-                self.tag_search = None;
                 self.start_lateral_view(widgets::LateralView::TagSearch.prev());
             }
             tag_search::TagSearchAction::ExecuteSearch => {
-                // Execute search with db access - take ownership temporarily to avoid borrow conflict
-                if let Some(mut search) = self.tag_search.take() {
-                    let read_db = self.read_db();
+                // Execute search - access witch and view as disjoint fields
+                if let (Some(ref mut witch), ActiveView::TagSearch(ref mut search)) =
+                    (&mut self.witch, &mut self.view)
+                {
+                    let read_db = witch.read_db();
                     search.execute_search(&read_db);
-                    self.tag_search = Some(search);
                 }
             }
             tag_search::TagSearchAction::EditAudioFile(audio_file) => {
                 // Open unified tag editor for single audio file
-                self.tag_search = None;
                 self.start_unified_tag_editor_for_audio_file(audio_file);
             }
         }
@@ -243,15 +249,15 @@ impl App {
             startup::IntakeConfirmationAction::None => {}
             startup::IntakeConfirmationAction::Confirmed => {
                 // User confirmed - create IndexTrack mutations and stage for review
-                let mutations = self.intake_confirmation
-                    .as_ref()
-                    .map(|s| s.create_index_mutations())
-                    .unwrap_or_default();
+                let mutations = if let ActiveView::IntakeConfirmation(ref s) = self.view {
+                    s.create_index_mutations()
+                } else {
+                    Vec::new()
+                };
 
                 if mutations.is_empty() {
                     // No files to index (all deleted since detection?) - skip to Insights
                     crate::logging::log_general("IntakeConfirmation: no mutations to queue, skipping to Insights");
-                    self.intake_confirmation = None;
                     self.start_insights_view();
                 } else {
                     let count = mutations.len();
@@ -271,7 +277,7 @@ impl App {
                         );
                     }
 
-                    // Note: intake_confirmation state is NOT cleared - preserved for Cancel return
+                    // Note: IntakeConfirmation state is preserved inside the suspended view for Cancel return
                     // Transition to review modal with ContentAnalysis phase for post-commit
                     self.start_transaction_review_with_phase(
                         transaction_review::TransactionReviewSource::IntakeConfirmation,
@@ -290,7 +296,6 @@ impl App {
                         let _ = operator_decisions::discard_transaction(witch);
                     }
                 }
-                self.intake_confirmation = None;
                 self.start_insights_view();
             }
         }
@@ -300,7 +305,6 @@ impl App {
         match action {
             tree_browser::TreeBrowserAction::None => {}
             tree_browser::TreeBrowserAction::Cancel => {
-                self.tree_browser = None;
                 self.start_insights_view();
             }
             tree_browser::TreeBrowserAction::EditDirectory(path) => {
@@ -312,17 +316,17 @@ impl App {
                 self.start_tag_editor_for_path(&path, false);
             }
             tree_browser::TreeBrowserAction::CycleNext => {
-                self.tree_browser = None;
                 self.start_lateral_view(widgets::LateralView::CorpusBrowser.next());
             }
             tree_browser::TreeBrowserAction::CyclePrev => {
-                self.tree_browser = None;
                 self.start_lateral_view(widgets::LateralView::CorpusBrowser.prev());
             }
             tree_browser::TreeBrowserAction::OpenFilter => {
                 // Open filter popup for corpus browser
-                self.filter_popup_state = Some(filter_popup::FilterPopupState::new());
-                self.filter_popup_context = Some(FilterPopupContext::CorpusBrowser);
+                self.filter_overlay = Some(FilterOverlay {
+                    state: filter_popup::FilterPopupState::new(),
+                    context: FilterPopupContext::CorpusBrowser,
+                });
             }
         }
     }
@@ -337,7 +341,7 @@ impl App {
             UnifiedTagEditorAction::StageDecisionAndNext { index, mutations } => {
                 // Stage the decision AND navigate to next item
                 self.stage_decision(index, mutations);
-                if let Some(ref mut editor) = self.unified_tag_editor {
+                if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
                     if editor.current_item_idx < editor.total_items.saturating_sub(1) {
                         editor.current_item_idx += 1;
                         editor.reset_field_state();
@@ -348,7 +352,7 @@ impl App {
             UnifiedTagEditorAction::StageDecisionAndPrev { index, mutations } => {
                 // Stage the decision AND navigate to previous item
                 self.stage_decision(index, mutations);
-                if let Some(ref mut editor) = self.unified_tag_editor {
+                if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
                     if editor.current_item_idx > 0 {
                         editor.current_item_idx -= 1;
                         editor.reset_field_state();
@@ -362,7 +366,7 @@ impl App {
                 self.stage_decision(index, mutations);
 
                 // Transition to standardized review modal
-                // Note: unified_tag_editor state is NOT cleared - preserved for Cancel return
+                // Note: unified_tag_editor state is preserved inside SuspendedView for Cancel return
                 self.start_transaction_review(transaction_review::TransactionReviewSource::TagEditor);
             }
 
@@ -371,13 +375,12 @@ impl App {
                 if let Some(the_witch) = self.witch.as_mut() {
                     let _ = super::operator_decisions::discard_transaction(the_witch);
                 }
-                self.unified_tag_editor = None;
                 self.start_insights_view();
                 self.status_message = Some("Edits discarded".to_string());
             }
 
             UnifiedTagEditorAction::NextItem => {
-                if let Some(ref mut editor) = self.unified_tag_editor {
+                if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
                     if editor.current_item_idx < editor.total_items.saturating_sub(1) {
                         editor.current_item_idx += 1;
                         editor.reset_field_state();
@@ -386,7 +389,7 @@ impl App {
             }
 
             UnifiedTagEditorAction::PrevItem => {
-                if let Some(ref mut editor) = self.unified_tag_editor {
+                if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
                     if editor.current_item_idx > 0 {
                         editor.current_item_idx -= 1;
                         editor.reset_field_state();
@@ -410,7 +413,7 @@ impl App {
                                     .map(|t| (t.tag_name, t.tag_value))
                                     .collect();
 
-                                if let Some(ref mut editor) = self.unified_tag_editor {
+                                if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
                                     editor.fill_from_db_result(tag_pairs);
                                 }
                                 self.status_message = Some("Tags loaded from database".to_string());
@@ -428,7 +431,7 @@ impl App {
 
             UnifiedTagEditorAction::RequestTransactionReview => {
                 // Transition to standardized review modal
-                // Note: unified_tag_editor state is NOT cleared - preserved for Cancel return
+                // Note: unified_tag_editor state is preserved inside SuspendedView for Cancel return
                 self.start_transaction_review(transaction_review::TransactionReviewSource::TagEditor);
             }
         }
@@ -441,111 +444,61 @@ impl App {
     /// Handle actions from the standardized transaction review modal.
     ///
     /// All mutation flows route through this review modal:
-    /// - Cancel: return to source modal (state preserved)
-    /// - Discard: discard transaction, clear all modal states, return to Insights
-    /// - Confirm: commit transaction, clear all modal states, go to Progress
+    /// - Cancel: return to source view (state preserved in SuspendedView)
+    /// - Discard: discard transaction, drop suspended view, return to Insights
+    /// - Confirm: commit transaction, drop suspended view, go to Progress
     pub(super) fn handle_transaction_review_action(&mut self, action: transaction_review::TransactionReviewAction) {
-        use transaction_review::{TransactionReviewAction, TransactionReviewSource};
+        use transaction_review::TransactionReviewAction;
 
         match action {
             TransactionReviewAction::None => {}
 
             TransactionReviewAction::Cancel => {
-                // Return to source modal - state was preserved
-                let source = self.transaction_review.as_ref().map(|r| r.source);
-                self.transaction_review = None;
-
-                match source {
-                    Some(TransactionReviewSource::TagEditor) => {
-                        // unified_tag_editor state was preserved
-                        self.mode = UiMode::UnifiedTagEditor;
+                // Take the current view, extract suspended, restore it
+                let old = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
+                let ActiveView::TransactionReview { suspended, .. } = old else {
+                    return;
+                };
+                match *suspended {
+                    SuspendedView::Direct(view) => {
+                        self.view = view;
                     }
-                    Some(TransactionReviewSource::TagCanonicityResolution) => {
-                        // Reload current cluster into V2 tag_canonicity_state
-                        if self.load_current_cluster_signal() {
-                            self.mode = UiMode::TagCanonicityResolution;
-                        } else {
-                            // Signal no longer exists - return to Insights
+                    SuspendedView::TagCanonicityReload { clusters } => {
+                        if !self.load_current_cluster_signal_with_clusters(clusters) {
                             self.start_insights_view();
                         }
                     }
-                    Some(TransactionReviewSource::DeployPreview) => {
-                        // deployment_preview state was preserved
-                        self.mode = UiMode::DeploymentPreview;
-                    }
-                    Some(TransactionReviewSource::MissingFileResolution) => {
-                        // missing_file_preview state was preserved
-                        self.mode = UiMode::MissingFileResolution;
-                    }
-                    Some(TransactionReviewSource::MissingDirectoryResolution) => {
-                        // missing_directory_preview state was preserved
-                        self.mode = UiMode::MissingDirectoryResolution;
-                    }
-                    Some(TransactionReviewSource::IntakeConfirmation) => {
-                        // intake_confirmation state was preserved
-                        self.mode = UiMode::IntakeConfirmation;
-                    }
-                    Some(TransactionReviewSource::CompoundTagSplit) => {
-                        // Reload current signal into compound_split_state
-                        if self.load_current_compound_split_signal() {
-                            self.mode = UiMode::CompoundTagSplit;
-                        } else {
-                            // Signal no longer exists - return to Insights
+                    SuspendedView::CompoundTagSplitReload { clusters, safe_mode } => {
+                        if !self.load_current_compound_split_signal_with_clusters(clusters, safe_mode) {
                             self.start_insights_view();
                         }
                     }
-                    Some(TransactionReviewSource::OobSyncResolution) => {
-                        // oob_sync_state was preserved
-                        self.mode = UiMode::OobSyncResolution;
-                    }
-                    Some(TransactionReviewSource::OobConflictResolution) => {
-                        // oob_conflict_state was preserved
-                        self.mode = UiMode::OobConflictInspection;
-                    }
-                    Some(TransactionReviewSource::CorruptFileResolution) => {
-                        // corrupt_file_preview state was preserved
-                        self.mode = UiMode::CorruptFileResolution;
-                    }
-                    Some(TransactionReviewSource::ShitFormatResolution) => {
-                        // shit_format_preview state was preserved
-                        self.mode = UiMode::ShitFormatResolution;
-                    }
-                    Some(TransactionReviewSource::SubparDuplicateResolution) => {
-                        // subpar_duplicate_preview state was preserved
-                        self.mode = UiMode::SubparDuplicateResolution;
-                    }
-                    Some(TransactionReviewSource::DirectoryClusterResolution) => {
-                        // directory_cluster_preview state was preserved
-                        self.mode = UiMode::DirectoryClusterResolution;
-                    }
-                    None => self.start_insights_view(),
                 }
             }
 
             TransactionReviewAction::Discard => {
-                // Discard transaction and clear all modal states
+                // Discard transaction and drop all suspended state
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::discard_transaction(witch);
                 }
-                self.clear_all_modal_states();
                 self.start_insights_view();
                 self.status_message = Some("Transaction discarded".to_string());
             }
 
             TransactionReviewAction::Confirm => {
                 // Determine progress phase before clearing state
-                let post_commit_phase = self.transaction_review.as_ref()
-                    .map(|r| r.post_commit_phase)
-                    .unwrap_or_default();
+                let post_commit_phase = if let ActiveView::TransactionReview { ref review, .. } = self.view {
+                    review.post_commit_phase
+                } else {
+                    transaction_review::PostCommitPhase::default()
+                };
 
-                // Commit transaction and clear all modal states
+                // Commit transaction - dropping the old view drops all suspended state
                 let commit_result = if let Some(ref mut witch) = self.witch {
                     super::operator_decisions::commit_transaction(witch)
                 } else {
                     Err(crate::witch::TransactionError::NoActiveTransaction)
                 };
-
-                self.clear_all_modal_states();
 
                 match commit_result {
                     Ok(summary) => {
@@ -576,32 +529,29 @@ impl App {
         }
     }
 
-    /// Clear all modal states when committing or discarding a transaction.
-    fn clear_all_modal_states(&mut self) {
-        self.transaction_review = None;
-        self.unified_tag_editor = None;
-        self.tag_canonicity_state = None;
-        self.tag_canonicity_clusters = None;
-        self.compound_split_state = None;
-        self.compound_split_clusters = None;
-        self.deployment_preview = None;
-        self.missing_file_preview = None;
-        self.missing_directory_preview = None;
-        self.intake_confirmation = None;
-        self.oob_sync_state = None;
-        self.oob_conflict_state = None;
-        self.corrupt_file_preview = None;
-        self.shit_format_preview = None;
-        self.subpar_duplicate_preview = None;
-        self.directory_cluster_preview = None;
-    }
-
     /// Transition to the standardized transaction review modal.
     ///
     /// Called after staging decisions to show the review before commit.
+    /// Takes ownership of the current view and wraps it as a SuspendedView.
     pub(in crate::ui) fn start_transaction_review(&mut self, source: transaction_review::TransactionReviewSource) {
-        self.transaction_review = Some(transaction_review::TransactionReviewState::new(source));
-        self.mode = UiMode::TransactionReview;
+        use transaction_review::TransactionReviewSource;
+
+        // Take current view, wrap as suspended
+        let old_view = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
+        let suspended = match (source, old_view) {
+            (TransactionReviewSource::TagCanonicityResolution, ActiveView::TagCanonicityResolution { clusters, .. }) => {
+                SuspendedView::TagCanonicityReload { clusters }
+            }
+            (TransactionReviewSource::CompoundTagSplit, ActiveView::CompoundTagSplit { clusters, safe_mode, .. }) => {
+                SuspendedView::CompoundTagSplitReload { clusters, safe_mode }
+            }
+            (_, view) => SuspendedView::Direct(view),
+        };
+
+        self.view = ActiveView::TransactionReview {
+            review: transaction_review::TransactionReviewState::new(source),
+            suspended: Box::new(suspended),
+        };
     }
 
     /// Transition to transaction review modal with custom post-commit phase.
@@ -612,11 +562,25 @@ impl App {
         source: transaction_review::TransactionReviewSource,
         phase: transaction_review::PostCommitPhase,
     ) {
-        self.transaction_review = Some(
-            transaction_review::TransactionReviewState::new(source)
-                .with_post_commit_phase(phase)
-        );
-        self.mode = UiMode::TransactionReview;
+        use transaction_review::TransactionReviewSource;
+
+        // Take current view, wrap as suspended
+        let old_view = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
+        let suspended = match (source, old_view) {
+            (TransactionReviewSource::TagCanonicityResolution, ActiveView::TagCanonicityResolution { clusters, .. }) => {
+                SuspendedView::TagCanonicityReload { clusters }
+            }
+            (TransactionReviewSource::CompoundTagSplit, ActiveView::CompoundTagSplit { clusters, safe_mode, .. }) => {
+                SuspendedView::CompoundTagSplitReload { clusters, safe_mode }
+            }
+            (_, view) => SuspendedView::Direct(view),
+        };
+
+        self.view = ActiveView::TransactionReview {
+            review: transaction_review::TransactionReviewState::new(source)
+                .with_post_commit_phase(phase),
+            suspended: Box::new(suspended),
+        };
     }
 
     // =========================================================================
@@ -625,56 +589,52 @@ impl App {
 
     /// Handle mouse click at the given position.
     ///
-    /// This dispatches to the current mode's click handler to check for
+    /// This dispatches to the current view's click handler to check for
     /// button hits. Mouse clicks on decision buttons are equivalent to
     /// Enter key presses for decision witnessing.
     pub(super) fn handle_click(&mut self, x: u16, y: u16) {
-        match self.mode {
-            UiMode::OobSyncResolution => {
-                if let Some(ref state) = self.oob_sync_state {
-                    if let Some(button_name) = state.button_rects.hit_test(x, y) {
-                        // Simulate the button press action
-                        let action = match button_name {
-                            "accept_disk" => oob_sync_flow::OobSyncAction::AcceptDisk,
-                            "accept_db" => oob_sync_flow::OobSyncAction::AcceptDb,
-                            "cancel" => oob_sync_flow::OobSyncAction::Cancel,
-                            _ => oob_sync_flow::OobSyncAction::None,
-                        };
-                        self.handle_oob_sync_action(action);
-                    }
+        match &self.view {
+            ActiveView::OobSyncResolution(state) => {
+                if let Some(button_name) = state.button_rects.hit_test(x, y) {
+                    // Simulate the button press action
+                    let action = match button_name {
+                        "accept_disk" => oob_sync_flow::OobSyncAction::AcceptDisk,
+                        "accept_db" => oob_sync_flow::OobSyncAction::AcceptDb,
+                        "cancel" => oob_sync_flow::OobSyncAction::Cancel,
+                        _ => oob_sync_flow::OobSyncAction::None,
+                    };
+                    self.handle_oob_sync_action(action);
                 }
             }
-            UiMode::OobConflictInspection => {
-                if let Some(ref state) = self.oob_conflict_state {
-                    if let Some(button_name) = state.button_rects.hit_test(x, y) {
-                        // Simulate the button press action
-                        let action = match button_name {
-                            "apply_db" => oob_conflict_flow::OobConflictAction::Resolve,
-                            "assimilate_disk" => oob_conflict_flow::OobConflictAction::Resolve,
-                            "acknowledge" => oob_conflict_flow::OobConflictAction::Acknowledge,
-                            "cancel" => oob_conflict_flow::OobConflictAction::Cancel,
-                            _ => oob_conflict_flow::OobConflictAction::None,
-                        };
-                        if button_name == "apply_db" {
-                            // Set button to ApplyDb before handling
-                            if let Some(ref mut state) = self.oob_conflict_state {
-                                state.selected_button = oob_conflict_flow::types::ResolutionButton::ApplyDb;
-                            }
-                        } else if button_name == "assimilate_disk" {
-                            if let Some(ref mut state) = self.oob_conflict_state {
-                                state.selected_button = oob_conflict_flow::types::ResolutionButton::AssimilateDisk;
-                            }
+            ActiveView::OobConflictInspection(state) => {
+                if let Some(button_name) = state.button_rects.hit_test(x, y) {
+                    // Determine action and button state from button name
+                    let action = match button_name {
+                        "apply_db" => oob_conflict_flow::OobConflictAction::Resolve,
+                        "assimilate_disk" => oob_conflict_flow::OobConflictAction::Resolve,
+                        "acknowledge" => oob_conflict_flow::OobConflictAction::Acknowledge,
+                        "cancel" => oob_conflict_flow::OobConflictAction::Cancel,
+                        _ => oob_conflict_flow::OobConflictAction::None,
+                    };
+                    // Set button before handling (need mutable access)
+                    if button_name == "apply_db" {
+                        if let ActiveView::OobConflictInspection(ref mut state) = self.view {
+                            state.selected_button = oob_conflict_flow::types::ResolutionButton::ApplyDb;
                         }
-                        self.handle_oob_conflict_action(action);
+                    } else if button_name == "assimilate_disk" {
+                        if let ActiveView::OobConflictInspection(ref mut state) = self.view {
+                            state.selected_button = oob_conflict_flow::types::ResolutionButton::AssimilateDisk;
+                        }
                     }
+                    self.handle_oob_conflict_action(action);
                 }
             }
-            UiMode::Insights => {
-                if let Some(ref mut view) = self.insights_view {
+            ActiveView::Insights(_) => {
+                if let ActiveView::Insights(ref mut view) = self.view {
                     view.handle_click(x, y);
                 }
             }
-            // Add other modes as needed
+            // Other views don't handle clicks
             _ => {}
         }
     }

@@ -650,12 +650,32 @@ fn render(f: &mut Frame, app: &mut App) {
         Vec::new()
     };
 
-    // Get transaction summary for status bar
-    let transaction_summary = app.witch.as_ref().and_then(|w| w.transaction_summary());
+    // Build status bar lines. Status message overrides line 1; otherwise
+    // the active mode provides contextual content (e.g. selected file path).
+    let status_line_1 = if let Some(ref msg) = app.status_message {
+        Some(msg.clone())
+    } else {
+        match app.mode {
+            UiMode::CorpusBrowser => app.tree_browser.as_ref()
+                .and_then(|b| b.selected_path())
+                .map(|p| p.to_string_lossy().to_string()),
+            UiMode::TagCanonicityResolution => app.tag_canonicity_state.as_ref()
+                .and_then(|s| s.data.files.get(s.file_cursor))
+                .map(|f| f.path.clone()),
+            _ => None,
+        }
+    };
+
+    let status_line_2 = app.witch.as_ref()
+        .and_then(|w| w.transaction_summary())
+        .map(|(label, dec, mut_)| {
+            let pd = if dec == 1 { "" } else { "s" };
+            let pm = if mut_ == 1 { "" } else { "s" };
+            format!("Transaction \"{label}\": {dec} decision{pd}, {mut_} mutation{pm} staged")
+        });
 
     let mut ctx = render::RenderContext {
         mode: app.mode,
-        status_message: app.status_message.as_deref(),
         tree_browser: app.tree_browser.as_mut(),
         deployment_preview: app.deployment_preview.as_mut(),
         missing_file_preview: app.missing_file_preview.as_ref(),
@@ -683,7 +703,8 @@ fn render(f: &mut Frame, app: &mut App) {
         corpus_summary,
         db_stats,
         filter_popup_state: app.filter_popup_state.as_ref(),
-        transaction_summary,
+        status_line_1,
+        status_line_2,
     };
     render::render(f, &mut ctx);
 }

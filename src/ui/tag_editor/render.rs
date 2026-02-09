@@ -22,7 +22,7 @@ use super::types::{
 
 impl UnifiedTagEditorState {
     /// Render the unified tag editor.
-    pub fn render(&mut self, f: &mut Frame, area: Rect, status_message: Option<&str>) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         // Layout: info pane | 3-column | status box
         let editor_layout = Layout::default()
             .direction(Direction::Vertical)
@@ -34,10 +34,6 @@ impl UnifiedTagEditorState {
 
         self.render_info_pane(f, editor_layout[0]);
         self.render_three_column(f, editor_layout[1]);
-        // TODO: Controls hints should be displayed in the centralized bottom panel
-        // based on active UiMode/modal. Design a ControlsContext trait or similar
-        // that each mode can implement to provide context-sensitive controls.
-        let _ = status_message; // Status messages also need centralized handling
 
         // Render modal overlay if active
         if let Some(modal) = &self.modal {

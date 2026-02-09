@@ -21,7 +21,6 @@ use super::{compound_split_v2, corrupt_file_flow, deploy_flow, directory_cluster
 /// Contains all the state needed to render the UI.
 pub struct RenderContext<'a> {
     pub mode: super::UiMode,
-    pub status_message: Option<&'a str>,
     pub tree_browser: Option<&'a mut tree_browser::TreeBrowserState>,
     pub deployment_preview: Option<&'a mut deploy_flow::DeploymentPreviewState>,
     pub missing_file_preview: Option<&'a missing_file_flow::MissingFilePreviewState>,
@@ -49,8 +48,10 @@ pub struct RenderContext<'a> {
     pub corpus_summary: Option<crate::meta::signals::CorpusSummary>,
     pub db_stats: Option<crate::db_thread::DbThreadStats>,
     pub filter_popup_state: Option<&'a filter_popup::FilterPopupState>,
-    /// Transaction summary for status bar (label, decision_count, mutation_count)
-    pub transaction_summary: Option<(&'a str, usize, usize)>,
+    /// Status bar line 1 content (path, info, etc.)
+    pub status_line_1: Option<String>,
+    /// Status bar line 2 content (transaction info, etc.)
+    pub status_line_2: Option<String>,
 }
 
 /// Main render entry point - dispatches to sub-renderers based on mode.
@@ -247,7 +248,7 @@ fn render_content(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderCo
         super::UiMode::UnifiedTagEditor => {
             view_name = "unified_tag_editor";
             if let Some(ref mut editor) = ctx.unified_tag_editor {
-                editor.render(f, area, ctx.status_message);
+                editor.render(f, area);
             }
         }
         super::UiMode::MissingFileResolution => {
@@ -472,32 +473,12 @@ fn render_exit_confirm_modal(
 }
 
 /// Render the minimal 2-line status bar.
-fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, ctx: &mut RenderContext) {
-    // Get selected path from the tree browser if in corpus browser mode
-    let selected_path: Option<String> = if ctx.mode == super::UiMode::CorpusBrowser {
-        ctx.tree_browser
-            .as_ref()
-            .and_then(|b| b.selected_path())
-            .map(|p| p.to_string_lossy().to_string())
-    } else {
-        None
-    };
-
-    // Convert transaction summary to status_bar's type
-    let txn_summary = ctx.transaction_summary.map(|(label, dec, mut_)| {
-        status_bar::TransactionSummary {
-            label: label.to_string(),
-            decision_count: dec,
-            mutation_count: mut_,
-        }
-    });
-
+fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, ctx: &RenderContext) {
     status_bar::render(
         f,
         area,
-        selected_path.as_deref(),
-        ctx.status_message,
-        txn_summary.as_ref(),
+        ctx.status_line_1.as_deref(),
+        ctx.status_line_2.as_deref(),
     );
 }
 

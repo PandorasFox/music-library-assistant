@@ -1,6 +1,6 @@
 //! Core database types for file metadata and audio info.
 
-use serde::{Deserialize, Serialize};
+
 
 // ============================================================================
 // New Schema Types (inode-based identity)
@@ -56,16 +56,12 @@ pub struct FileEntry {
     pub source: FileSource,
     /// Relative path within the source root
     pub path: String,
-    /// True if this is a directory, false if a file
-    pub is_dir: bool,
-    /// Filesystem modification time (seconds since epoch)
-    pub mtime_secs: i64,
-    /// Filesystem modification time (nanoseconds component)
-    pub mtime_nanos: i64,
+    pub _is_dir: bool,
+    pub _mtime_secs: i64,
+    pub _mtime_nanos: i64,
     /// File size in bytes
     pub file_size: i64,
-    /// When this entry was last scanned (Unix timestamp)
-    pub scanned_at: i64,
+    pub _scanned_at: i64,
 }
 
 /// Audio-specific metadata for audio files.
@@ -74,8 +70,7 @@ pub struct FileEntry {
 /// Directories do not have audio_info records.
 #[derive(Debug, Clone)]
 pub struct AudioInfo {
-    /// The inode number (links to files.inode)
-    pub inode: i64,
+    pub _inode: i64,
     /// Audio format (flac, mp3, opus, ogg, etc.)
     pub file_type: String,
     /// Duration in milliseconds
@@ -86,8 +81,7 @@ pub struct AudioInfo {
     pub sample_rate: Option<i32>,
     /// Chromaprint acoustic fingerprint as raw u32 values
     pub fingerprint: Option<Vec<u32>>,
-    /// True when DB tags have changed but disk hasn't been updated yet
-    pub needs_tag_flush: bool,
+    pub _needs_tag_flush: bool,
 }
 
 /// Combined view of a file entry with its audio info.
@@ -119,15 +113,6 @@ pub struct AudioTag {
     pub inode: i64,
     pub tag_name: String,
     pub tag_value: String,
-}
-
-/// Deployment statistics for corpus health tracking.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeploymentStats {
-    pub total_corpus_files: usize,
-    pub deployed_files: usize,
-    pub deployment_percentage: f64,
-    pub last_updated: String,
 }
 
 // ============================================================================

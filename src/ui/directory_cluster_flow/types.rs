@@ -28,7 +28,8 @@ pub struct DirectoryGroupEntry {
     pub format_summary: String,
     /// Total file size in MB
     pub total_size_mb: f64,
-    /// Whether this source can have duplicates stashed (from config, default: true)
+    /// Whether this source can have duplicates stashed (from config, default: true).
+    /// TODO: replumb full directory config through here for can_stash properties after refactors.
     pub can_stash_dupes: bool,
 }
 

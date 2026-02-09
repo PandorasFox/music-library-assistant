@@ -378,7 +378,7 @@ fn index_track_from_metadata(
     let file_data = FileData {
         inode: metadata.inode,
         source: source.to_string(),
-        is_dir: false,
+        _is_dir: false,
         mtime_secs,
         mtime_nanos,
         file_size: metadata.file_size,

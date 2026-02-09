@@ -9,10 +9,10 @@
 //!
 //! ```ignore
 //! // UI code (every frame when data is needed):
-//! witch.ui_read_cache().want_corpus_summary();
+//! witch.ui_read_cache().want_insights_data();
 //!
 //! // Render code (reads latest cached value, never blocks):
-//! let summary = witch.ui_read_cache().corpus_summary();
+//! let data = witch.ui_read_cache().insights_data();
 //! ```
 //!
 //! ## Design
@@ -28,7 +28,6 @@ use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::corpus::db::types::InsightsData;
-use crate::meta::signals::CorpusSummary;
 use crate::corpus::db::Database;
 
 // ============================================================================
@@ -264,40 +263,18 @@ impl<T> Drop for CacheWriter<T> {
 /// Owned by the Witch. UI components call `want_*()` methods to flag demand,
 /// and `*()` methods to read cached values.
 pub struct UiReadCache {
-    corpus_summary: CacheEntry<CorpusSummary>,
     insights_data: CacheEntry<InsightsData>,
 }
 
 impl UiReadCache {
-    /// Default throttle duration for cache entries (15 seconds).
-    const DEFAULT_THROTTLE: Duration = Duration::from_secs(15);
     /// Insights data throttle (30 seconds - heavier computation).
     const INSIGHTS_THROTTLE: Duration = Duration::from_secs(30);
 
     /// Create a new UI read cache with default throttle settings.
     pub fn new() -> Self {
         Self {
-            corpus_summary: CacheEntry::new(Self::DEFAULT_THROTTLE),
             insights_data: CacheEntry::new(Self::INSIGHTS_THROTTLE),
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // Corpus Summary
-    // -------------------------------------------------------------------------
-
-    /// UI calls this when it wants corpus summary data.
-    ///
-    /// Idempotent - safe to call every frame. Respects throttle.
-    pub fn want_corpus_summary(&self) {
-        self.corpus_summary.want();
-    }
-
-    /// Read the latest cached corpus summary.
-    ///
-    /// Returns None if never computed. Never blocks.
-    pub fn corpus_summary(&self) -> Option<CorpusSummary> {
-        self.corpus_summary.get()
     }
 
     // -------------------------------------------------------------------------
@@ -338,26 +315,6 @@ impl UiReadCache {
         // Don't spawn new refreshes if shutdown is in progress
         if is_shutdown_requested() {
             return;
-        }
-
-        // Corpus summary refresh
-        if let Some(writer) = self.corpus_summary.take_refresh() {
-            IN_FLIGHT_REFRESHES.fetch_add(1, Ordering::Release);
-            rayon::spawn(move || {
-                // Open fresh read-only connection on worker thread
-                if let Ok(db_path) = config::get_db_path() {
-                    if let Ok(db) = Database::open_read_only(&db_path) {
-                        if let Ok(summary) = db.get_corpus_summary() {
-                            writer.complete(summary);
-                            IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
-                            return;
-                        }
-                    }
-                }
-                // On error, abort (allows retry on next want)
-                writer.abort();
-                IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
-            });
         }
 
         // Insights data refresh

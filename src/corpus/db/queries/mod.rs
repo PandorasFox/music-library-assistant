@@ -6,7 +6,6 @@
 //! - `metadata`: App metadata, tag canonicalization
 //! - `library_scan`: Library scanning state
 
-mod deployment;
 pub mod files;
 mod health;
 mod library_scan;
@@ -656,11 +655,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get all files for a library (for DeriveDeployHealthSignals).
     pub fn get_library_files(&self, library_name: &str) -> Result<Vec<library_scan::LibraryScanEntry>> {
         self.db.get_library_files(library_name)
-    }
-
-    /// Get all inodes that are deployed in any library.
-    pub fn get_all_library_inodes(&self) -> Result<std::collections::HashSet<i64>> {
-        self.db.get_all_library_inodes()
     }
 
     /// Get audio info for a track by inode.

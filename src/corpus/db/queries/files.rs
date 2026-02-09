@@ -591,11 +591,11 @@ impl Database {
             inode: row.get(0)?,
             source,
             path: row.get(2)?,
-            is_dir: is_dir != 0,
-            mtime_secs: row.get(4)?,
-            mtime_nanos: row.get(5)?,
+            _is_dir: is_dir != 0,
+            _mtime_secs: row.get(4)?,
+            _mtime_nanos: row.get(5)?,
             file_size: row.get(6)?,
-            scanned_at: row.get(7)?,
+            _scanned_at: row.get(7)?,
         })
     }
 
@@ -606,13 +606,13 @@ impl Database {
         let needs_tag_flush: i32 = row.get(6)?;
 
         Ok(AudioInfo {
-            inode: row.get(0)?,
+            _inode: row.get(0)?,
             file_type: row.get(1)?,
             duration_ms: row.get(2)?,
             bitrate_kbps: row.get(3)?,
             sample_rate: row.get(4)?,
             fingerprint,
-            needs_tag_flush: needs_tag_flush != 0,
+            _needs_tag_flush: needs_tag_flush != 0,
         })
     }
 
@@ -634,20 +634,20 @@ impl Database {
                 inode: row.get(0)?,
                 source,
                 path: row.get(2)?,
-                is_dir: is_dir != 0,
-                mtime_secs: row.get(4)?,
-                mtime_nanos: row.get(5)?,
+                _is_dir: is_dir != 0,
+                _mtime_secs: row.get(4)?,
+                _mtime_nanos: row.get(5)?,
                 file_size: row.get(6)?,
-                scanned_at: row.get(7)?,
+                _scanned_at: row.get(7)?,
             },
             audio: AudioInfo {
-                inode: row.get(0)?,
+                _inode: row.get(0)?,
                 file_type: row.get(8)?,
                 duration_ms: row.get(9)?,
                 bitrate_kbps: row.get(10)?,
                 sample_rate: row.get(11)?,
                 fingerprint,
-                needs_tag_flush: needs_tag_flush != 0,
+                _needs_tag_flush: needs_tag_flush != 0,
             },
         })
     }

@@ -503,7 +503,6 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Flag demand for cached UI data
         if let Some(ref the_witch) = app.witch {
-            the_witch.ui_read_cache().want_corpus_summary();
             if matches!(app.view, ActiveView::Insights(_)) {
                 the_witch.ui_read_cache().want_insights_data();
             }

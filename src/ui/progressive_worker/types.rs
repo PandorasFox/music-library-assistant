@@ -17,21 +17,12 @@ pub enum WorkItem {
         /// Index in the overall work queue (for decision numbering)
         idx: usize,
     },
-    /// Stage mutations for tag canonicity.
-    StageTagCanonicality {
-        /// The signal ID to process
-        signal_id: i64,
-        /// Index in the overall work queue
-        idx: usize,
-    },
     // Future: LoadSignalData, LoadDeployPreview, etc.
 }
 
 /// Summary of work completed - returned via callback.
 #[derive(Debug, Default)]
 pub struct WorkSummary {
-    /// Total items processed
-    pub processed: usize,
     /// Items that generated mutations
     pub mutations_generated: usize,
     /// Items skipped (NOP - no changes needed)
@@ -99,21 +90,6 @@ impl ProgressiveWorkerState {
         state
     }
 
-    /// Create a new progressive worker for tag canonicity.
-    pub fn for_tag_canonicity(signal_ids: Vec<i64>) -> Self {
-        let items: Vec<WorkItem> = signal_ids
-            .iter()
-            .enumerate()
-            .map(|(idx, &signal_id)| WorkItem::StageTagCanonicality { signal_id, idx })
-            .collect();
-
-        Self::new(
-            "Staging tag canonicity...".to_string(),
-            items,
-            OnComplete::TagCanonicalityStaging,
-        )
-    }
-
     /// Progress ratio for the gauge (0.0 to 1.0).
     pub fn progress_ratio(&self) -> f64 {
         if self.total == 0 {
@@ -126,7 +102,6 @@ impl ProgressiveWorkerState {
     /// Build the final work summary.
     pub fn build_summary(&self) -> WorkSummary {
         WorkSummary {
-            processed: self.processed,
             mutations_generated: self.mutations_generated,
             nops_elided: self.nops_elided,
         }
@@ -138,7 +113,5 @@ impl ProgressiveWorkerState {
 pub enum OnComplete {
     /// Show transaction review for compound split staging.
     CompoundSplitStaging,
-    /// Show transaction review for tag canonicity staging.
-    TagCanonicalityStaging,
     // Future: LoadDeployPreview, LoadMissingFiles, etc.
 }

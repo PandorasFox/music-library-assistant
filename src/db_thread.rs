@@ -49,7 +49,7 @@ use crate::config;
 pub struct FileData {
     pub inode: i64,
     pub source: String,     // 'corpus', 'library', 'inbox'
-    pub is_dir: bool,
+    pub _is_dir: bool,
     pub mtime_secs: i64,
     pub mtime_nanos: i64,
     pub file_size: i64,
@@ -60,21 +60,6 @@ pub struct FileData {
 /// Only for audio files (not directories).
 #[derive(Debug, Clone)]
 pub struct AudioData {
-    pub file_type: String,
-    pub duration_ms: Option<i64>,
-    pub bitrate_kbps: Option<i32>,
-    pub sample_rate: Option<i32>,
-    pub fingerprint: Option<Vec<u32>>,
-}
-
-/// Track audio/file metadata for indexing (legacy format).
-///
-/// **DEPRECATED**: Use `FileData` + `AudioData` instead.
-/// Retained for backward compatibility during schema migration.
-#[derive(Debug, Clone)]
-pub struct TrackData {
-    pub inode: i64,
-    pub file_size: i64,
     pub file_type: String,
     pub duration_ms: Option<i64>,
     pub bitrate_kbps: Option<i32>,
@@ -438,7 +423,7 @@ pub struct DbThreadStats {
     pub _signal_writes: u64,
     pub _index_writes: u64,
     pub queue_depth: u64,
-    pub avg_latency_us: u64,
+    pub _avg_latency_us: u64,
     pub writes_per_sec: f64,
     pub _queue_empty: bool,
 }
@@ -483,7 +468,7 @@ impl DbThreadHandle {
             _signal_writes: self.stats.signal_writes.load(Ordering::Relaxed),
             _index_writes: self.stats.index_writes.load(Ordering::Relaxed),
             queue_depth: self.stats.queue_depth.load(Ordering::Relaxed),
-            avg_latency_us: if total_writes > 0 {
+            _avg_latency_us: if total_writes > 0 {
                 total_db_time_us / total_writes
             } else {
                 0

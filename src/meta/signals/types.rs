@@ -4,9 +4,9 @@
 //! Signal types are pure enums/structs with no reverse dependencies on
 //! other MLA modules (except `DeploymentStats` from `corpus::db::types`).
 
-use std::collections::HashMap;
 
-use crate::corpus::db::types::DeploymentStats;
+
+
 
 // ============================================================================
 // Signal Key Types
@@ -462,55 +462,4 @@ impl From<AggregateSignal> for Signal {
     }
 }
 
-/// Summary of corpus signals.
-#[derive(Debug, Clone, Default)]
-pub struct SignalSummary {
-    /// Total health issues (excluding deploy_conflicts)
-    pub total_issues: usize,
-    // Content-level breakdowns (may not sum to total_issues due to other issue types)
-    pub metadata_duplicates: usize,
-    pub canonicalization_issues: usize,
-    pub missing_tag_issues: usize,
-}
 
-/// Aggregated corpus summary for UI display.
-#[derive(Debug, Clone, Default)]
-pub struct CorpusSummary {
-    pub _track_count: usize,
-    /// Number of unresolved deployment conflicts (tracks that would deploy to same path)
-    pub deploy_conflicts: usize,
-    pub signal_summary: SignalSummary,
-    pub _deployment_stats: Option<DeploymentStats>,
-    pub _pending_changes: HashMap<String, usize>,
-    pub _last_scan: Option<String>,
-
-    // File-level stats (benign signals, shown separately from issues)
-    /// Total files discovered in corpus directories
-    pub files_in_corpus: usize,
-    /// Files that are healthy (in corpus + indexed + matching mtime)
-    pub healthy_files: usize,
-    /// Files in corpus but not indexed
-    pub unindexed_files: usize,
-    /// Files in index but no longer exist on disk
-    pub missing_files: usize,
-    /// Directories in index but no longer exist on disk
-    pub missing_directories: usize,
-    /// Files that were moved (same inode, different path)
-    pub moved_files: usize,
-
-    // Library deployment signals
-    /// Library files that are stale (deployed from wrong source)
-    pub library_stale: usize,
-    /// Library files that are leftovers (no corpus backing)
-    pub library_leftover: usize,
-
-    // Out-of-band change signals
-    /// Files with syncable tag extras (one direction only)
-    pub oob_tag_sync: usize,
-    /// Files with tag value conflicts or mixed-direction extras
-    pub oob_tag_conflict: usize,
-    /// Files with mtime changed but tags identical (requires acknowledgement)
-    pub mtime_only_mismatch: usize,
-    /// Multiple index entries sharing same inode
-    pub duplicate_inodes: usize,
-}

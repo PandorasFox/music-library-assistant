@@ -122,19 +122,4 @@ impl Database {
         Ok(entries)
     }
 
-    /// Get all inodes that are deployed in any library.
-    ///
-    /// Returns a HashSet for O(1) lookup when checking if a corpus file is deployed.
-    pub fn get_all_library_inodes(&self) -> Result<std::collections::HashSet<i64>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT DISTINCT inode FROM files WHERE source = 'library'")?;
-
-        let inodes = stmt
-            .query_map(params![], |row| row.get(0))?
-            .collect::<Result<std::collections::HashSet<i64>, _>>()
-            .context("Failed to query library inodes")?;
-
-        Ok(inodes)
-    }
 }

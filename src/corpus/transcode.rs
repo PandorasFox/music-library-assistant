@@ -25,13 +25,6 @@ impl TranscodeTarget {
         }
     }
 
-    /// Human-readable label for display.
-    pub fn label(&self) -> String {
-        match self {
-            TranscodeTarget::Opus { bitrate_kbps } => format!("Opus {}kbps", bitrate_kbps),
-            TranscodeTarget::Flac => "FLAC".to_string(),
-        }
-    }
 }
 
 /// Transcode a source audio file to the target format.

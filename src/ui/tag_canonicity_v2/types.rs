@@ -42,8 +42,6 @@ pub struct FileTagInfo {
     pub path: String,
     /// All tags for this file (tag_name, tag_value)
     pub tag_values: Vec<(String, String)>,
-    /// Which variant this file has (index into variants list, if any)
-    pub variant_index: Option<usize>,
 }
 
 /// Extended modal data with per-file tag info.
@@ -129,17 +127,11 @@ impl TagCanonicalityModalDataV2 {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect();
 
-                // Find which variant this file has for the target tag
-                let current_value = tagset.values_for(&tag_name).next();
-                let variant_index = current_value
-                    .and_then(|v| variants.iter().position(|var| var.value == v));
-
                 files.push(FileTagInfo {
                     inode,
                     filename,
                     path: path.to_string(),
                     tag_values,
-                    variant_index,
                 });
             }
         }

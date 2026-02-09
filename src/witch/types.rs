@@ -3,7 +3,6 @@
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use crate::meta::computations::Computation;
 use crate::meta::mutations::Mutation;
@@ -332,19 +331,6 @@ impl TaskLabel {
     }
 }
 
-/// Summary of a completed Witch session (for lingering display).
-#[derive(Debug, Clone)]
-pub struct CompletedSession {
-    /// How long the session took (first queue to last complete)
-    pub duration: Duration,
-    /// Total tasks processed
-    pub total_processed: usize,
-    /// Tasks that failed
-    pub failed: usize,
-    /// Breakdown by task type
-    pub task_counts: HashMap<String, usize>,
-}
-
 /// Status information returned from tick().
 #[derive(Debug, Clone, Default)]
 pub struct DaemonStatus {
@@ -360,16 +346,8 @@ pub struct DaemonStatus {
     pub total_processed: usize,
     /// Total tasks queued in current session (for progress: processed/queued)
     pub session_queued: usize,
-    /// Recent error messages
-    pub recent_errors: Vec<String>,
-    /// Breakdown of processed tasks by type label
-    pub task_counts: HashMap<String, usize>,
     /// Breakdown of pending tasks by type label
     pub pending_by_label: HashMap<String, usize>,
-    /// Elapsed time since first task was queued (if session active)
-    pub elapsed: Option<Duration>,
-    /// Completed session summary (for lingering display)
-    pub completed_session: Option<CompletedSession>,
 }
 
 /// Snapshot of Witch state for status reporting.

@@ -223,15 +223,9 @@ impl TagSet {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
 
-        let common: Vec<(String, String)> = self_set
-            .intersection(&other_set)
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
         TagSetDiff {
             only_left: TagSet::new(only_left),
             only_right: TagSet::new(only_right),
-            common: TagSet::new(common),
         }
     }
 }
@@ -247,16 +241,9 @@ pub struct TagSetDiff {
     pub only_left: TagSet,
     /// Tags in the second set but not the first.
     pub only_right: TagSet,
-    /// Tags in both sets.
-    pub common: TagSet,
 }
 
 impl TagSetDiff {
-    /// True if the sets are identical (no differences).
-    pub fn is_empty(&self) -> bool {
-        self.only_left.tags.is_empty() && self.only_right.tags.is_empty()
-    }
-
     /// Classify the difference for OOB detection.
     #[cfg(test)]
     pub fn classify(&self) -> DiffClassification {

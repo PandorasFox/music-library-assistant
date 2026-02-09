@@ -49,17 +49,9 @@ pub struct CompoundEntry {
     pub split_parts: Vec<String>,
     /// Which parts exist in corpus
     pub matching_parts: Vec<String>,
-    /// Separator used (e.g., "; ")
-    pub separator: String,
 }
 
 impl CompoundEntry {
-    /// Whether all split parts exist in corpus (safe to split).
-    pub fn is_safe(&self) -> bool {
-        !self.split_parts.is_empty()
-            && self.split_parts.len() == self.matching_parts.len()
-    }
-
     /// Check if a specific part exists in corpus.
     pub fn part_exists(&self, part: &str) -> bool {
         self.matching_parts.iter().any(|m| m == part)
@@ -71,8 +63,6 @@ impl CompoundEntry {
 pub struct CompoundSplitDataV2 {
     /// The first compound entry (we process one at a time)
     pub compound: CompoundEntry,
-    /// Inode from the signal
-    pub inode: i64,
     /// Per-file tag info with cached tag values
     pub files: Vec<FileTagInfo>,
 }
@@ -125,11 +115,6 @@ impl CompoundSplitDataV2 {
                         .collect()
                 })
                 .unwrap_or_default(),
-            separator: c
-                .get("separator")
-                .and_then(|v| v.as_str())
-                .unwrap_or("; ")
-                .to_string(),
         };
 
         // Load file info
@@ -167,7 +152,6 @@ impl CompoundSplitDataV2 {
 
         Some(Self {
             compound,
-            inode,
             files,
         })
     }
@@ -265,14 +249,6 @@ impl CompoundSplitStateV2 {
             group_index,
             total_groups,
         }
-    }
-
-    /// Check if the staged decision was a canonicalize action (EmitCanonicalTag).
-    ///
-    /// Returns true if the mutations indicate the user chose to mark this value
-    /// as canonical rather than split it.
-    pub fn is_canonicalize_decision(mutations: &[Mutation]) -> bool {
-        mutations.iter().any(|m| matches!(m, Mutation::EmitCanonicalTag(_)))
     }
 
     /// Restore UI state from a previously staged decision's mutations.

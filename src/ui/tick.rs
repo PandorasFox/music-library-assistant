@@ -209,9 +209,6 @@ impl App {
             WorkItem::StageCompoundSplit { signal_id, idx } => {
                 self.process_compound_split_item(*signal_id, *idx, worker);
             }
-            WorkItem::StageTagCanonicality { signal_id, idx } => {
-                self.process_tag_canonicity_item(*signal_id, *idx, worker);
-            }
         }
     }
 
@@ -314,18 +311,6 @@ impl App {
         }
     }
 
-    /// Process a single tag canonicity work item.
-    fn process_tag_canonicity_item(
-        &mut self,
-        _signal_id: i64,
-        _idx: usize,
-        worker: &mut ProgressiveWorkerState,
-    ) {
-        // Tag canonicity staging - placeholder for future implementation
-        // For now, just count as NOP
-        worker.nops_elided += 1;
-    }
-
     /// Handle completion of progressive work.
     ///
     /// Directly creates the TransactionReview view with the return_context as the
@@ -354,19 +339,6 @@ impl App {
                 self.view = ActiveView::TransactionReview {
                     review: transaction_review::TransactionReviewState::new(
                         transaction_review::TransactionReviewSource::CompoundTagSplit,
-                    ),
-                    suspended: return_context,
-                };
-            }
-            OnComplete::TagCanonicalityStaging => {
-                self.status_message = Some(format!(
-                    "Staged {} tag canonicity decisions",
-                    summary.mutations_generated,
-                ));
-
-                self.view = ActiveView::TransactionReview {
-                    review: transaction_review::TransactionReviewState::new(
-                        transaction_review::TransactionReviewSource::TagCanonicityResolution,
                     ),
                     suspended: return_context,
                 };

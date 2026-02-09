@@ -11,7 +11,6 @@
 //! - **Consistent**: Uniform styling and behavior across the app
 //! - **Focus-aware**: Widgets know when they're focused and style accordingly
 
-mod controls;
 pub mod control_colors;
 pub mod file_path_list;
 mod layout;
@@ -31,9 +30,7 @@ pub use list_click_targets::ListClickTargets;
 pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout};
 
 // Modal widgets
-pub use modal::{centered_rect, centered_rect_fixed, Modal, ModalButton, ModalStyle};
-
-// Controls hint widgets (legacy presets - now mostly unused, modals handle their own hints)
+pub use modal::{centered_rect_fixed, Modal, ModalButton, ModalStyle};
 
 // Title bar widgets
 pub use titlebar::{LateralView, UnifiedTitleBar};

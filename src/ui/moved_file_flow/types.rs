@@ -54,8 +54,6 @@ pub struct MovedFileState {
     pub files: Vec<MovedFileInfo>,
     /// Currently selected file in the list
     pub current_file: usize,
-    /// Scroll offset for file list
-    pub scroll: usize,
     /// Currently selected button
     pub selected_button: MovedFileButton,
     /// Current focus pane (List or Buttons)
@@ -67,7 +65,6 @@ impl MovedFileState {
         Self {
             files,
             current_file: 0,
-            scroll: 0,
             selected_button: MovedFileButton::Acknowledge,
             focus_pane: FocusPane::List,
         }

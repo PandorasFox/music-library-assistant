@@ -94,6 +94,7 @@ pub enum PostCommitPhase {
 /// Decision data is fetched from the Witch's active transaction at render time,
 /// NOT stored in this state. The Witch is the source of truth.
 pub struct TransactionReviewState {
+    // TODO: use source for returning to prior view when cancelling
     pub source: TransactionReviewSource,
     pub cursor: usize,
     pub scroll: usize,

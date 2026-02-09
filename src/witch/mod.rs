@@ -38,7 +38,7 @@ mod worker_stats;
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
-    CommitSummary, CompletedSession, CorpusObservationState, DaemonStatus, DecisionWitness,
+    CommitSummary, CorpusObservationState, DaemonStatus, DecisionWitness,
     DiscardSummary, EyeState, Migration, MigrationWitness, MutationExecutionWitness,
     PendingTransaction, SpawnedMutation, Task, TaskExecutionState, TaskExecutionStateSnapshot,
     TaskLabel, TransactionError, WorkerStats,
@@ -149,8 +149,6 @@ pub struct Witch {
     pending_by_label: HashMap<String, usize>,
     current_label: Option<String>,
 
-    // Completed session for lingering display
-    completed_session: Option<CompletedSession>,
     completed_at: Option<Instant>,
 
     // Transaction state
@@ -239,7 +237,6 @@ impl Witch {
             task_counts: HashMap::new(),
             pending_by_label: HashMap::new(),
             current_label: None,
-            completed_session: None,
             completed_at: None,
             pending_transaction: None,
             read_only_conn: None,
@@ -325,29 +322,6 @@ impl Witch {
         self.eye_state == EyeState::Awake
             && !self.read_only_mode
             && self.safety_latch_reason.is_none()
-    }
-
-    /// Check if the Witch is in read-only mode (for any reason).
-    ///
-    /// Returns true if:
-    /// - Config-based read-only mode is enabled, OR
-    /// - Safety latch was triggered at runtime
-    pub fn is_read_only(&self) -> bool {
-        self.read_only_mode || self.safety_latch_reason.is_some()
-    }
-
-    /// Get the reason for read-only mode, if any.
-    ///
-    /// Returns:
-    /// - Some("config") if read-only mode was set via config
-    /// - Some(reason) if safety latch was triggered
-    /// - None if mutations are allowed
-    pub fn read_only_reason(&self) -> Option<&str> {
-        if self.read_only_mode {
-            Some("Read-only mode enabled in config")
-        } else {
-            self.safety_latch_reason.as_deref()
-        }
     }
 
     /// Trigger the safety latch, permanently disabling mutations for this session.
@@ -521,10 +495,7 @@ impl Witch {
         let current_in_flight = self.in_flight;
         let current_total_processed = self.total_processed;
         let current_session_queued = self.session_queued;
-        let current_task_counts = self.task_counts.clone();
         let current_pending_by_label = self.pending_by_label.clone();
-        let current_errors = self.recent_errors.iter().cloned().collect();
-        let elapsed = self.session_start.map(|start| start.elapsed());
 
         // State machine transitions (uses self.in_flight internally)
         self.update_state();
@@ -536,11 +507,7 @@ impl Witch {
             failed,
             total_processed: current_total_processed,
             session_queued: current_session_queued,
-            recent_errors: current_errors,
-            task_counts: current_task_counts,
             pending_by_label: current_pending_by_label,
-            elapsed,
-            completed_session: self.completed_session.clone(),
         }
     }
 
@@ -571,8 +538,6 @@ impl Witch {
     }
 
     fn transition_to_completed(&mut self) {
-        let duration = self.session_start.map(|s| s.elapsed()).unwrap_or_default();
-
         // Capture mutation flag before session reset
         let had_mutations = self.mutations_ran_this_session;
 
@@ -582,13 +547,6 @@ impl Witch {
         let mut queue_content_analysis_after_reset = false;
         // Flag to queue re-observation (WalkCorpus) after mutations complete
         let mut queue_reobservation_after_reset = false;
-
-        self.completed_session = Some(CompletedSession {
-            duration,
-            total_processed: self.total_processed,
-            failed: self.total_failed,
-            task_counts: self.task_counts.clone(),
-        });
 
         self.completed_at = Some(Instant::now());
         self.state = TaskExecutionState::Completed;
@@ -794,7 +752,6 @@ impl Witch {
 
     fn transition_to_idle(&mut self) {
         self.state = TaskExecutionState::Idle;
-        self.completed_session = None;
         self.completed_at = None;
     }
 
@@ -1147,11 +1104,7 @@ impl Witch {
             failed: 0,    // Only meaningful from tick() result
             total_processed: self.total_processed,
             session_queued: self.session_queued,
-            recent_errors: self.recent_errors.iter().cloned().collect(),
-            task_counts: self.task_counts.clone(),
             pending_by_label: self.pending_by_label.clone(),
-            elapsed: self.session_start.map(|start| start.elapsed()),
-            completed_session: self.completed_session.clone(),
         }
     }
 

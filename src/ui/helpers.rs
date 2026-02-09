@@ -2,9 +2,6 @@
 //!
 //! Common helpers used across multiple UI modules to avoid code duplication.
 
-// Re-export centered_rect from widgets module
-pub use super::widgets::centered_rect;
-
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Clear};
 use ratatui::Frame;
@@ -84,26 +81,6 @@ pub fn truncate_right(s: &str, max_chars: usize) -> String {
     }
     let take = max_chars.saturating_sub(3);
     format!("{}...", s.chars().take(take).collect::<String>())
-}
-
-/// Format a Duration as a human-readable string.
-pub fn format_duration(duration: std::time::Duration) -> String {
-    let total_secs = duration.as_secs();
-    let millis = duration.subsec_millis();
-
-    if total_secs == 0 {
-        format!("{}ms", millis)
-    } else if total_secs < 60 {
-        format!("{}.{}s", total_secs, millis / 100)
-    } else if total_secs < 3600 {
-        let mins = total_secs / 60;
-        let secs = total_secs % 60;
-        format!("{}m {}s", mins, secs)
-    } else {
-        let hours = total_secs / 3600;
-        let mins = (total_secs % 3600) / 60;
-        format!("{}h {}m", hours, mins)
-    }
 }
 
 // ============================================================================

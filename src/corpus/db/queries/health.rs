@@ -14,73 +14,19 @@
 //! - `replace_signal` - delete existing + insert new (for summary signals)
 
 use anyhow::{Context, Result};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 
 use super::Database;
 use crate::db_thread::SignalWitness;
 use crate::corpus::db::types::FileSource;
 use crate::meta::signals::{
     AggregateSignal, AggregateSignalType, CorpusFileSignalType,
-    Signal, SignalType,
 };
 
 impl Database {
     // ========================================================================
     // Health Issue Operations
     // ========================================================================
-
-    /// Get health signals filtered by type.
-    ///
-    /// Reads from the per-signal typed table. For total counts, use count_all_signals().
-    pub fn get_signals(
-        &self,
-        issue_type: Option<SignalType>,
-    ) -> Result<Vec<Signal>> {
-        match issue_type {
-            Some(signal_type) => self.get_signals_from_typed_table(signal_type),
-            None => Ok(Vec::new()), // Use count_all_signals() for counting
-        }
-    }
-
-    /// Read signals of a specific type from the per-signal typed table.
-    fn get_signals_from_typed_table(&self, signal_type: SignalType) -> Result<Vec<Signal>> {
-        // Map signal type to the appropriate typed table
-        let table = match corpus_signal_table_name(signal_type) {
-            Some(t) => t,
-            None => {
-                // Aggregate signal type — convert through get_aggregate_signals
-                if let Some(agg_type) = AggregateSignalType::from_str(signal_type.as_str()) {
-                    let agg_signals = self.get_aggregate_signals(Some(agg_type))?;
-                    return Ok(agg_signals.into_iter().map(Signal::from).collect());
-                }
-                return Ok(Vec::new());
-            }
-        };
-
-        // Most corpus signal tables have: inode, path, [extras...], discovered_at
-        // Reconstruct Signal with metadata_json containing {"path": "..."} for compat
-        let sql = format!(
-            "SELECT inode, path, discovered_at FROM {} ORDER BY discovered_at DESC",
-            table
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![], |row| {
-            let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            let discovered_at: Option<String> = row.get(2)?;
-            Ok(Signal {
-                id: None,
-                issue_type: signal_type,
-                issue_key: inode.to_string(),
-                discovered_at,
-                metadata_json: Some(format!(r#"{{"path":"{}"}}"#, path.replace('\\', "\\\\").replace('"', "\\\""))),
-                inode: Some(inode),
-            })
-        })?;
-        let mut signals = Vec::new();
-        for row in rows { signals.push(row?); }
-        Ok(signals)
-    }
 
 
     /// Count total signals across all typed tables.
@@ -121,6 +67,40 @@ impl Database {
         total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0) as usize;
         total += LibraryStaleSignal::count(&self.conn).unwrap_or(0) as usize;
         total
+    }
+
+    // ========================================================================
+    // Typed Signal Queries (direct struct access, no JSON)
+    // ========================================================================
+
+    pub fn get_unindexed_file_signals(&self) -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>> {
+        crate::meta::signals::data::UnindexedFileSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query unindexed file signals: {}", e))
+    }
+
+    pub fn get_healthy_file_signals(&self) -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>> {
+        crate::meta::signals::data::HealthyFileSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query healthy file signals: {}", e))
+    }
+
+    pub fn get_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>> {
+        crate::meta::signals::data::TagCanonicitySignal::query_by_key(&self.conn, key)
+            .map_err(|e| anyhow::anyhow!("Failed to query tag canonicity signal: {}", e))
+    }
+
+    pub fn get_inconsistent_album_artist_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>> {
+        crate::meta::signals::data::InconsistentAlbumArtistSignal::query_by_key(&self.conn, key)
+            .map_err(|e| anyhow::anyhow!("Failed to query inconsistent album artist signal: {}", e))
+    }
+
+    pub fn get_compound_tag_signal(&self, inode: i64) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>> {
+        crate::meta::signals::data::CompoundTagSignal::query_by_inode(&self.conn, inode)
+            .map_err(|e| anyhow::anyhow!("Failed to query compound tag signal: {}", e))
+    }
+
+    pub fn get_cross_source_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
+        crate::meta::signals::data::CrossSourceOverlapSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query cross source overlap signals: {}", e))
     }
 
     /// Fast existence check for an aggregate signal (semantic-keyed).
@@ -554,119 +534,6 @@ impl Database {
             }
             Ok(results)
         }
-    }
-
-    /// Get an aggregate signal by its natural key.
-    ///
-    /// Searches across all aggregate signal typed tables until a match is found.
-    /// Returns the first match as an AggregateSignal with reconstructed metadata.
-    pub fn get_aggregate_signal_by_key(
-        &self,
-        key: &str,
-    ) -> Result<Option<AggregateSignal>> {
-        // Try each aggregate signal type's table until we find a match
-        for &agg_type in &[
-            AggregateSignalType::FingerprintOverlap,
-            AggregateSignalType::MetadataDuplicate,
-            AggregateSignalType::DuplicateInode,
-            AggregateSignalType::MissingTag,
-            AggregateSignalType::DeployConflict,
-            AggregateSignalType::TagCanonicity,
-            AggregateSignalType::InconsistentAlbumArtist,
-            AggregateSignalType::CompoundTagValue,
-            AggregateSignalType::CrossSourceOverlap,
-            AggregateSignalType::CanonicalTag,
-            AggregateSignalType::LibraryLeftover,
-            AggregateSignalType::LibraryStale,
-        ] {
-            let table = aggregate_signal_table_name(agg_type);
-            let has_blob = aggregate_signal_has_data_blob(agg_type);
-
-            let result = if has_blob {
-                self.conn.query_row(
-                    &format!("SELECT key, data, discovered_at FROM {} WHERE key = ?1", table),
-                    params![key],
-                    |row| {
-                        let key: String = row.get(0)?;
-                        let blob: Vec<u8> = row.get(1)?;
-                        let discovered_at: Option<String> = row.get(2)?;
-                        Ok(AggregateSignal {
-                            id: None,
-                            signal_type: agg_type,
-                            key: key.clone(),
-                            discovered_at,
-                            metadata_json: Some(reconstruct_aggregate_metadata_json(agg_type, &key, &blob)),
-                        })
-                    },
-                ).optional()
-            } else {
-                // For non-blob types, just check existence
-                self.conn.query_row(
-                    &format!("SELECT key, discovered_at FROM {} WHERE key = ?1", table),
-                    params![key],
-                    |row| {
-                        let key: String = row.get(0)?;
-                        let discovered_at: Option<String> = row.get(1)?;
-                        Ok(AggregateSignal {
-                            id: None,
-                            signal_type: agg_type,
-                            key,
-                            discovered_at,
-                            metadata_json: None,
-                        })
-                    },
-                ).optional()
-            };
-
-            if let Ok(Some(signal)) = result {
-                return Ok(Some(signal));
-            }
-        }
-
-        // Also check signal_compound_tag (corpus table) since compound split uses
-        // inode-as-key and reads from the per-inode corpus table
-        if let Ok(inode) = key.parse::<i64>() {
-            let result = self.conn.query_row(
-                "SELECT inode, path, data, discovered_at FROM signal_compound_tag WHERE inode = ?1",
-                params![inode],
-                |row| {
-                    let inode: i64 = row.get(0)?;
-                    let path: String = row.get(1)?;
-                    let blob: Vec<u8> = row.get(2)?;
-                    let discovered_at: Option<String> = row.get(3)?;
-                    Ok((inode, path, blob, discovered_at))
-                },
-            ).optional()?;
-
-            if let Some((inode, path, blob, discovered_at)) = result {
-                use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
-
-                let compounds: Vec<TypedEntry> = bincode::deserialize(&blob).unwrap_or_default();
-                if !compounds.is_empty() {
-                    let metadata = serde_json::json!({
-                        "inode": inode,
-                        "path": path,
-                        "compounds": compounds.iter().map(|c| serde_json::json!({
-                            "tag_name": c.tag_name,
-                            "compound_value": c.compound_value,
-                            "split_parts": c.split_parts,
-                            "separator": c.separator,
-                            "matching_parts": c.matching_parts,
-                        })).collect::<Vec<_>>()
-                    });
-
-                    return Ok(Some(AggregateSignal {
-                        id: Some(inode),
-                        signal_type: AggregateSignalType::CompoundTagValue,
-                        key: inode.to_string(),
-                        discovered_at,
-                        metadata_json: Some(metadata.to_string()),
-                    }));
-                }
-            }
-        }
-
-        Ok(None)
     }
 
     /// Get compound tag signals filtered by safety classification.
@@ -1454,26 +1321,6 @@ impl Database {
 // ============================================================================
 // Signal Typed-Table Helpers
 // ============================================================================
-
-/// Get the typed table name for a corpus signal type.
-/// Returns None for aggregate signal types (which use a different table pattern).
-fn corpus_signal_table_name(signal_type: SignalType) -> Option<&'static str> {
-    match signal_type {
-        SignalType::FileInCorpus => Some("signal_file_in_corpus"),
-        SignalType::UnindexedFile => Some("signal_unindexed_file"),
-        SignalType::HealthyFile => Some("signal_healthy_file"),
-        SignalType::CorruptFile => Some("signal_corrupt_file"),
-        SignalType::MtimeOnlyMismatch => Some("signal_mtime_only_mismatch"),
-        SignalType::MissingDirectory => Some("signal_missing_directory"),
-        SignalType::MissingFile => Some("signal_missing_file"),
-        SignalType::MovedFile => Some("signal_moved_file"),
-        SignalType::ShitFormat => Some("signal_shit_format"),
-        SignalType::OutOfBandTagSync => Some("signal_oob_tag_sync"),
-        SignalType::OutOfBandTagConflict => Some("signal_oob_tag_conflict"),
-        SignalType::SubparDuplicate => Some("signal_subpar_duplicate"),
-        _ => None, // Aggregate signal types (or corpus-only types not in SignalType)
-    }
-}
 
 /// Get the typed table name for an aggregate signal type.
 fn aggregate_signal_table_name(signal_type: AggregateSignalType) -> &'static str {

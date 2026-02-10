@@ -17,7 +17,7 @@ use std::path::Path;
 
 use crate::config;
 use crate::meta::signals::{
-    AggregateSignal, AggregateSignalType, CorpusFileSignalType, Signal, SignalType,
+    AggregateSignal, AggregateSignalType, CorpusFileSignalType,
 };
 
 // Types are re-exported from db/mod.rs, not here.
@@ -447,15 +447,35 @@ impl<'a> ReadOnlyDb<'a> {
     // Signal Queries
     // =========================================================================
 
-    /// Get signals, optionally filtered by type.
-    pub fn get_signals(&self, issue_type: Option<SignalType>) -> Result<Vec<Signal>> {
-        self.db.get_signals(issue_type)
-    }
-
-
     /// Count total signals across all typed tables.
     pub fn count_all_signals(&self) -> usize {
         self.db.count_all_signals()
+    }
+
+    // --- Typed signal queries (no JSON) ---
+
+    pub fn get_unindexed_file_signals(&self) -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>> {
+        self.db.get_unindexed_file_signals()
+    }
+
+    pub fn get_healthy_file_signals(&self) -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>> {
+        self.db.get_healthy_file_signals()
+    }
+
+    pub fn get_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>> {
+        self.db.get_tag_canonicity_signal(key)
+    }
+
+    pub fn get_inconsistent_album_artist_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>> {
+        self.db.get_inconsistent_album_artist_signal(key)
+    }
+
+    pub fn get_compound_tag_signal(&self, inode: i64) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>> {
+        self.db.get_compound_tag_signal(inode)
+    }
+
+    pub fn get_cross_source_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
+        self.db.get_cross_source_overlap_signals()
     }
 
     /// Get aggregate signals, optionally filtered by type.
@@ -466,11 +486,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get compound tag signals filtered by safety classification and optional tag name.
     pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<AggregateSignal>> {
         self.db.get_compound_signals_by_safety(safe_only, tag_filter)
-    }
-
-    /// Get an aggregate signal by its natural key.
-    pub fn get_aggregate_signal_by_key(&self, key: &str) -> Result<Option<AggregateSignal>> {
-        self.db.get_aggregate_signal_by_key(key)
     }
 
     /// Check if an aggregate signal exists (semantic-keyed).

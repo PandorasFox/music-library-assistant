@@ -19,7 +19,7 @@ use ratatui::Frame;
 
 use crate::ui::widgets::centered_rect_fixed;
 
-use crate::meta::signals::SignalType;
+use crate::meta::signals::data::UnindexedFileSignal;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::indexing::IndexFileFromPathMutation;
@@ -82,8 +82,8 @@ impl IntakeConfirmationState {
     /// Returns None if there are no unindexed files.
     pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
         // Get all UnindexedFile signals - these are pre-computed during Awakening
-        let issues = match read_db.get_signals(Some(SignalType::UnindexedFile)) {
-            Ok(i) => i,
+        let signals: Vec<UnindexedFileSignal> = match read_db.get_unindexed_file_signals() {
+            Ok(s) => s,
             Err(e) => {
                 crate::logging::log_error(format!(
                     "IntakeConfirmation::gather: query failed: {:?}",
@@ -95,14 +95,14 @@ impl IntakeConfirmationState {
 
         log_general(format!(
             "IntakeConfirmation::gather: found {} UnindexedFile signals",
-            issues.len()
+            signals.len()
         ));
 
-        if issues.is_empty() {
+        if signals.is_empty() {
             return None;
         }
 
-        // Inode-keyed signals: inode in dedicated column, path in metadata_json
+        // Typed signals: inode and path available as direct fields
         let resolver = paths::get_resolver();
         let mut files: Vec<UnindexedFileEntry> = Vec::new();
         let mut total_bytes: u64 = 0;
@@ -110,17 +110,8 @@ impl IntakeConfirmationState {
         // Group files by their relative directory path for display
         let mut dir_to_files: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-        for issue in &issues {
-            // Extract path from metadata_json
-            let rel_path_str = issue.metadata_json.as_ref()
-                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                .and_then(|v| v.get("path")?.as_str().map(|s| s.to_string()));
-
-            let Some(rel_path_str) = rel_path_str else {
-                continue;
-            };
-
-            let rel_path = std::path::Path::new(&rel_path_str);
+        for signal in &signals {
+            let rel_path = std::path::Path::new(&signal.path);
             let abs_path = resolver.resolve(rel_path);
 
             // Verify file still exists and get size

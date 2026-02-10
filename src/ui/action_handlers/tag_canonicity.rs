@@ -3,7 +3,10 @@
 //! Handles the tag canonicity flow: loading signals, navigating between
 //! clusters, staging canonicalization decisions.
 
-use crate::ui::{insights_view, tag_canonicity_v2, transaction_review, ActiveView, TagCanonicityClusters};
+use crate::ui::{
+    insights_view, tag_canonicity_v2, transaction_review, ActiveView,
+    CanonicitySignalKind, TagCanonicityClusters,
+};
 use super::super::App;
 
 impl App {
@@ -30,8 +33,8 @@ impl App {
             }
         };
 
-        // Load signals based on insight type (scoped borrow of read_db)
-        let (signals, pre_fill) = {
+        // Determine signal kind and load keys (scoped borrow of read_db)
+        let (signal_keys, kind) = {
             let read_db = match self.witch.as_mut() {
                 Some(w) => w.read_db(),
                 None => {
@@ -44,16 +47,17 @@ impl App {
                 insights_view::InsightType::InconsistentAlbumArtist => {
                     let sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::InconsistentAlbumArtist))
                         .unwrap_or_default();
-                    (sigs, false) // No pre-fill for album_artist
+                    let keys: Vec<String> = sigs.into_iter().map(|s| s.key).collect();
+                    (keys, CanonicitySignalKind::InconsistentAlbumArtist)
                 }
                 insights_view::InsightType::TagCanonicity { tag_name } => {
-                    // Load all TagCanonicity signals, then filter by tag_name prefix
                     let all_sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::TagCanonicity))
                         .unwrap_or_default();
-                    let filtered: Vec<_> = all_sigs.into_iter()
+                    let keys: Vec<String> = all_sigs.into_iter()
                         .filter(|s| s.key.starts_with(&format!("{}:", tag_name)))
+                        .map(|s| s.key)
                         .collect();
-                    (filtered, true) // Pre-fill for tag canonicity
+                    (keys, CanonicitySignalKind::TagCanonicity)
                 }
                 _ => {
                     self.status_message = Some("Invalid insight type for tag resolution".to_string());
@@ -62,22 +66,20 @@ impl App {
             }
         };
 
-        if signals.is_empty() {
+        if signal_keys.is_empty() {
             self.status_message = Some("No signals to resolve".to_string());
             return;
         }
 
-        // Store signal keys for cluster navigation
-        let signal_keys: Vec<String> = signals.iter().map(|s| s.key.clone()).collect();
-        let clusters = TagCanonicityClusters::new(signal_keys);
+        let clusters = TagCanonicityClusters::new(signal_keys, kind);
 
         // Start transaction ONCE for entire flow
         if let Some(ref mut witch) = self.witch {
             let _ = witch.start_transaction("Tag canonicalization");
         }
 
-        // Load the first signal into V2 modal data (with file info) - scoped borrow
-        let first_signal = &signals[0];
+        // Load the first signal into V2 modal data using typed query
+        let first_key = clusters.signal_keys[0].clone();
         let data = {
             let read_db = match self.witch.as_mut() {
                 Some(w) => w.read_db(),
@@ -86,13 +88,13 @@ impl App {
                     return;
                 }
             };
-            tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(first_signal, &read_db)
+            Self::load_typed_signal_data(&first_key, kind, &read_db)
         };
 
         let data = match data {
             Some(d) => d,
             None => {
-                self.status_message = Some("Failed to parse signal data".to_string());
+                self.status_message = Some("Failed to load signal data".to_string());
                 // Discard the transaction we just started via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::super::operator_decisions::discard_transaction(witch);
@@ -102,6 +104,7 @@ impl App {
         };
 
         // Get group info from clusters
+        let pre_fill = clusters.pre_fill();
         let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
 
         let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
@@ -235,13 +238,16 @@ impl App {
     /// Load the signal at the current cluster index into modal state.
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_cluster_signal(&mut self) -> bool {
-        use crate::meta::signals::AggregateSignalType;
-
         // Extract cluster info from current view
-        let (signal_key, current_index, total) = match &self.view {
+        let (signal_key, kind, current_index, total) = match &self.view {
             ActiveView::TagCanonicityResolution { clusters, .. } => {
                 match clusters.current_signal_key() {
-                    Some(key) => (key.to_string(), clusters.current_index, clusters.signal_keys.len()),
+                    Some(key) => (
+                        key.to_string(),
+                        clusters.kind,
+                        clusters.current_index,
+                        clusters.signal_keys.len(),
+                    ),
                     None => return false,
                 }
             }
@@ -253,26 +259,15 @@ impl App {
             None => return false,
         };
 
-        // Load signal by key
-        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
-            Ok(Some(s)) => s,
-            _ => {
+        let data = match Self::load_typed_signal_data(&signal_key, kind, &read_db) {
+            Some(d) => d,
+            None => {
                 self.status_message = Some("Signal not found".to_string());
                 return false;
             }
         };
 
-        let data = match tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(&agg_signal, &read_db) {
-            Some(d) => d,
-            None => {
-                self.status_message = Some("Failed to parse signal data".to_string());
-                return false;
-            }
-        };
-
-        // Determine pre-fill based on signal type
-        let pre_fill = agg_signal.signal_type == AggregateSignalType::TagCanonicity;
-
+        let pre_fill = kind == CanonicitySignalKind::TagCanonicity;
         let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total);
 
         // Back-fill UI state from staged decision if one exists for this cluster
@@ -294,13 +289,12 @@ impl App {
     /// Sets the view to TagCanonicityResolution with the provided clusters,
     /// loading the current signal's state from the database.
     pub(in crate::ui) fn load_current_cluster_signal_with_clusters(&mut self, clusters: TagCanonicityClusters) -> bool {
-        use crate::meta::signals::AggregateSignalType;
-
         let signal_key = match clusters.current_signal_key() {
             Some(key) => key.to_string(),
             None => return false,
         };
 
+        let kind = clusters.kind;
         let (current_index, total) = (clusters.current_index, clusters.signal_keys.len());
 
         let read_db = match self.witch.as_mut() {
@@ -308,26 +302,15 @@ impl App {
             None => return false,
         };
 
-        // Load signal by key
-        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
-            Ok(Some(s)) => s,
-            _ => {
+        let data = match Self::load_typed_signal_data(&signal_key, kind, &read_db) {
+            Some(d) => d,
+            None => {
                 self.status_message = Some("Signal not found".to_string());
                 return false;
             }
         };
 
-        let data = match tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(&agg_signal, &read_db) {
-            Some(d) => d,
-            None => {
-                self.status_message = Some("Failed to parse signal data".to_string());
-                return false;
-            }
-        };
-
-        // Determine pre-fill based on signal type
-        let pre_fill = agg_signal.signal_type == AggregateSignalType::TagCanonicity;
-
+        let pre_fill = clusters.pre_fill();
         let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total);
 
         // Back-fill UI state from staged decision if one exists for this cluster
@@ -339,5 +322,23 @@ impl App {
 
         self.view = ActiveView::TagCanonicityResolution { state, clusters };
         true
+    }
+
+    /// Load typed signal data by key and kind, returning modal data.
+    fn load_typed_signal_data(
+        key: &str,
+        kind: CanonicitySignalKind,
+        read_db: &crate::corpus::db::ReadOnlyDb,
+    ) -> Option<tag_canonicity_v2::TagCanonicalityModalDataV2> {
+        match kind {
+            CanonicitySignalKind::TagCanonicity => {
+                let signal = read_db.get_tag_canonicity_signal(key).ok()??;
+                tag_canonicity_v2::TagCanonicalityModalDataV2::from_tag_canonicity(&signal, read_db)
+            }
+            CanonicitySignalKind::InconsistentAlbumArtist => {
+                let signal = read_db.get_inconsistent_album_artist_signal(key).ok()??;
+                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inconsistent_album_artist(&signal, read_db)
+            }
+        }
     }
 }

@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::AggregateSignalType;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::file_ops::MoveToStashMutation;
@@ -38,8 +37,6 @@ pub struct DirectoryGroupEntry {
 pub struct DirectoryClusterEntry {
     /// Cluster key (sorted source paths joined by |)
     pub cluster_key: String,
-    /// Signal ID for this cluster
-    pub signal_id: i64,
     /// Source directories in this cluster (usually 2)
     pub directories: Vec<DirectoryGroupEntry>,
     /// Source fingerprint overlap keys
@@ -80,9 +77,9 @@ pub struct DirectoryClusterModalData {
 impl DirectoryClusterModalData {
     /// Load cross-source overlap clusters from the database.
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        // Get all CrossSourceOverlap signals
+        // Get all CrossSourceOverlap signals (typed, no JSON parsing needed)
         let signals = read_db
-            .get_aggregate_signals(Some(AggregateSignalType::CrossSourceOverlap))
+            .get_cross_source_overlap_signals()
             .unwrap_or_default();
 
         if signals.is_empty() {
@@ -92,72 +89,19 @@ impl DirectoryClusterModalData {
         let mut clusters = Vec::new();
 
         for signal in signals {
-            let signal_id = signal.id.unwrap_or(0);
-            let cluster_key = signal.key.clone();
+            let cluster_key = signal.key;
+            let data = signal.data;
 
-            // Parse metadata
-            let metadata: serde_json::Value = signal
-                .metadata_json
-                .as_ref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
+            let source_a = data.source_a;
+            let source_b = data.source_b;
+            let source_a_can_stash = data.source_a_can_stash;
+            let source_b_can_stash = data.source_b_can_stash;
+            let overlap_count = data.overlap_count;
+            let fingerprint_keys = data.fingerprint_keys;
 
-            let source_a = metadata
-                .get("source_a")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let source_b = metadata
-                .get("source_b")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let source_a_can_stash = metadata
-                .get("source_a_can_stash")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-
-            let source_b_can_stash = metadata
-                .get("source_b_can_stash")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-
-            let overlap_count = metadata
-                .get("overlap_count")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as usize;
-
-            let fingerprint_keys: Vec<String> = metadata
-                .get("fingerprint_keys")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            // track_pairs: Vec<[source_a_inode, source_b_inode]>
-            let track_pairs: Vec<(i64, i64)> = metadata
-                .get("track_pairs")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|pair| {
-                            let arr = pair.as_array()?;
-                            let a = arr.first()?.as_i64()?;
-                            let b = arr.get(1)?.as_i64()?;
-                            Some((a, b))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            // Collect all inodes for each source
-            let source_a_inodes: Vec<i64> = track_pairs.iter().map(|(a, _)| *a).collect();
-            let source_b_inodes: Vec<i64> = track_pairs.iter().map(|(_, b)| *b).collect();
+            // Collect all inodes for each source from typed track pairs
+            let source_a_inodes: Vec<i64> = data.track_pairs.iter().map(|tp| tp.source_a_inode).collect();
+            let source_b_inodes: Vec<i64> = data.track_pairs.iter().map(|tp| tp.source_b_inode).collect();
 
             // Build directory entries for each source
             let mut directories = Vec::new();
@@ -219,7 +163,6 @@ impl DirectoryClusterModalData {
 
             clusters.push(DirectoryClusterEntry {
                 cluster_key,
-                signal_id,
                 directories,
                 fingerprint_overlap_keys: fingerprint_keys,
                 overlap_count,

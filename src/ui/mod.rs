@@ -51,8 +51,8 @@ pub mod progressive_worker;
 
 // Re-export for convenience
 pub(crate) use active_view::{
-    ActiveView, ExitConfirmModalState, ExitConfirmAction, FilterOverlay, FilterPopupContext,
-    SuspendedView, TagCanonicityClusters, ViewAction,
+    ActiveView, CanonicitySignalKind, ExitConfirmModalState, ExitConfirmAction, FilterOverlay,
+    FilterPopupContext, SuspendedView, TagCanonicityClusters, ViewAction,
 };
 use types::ProgressStatsUpdater;
 

@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::meta::signals::AggregateSignal;
+use crate::meta::signals::data::CompoundTagSignal;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
@@ -68,53 +68,25 @@ pub struct CompoundSplitDataV2 {
 }
 
 impl CompoundSplitDataV2 {
-    /// Parse from an AggregateSignal's metadata JSON.
+    /// Construct from a typed `CompoundTagSignal`.
     ///
-    /// Signal format (per-file):
-    /// {
-    ///   "inode": 12345,
-    ///   "compounds": [
-    ///     {
-    ///       "tag_name": "artist",
-    ///       "compound_value": "A & B",
-    ///       "split_parts": ["A", "B"],
-    ///       "matching_parts": ["A", "B"],
-    ///       "separator": " & "
-    ///     }
-    ///   ]
-    /// }
-    pub fn from_signal_with_files(signal: &AggregateSignal, read_db: &ReadOnlyDb) -> Option<Self> {
-        let metadata = signal.metadata_json.as_ref()?;
-        let json: serde_json::Value = serde_json::from_str(metadata).ok()?;
-
-        let inode = json.get("inode")?.as_i64()?;
-
-        // Get the compounds array
-        let compounds_arr = json.get("compounds")?.as_array()?;
-        if compounds_arr.is_empty() {
+    /// Reads compound data directly from struct fields (no JSON parsing).
+    /// Takes the first compound entry (we process one at a time per signal).
+    /// Loads file info for the inode from disk tags.
+    pub fn from_compound_tag_signal(signal: &CompoundTagSignal, read_db: &ReadOnlyDb) -> Option<Self> {
+        if signal.compounds.is_empty() {
             return None;
         }
 
+        let inode = signal.inode;
+
         // Take the first compound (we process one at a time per signal)
-        let c = &compounds_arr[0];
+        let c = &signal.compounds[0];
         let compound = CompoundEntry {
-            tag_name: c.get("tag_name")?.as_str()?.to_string(),
-            compound_value: c.get("compound_value")?.as_str()?.to_string(),
-            split_parts: c
-                .get("split_parts")?
-                .as_array()?
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect(),
-            matching_parts: c
-                .get("matching_parts")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            tag_name: c.tag_name.clone(),
+            compound_value: c.compound_value.clone(),
+            split_parts: c.split_parts.clone(),
+            matching_parts: c.matching_parts.clone(),
         };
 
         // Load file info

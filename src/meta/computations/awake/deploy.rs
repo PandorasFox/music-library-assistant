@@ -46,36 +46,26 @@ pub fn execute_detect_deploy_conflicts(
     sender.clear_signals_by_type(SignalType::DeployConflict, witness);
 
     let healthy_signals = read_only_db
-        .get_signals(Some(SignalType::HealthyFile))
+        .get_healthy_file_signals()
         .unwrap_or_default();
 
     let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
 
     for signal in &healthy_signals {
-        let inode = match signal.inode {
-            Some(i) => i,
-            None => continue,
-        };
-        let corpus_path = signal.metadata_json.as_ref()
-            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-            .and_then(|v| v.get("path").and_then(|p| p.as_str().map(String::from)))
-            .unwrap_or_default();
-        if corpus_path.is_empty() { continue; }
-
-        let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+        let tags = read_only_db.get_corpus_tags(signal.inode).unwrap_or_default();
         let tag_map: HashMap<String, String> = tags
             .into_iter()
             .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
             .collect();
 
-        let deploy_path = compute_deployment_path_with_tags(&corpus_path, &tag_map)
+        let deploy_path = compute_deployment_path_with_tags(&signal.path, &tag_map)
             .to_string_lossy()
             .to_string();
 
         deploy_path_to_tracks
             .entry(deploy_path)
             .or_default()
-            .push(inode);
+            .push(signal.inode);
     }
 
     let mut conflict_count = 0;
@@ -288,7 +278,7 @@ pub fn execute_derive_corpus_deploy_status(
 
     // Get all HealthyFile signals
     let healthy_signals = read_only_db
-        .get_signals(Some(SignalType::HealthyFile))
+        .get_healthy_file_signals()
         .unwrap_or_default();
 
     // Build inode → library paths map from files table (source='library')
@@ -321,19 +311,10 @@ pub fn execute_derive_corpus_deploy_status(
     let mut skipped_not_configured = 0usize;
 
     for signal in &healthy_signals {
-        // Extract inode from signal's native inode column
-        let inode = match signal.inode {
-            Some(i) => i,
-            None => continue,
-        };
-        // Extract corpus path from metadata_json
-        let corpus_path = signal.metadata_json.as_ref()
-            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-            .and_then(|v| v.get("path").and_then(|p| p.as_str().map(String::from)))
-            .unwrap_or_default();
-        if corpus_path.is_empty() { continue; }
+        let inode = signal.inode;
+        let corpus_path = &signal.path;
 
-        let corpus_path_buf = Path::new(&corpus_path);
+        let corpus_path_buf = Path::new(corpus_path);
 
         // Skip files not in a configured source directory
         if !config.is_path_in_source(corpus_path_buf) {

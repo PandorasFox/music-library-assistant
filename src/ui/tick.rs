@@ -217,12 +217,10 @@ impl App {
         idx: usize,
         worker: &mut ProgressiveWorkerState,
     ) {
-        use crate::meta::signals::AggregateSignalType;
-
         let is_safe_mode = worker.is_safe_mode;
         let total = worker.total;
 
-        // Query signal and parse data (scoped borrow)
+        // Parse key as inode and query typed signal (scoped borrow)
         let data = {
             let read_db = match self.witch.as_mut() {
                 Some(w) => w.read_db(),
@@ -232,8 +230,15 @@ impl App {
                 }
             };
 
-            // Get signal by key
-            let agg_signal = match read_db.get_aggregate_signal_by_key(signal_key) {
+            let inode: i64 = match signal_key.parse() {
+                Ok(i) => i,
+                Err(_) => {
+                    worker.nops_elided += 1;
+                    return;
+                }
+            };
+
+            let typed_signal = match read_db.get_compound_tag_signal(inode) {
                 Ok(Some(s)) => s,
                 _ => {
                     worker.nops_elided += 1;
@@ -241,14 +246,7 @@ impl App {
                 }
             };
 
-            // Skip if wrong type
-            if agg_signal.signal_type != AggregateSignalType::CompoundTagValue {
-                worker.nops_elided += 1;
-                return;
-            }
-
-            // Parse data using v2
-            match compound_split_v2::CompoundSplitDataV2::from_signal_with_files(&agg_signal, &read_db) {
+            match compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db) {
                 Some(d) => d,
                 None => {
                     worker.nops_elided += 1;

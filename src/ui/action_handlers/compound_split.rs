@@ -49,7 +49,12 @@ impl App {
         let first_signal = &signals[0];
         let data = {
             let read_db = self.witch.as_mut().unwrap().read_db();
-            compound_split_v2::CompoundSplitDataV2::from_signal_with_files(first_signal, &read_db)
+            first_signal.key.parse::<i64>().ok()
+                .and_then(|inode| read_db.get_compound_tag_signal(inode).ok())
+                .flatten()
+                .and_then(|typed_signal| {
+                    compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db)
+                })
         };
 
         let data = match data {
@@ -301,8 +306,6 @@ impl App {
     /// Load the compound split signal at the current cluster index into modal state.
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_compound_split_signal(&mut self) -> bool {
-        use crate::meta::signals::AggregateSignalType;
-
         // Extract cluster info from current view
         let (signal_key, group_index, total, safe_mode) = match &self.view {
             ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
@@ -314,33 +317,34 @@ impl App {
             _ => return false,
         };
 
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => return false,
-        };
-
-        // Fetch the signal by key
-        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
-            Ok(Some(s)) => s,
-            _ => {
-                self.status_message = Some("Signal not found".to_string());
+        // Parse key as inode and query typed signal
+        let inode: i64 = match signal_key.parse() {
+            Ok(i) => i,
+            Err(_) => {
+                self.status_message = Some("Invalid signal key (not an inode)".to_string());
                 return false;
             }
         };
 
-        // Verify signal type
-        if agg_signal.signal_type != AggregateSignalType::CompoundTagValue {
-            self.status_message = Some(format!(
-                "Wrong signal type: expected compound_tag_value, got {:?}",
-                agg_signal.signal_type
-            ));
-            return false;
-        }
-
-        // Parse modal data from signal (need witch for file info)
         let data = {
-            let read_db = self.witch.as_mut().unwrap().read_db();
-            compound_split_v2::CompoundSplitDataV2::from_signal_with_files(&agg_signal, &read_db)
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => return false,
+            };
+
+            let typed_signal = match read_db.get_compound_tag_signal(inode) {
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    self.status_message = Some("Signal not found".to_string());
+                    return false;
+                }
+                Err(_) => {
+                    self.status_message = Some("Signal not found".to_string());
+                    return false;
+                }
+            };
+
+            compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db)
         };
 
         let Some(data) = data else {
@@ -379,8 +383,6 @@ impl App {
         clusters: compound_split_v2::CompoundSplitClustersV2,
         safe_mode: bool,
     ) -> bool {
-        use crate::meta::signals::AggregateSignalType;
-
         let signal_key = match clusters.current_signal_key() {
             Some(key) => key.to_string(),
             None => return false,
@@ -388,33 +390,34 @@ impl App {
 
         let (group_index, total) = (clusters.current_index(), clusters.total());
 
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => return false,
-        };
-
-        // Fetch the signal by key
-        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
-            Ok(Some(s)) => s,
-            _ => {
-                self.status_message = Some("Signal not found".to_string());
+        // Parse key as inode and query typed signal
+        let inode: i64 = match signal_key.parse() {
+            Ok(i) => i,
+            Err(_) => {
+                self.status_message = Some("Invalid signal key (not an inode)".to_string());
                 return false;
             }
         };
 
-        // Verify signal type
-        if agg_signal.signal_type != AggregateSignalType::CompoundTagValue {
-            self.status_message = Some(format!(
-                "Wrong signal type: expected compound_tag_value, got {:?}",
-                agg_signal.signal_type
-            ));
-            return false;
-        }
-
-        // Parse modal data from signal
         let data = {
-            let read_db = self.witch.as_mut().unwrap().read_db();
-            compound_split_v2::CompoundSplitDataV2::from_signal_with_files(&agg_signal, &read_db)
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => return false,
+            };
+
+            let typed_signal = match read_db.get_compound_tag_signal(inode) {
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    self.status_message = Some("Signal not found".to_string());
+                    return false;
+                }
+                Err(_) => {
+                    self.status_message = Some("Signal not found".to_string());
+                    return false;
+                }
+            };
+
+            compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db)
         };
 
         let Some(data) = data else {

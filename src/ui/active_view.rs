@@ -221,6 +221,15 @@ pub(crate) enum FilterPopupContext {
 // TagCanonicityClusters - signal navigation
 // ============================================================================
 
+/// Which typed signal table this cluster flow targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicitySignalKind {
+    /// `signal_tag_canonicity` table (pre-fill enabled)
+    TagCanonicity,
+    /// `signal_inconsistent_album_artist` table (no pre-fill)
+    InconsistentAlbumArtist,
+}
+
 /// Tracks the list of signals for Tab/Shift-Tab navigation in tag canonicity modal.
 #[derive(Debug, Clone)]
 pub(crate) struct TagCanonicityClusters {
@@ -228,11 +237,18 @@ pub(crate) struct TagCanonicityClusters {
     pub signal_keys: Vec<String>,
     /// Current index into signal_keys
     pub current_index: usize,
+    /// Which typed signal table these keys belong to
+    pub kind: CanonicitySignalKind,
 }
 
 impl TagCanonicityClusters {
-    pub fn new(signal_keys: Vec<String>) -> Self {
-        Self { signal_keys, current_index: 0 }
+    pub fn new(signal_keys: Vec<String>, kind: CanonicitySignalKind) -> Self {
+        Self { signal_keys, current_index: 0, kind }
+    }
+
+    /// Whether the canonical value text field should be pre-filled.
+    pub fn pre_fill(&self) -> bool {
+        self.kind == CanonicitySignalKind::TagCanonicity
     }
 
     pub fn current_signal_key(&self) -> Option<&str> {

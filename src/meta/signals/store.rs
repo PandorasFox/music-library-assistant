@@ -153,6 +153,18 @@ impl CorpusSignalStore for UnindexedFileSignal {
     }
 }
 
+impl UnindexedFileSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT inode, path FROM signal_unindexed_file ORDER BY path"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Self { inode: row.get(0)?, path: row.get(1)? })
+        })?;
+        rows.collect()
+    }
+}
+
 impl CorpusSignalStore for HealthyFileSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_healthy_file (
         inode INTEGER PRIMARY KEY,
@@ -180,6 +192,18 @@ impl CorpusSignalStore for HealthyFileSignal {
             [inode],
             |row| row.get(0),
         )
+    }
+}
+
+impl HealthyFileSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT inode, path FROM signal_healthy_file ORDER BY path"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Self { inode: row.get(0)?, path: row.get(1)? })
+        })?;
+        rows.collect()
     }
 }
 
@@ -564,6 +588,22 @@ impl CorpusSignalStore for CompoundTagSignal {
     }
 }
 
+impl CompoundTagSignal {
+    pub fn query_by_inode(conn: &Connection, inode: i64) -> Result<Option<Self>> {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT inode, path, data FROM signal_compound_tag WHERE inode = ?1",
+            rusqlite::params![inode],
+            |row| {
+                let blob: Vec<u8> = row.get(2)?;
+                let compounds: Vec<CompoundTagEntry> = bincode::deserialize(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                Ok(Self { inode: row.get(0)?, path: row.get(1)?, compounds })
+            },
+        ).optional()
+    }
+}
+
 // ============================================================================
 // Aggregate Signal Implementations
 // ============================================================================
@@ -859,6 +899,22 @@ impl AggregateSignalStore for TagCanonicitySignal {
     }
 }
 
+impl TagCanonicitySignal {
+    pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT key, tag_name, data FROM signal_tag_canonicity WHERE key = ?1",
+            rusqlite::params![key],
+            |row| {
+                let blob: Vec<u8> = row.get(2)?;
+                let data: TagCanonicityData = bincode::deserialize(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                Ok(Self { key: row.get(0)?, tag_name: row.get(1)?, data })
+            },
+        ).optional()
+    }
+}
+
 impl AggregateSignalStore for InconsistentAlbumArtistSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inconsistent_album_artist (
         key TEXT PRIMARY KEY,
@@ -888,6 +944,22 @@ impl AggregateSignalStore for InconsistentAlbumArtistSignal {
             [key],
             |row| row.get(0),
         )
+    }
+}
+
+impl InconsistentAlbumArtistSignal {
+    pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT key, data FROM signal_inconsistent_album_artist WHERE key = ?1",
+            rusqlite::params![key],
+            |row| {
+                let blob: Vec<u8> = row.get(1)?;
+                let data: InconsistentAlbumArtistData = bincode::deserialize(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                Ok(Self { key: row.get(0)?, data })
+            },
+        ).optional()
     }
 }
 
@@ -953,6 +1025,21 @@ impl AggregateSignalStore for CrossSourceOverlapSignal {
             [key],
             |row| row.get(0),
         )
+    }
+}
+
+impl CrossSourceOverlapSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM signal_cross_source_overlap ORDER BY key"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            let data: CrossSourceOverlapData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Self { key: row.get(0)?, data })
+        })?;
+        rows.collect()
     }
 }
 

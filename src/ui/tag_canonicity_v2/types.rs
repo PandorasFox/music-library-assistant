@@ -14,7 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::{AggregateSignal, AggregateSignalType};
+use crate::meta::signals::data::{
+    InconsistentAlbumArtistSignal, TagCanonicitySignal,
+};
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
@@ -60,54 +62,72 @@ pub struct TagCanonicalityModalDataV2 {
 }
 
 impl TagCanonicalityModalDataV2 {
-    /// Create from an AggregateSignal, loading file info from database.
-    ///
-    /// Handles two signal formats:
-    /// - TagCanonicity: { tag_name, variants: {value: count}, inodes, context? }
-    /// - InconsistentAlbumArtist: { album, album_artist_variants: {value: count}, inodes }
-    pub fn from_signal_with_files(signal: &AggregateSignal, read_db: &ReadOnlyDb) -> Option<Self> {
-        let metadata = signal.metadata_json.as_ref()?;
-        let json: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    /// Create from a typed `TagCanonicitySignal`, loading file info from database.
+    pub fn from_tag_canonicity(signal: &TagCanonicitySignal, read_db: &ReadOnlyDb) -> Option<Self> {
+        let tag_name = signal.tag_name.clone();
 
-        // Parse variants based on signal type
-        let (tag_name, variants_obj, context_label) =
-            if signal.signal_type == AggregateSignalType::InconsistentAlbumArtist {
-                let variants_obj = json.get("album_artist_variants")?.as_object()?;
-                let album = json.get("album").and_then(|v| v.as_str()).map(String::from);
-                ("album_artist".to_string(), variants_obj.clone(), album)
-            } else {
-                // Standard TagCanonicity format
-                let tag_name = json.get("tag_name")?.as_str()?.to_string();
-                let variants_obj = json.get("variants")?.as_object()?;
-                let context = json.get("context").and_then(|v| v.as_str()).map(String::from);
-                (tag_name, variants_obj.clone(), context)
-            };
-
-        // Parse variants
-        let mut variants: Vec<TagVariantEntry> = variants_obj
+        let mut variants: Vec<TagVariantEntry> = signal
+            .data
+            .variants
             .iter()
-            .filter_map(|(value, count)| {
-                Some(TagVariantEntry {
-                    value: value.clone(),
-                    count: count.as_u64()? as usize,
-                })
+            .map(|(value, count)| TagVariantEntry {
+                value: value.clone(),
+                count: *count,
             })
             .collect();
 
         variants.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
 
-        // Parse inodes
-        let inodes: Vec<i64> = json
-            .get("inodes")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-            .unwrap_or_default();
+        let inodes = signal.data.inodes.clone();
+        let files = Self::load_file_info(&inodes, read_db);
 
-        // Load file info for each inode
+        Some(Self {
+            tag_name,
+            context_label: None,
+            variants,
+            inodes,
+            files,
+        })
+    }
+
+    /// Create from a typed `InconsistentAlbumArtistSignal`, loading file info from database.
+    pub fn from_inconsistent_album_artist(
+        signal: &InconsistentAlbumArtistSignal,
+        read_db: &ReadOnlyDb,
+    ) -> Option<Self> {
+        let tag_name = "album_artist".to_string();
+        let context_label = Some(signal.data.album.clone());
+
+        let mut variants: Vec<TagVariantEntry> = signal
+            .data
+            .album_artist_variants
+            .iter()
+            .map(|(value, count)| TagVariantEntry {
+                value: value.clone(),
+                count: *count,
+            })
+            .collect();
+
+        variants.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+
+        let inodes = signal.data.inodes.clone();
+        let files = Self::load_file_info(&inodes, read_db);
+
+        Some(Self {
+            tag_name,
+            context_label,
+            variants,
+            inodes,
+            files,
+        })
+    }
+
+    /// Load file info (filename, path, tags) for a set of inodes.
+    fn load_file_info(inodes: &[i64], read_db: &ReadOnlyDb) -> Vec<FileTagInfo> {
         let resolver = paths::get_resolver();
         let mut files = Vec::new();
 
-        for &inode in &inodes {
+        for &inode in inodes {
             if let Ok(Some(audio_file)) =
                 read_db.get_audio_file_by_inode(inode, FileSource::Corpus)
             {
@@ -138,14 +158,7 @@ impl TagCanonicalityModalDataV2 {
 
         // Sort files alphabetically by filename for consistent display
         files.sort_by(|a, b| a.filename.cmp(&b.filename));
-
-        Some(Self {
-            tag_name,
-            context_label,
-            variants,
-            inodes,
-            files,
-        })
+        files
     }
 
     /// Get the default canonical value for pre-filling.

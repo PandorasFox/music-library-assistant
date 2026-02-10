@@ -29,7 +29,7 @@ impl Database {
         let count = self
             .conn
             .execute(
-                "DELETE FROM files WHERE source = 'library' AND path LIKE ?1 ESCAPE '\'",
+                r"DELETE FROM files WHERE source = 'library' AND path LIKE ?1 ESCAPE '\'",
                 params![pattern],
             )
             .context("Failed to clear library files")?;
@@ -82,7 +82,7 @@ impl Database {
     pub fn get_library_files(&self, library_name: &str) -> Result<Vec<LibraryScanEntry>> {
         let pattern = dir_like_pattern_str(library_name);
         let mut stmt = self.conn.prepare(
-            "SELECT path, inode
+            r"SELECT path, inode
              FROM files
              WHERE source = 'library' AND path LIKE ?1 ESCAPE '\'
              ORDER BY path",

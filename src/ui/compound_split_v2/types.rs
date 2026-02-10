@@ -196,6 +196,11 @@ pub struct CompoundSplitStateV2 {
 }
 
 impl CompoundSplitStateV2 {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.data.files.get(self.file_cursor).map(|f| f.path.as_str())
+    }
+
     /// Create a new state from data.
     pub fn new(
         data: CompoundSplitDataV2,

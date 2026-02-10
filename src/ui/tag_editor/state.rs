@@ -115,6 +115,16 @@ pub struct UnifiedTagEditorState {
 }
 
 impl UnifiedTagEditorState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        match &self.context {
+            TagEditContext::SingleFile { audio_file, .. } => Some(audio_file.path()),
+            TagEditContext::BulkEdit { audio_files, .. } => {
+                audio_files.get(self.current_item_idx).map(|af| af.path())
+            }
+        }
+    }
+
     // ========================================================================
     // Constructors
     // ========================================================================

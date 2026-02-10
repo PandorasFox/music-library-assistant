@@ -373,13 +373,7 @@ fn render(f: &mut Frame, app: &mut App) {
     let status_line_1 = if let Some(ref msg) = app.status_message {
         Some(msg.clone())
     } else {
-        match &app.view {
-            ActiveView::CorpusBrowser(browser) => browser.selected_path()
-                .map(|p| p.to_string_lossy().to_string()),
-            ActiveView::TagCanonicityResolution { state, .. } => state.data.files.get(state.file_cursor)
-                .map(|f| f.path.clone()),
-            _ => None,
-        }
+        app.view.selected_path().map(|s| s.to_string())
     };
 
     let status_line_2 = app.witch.as_ref()

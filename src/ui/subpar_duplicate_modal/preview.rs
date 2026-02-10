@@ -72,6 +72,11 @@ pub struct SubparDuplicatePreviewState {
 }
 
 impl SubparDuplicatePreviewState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.cached_data.files.get(self.scroll).map(|f| f.corpus_path.as_str())
+    }
+
     /// Create a new preview state with cached data.
     pub fn new(cached_data: SubparDuplicateModalData) -> Self {
         Self {

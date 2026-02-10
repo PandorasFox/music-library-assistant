@@ -50,6 +50,16 @@ pub struct ShitFormatPreviewState {
 }
 
 impl ShitFormatPreviewState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        let lossless_len = self.cached_data.lossless_files.len();
+        if self.scroll < lossless_len {
+            self.cached_data.lossless_files.get(self.scroll).map(|f| f.corpus_path.as_str())
+        } else {
+            self.cached_data.lossy_files.get(self.scroll - lossless_len).map(|f| f.corpus_path.as_str())
+        }
+    }
+
     /// Create a new preview state with cached data.
     pub fn new(cached_data: ShitFormatModalData) -> Self {
         // Default to first available action

@@ -79,6 +79,11 @@ pub struct OobSyncState {
 }
 
 impl OobSyncState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.files.get(self.current_file).map(|f| f.path.as_str())
+    }
+
     pub fn new(files: Vec<OobSyncFile>) -> Self {
         // Default to AcceptDisk if there are disk-to-index files, otherwise AcceptDb
         let has_disk_to_index = files.iter().any(|f| f.direction == OobSyncDirection::DiskToIndex);

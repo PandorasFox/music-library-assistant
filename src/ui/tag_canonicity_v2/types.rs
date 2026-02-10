@@ -213,6 +213,11 @@ pub struct TagCanonicalityStateV2 {
 }
 
 impl TagCanonicalityStateV2 {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.data.files.get(self.file_cursor).map(|f| f.path.as_str())
+    }
+
     /// Create a new state from data.
     ///
     /// If `pre_fill` is true, pre-fills the canonical input with the most common value.

@@ -61,6 +61,11 @@ pub struct MissingDirectoryPreviewState {
 }
 
 impl MissingDirectoryPreviewState {
+    /// Path of the currently selected directory (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.cached_data.directories.get(self.scroll).map(|s| s.as_str())
+    }
+
     /// Create a new preview state with cached data.
     pub fn new(cached_data: MissingDirectoryModalData) -> Self {
         let selected_button = if cached_data.count() > 0 {

@@ -44,6 +44,18 @@ pub struct DeploymentPreviewState {
 }
 
 impl DeploymentPreviewState {
+    /// Path of the currently selected item (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        let scroll = self.tab_scroll[self.active_tab.index()];
+        match self.active_tab {
+            DeployTab::Healthy => self.cached_data.healthy.get(scroll).map(|f| f.corpus_path.as_str()),
+            DeployTab::New => self.cached_data.new_by_dir.get(scroll).map(|d| d.directory.as_str()),
+            DeployTab::Conflicts => self.cached_data.conflicts.get(scroll).map(|c| c.deploy_path.as_str()),
+            DeployTab::Leftover => self.cached_data.leftover_by_dir.get(scroll).map(|d| d.directory.as_str()),
+            DeployTab::Stale => self.cached_data.stale.get(scroll).map(|f| f.library_path.as_str()),
+        }
+    }
+
     /// Create a new deployment preview state with cached data.
     pub fn new(cached_data: DeployModalData) -> Self {
         // Start on the New tab if there are new files, otherwise Healthy

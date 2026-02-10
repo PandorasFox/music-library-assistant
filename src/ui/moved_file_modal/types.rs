@@ -61,6 +61,11 @@ pub struct MovedFileState {
 }
 
 impl MovedFileState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.files.get(self.current_file).map(|f| f.new_path.as_str())
+    }
+
     pub fn new(files: Vec<MovedFileInfo>) -> Self {
         Self {
             files,

@@ -44,6 +44,11 @@ pub struct CorruptFilePreviewState {
 }
 
 impl CorruptFilePreviewState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.cached_data.files.get(self.scroll).map(|f| f.corpus_path.as_str())
+    }
+
     /// Create a new preview state with cached data.
     pub fn new(cached_data: CorruptFileModalData) -> Self {
         Self {

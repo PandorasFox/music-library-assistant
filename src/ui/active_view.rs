@@ -115,6 +115,31 @@ impl ActiveView {
         }
     }
 
+    /// Path of the currently selected file/directory (for status bar line 1).
+    ///
+    /// Returns the corpus-relative path of whatever item the cursor is on.
+    /// Views without file listings return None.
+    pub(crate) fn selected_path(&self) -> Option<&str> {
+        match self {
+            Self::CorpusBrowser(browser) => browser.selected_path()
+                .and_then(|p| p.to_str()),
+            Self::TagCanonicityResolution { state, .. } => state.selected_path(),
+            Self::CompoundTagSplit { state, .. } => state.selected_path(),
+            Self::MissingFileResolution(s) => s.selected_path(),
+            Self::MissingDirectoryResolution(s) => s.selected_path(),
+            Self::CorruptFileResolution(s) => s.selected_path(),
+            Self::ShitFormatResolution(s) => s.selected_path(),
+            Self::SubparDuplicateResolution(s) => s.selected_path(),
+            Self::DirectoryClusterResolution(s) => s.selected_path(),
+            Self::MovedFileAcknowledge(s) => s.selected_path(),
+            Self::OobSyncResolution(s) => s.selected_path(),
+            Self::OobConflictInspection(s) => s.selected_path(),
+            Self::DeploymentPreview(s) => s.selected_path(),
+            Self::UnifiedTagEditor(s) => s.selected_path(),
+            _ => None,
+        }
+    }
+
     /// Whether this view uses the unified lateral title bar (no header row).
     pub(crate) fn uses_unified_titlebar(&self) -> bool {
         matches!(

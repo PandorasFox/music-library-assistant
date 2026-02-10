@@ -82,6 +82,14 @@ pub struct DirectoryClusterPreviewState {
 }
 
 impl DirectoryClusterPreviewState {
+    /// Path of the current cluster's first directory (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.cached_data.clusters
+            .get(self.current_cluster_index)
+            .and_then(|c| c.directories.first())
+            .map(|d| d.path_suffix.as_str())
+    }
+
     /// Create a new preview state with cached data.
     pub fn new(cached_data: DirectoryClusterModalData) -> Self {
         let current_options = if cached_data.clusters.is_empty() {

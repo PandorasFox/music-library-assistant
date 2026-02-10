@@ -49,6 +49,16 @@ pub struct MissingFilePreviewState {
 }
 
 impl MissingFilePreviewState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        let idx = self.scroll[self.focused_list];
+        if self.focused_list == 0 {
+            self.cached_data.restorable.get(idx).map(|f| f.corpus_path.as_str())
+        } else {
+            self.cached_data.non_restorable.get(idx).map(|f| f.corpus_path.as_str())
+        }
+    }
+
     /// Create a new preview state with cached data.
     pub fn new(cached_data: MissingFileModalData) -> Self {
         // Focus the list that has items

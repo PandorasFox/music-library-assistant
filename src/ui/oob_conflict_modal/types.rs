@@ -162,6 +162,11 @@ pub struct OobConflictState {
 }
 
 impl OobConflictState {
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.active_bucket_state().current_file().map(|f| f.path.as_str())
+    }
+
     pub fn new(files: Vec<BucketedOobFile>) -> Self {
         // Partition files into buckets
         let mut b0 = Vec::new();

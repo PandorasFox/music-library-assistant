@@ -1,23 +1,13 @@
-//! Health signal and known variant operations.
+//! Health signal read-only queries.
 //!
-//! Signals are facts about corpus state. They are created by computations and
-//! deleted when they become stale. There is no "resolution" concept - signals
-//! simply exist or don't exist based on current corpus state.
-//!
-//! ## Witnessed Operations
-//!
-//! Signal-altering operations require a witness (`ComputationWitness` or
-//! `MutationExecutionWitness`) to ensure they're only called from authorized
-//! execution contexts. Use:
-//! - `ensure_signal` - idempotent create (no-op if exists)
-//! - `clear_signal` - idempotent delete (no-op if doesn't exist)
-//! - `replace_signal` - delete existing + insert new (for summary signals)
+//! Signals are facts about corpus state stored in per-signal typed tables.
+//! This module provides read-only query methods for the UI and computations.
+//! Signal writes go through `db_thread` via `SignalWriteSender`.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::params;
 
 use super::Database;
-use crate::db_thread::SignalWitness;
 use crate::corpus::db::types::FileSource;
 use crate::meta::signals::{
     AggregateSignalType, CorpusFileSignalType,
@@ -184,151 +174,6 @@ impl Database {
             CorpusFileSignalType::DeployReady => DeployReadySignal::exists(&self.conn, inode),
             CorpusFileSignalType::DeployedHealthy => DeployedHealthySignal::exists(&self.conn, inode),
         }.unwrap_or(false)
-    }
-
-    /// Ensure an inode-keyed corpus signal exists (idempotent).
-    ///
-    /// Uses the native `inode` column. The path is stored in `metadata_json`
-    /// for display purposes, and `issue_key` is set to the inode as string
-    /// for backwards compatibility.
-    pub fn ensure_corpus_signal(
-        &self,
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: &str,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        let key = inode.to_string();
-        let metadata = serde_json::json!({ "path": path });
-        self.conn
-            .execute(
-                r#"
-                INSERT OR IGNORE INTO signals
-                (issue_type, issue_key, inode, discovered_at, metadata_json)
-                VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, ?4)
-                "#,
-                params![signal_type.as_str(), key, inode, metadata.to_string()],
-            )
-            .context("Failed to ensure corpus signal")?;
-
-        Ok(self.conn.changes() > 0)
-    }
-
-    /// Clear an inode-keyed corpus signal (idempotent delete).
-    pub fn clear_corpus_signal(
-        &self,
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND inode = ?2",
-                params![signal_type.as_str(), inode],
-            )
-            .context("Failed to clear corpus signal")?;
-
-        Ok(deleted > 0)
-    }
-
-    /// Clear all corpus signals for an inode.
-    ///
-    /// Used when dropping a file from the index to clear all associated signals.
-    pub fn clear_all_corpus_signals_for_inode(
-        &self,
-        inode: i64,
-        _witness: &impl SignalWitness,
-    ) -> Result<usize> {
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE inode = ?1",
-                params![inode],
-            )
-            .context("Failed to clear corpus signals for inode")?;
-
-        Ok(deleted)
-    }
-
-    /// Delete all signals for a specific path (for path-keyed signals like library signals).
-    ///
-    /// Used during track deletion to clear all associated signals.
-    pub fn delete_signals_for_path(&self, path: &str, _witness: &impl SignalWitness) -> Result<usize> {
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_key = ?1",
-                params![path],
-            )
-            .context("Failed to delete signals for path")?;
-        Ok(deleted)
-    }
-
-    /// Delete mutable signals for a path, preserving file-inherent signals.
-    ///
-    /// File-inherent signals (CorruptFile, ShitFormat) are properties of the file itself
-    /// and should only be cleared by specific mutations (MoveToStash, DropFromIndex, Transcode)
-    /// or by verification computations (VerifyAudio).
-    ///
-    /// Tag-based signals (OOB conflicts, mtime mismatches, health status) can be cleared
-    /// and recomputed by UpdateCorpusFileSignals.
-    ///
-    /// TODO: Refactor to use signal categories at the type level instead of SQL string matching.
-    /// Consider a SignalCategory enum (FileInherent, TagBased, Aggregate) with methods to
-    /// determine clearing behavior.
-    pub fn delete_mutable_signals_for_path(&self, path: &str, _witness: &impl SignalWitness) -> Result<usize> {
-        let deleted = self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_key = ?1 AND issue_type NOT IN ('corrupt_file', 'shit_format')",
-                params![path],
-            )
-            .context("Failed to delete mutable signals for path")?;
-        Ok(deleted)
-    }
-
-    // ========================================================================
-    // Type-Safe Signal Operations (Aggregate)
-    // ========================================================================
-    // NOTE: ensure_file_signal/clear_file_signal have been removed.
-    // - Corpus signals: use ensure_corpus_signal/clear_corpus_signal (inode-keyed)
-    // - Library signals: use ensure_aggregate_signal/clear_aggregate_signal (semantic-keyed)
-
-    /// Ensure an aggregate signal exists (with metadata).
-    pub fn ensure_aggregate_signal(
-        &self,
-        signal_type: AggregateSignalType,
-        key: &str,
-        metadata_json: Option<&str>,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        self.conn
-            .execute(
-                r#"
-                INSERT OR IGNORE INTO signals
-                (issue_type, issue_key, discovered_at, metadata_json)
-                VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3)
-                "#,
-                params![signal_type.as_str(), key, metadata_json],
-            )
-            .context("Failed to ensure aggregate signal")?;
-
-        Ok(self.conn.changes() > 0)
-    }
-
-    /// Clear an aggregate signal (idempotent delete).
-    pub fn clear_aggregate_signal(
-        &self,
-        signal_type: AggregateSignalType,
-        key: &str,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        let deleted = self
-            .conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
-                params![signal_type.as_str(), key],
-            )
-            .context("Failed to clear aggregate signal")?;
-
-        Ok(deleted > 0)
     }
 
     /// Get compound tag signal keys (inode strings) filtered by safety classification.
@@ -955,7 +800,7 @@ impl Database {
 
     /// Get all corpus paths with MissingFile signals.
     ///
-    /// Returns the path from metadata_json for each missing_file signal.
+    /// Returns the path column for each missing_file signal.
     /// Used by the missing file resolution modal to categorize files.
     /// MissingFile signals are keyed by inode with path in metadata.
     pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
@@ -976,7 +821,7 @@ impl Database {
 
     /// Get all corpus paths with CorruptFile signals.
     ///
-    /// Returns the path from metadata_json for each corrupt_file signal.
+    /// Returns the path column for each corrupt_file signal.
     /// Used by the corrupt file resolution modal.
     /// CorruptFile signals are keyed by inode with path in metadata.
     pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
@@ -998,7 +843,7 @@ impl Database {
     /// Get all corpus paths with ShitFormat signals.
     ///
     /// Returns (path, file_type) for each shit_format signal.
-    /// Both values are extracted from metadata_json.
+    /// Both values are typed columns in the signal_shit_format table.
     /// Used by the shit format resolution modal.
     /// ShitFormat signals are keyed by inode with path in metadata.
     pub fn get_shit_format_files(&self) -> Result<Vec<(String, String)>> {

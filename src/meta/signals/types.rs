@@ -110,107 +110,6 @@ pub enum SignalType {
     SubparDuplicate,
 }
 
-impl SignalType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            // First-level signals
-            Self::FileInCorpus => "file_in_corpus",
-
-            // Second-level signals
-            Self::UnindexedFile => "unindexed_file",
-            Self::HealthyFile => "healthy_file",
-            Self::MovedFile => "moved_file",
-            Self::MissingFile => "missing_file",
-            Self::MissingDirectory => "missing_directory",
-
-            // Third-level signals
-            Self::DeployConflict => "deploy_conflict",
-
-            // Library deployment health signals
-            Self::LibraryStale => "library_stale",
-            Self::LibraryLeftover => "library_leftover",
-
-            // Content-level signals
-            Self::FingerprintOverlap => "fingerprint_dup",
-            Self::MetadataDuplicate => "metadata_dup",
-            Self::MissingTag => "missing_tag",
-            Self::OutOfBandTagSync => "oob_tag_sync",
-            Self::OutOfBandTagConflict => "oob_tag_conflict",
-            Self::MtimeOnlyMismatch => "mtime_only_mismatch",
-            Self::DuplicateInode => "duplicate_inode",
-            Self::TagCanonicity => "tag_canonicity",
-            Self::InconsistentAlbumArtist => "inconsistent_album_artist",
-            Self::CompoundTagValue => "compound_tag_value",
-            Self::CrossSourceOverlap => "cross_source_overlap",
-
-            // Error signals
-            Self::CorruptFile => "corrupt_file",
-            Self::ShitFormat => "shit_format",
-            Self::SubparDuplicate => "subpar_duplicate",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            // First-level signals
-            "file_in_corpus" => Some(Self::FileInCorpus),
-
-            // Second-level signals
-            "unindexed_file" => Some(Self::UnindexedFile),
-            "healthy_file" => Some(Self::HealthyFile),
-            "moved_file" => Some(Self::MovedFile),
-            "missing_file" => Some(Self::MissingFile),
-            "missing_directory" => Some(Self::MissingDirectory),
-
-            // Third-level signals
-            "deploy_conflict" => Some(Self::DeployConflict),
-
-            // Library deployment health signals
-            "library_stale" => Some(Self::LibraryStale),
-            "library_leftover" => Some(Self::LibraryLeftover),
-
-            // Content-level signals
-            "fingerprint_dup" => Some(Self::FingerprintOverlap),
-            "metadata_dup" => Some(Self::MetadataDuplicate),
-            "missing_tag" => Some(Self::MissingTag),
-            "oob_tag_sync" => Some(Self::OutOfBandTagSync),
-            "oob_tag_conflict" => Some(Self::OutOfBandTagConflict),
-            "mtime_only_mismatch" => Some(Self::MtimeOnlyMismatch),
-            // Legacy: treat old "oob_tag" as conflict (conservative)
-            "oob_tag" => Some(Self::OutOfBandTagConflict),
-            "duplicate_inode" => Some(Self::DuplicateInode),
-            // Legacy: inode_changed was removed in v3 migration
-            // These are now exposed as MissingFile + UnindexedFile pair
-            "inode_changed" => Some(Self::MissingFile),
-            "tag_canonicity" => Some(Self::TagCanonicity),
-            "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
-            "compound_tag_value" => Some(Self::CompoundTagValue),
-            "compound_tag" => Some(Self::CompoundTagValue),
-            "cross_source_overlap" => Some(Self::CrossSourceOverlap),
-            // Legacy: map old error signal types to CorruptFile
-            "tag_parse_error" => Some(Self::CorruptFile),
-            "waveform_read_error" => Some(Self::CorruptFile),
-            "corrupt_file" => Some(Self::CorruptFile),
-            "shit_format" => Some(Self::ShitFormat),
-            "subpar_duplicate" => Some(Self::SubparDuplicate),
-
-            // Legacy DB values → map to new types
-            "missing_from_disk" => Some(Self::MissingFile),
-            "missing_from_index" => Some(Self::FileInCorpus),
-            "file_relocated" => Some(Self::MovedFile),
-            // Legacy: oob_file_change was split into OOB trio
-            "oob_file_change" => Some(Self::OutOfBandTagConflict),
-            "corpus_file_modified_oob" => Some(Self::OutOfBandTagConflict),
-
-            _ => None,
-        }
-    }
-}
-
-// NOTE: From<CorpusFileSignalType> for SignalType has been intentionally removed.
-// This prevents accidental coercion that could lead to keying mismatches.
-// If you need the string representation, use signal_type.as_str() directly.
-
 
 // ============================================================================
 // Signal Types (Type-Safe Signal System)
@@ -299,17 +198,6 @@ impl std::fmt::Display for CorpusFileSignalType {
 // - CorpusFileSignalType -> must use clear_corpus_signal(type, inode)
 // - AggregateSignalType -> must use clear_aggregate_signal(type, key)
 
-/// Aggregate health signal.
-///
-/// Groups multiple tracks under a common key. Metadata contains details.
-#[derive(Debug, Clone)]
-pub struct AggregateSignal {
-    pub signal_type: AggregateSignalType,
-    pub key: String,
-    pub discovered_at: Option<String>,
-    pub metadata_json: Option<String>,
-}
-
 
 /// Types of aggregate signals (semantic-keyed).
 ///
@@ -355,40 +243,4 @@ pub enum AggregateSignalType {
     LibraryStale,
 }
 
-impl AggregateSignalType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::FingerprintOverlap => "fingerprint_dup",
-            Self::MetadataDuplicate => "metadata_dup",
-            Self::DuplicateInode => "duplicate_inode",
-            Self::MissingTag => "missing_tag",
-            Self::DeployConflict => "deploy_conflict",
-            Self::TagCanonicity => "tag_canonicity",
-            Self::InconsistentAlbumArtist => "inconsistent_album_artist",
-            Self::CompoundTagValue => "compound_tag_value",
-            Self::CrossSourceOverlap => "cross_source_overlap",
-            Self::CanonicalTag => "canonical_tag",
-            Self::LibraryLeftover => "library_leftover",
-            Self::LibraryStale => "library_stale",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "fingerprint_dup" => Some(Self::FingerprintOverlap),
-            "metadata_dup" => Some(Self::MetadataDuplicate),
-            "duplicate_inode" => Some(Self::DuplicateInode),
-            "missing_tag" => Some(Self::MissingTag),
-            "deploy_conflict" => Some(Self::DeployConflict),
-            "tag_canonicity" => Some(Self::TagCanonicity),
-            "inconsistent_album_artist" => Some(Self::InconsistentAlbumArtist),
-            "compound_tag_value" => Some(Self::CompoundTagValue),
-            "cross_source_overlap" => Some(Self::CrossSourceOverlap),
-            "canonical_tag" => Some(Self::CanonicalTag),
-            "library_leftover" => Some(Self::LibraryLeftover),
-            "library_stale" => Some(Self::LibraryStale),
-            _ => None,
-        }
-    }
-}
 

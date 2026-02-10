@@ -429,29 +429,9 @@ impl Mutation {
         dirs
     }
 
-    /// Get specific file paths affected by this mutation for signal updates.
-    ///
-    /// Unlike `affected_directories()` which returns parent directories,
-    /// this returns the actual file paths that need signal updates.
-    /// Used to spawn per-file `UpdateFileSignals` computations.
-    pub fn affected_paths(&self) -> Vec<PathBuf> {
-        match self.as_executor() {
-            Some(e) => e.affected_paths(),
-            None => Vec::new(), // DbMigration
-        }
-    }
-
     // ========================================================================
     // Post-Execution Behavior Methods (delegated to MutationExecutor trait)
     // ========================================================================
-
-    /// Signal clearing scope after successful mutation.
-    pub fn signal_clear_scope(&self) -> SignalClearScope {
-        match self.as_executor() {
-            Some(e) => e.signal_clear_scope(),
-            None => SignalClearScope::None, // DbMigration
-        }
-    }
 
     /// Paths to spawn signal update computations for.
     pub fn paths_for_signal_updates(&self) -> Vec<PathBuf> {

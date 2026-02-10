@@ -27,8 +27,9 @@ use std::time::Instant;
 use crate::config;
 use crate::meta::computations::{Computation, awakening, with_read_only_db};
 use crate::meta::signals::CorpusFileSignalType;
+use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::db::{Database, ReadOnlyDb};
-use crate::meta::mutations::{Mutation, PendingSignal, SignalClearScope, SignalToClear};
+use crate::meta::mutations::{Mutation, PendingSignal, SignalToClear};
 use crate::corpus::paths;
 use crate::db_thread;
 
@@ -171,10 +172,12 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                     let resolver = paths::get_resolver();
                     if let Some(rel) = resolver.to_relative(path) {
                         let rel_str = rel.to_string_lossy();
-                        sender.ensure_corpus_signal(
-                            CorpusFileSignalType::CorruptFile,
-                            inode,
-                            &rel_str,
+                        sender.write_typed_signal(
+                            TypedSignalWrite::simple_corpus(
+                                CorpusFileSignalType::CorruptFile,
+                                inode,
+                                rel_str.to_string(),
+                            ),
                             &witness,
                         );
                         crate::logging::log_general(format!(
@@ -294,28 +297,12 @@ fn apply_post_execution(
     let resolver = paths::get_resolver();
     let mut spawned = Vec::new();
 
-    // Phase 1: Signal clearing (MUST happen before emission)
-    // Clears stale signals for affected paths; scope determined by mutation type.
-    let clear_scope = mutation.signal_clear_scope();
-    if clear_scope != SignalClearScope::None {
-        if let Some(sender) = db_thread::signal_sender() {
-            for path in mutation.affected_paths() {
-                let signal_key = if path.is_absolute() {
-                    resolver.to_relative(&path)
-                } else {
-                    Some(path)
-                };
-                if let Some(key) = signal_key {
-                    let key_str = key.to_string_lossy();
-                    match clear_scope {
-                        SignalClearScope::All => sender.clear_signals_for_path(&key_str, witness),
-                        SignalClearScope::MutableOnly => sender.clear_mutable_signals_for_path(&key_str, witness),
-                        SignalClearScope::None => {} // Already handled above
-                    }
-                }
-            }
-        }
-    }
+    // Phase 1: Inode-based corpus signal clearing
+    // The old path-based clearing was removed (signals are inode-keyed, not path-keyed).
+    // Corpus signal clearing is now handled by:
+    //   - ClearAllCorpusSignals (for affected inodes, driven by mutation executors)
+    //   - ClearCorpusSignal (for specific signal types)
+    //   - Dirty inode system (for recomputation after mutations)
 
     // Phase 1b: Drop files table entry for MoveToStash
     // When stashing a file, we must also remove it from the files table (not just signals).
@@ -418,7 +405,8 @@ fn emit_pending_signals(
     for signal in pending_signals {
         match signal {
             PendingSignal::CorpusSignal { signal_type, inode, path } => {
-                sender.ensure_corpus_signal(*signal_type, *inode, path, witness);
+                let typed = TypedSignalWrite::simple_corpus(*signal_type, *inode, path.clone());
+                sender.write_typed_signal(typed, witness);
             }
             PendingSignal::Typed(typed_signal) => {
                 sender.write_typed_signal(typed_signal.clone(), witness);

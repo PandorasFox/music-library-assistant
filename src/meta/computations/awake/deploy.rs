@@ -9,7 +9,7 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
     drop_stale_aggregate_signal,
-    ensure_aggregate_signal_if_missing,
+    ensure_library_leftover_if_missing,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType, SignalType};
@@ -221,7 +221,7 @@ pub fn execute_derive_deploy_health_signals(
             }
         } else {
             leftover_count += 1;
-            ensure_aggregate_signal_if_missing(read_only_db, &sender, AggregateSignalType::LibraryLeftover, &leftover_key, None, witness);
+            ensure_library_leftover_if_missing(read_only_db, &sender, &leftover_key, witness);
             drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryStale, &stale_key, witness);
         }
     }

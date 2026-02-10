@@ -81,7 +81,6 @@ pub fn execute_detect_fingerprint_overlaps(
 
         computed.push(ComputedAggregateSignal {
             key: fingerprint_text.clone(),
-            inodes: inodes.clone(),
             typed_data: TypedSignalWrite::FingerprintOverlap(FingerprintOverlapSignal {
                 key: fingerprint_text,
                 inodes,
@@ -162,7 +161,6 @@ pub fn execute_detect_duplicate_inodes(
 
         computed.push(ComputedAggregateSignal {
             key: inode.to_string(),
-            inodes: inodes.clone(),
             typed_data: TypedSignalWrite::DuplicateInode(DuplicateInodeSignal {
                 key: inode.to_string(),
                 inode,

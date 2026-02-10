@@ -158,6 +158,24 @@ impl MigrationRegistry {
             },
         });
 
+        // v4→v5: Drop old signals table (all data now in per-signal typed tables)
+        registry.register(Migration {
+            from_version: 4,
+            to_version: 5,
+            description: "Drop legacy signals table — per-signal typed tables are now sole source of truth",
+            apply: |db| {
+                // Drop the old monolithic signals table and its indices.
+                // All signal data is now stored in per-signal typed tables
+                // (signal_file_in_corpus, signal_missing_file, etc.)
+                db.conn().execute_batch(
+                    r#"
+                    DROP TABLE IF EXISTS signals;
+                    "#
+                )?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

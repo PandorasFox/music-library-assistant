@@ -276,22 +276,6 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_corpus_health_type ON corpus_health_stats(stat_type);
 
             -- =================================================================
-            -- Signals (facts about corpus state)
-            -- =================================================================
-            -- Signals are created by computations and deleted when stale.
-            -- Note: column names kept as issue_type/issue_key for backwards compat.
-            CREATE TABLE IF NOT EXISTS signals (
-                id INTEGER PRIMARY KEY,
-                issue_type TEXT NOT NULL,
-                issue_key TEXT NOT NULL,
-                discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                metadata_json TEXT,
-                UNIQUE(issue_type, issue_key)
-            );
-            CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(issue_type);
-            CREATE INDEX IF NOT EXISTS idx_signals_discovered ON signals(discovered_at);
-
-            -- =================================================================
             -- Dirty Inodes (incremental computation tracking)
             -- =================================================================
             -- Tracks inodes that need recomputation for specific computation types.
@@ -316,6 +300,10 @@ impl Database {
             );
             "#
         ).context("Failed to initialize database schema")?;
+
+        // Create per-signal typed tables (one table per signal type)
+        crate::meta::signals::store::create_all_signal_tables(&self.conn)
+            .context("Failed to create signal tables")?;
 
         Ok(())
     }

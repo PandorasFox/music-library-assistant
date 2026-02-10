@@ -164,10 +164,14 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 // inode-keyed corpus signals. This is the preferred pattern for all
 // corpus file signals.
 
-/// Ensure a corpus signal exists using the native inode column.
+/// Ensure a simple corpus signal exists (inode + path only).
 ///
 /// Uses `read_only_db.corpus_signal_exists_by_inode()` for efficient freshness check,
-/// then queues to the write thread if needed.
+/// then queues a typed write to the signal's per-type table if needed.
+///
+/// Only valid for simple signal types (FileInCorpus, UnindexedFile, HealthyFile,
+/// MissingFile, MissingDirectory, CorruptFile, MtimeOnlyMismatch). Signal types
+/// with extra data (MovedFile, ShitFormat, etc.) must construct TypedSignalWrite directly.
 pub(crate) fn ensure_corpus_signal(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
@@ -177,7 +181,8 @@ pub(crate) fn ensure_corpus_signal(
     witness: &impl SignalWitness,
 ) {
     if !read_only_db.corpus_signal_exists_by_inode(signal_type, inode) {
-        sender.ensure_corpus_signal(signal_type, inode, path, witness);
+        let typed = TypedSignalWrite::simple_corpus(signal_type, inode, path.to_string());
+        sender.write_typed_signal(typed, witness);
     }
 }
 
@@ -202,19 +207,20 @@ pub(crate) fn drop_stale_corpus_signal(
 // These helpers use semantic string keys for aggregate signals.
 // Used for LibraryStale, LibraryLeftover, and other semantic-keyed signals.
 
-/// Ensure an aggregate signal exists, but only queue the write if it doesn't already exist.
+/// Ensure a LibraryLeftover aggregate signal exists.
 ///
-/// Uses the read-only DB to check freshness before queueing to the write thread.
-pub(crate) fn ensure_aggregate_signal_if_missing(
+/// Uses the read-only DB to check freshness before queueing a typed write.
+pub(crate) fn ensure_library_leftover_if_missing(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: AggregateSignalType,
     key: &str,
-    metadata_json: Option<&str>,
     witness: &impl SignalWitness,
 ) {
-    if !read_only_db.aggregate_signal_exists(signal_type, key) {
-        sender.ensure_aggregate_signal(signal_type, key, metadata_json, witness);
+    if !read_only_db.aggregate_signal_exists(AggregateSignalType::LibraryLeftover, key) {
+        let typed = TypedSignalWrite::LibraryLeftover(
+            crate::meta::signals::data::LibraryLeftoverSignal { key: key.to_string() }
+        );
+        sender.write_typed_signal(typed, witness);
     }
 }
 
@@ -239,10 +245,9 @@ pub(crate) fn drop_stale_aggregate_signal(
 
 /// A computed aggregate signal ready for reconciliation.
 ///
-/// Contains the key, inodes, and typed data for the signal write.
+/// Contains the key and typed data for the signal write.
 pub(super) struct ComputedAggregateSignal {
     pub key: String,
-    pub inodes: Vec<i64>,
     pub typed_data: TypedSignalWrite,
 }
 

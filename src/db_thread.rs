@@ -153,20 +153,10 @@ pub fn request_shutdown() {
 /// Signal write operations (health signals and computation state).
 #[derive(Debug)]
 enum SignalWriteOp {
-    // NOTE: EnsureFileSignal/ClearFileSignal have been removed.
-    // - Corpus signals use EnsureCorpusSignal/ClearCorpusSignal (inode-keyed)
-    // - Library signals use EnsureAggregateSignal/ClearAggregateSignal (semantic-keyed)
-
     // =========================================================================
     // Inode-Keyed Corpus Signal Operations
     // =========================================================================
 
-    /// Ensure an inode-keyed corpus signal exists (uses native inode column)
-    EnsureCorpusSignal {
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: String,
-    },
     /// Clear an inode-keyed corpus signal
     ClearCorpusSignal {
         signal_type: CorpusFileSignalType,
@@ -177,12 +167,6 @@ enum SignalWriteOp {
         inode: i64,
     },
 
-    /// Aggregate signal (with metadata)
-    EnsureAggregateSignal {
-        signal_type: AggregateSignalType,
-        key: String,
-        metadata_json: Option<String>,
-    },
     /// Clear an aggregate signal
     ClearAggregateSignal {
         signal_type: AggregateSignalType,
@@ -331,19 +315,6 @@ enum SignalWriteOp {
     // TODO: Refactor signal clearing into a unified system with signal categories.
     // File-inherent signals (CorruptFile, ShitFormat) vs tag-based signals (OOB, mtime)
     // should be distinguished at the type level, not via SQL string matching.
-
-    /// Clear all signals for a specific path.
-    /// Used by MoveToStash/DropFromIndex to fully clear signals on removal.
-    ClearSignalsForPath {
-        path: String,
-    },
-
-    /// Clear mutable signals for a path, preserving file-inherent signals.
-    /// File-inherent signals (CorruptFile, ShitFormat) require specific mutations to clear.
-    /// Used by general mutation handler for signal refresh.
-    ClearMutableSignalsForPath {
-        path: String,
-    },
 
     // =========================================================================
     // Dirty Inode Operations (for incremental computations)
@@ -498,32 +469,9 @@ impl SignalWriteSender {
         self.stats.queue_empty.store(false, Ordering::Release);
     }
 
-    // NOTE: ensure_file_signal/clear_file_signal have been removed.
-    // - Corpus signals: use ensure_corpus_signal/clear_corpus_signal (inode-keyed)
-    // - Library signals: use ensure_aggregate_signal/clear_aggregate_signal (semantic-keyed)
-
     // =========================================================================
     // Inode-keyed corpus signal operations (uses native inode column)
     // =========================================================================
-
-    /// Enqueue an inode-keyed corpus signal (uses native inode column).
-    ///
-    /// The inode is stored in the dedicated `inode` column for efficient queries.
-    /// The path is stored in metadata_json for display purposes.
-    pub fn ensure_corpus_signal(
-        &self,
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: &str,
-        _witness: &impl SignalWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::EnsureCorpusSignal {
-            signal_type,
-            inode,
-            path: path.to_string(),
-        });
-    }
 
     /// Clear an inode-keyed corpus signal.
     pub fn clear_corpus_signal(
@@ -550,22 +498,6 @@ impl SignalWriteSender {
     // =========================================================================
     // Aggregate signal operations
     // =========================================================================
-
-    /// Enqueue an aggregate signal (with metadata).
-    pub fn ensure_aggregate_signal(
-        &self,
-        signal_type: AggregateSignalType,
-        key: &str,
-        metadata_json: Option<&str>,
-        _witness: &impl SignalWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::EnsureAggregateSignal {
-            signal_type,
-            key: key.to_string(),
-            metadata_json: metadata_json.map(|s| s.to_string()),
-        });
-    }
 
     /// Clear an aggregate signal (idempotent delete).
     pub fn clear_aggregate_signal(
@@ -846,35 +778,6 @@ impl SignalWriteSender {
         });
     }
 
-    /// Clear all signals for a specific path.
-    ///
-    /// Used by MoveToStash/DropFromIndex to fully clear signals when removing a file.
-    pub fn clear_signals_for_path(
-        &self,
-        path: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearSignalsForPath {
-            path: path.to_string(),
-        });
-    }
-
-    /// Clear mutable signals for a path, preserving file-inherent signals.
-    ///
-    /// File-inherent signals (CorruptFile, ShitFormat) are preserved because they
-    /// require specific mutations or verification to clear. Tag-based signals
-    /// are cleared and will be recomputed by UpdateCorpusFileSignals.
-    pub fn clear_mutable_signals_for_path(
-        &self,
-        path: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearMutableSignalsForPath {
-            path: path.to_string(),
-        });
-    }
 
     /// Set the needs_disk_flush flag for a track.
     ///
@@ -1092,165 +995,14 @@ where
 }
 
 // ============================================================================
-// Typed Table Dual-Write Helpers
+// Typed Signal Table Helpers
 // ============================================================================
 //
-// These write to the new per-signal typed tables alongside the old `signals` table.
-// During the transition period, both tables are kept in sync. Once reads are
-// switched to typed tables (Step B5), the old-table writes will be removed.
+// These operate on the per-signal typed tables, which are now the sole source
+// of truth for signal data.
 
 use crate::meta::signals::data::*;
 use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
-
-/// Write a simple corpus signal (no extra metadata) to its typed table.
-fn typed_write_corpus_signal(db: &Database, signal_type: CorpusFileSignalType, inode: i64, path: &str) {
-    let conn = db.conn();
-    let _ = match signal_type {
-        CorpusFileSignalType::FileInCorpus =>
-            FileInCorpusSignal { inode, path: path.to_string() }.insert(conn),
-        CorpusFileSignalType::UnindexedFile =>
-            UnindexedFileSignal { inode, path: path.to_string() }.insert(conn),
-        CorpusFileSignalType::HealthyFile =>
-            HealthyFileSignal { inode, path: path.to_string() }.insert(conn),
-        CorpusFileSignalType::MissingFile =>
-            // No replaced_by_inode available in simple path — use None
-            MissingFileSignal { inode, path: path.to_string(), replaced_by_inode: None }.insert(conn),
-        CorpusFileSignalType::MissingDirectory =>
-            MissingDirectorySignal { inode, path: path.to_string() }.insert(conn),
-        CorpusFileSignalType::MtimeOnlyMismatch =>
-            MtimeOnlyMismatchSignal { inode, path: path.to_string() }.insert(conn),
-        CorpusFileSignalType::CorruptFile =>
-            CorruptFileSignal { inode, path: path.to_string() }.insert(conn),
-        // These types always have metadata — should go through typed_write_corpus_signal_with_metadata
-        CorpusFileSignalType::MovedFile
-        | CorpusFileSignalType::ShitFormat
-        | CorpusFileSignalType::SubparDuplicate
-        | CorpusFileSignalType::CompoundTag
-        | CorpusFileSignalType::DeployReady
-        | CorpusFileSignalType::DeployedHealthy
-        | CorpusFileSignalType::OutOfBandTagSync
-        | CorpusFileSignalType::OutOfBandTagConflict => {
-            // Called without metadata for a type that normally has it — emit with defaults
-            return;
-        }
-    };
-}
-
-/// Write an aggregate signal to its typed table.
-fn typed_write_aggregate_signal(
-    db: &Database,
-    signal_type: AggregateSignalType,
-    key: &str,
-    metadata_json: Option<&str>,
-) {
-    let conn = db.conn();
-    let meta: serde_json::Value = metadata_json
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-
-    let _ = match signal_type {
-        AggregateSignalType::CanonicalTag => {
-            CanonicalTagSignal {
-                key: key.to_string(),
-                tag_name: meta["tag_name"].as_str().unwrap_or("").to_string(),
-                canonical_value: meta["canonical_value"].as_str().unwrap_or("").to_string(),
-                created_at: meta["created_at"].as_str().unwrap_or("").to_string(),
-            }.insert(conn)
-        }
-        AggregateSignalType::LibraryLeftover => {
-            LibraryLeftoverSignal { key: key.to_string() }.insert(conn)
-        }
-        AggregateSignalType::LibraryStale => {
-            LibraryStaleSignal {
-                key: key.to_string(),
-                library_path: meta["library_path"].as_str().unwrap_or("").to_string(),
-                expected_path: meta["expected_path"].as_str().unwrap_or("").to_string(),
-                corpus_path: meta["corpus_path"].as_str().unwrap_or("").to_string(),
-                inode: meta["inode"].as_i64().unwrap_or(0),
-            }.insert(conn)
-        }
-        AggregateSignalType::FingerprintOverlap => {
-            let inodes = parse_inodes_array(&meta);
-            FingerprintOverlapSignal { key: key.to_string(), inodes }.insert(conn)
-        }
-        AggregateSignalType::MetadataDuplicate => {
-            let data = MetadataDuplicateData {
-                tag_signature: meta["tag_signature"].as_str().unwrap_or("").to_string(),
-                inodes: parse_inodes_array(&meta),
-            };
-            MetadataDuplicateSignal { key: key.to_string(), data }.insert(conn)
-        }
-        AggregateSignalType::DuplicateInode => {
-            let inode_val = meta["inode"].as_i64().unwrap_or(0);
-            let inodes = parse_inodes_array(&meta);
-            DuplicateInodeSignal { key: key.to_string(), inode: inode_val, inodes }.insert(conn)
-        }
-        AggregateSignalType::MissingTag => {
-            let data = MissingTagData {
-                missing_tags: meta["missing_tags"].as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                    .unwrap_or_default(),
-                inodes: parse_inodes_array(&meta),
-            };
-            MissingTagSignal { key: key.to_string(), data }.insert(conn)
-        }
-        AggregateSignalType::DeployConflict => {
-            let deploy_path = meta["deploy_path"].as_str().unwrap_or("").to_string();
-            let inodes = parse_inodes_array(&meta);
-            DeployConflictSignal { key: key.to_string(), deploy_path, inodes }.insert(conn)
-        }
-        AggregateSignalType::TagCanonicity => {
-            let data = TagCanonicityData {
-                variants: parse_variants_map(&meta),
-                inodes: parse_inodes_array(&meta),
-            };
-            TagCanonicitySignal {
-                key: key.to_string(),
-                tag_name: meta["tag_name"].as_str().unwrap_or("").to_string(),
-                data,
-            }.insert(conn)
-        }
-        AggregateSignalType::InconsistentAlbumArtist => {
-            let data = InconsistentAlbumArtistData {
-                album: meta["album"].as_str().unwrap_or("").to_string(),
-                artist_variants: parse_variants_map_from(&meta, "artist_variants"),
-                album_artist_variants: parse_variants_map_from(&meta, "album_artist_variants"),
-                inodes: parse_inodes_array(&meta),
-            };
-            InconsistentAlbumArtistSignal { key: key.to_string(), data }.insert(conn)
-        }
-        AggregateSignalType::CompoundTagValue => {
-            let data = CompoundTagValueData {
-                compound_value: meta["compound_value"].as_str().unwrap_or("").to_string(),
-                split_parts: meta["split_parts"].as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                    .unwrap_or_default(),
-                separator: meta["separator"].as_str().unwrap_or("").to_string(),
-                inodes: parse_inodes_array(&meta),
-            };
-            CompoundTagValueSignal {
-                key: key.to_string(),
-                tag_name: meta["tag_name"].as_str().unwrap_or("").to_string(),
-                data,
-            }.insert(conn)
-        }
-        AggregateSignalType::CrossSourceOverlap => {
-            let data = CrossSourceOverlapData {
-                source_a: meta["source_a"].as_str().unwrap_or("").to_string(),
-                source_b: meta["source_b"].as_str().unwrap_or("").to_string(),
-                source_a_can_stash: meta["source_a_can_stash"].as_bool().unwrap_or(false),
-                source_b_can_stash: meta["source_b_can_stash"].as_bool().unwrap_or(false),
-                overlap_count: meta["overlap_count"].as_u64().unwrap_or(0) as usize,
-                fingerprint_count: meta["fingerprint_count"].as_u64().unwrap_or(0) as usize,
-                fingerprint_keys: meta["fingerprint_keys"].as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                    .unwrap_or_default(),
-                track_pairs: parse_cross_source_track_pairs(&meta),
-            };
-            CrossSourceOverlapSignal { key: key.to_string(), data }.insert(conn)
-        }
-    };
-}
 
 /// Clear a corpus signal from its typed table.
 fn typed_clear_corpus_signal(db: &Database, signal_type: CorpusFileSignalType, inode: i64) {
@@ -1365,38 +1117,8 @@ fn typed_clear_corpus_signals_by_type(db: &Database, signal_type: &CorpusFileSig
     };
 }
 
-// --- JSON parsing helpers for typed table dual-write ---
-
-fn parse_inodes_array(meta: &serde_json::Value) -> Vec<i64> {
-    meta["inodes"].as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
-        .unwrap_or_default()
-}
-
-fn parse_variants_map(meta: &serde_json::Value) -> Vec<(String, usize)> {
-    parse_variants_map_from(meta, "variants")
-}
-
-fn parse_variants_map_from(meta: &serde_json::Value, field: &str) -> Vec<(String, usize)> {
-    meta[field].as_object()
-        .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap_or(0) as usize)).collect())
-        .unwrap_or_default()
-}
-
-fn parse_cross_source_track_pairs(meta: &serde_json::Value) -> Vec<CrossSourceTrackPair> {
-    meta["track_pairs"].as_array()
-        .map(|arr| arr.iter().map(|p| CrossSourceTrackPair {
-            fingerprint_key: p["fingerprint_key"].as_str().unwrap_or("").to_string(),
-            source_a_inode: p["source_a_inode"].as_i64().unwrap_or(0),
-            source_a_path: p["source_a_path"].as_str().unwrap_or("").to_string(),
-            source_b_inode: p["source_b_inode"].as_i64().unwrap_or(0),
-            source_b_path: p["source_b_path"].as_str().unwrap_or("").to_string(),
-        }).collect())
-        .unwrap_or_default()
-}
 
 /// Execute a single signal write operation.
-#[allow(deprecated)]
 fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
     // Note: We don't have a ComputationWitness here, but we need one for the db methods.
     // The witness was checked at the send site. We use a thread-local witness for execution.
@@ -1404,44 +1126,15 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
 
     match op {
         // Inode-keyed corpus signal operations
-        SignalWriteOp::EnsureCorpusSignal {
-            signal_type,
-            inode,
-            path,
-        } => {
-            with_retry("ensure_corpus_signal", path, || {
-                db.ensure_corpus_signal(*signal_type, *inode, path, &witness).map(|_| ())
-            });
-            typed_write_corpus_signal(db, *signal_type, *inode, path);
-        }
         SignalWriteOp::ClearCorpusSignal { signal_type, inode } => {
-            with_retry("clear_corpus_signal", &inode.to_string(), || {
-                db.clear_corpus_signal(*signal_type, *inode, &witness).map(|_| ())
-            });
             typed_clear_corpus_signal(db, *signal_type, *inode);
         }
         SignalWriteOp::ClearAllCorpusSignals { inode } => {
-            with_retry("clear_all_corpus_signals", &inode.to_string(), || {
-                db.clear_all_corpus_signals_for_inode(*inode, &witness).map(|_| ())
-            });
             typed_clear_all_corpus_signals(db, *inode);
         }
 
         // Aggregate signal operations
-        SignalWriteOp::EnsureAggregateSignal {
-            signal_type,
-            key,
-            metadata_json,
-        } => {
-            with_retry("ensure_aggregate_signal", key, || {
-                db.ensure_aggregate_signal(*signal_type, key, metadata_json.as_deref(), &witness).map(|_| ())
-            });
-            typed_write_aggregate_signal(db, *signal_type, key, metadata_json.as_deref());
-        }
         SignalWriteOp::ClearAggregateSignal { signal_type, key } => {
-            with_retry("clear_aggregate_signal", key, || {
-                db.clear_aggregate_signal(*signal_type, key, &witness).map(|_| ())
-            });
             typed_clear_aggregate_signal(db, *signal_type, key);
         }
 
@@ -1479,31 +1172,9 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
 
         // Bulk operations (Awake phase content analysis)
         SignalWriteOp::ClearSignalsByType { issue_type } => {
-            let issue_type_str = issue_type.as_str();
-            with_retry("clear_signals_by_type", issue_type_str, || {
-                use rusqlite::params;
-                db.conn()
-                    .execute(
-                        "DELETE FROM signals WHERE issue_type = ?1",
-                        params![issue_type_str],
-                    )
-                    .map(|_| ())
-                    .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
-            });
             typed_clear_signals_by_type(db, issue_type);
         }
         SignalWriteOp::ClearCorpusSignalsByType { signal_type } => {
-            let signal_type_str = signal_type.as_str();
-            with_retry("clear_corpus_signals_by_type", signal_type_str, || {
-                use rusqlite::params;
-                db.conn()
-                    .execute(
-                        "DELETE FROM signals WHERE issue_type = ?1",
-                        params![signal_type_str],
-                    )
-                    .map(|_| ())
-                    .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
-            });
             typed_clear_corpus_signals_by_type(db, signal_type);
         }
         SignalWriteOp::WriteTypedSignal { signal } => {
@@ -1617,18 +1288,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::ClearTagMismatchesForTrack { path } => {
             with_retry("clear_tag_mismatches_for_track", path, || {
                 execute_clear_tag_mismatches_for_track(db, path)
-            });
-        }
-
-        SignalWriteOp::ClearSignalsForPath { path } => {
-            with_retry("clear_signals_for_path", path, || {
-                db.delete_signals_for_path(path, &witness).map(|_| ())
-            });
-        }
-
-        SignalWriteOp::ClearMutableSignalsForPath { path } => {
-            with_retry("clear_mutable_signals_for_path", path, || {
-                db.delete_mutable_signals_for_path(path, &witness).map(|_| ())
             });
         }
 
@@ -1954,19 +1613,8 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
         )?;
     }
 
-    // Clear all inode-keyed signals for this inode (MissingFile, CorruptFile, etc.)
-    // This uses the native inode column for proper cleanup
-    db.conn().execute(
-        "DELETE FROM signals WHERE inode = ?1",
-        params![inode],
-    )?;
-
-    // Also clear path-keyed signals (MissingDirectory, library signals, etc.)
-    // These use issue_key = path
-    db.conn().execute(
-        "DELETE FROM signals WHERE issue_key = ?1",
-        params![path],
-    )?;
+    // Clear all corpus signals for this inode from typed tables
+    typed_clear_all_corpus_signals(db, inode);
 
     Ok(())
 }
@@ -2215,7 +1863,7 @@ fn execute_upsert_file_entry(
 
 /// Execute ClearTagMismatchesForTrack: clear all mismatches for a file.
 /// NOTE: tag_mismatches table is dropped in new schema. Tag conflicts are
-/// now handled via OOB signals with mismatch details in metadata_json.
+/// now handled via OOB signals with typed mismatch data in bincode BLOBs.
 /// This is a no-op placeholder until callers are updated.
 fn execute_clear_tag_mismatches_for_track(_db: &Database, _path: &str) -> anyhow::Result<()> {
     // TODO: Clear OOB signals for this path when tag conflicts are fully signal-based

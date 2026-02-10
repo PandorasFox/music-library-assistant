@@ -381,6 +381,34 @@ pub enum TypedSignalWrite {
 }
 
 impl TypedSignalWrite {
+    /// Construct a TypedSignalWrite for simple corpus signals (inode + path only).
+    ///
+    /// Panics if the signal type requires extra fields (e.g., ShitFormat, MovedFile).
+    /// Those must be constructed directly with their full data.
+    pub fn simple_corpus(signal_type: crate::meta::signals::types::CorpusFileSignalType, inode: i64, path: String) -> Self {
+        use crate::meta::signals::types::CorpusFileSignalType;
+        match signal_type {
+            CorpusFileSignalType::FileInCorpus => Self::FileInCorpus(FileInCorpusSignal { inode, path }),
+            CorpusFileSignalType::UnindexedFile => Self::UnindexedFile(UnindexedFileSignal { inode, path }),
+            CorpusFileSignalType::HealthyFile => Self::HealthyFile(HealthyFileSignal { inode, path }),
+            CorpusFileSignalType::MissingFile => Self::MissingFile(MissingFileSignal { inode, path, replaced_by_inode: None }),
+            CorpusFileSignalType::MissingDirectory => Self::MissingDirectory(MissingDirectorySignal { inode, path }),
+            CorpusFileSignalType::CorruptFile => Self::CorruptFile(CorruptFileSignal { inode, path }),
+            CorpusFileSignalType::MtimeOnlyMismatch => Self::MtimeOnlyMismatch(MtimeOnlyMismatchSignal { inode, path }),
+            // These signal types require extra data — cannot be constructed from (inode, path) alone
+            CorpusFileSignalType::MovedFile
+            | CorpusFileSignalType::ShitFormat
+            | CorpusFileSignalType::SubparDuplicate
+            | CorpusFileSignalType::OutOfBandTagSync
+            | CorpusFileSignalType::OutOfBandTagConflict
+            | CorpusFileSignalType::CompoundTag
+            | CorpusFileSignalType::DeployReady
+            | CorpusFileSignalType::DeployedHealthy => {
+                panic!("TypedSignalWrite::simple_corpus called with signal type {:?} that requires extra data", signal_type)
+            }
+        }
+    }
+
     /// Insert this signal into its typed table.
     pub fn insert(self, conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};

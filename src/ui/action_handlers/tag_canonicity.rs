@@ -45,17 +45,15 @@ impl App {
 
             match &insight_type {
                 insights_view::InsightType::InconsistentAlbumArtist => {
-                    let sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::InconsistentAlbumArtist))
+                    let keys = read_db.get_aggregate_signal_keys(AggregateSignalType::InconsistentAlbumArtist)
                         .unwrap_or_default();
-                    let keys: Vec<String> = sigs.into_iter().map(|s| s.key).collect();
                     (keys, CanonicitySignalKind::InconsistentAlbumArtist)
                 }
                 insights_view::InsightType::TagCanonicity { tag_name } => {
-                    let all_sigs = read_db.get_aggregate_signals(Some(AggregateSignalType::TagCanonicity))
+                    let all_keys = read_db.get_aggregate_signal_keys(AggregateSignalType::TagCanonicity)
                         .unwrap_or_default();
-                    let keys: Vec<String> = all_sigs.into_iter()
-                        .filter(|s| s.key.starts_with(&format!("{}:", tag_name)))
-                        .map(|s| s.key)
+                    let keys: Vec<String> = all_keys.into_iter()
+                        .filter(|k| k.starts_with(&format!("{}:", tag_name)))
                         .collect();
                     (keys, CanonicitySignalKind::TagCanonicity)
                 }

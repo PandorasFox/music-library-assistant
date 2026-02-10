@@ -576,7 +576,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 
     // Get all FingerprintOverlap signals
     let fp_dup_signals = read_only_db
-        .get_aggregate_signals(Some(AggregateSignalType::FingerprintOverlap))
+        .get_fingerprint_overlap_signals()
         .unwrap_or_default();
 
     if fp_dup_signals.is_empty() {
@@ -589,7 +589,7 @@ pub fn execute_analyze_fingerprint_overlaps(
     let mut variant_skipped = 0;
 
     for signal in &fp_dup_signals {
-        let inodes = signal.inodes();
+        let inodes = signal.inodes.clone();
         if inodes.len() < 2 {
             continue;
         }
@@ -839,7 +839,7 @@ pub fn execute_detect_cross_source_overlaps(
 
     // Get all FingerprintOverlap signals
     let fp_overlap_signals = read_only_db
-        .get_aggregate_signals(Some(AggregateSignalType::FingerprintOverlap))
+        .get_fingerprint_overlap_signals()
         .unwrap_or_default();
 
     if fp_overlap_signals.is_empty() {
@@ -859,7 +859,7 @@ pub fn execute_detect_cross_source_overlaps(
     let mut within_source_skipped = 0;
 
     for signal in &fp_overlap_signals {
-        let inodes = signal.inodes();
+        let inodes = signal.inodes.clone();
         if inodes.len() < 2 {
             continue;
         }

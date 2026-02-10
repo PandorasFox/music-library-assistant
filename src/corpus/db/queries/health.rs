@@ -103,6 +103,34 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Failed to query cross source overlap signals: {}", e))
     }
 
+    pub fn get_fingerprint_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
+        crate::meta::signals::data::FingerprintOverlapSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query fingerprint overlap signals: {}", e))
+    }
+
+    /// Query all keys for a given aggregate signal type.
+    ///
+    /// Returns just the key strings from the per-signal typed table.
+    pub fn get_aggregate_signal_keys(&self, signal_type: AggregateSignalType) -> Result<Vec<String>> {
+        use crate::meta::signals::data::*;
+        use crate::meta::signals::store::AggregateSignalStore;
+        let result = match signal_type {
+            AggregateSignalType::FingerprintOverlap => FingerprintOverlapSignal::query_keys(&self.conn),
+            AggregateSignalType::MetadataDuplicate => MetadataDuplicateSignal::query_keys(&self.conn),
+            AggregateSignalType::DuplicateInode => DuplicateInodeSignal::query_keys(&self.conn),
+            AggregateSignalType::MissingTag => MissingTagSignal::query_keys(&self.conn),
+            AggregateSignalType::DeployConflict => DeployConflictSignal::query_keys(&self.conn),
+            AggregateSignalType::TagCanonicity => TagCanonicitySignal::query_keys(&self.conn),
+            AggregateSignalType::InconsistentAlbumArtist => InconsistentAlbumArtistSignal::query_keys(&self.conn),
+            AggregateSignalType::CompoundTagValue => CompoundTagValueSignal::query_keys(&self.conn),
+            AggregateSignalType::CrossSourceOverlap => CrossSourceOverlapSignal::query_keys(&self.conn),
+            AggregateSignalType::CanonicalTag => CanonicalTagSignal::query_keys(&self.conn),
+            AggregateSignalType::LibraryLeftover => LibraryLeftoverSignal::query_keys(&self.conn),
+            AggregateSignalType::LibraryStale => LibraryStaleSignal::query_keys(&self.conn),
+        };
+        result.map_err(|e| anyhow::anyhow!("Failed to query aggregate signal keys for {:?}: {}", signal_type, e))
+    }
+
     /// Fast existence check for an aggregate signal (semantic-keyed).
     ///
     /// Queries the per-signal typed table directly.
@@ -406,160 +434,28 @@ impl Database {
         }
     }
 
-    /// Get all aggregate signals of a given type.
-    ///
-    /// Reads from the per-signal typed table and reconstructs metadata_json
-    /// from bincode for backwards compatibility.
-    pub fn get_aggregate_signals(
-        &self,
-        signal_type: Option<AggregateSignalType>,
-    ) -> Result<Vec<AggregateSignal>> {
-        match signal_type {
-            Some(agg_type) => self.get_aggregate_signals_from_typed_table(agg_type),
-            None => Ok(Vec::new()),
-        }
-    }
-
-    /// Read aggregate signals from the per-signal typed table.
-    fn get_aggregate_signals_from_typed_table(
-        &self,
-        agg_type: AggregateSignalType,
-    ) -> Result<Vec<AggregateSignal>> {
-        let table = aggregate_signal_table_name(agg_type);
-        let has_blob = aggregate_signal_has_data_blob(agg_type);
-
-        if has_blob {
-            let sql = format!(
-                "SELECT key, data, discovered_at FROM {} ORDER BY discovered_at DESC",
-                table
-            );
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![], |row| {
-                let key: String = row.get(0)?;
-                let blob: Vec<u8> = row.get(1)?;
-                let discovered_at: Option<String> = row.get(2)?;
-                Ok((key, blob, discovered_at))
-            })?;
-            let mut results = Vec::new();
-            for row in rows {
-                let (key, blob, discovered_at) = row?;
-                let metadata_json = Some(reconstruct_aggregate_metadata_json(agg_type, &key, &blob));
-                results.push(AggregateSignal {
-                    id: None,
-                    signal_type: agg_type,
-                    key,
-                    discovered_at,
-                    metadata_json,
-                });
-            }
-            Ok(results)
-        } else {
-            // No BLOB — simple key + discovered_at
-            // For CanonicalTag: also has tag_name, canonical_value columns
-            // For LibraryStale: has library_path, expected_path, corpus_path, inode columns
-            // For LibraryLeftover: just key
-            let sql = match agg_type {
-                AggregateSignalType::CanonicalTag => {
-                    format!("SELECT key, tag_name, canonical_value, discovered_at FROM {} ORDER BY discovered_at DESC", table)
-                }
-                AggregateSignalType::LibraryStale => {
-                    format!("SELECT key, library_path, expected_path, corpus_path, inode, discovered_at FROM {} ORDER BY discovered_at DESC", table)
-                }
-                _ => {
-                    format!("SELECT key, discovered_at FROM {} ORDER BY discovered_at DESC", table)
-                }
-            };
-            let mut stmt = self.conn.prepare(&sql)?;
-            let mut results = Vec::new();
-
-            match agg_type {
-                AggregateSignalType::CanonicalTag => {
-                    let rows = stmt.query_map(params![], |row| {
-                        let key: String = row.get(0)?;
-                        let tag_name: String = row.get(1)?;
-                        let canonical_value: String = row.get(2)?;
-                        let discovered_at: Option<String> = row.get(3)?;
-                        Ok(AggregateSignal {
-                            id: None,
-                            signal_type: agg_type,
-                            key,
-                            discovered_at,
-                            metadata_json: Some(
-                                serde_json::json!({"tag_name": tag_name, "canonical_value": canonical_value}).to_string()
-                            ),
-                        })
-                    })?;
-                    for row in rows { results.push(row?); }
-                }
-                AggregateSignalType::LibraryStale => {
-                    let rows = stmt.query_map(params![], |row| {
-                        let key: String = row.get(0)?;
-                        let library_path: String = row.get(1)?;
-                        let expected_path: String = row.get(2)?;
-                        let corpus_path: String = row.get(3)?;
-                        let inode: i64 = row.get(4)?;
-                        let discovered_at: Option<String> = row.get(5)?;
-                        Ok(AggregateSignal {
-                            id: None,
-                            signal_type: agg_type,
-                            key,
-                            discovered_at,
-                            metadata_json: Some(
-                                serde_json::json!({
-                                    "library_path": library_path,
-                                    "expected_path": expected_path,
-                                    "corpus_path": corpus_path,
-                                    "inode": inode
-                                }).to_string()
-                            ),
-                        })
-                    })?;
-                    for row in rows { results.push(row?); }
-                }
-                _ => {
-                    // LibraryLeftover — just key, no metadata
-                    let rows = stmt.query_map(params![], |row| {
-                        let key: String = row.get(0)?;
-                        let discovered_at: Option<String> = row.get(1)?;
-                        Ok(AggregateSignal {
-                            id: None,
-                            signal_type: agg_type,
-                            key,
-                            discovered_at,
-                            metadata_json: None,
-                        })
-                    })?;
-                    for row in rows { results.push(row?); }
-                }
-            }
-            Ok(results)
-        }
-    }
-
-    /// Get compound tag signals filtered by safety classification.
+    /// Get compound tag signal keys (inode strings) filtered by safety classification.
     ///
     /// If `safe_only` is true, returns only signals where ALL compounds have
     /// all split parts existing in corpus (matching_parts.len() == split_parts.len()).
     /// If false, returns only signals that need review (some/all parts are new).
     /// If `tag_filter` is Some, only returns signals containing compounds for that tag name.
-    pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<AggregateSignal>> {
+    pub fn get_compound_signal_keys_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<String>> {
         use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
 
         let mut stmt = self.conn.prepare(
-            "SELECT inode, path, data, discovered_at FROM signal_compound_tag ORDER BY discovered_at DESC"
+            "SELECT inode, data FROM signal_compound_tag ORDER BY discovered_at DESC"
         )?;
 
         let rows = stmt.query_map(params![], |row| {
             let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            let discovered_at: Option<String> = row.get(3)?;
-            Ok((inode, path, blob, discovered_at))
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((inode, blob))
         })?;
 
         let mut results = Vec::new();
         for row in rows {
-            let (inode, path, blob, discovered_at) = row?;
+            let (inode, blob) = row?;
 
             let compounds: Vec<TypedEntry> = match bincode::deserialize(&blob) {
                 Ok(c) => c,
@@ -570,7 +466,6 @@ impl Database {
                 continue;
             }
 
-            let dominated_tag_name = Some(compounds[0].tag_name.clone());
             let is_safe = compounds.iter().all(|c| {
                 !c.split_parts.is_empty() && c.split_parts.len() == c.matching_parts.len()
             });
@@ -580,31 +475,12 @@ impl Database {
             }
 
             if let Some(filter) = tag_filter {
-                match &dominated_tag_name {
-                    Some(tag) if tag == filter => {}
-                    _ => continue,
+                if compounds[0].tag_name != filter {
+                    continue;
                 }
             }
 
-            // Reconstruct AggregateSignal with JSON metadata for backwards compat with UI code
-            let metadata = serde_json::json!({
-                "path": path,
-                "compounds": compounds.iter().map(|c| serde_json::json!({
-                    "tag_name": c.tag_name,
-                    "compound_value": c.compound_value,
-                    "split_parts": c.split_parts,
-                    "separator": c.separator,
-                    "matching_parts": c.matching_parts,
-                })).collect::<Vec<_>>()
-            });
-
-            results.push(AggregateSignal {
-                id: Some(inode), // Use inode as ID for backwards compat
-                signal_type: AggregateSignalType::CompoundTagValue,
-                key: inode.to_string(),
-                discovered_at,
-                metadata_json: Some(metadata.to_string()),
-            });
+            results.push(inode.to_string());
         }
 
         Ok(results)

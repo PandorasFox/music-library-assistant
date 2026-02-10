@@ -83,6 +83,14 @@ pub trait AggregateSignalStore: Sized {
         conn.execute(&sql, [])?;
         Ok(())
     }
+
+    /// Query all keys for this signal type.
+    fn query_keys(conn: &Connection) -> Result<Vec<String>> {
+        let sql = format!("SELECT key FROM {} ORDER BY key", Self::TABLE_NAME);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
 }
 
 // ============================================================================
@@ -733,6 +741,25 @@ impl AggregateSignalStore for FingerprintOverlapSignal {
             [key],
             |row| row.get(0),
         )
+    }
+}
+
+impl FingerprintOverlapSignal {
+    /// Query all fingerprint overlap signals with deserialized inodes.
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM signal_fingerprint_overlap ORDER BY key"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let key: String = row.get(0)?;
+            let data: Vec<u8> = row.get(1)?;
+            let inodes: Vec<i64> = bincode::deserialize(&data)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                    1, rusqlite::types::Type::Blob, Box::new(e)
+                ))?;
+            Ok(Self { key, inodes })
+        })?;
+        rows.collect()
     }
 }
 

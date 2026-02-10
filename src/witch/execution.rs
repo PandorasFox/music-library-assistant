@@ -392,15 +392,15 @@ fn clear_signals_by_pattern(
     spec: &SignalToClear,
     witness: &MutationExecutionWitness,
 ) {
-    // Query existing aggregate signals of this type and clear those matching the pattern
-    if let Ok(signals) = db.get_aggregate_signals(Some(spec.signal_type)) {
-        for signal in signals {
+    // Query existing aggregate signal keys of this type and clear those matching the pattern
+    if let Ok(keys) = db.get_aggregate_signal_keys(spec.signal_type) {
+        for key in keys {
             // Match if key ends with the pattern (compound key format)
             // or if key equals the pattern exactly
-            if signal.key.ends_with(&format!(":{}", spec.key_pattern))
-               || signal.key == spec.key_pattern
+            if key.ends_with(&format!(":{}", spec.key_pattern))
+               || key == spec.key_pattern
             {
-                sender.clear_aggregate_signal(spec.signal_type, &signal.key, witness);
+                sender.clear_aggregate_signal(spec.signal_type, &key, witness);
             }
         }
     }

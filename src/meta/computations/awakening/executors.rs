@@ -781,21 +781,21 @@ fn clear_library_signals_for_path(
     witness: &ComputationWitness,
 ) {
     // Check for LibraryLeftover signals matching this path
-    if let Ok(signals) = read_only_db.get_aggregate_signals(Some(AggregateSignalType::LibraryLeftover)) {
-        for signal in signals {
+    if let Ok(keys) = read_only_db.get_aggregate_signal_keys(AggregateSignalType::LibraryLeftover) {
+        for key in keys {
             // Key format: "{name}:{path}"
-            if signal.key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_aggregate_signal(AggregateSignalType::LibraryLeftover, &signal.key, witness);
+            if key.ends_with(&format!(":{}", library_path)) {
+                sender.clear_aggregate_signal(AggregateSignalType::LibraryLeftover, &key, witness);
             }
         }
     }
 
     // Check for LibraryStale signals matching this path
-    if let Ok(signals) = read_only_db.get_aggregate_signals(Some(AggregateSignalType::LibraryStale)) {
-        for signal in signals {
+    if let Ok(keys) = read_only_db.get_aggregate_signal_keys(AggregateSignalType::LibraryStale) {
+        for key in keys {
             // Key format: "{name}:{path}"
-            if signal.key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_aggregate_signal(AggregateSignalType::LibraryStale, &signal.key, witness);
+            if key.ends_with(&format!(":{}", library_path)) {
+                sender.clear_aggregate_signal(AggregateSignalType::LibraryStale, &key, witness);
             }
         }
     }

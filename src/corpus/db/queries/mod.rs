@@ -17,7 +17,7 @@ use std::path::Path;
 
 use crate::config;
 use crate::meta::signals::{
-    AggregateSignal, AggregateSignalType, CorpusFileSignalType,
+    AggregateSignalType, CorpusFileSignalType,
 };
 
 // Types are re-exported from db/mod.rs, not here.
@@ -478,14 +478,18 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_cross_source_overlap_signals()
     }
 
-    /// Get aggregate signals, optionally filtered by type.
-    pub fn get_aggregate_signals(&self, signal_type: Option<AggregateSignalType>) -> Result<Vec<AggregateSignal>> {
-        self.db.get_aggregate_signals(signal_type)
+    pub fn get_fingerprint_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
+        self.db.get_fingerprint_overlap_signals()
     }
 
-    /// Get compound tag signals filtered by safety classification and optional tag name.
-    pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<AggregateSignal>> {
-        self.db.get_compound_signals_by_safety(safe_only, tag_filter)
+    /// Query all keys for a given aggregate signal type.
+    pub fn get_aggregate_signal_keys(&self, signal_type: AggregateSignalType) -> Result<Vec<String>> {
+        self.db.get_aggregate_signal_keys(signal_type)
+    }
+
+    /// Get compound tag signal keys filtered by safety classification and optional tag name.
+    pub fn get_compound_signal_keys_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<String>> {
+        self.db.get_compound_signal_keys_by_safety(safe_only, tag_filter)
     }
 
     /// Check if an aggregate signal exists (semantic-keyed).

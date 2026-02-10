@@ -21,11 +21,11 @@ impl App {
             }
         };
 
-        // Load compound signals filtered by safety classification and tag
-        let signals = read_db.get_compound_signals_by_safety(safe_only, tag_filter)
+        // Load compound signal keys filtered by safety classification and tag
+        let signal_keys = read_db.get_compound_signal_keys_by_safety(safe_only, tag_filter)
             .unwrap_or_default();
 
-        if signals.is_empty() {
+        if signal_keys.is_empty() {
             let msg = if safe_only {
                 "No safe compound splits available"
             } else {
@@ -36,7 +36,6 @@ impl App {
         }
 
         // Store signal keys for cluster navigation
-        let signal_keys: Vec<String> = signals.iter().map(|s| s.key.clone()).collect();
         let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_keys);
 
         // Start transaction ONCE for entire flow
@@ -46,10 +45,10 @@ impl App {
         }
 
         // Load the first signal into modal data (need witch for file info)
-        let first_signal = &signals[0];
+        let first_key = &clusters.all_signal_keys()[0];
         let data = {
             let read_db = self.witch.as_mut().unwrap().read_db();
-            first_signal.key.parse::<i64>().ok()
+            first_key.parse::<i64>().ok()
                 .and_then(|inode| read_db.get_compound_tag_signal(inode).ok())
                 .flatten()
                 .and_then(|typed_signal| {
@@ -274,16 +273,15 @@ impl App {
             }
         };
 
-        // Load safe compound signals only, filtered by tag if specified
-        let signals = read_db.get_compound_signals_by_safety(true, tag_filter).unwrap_or_default();
+        // Load safe compound signal keys only, filtered by tag if specified
+        let signal_keys = read_db.get_compound_signal_keys_by_safety(true, tag_filter).unwrap_or_default();
 
-        if signals.is_empty() {
+        if signal_keys.is_empty() {
             self.status_message = Some("No safe compound splits available".to_string());
             return;
         }
 
         // Store signal keys for cluster tracking
-        let signal_keys: Vec<String> = signals.iter().map(|s| s.key.clone()).collect();
         let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_keys.clone());
 
         // Start transaction

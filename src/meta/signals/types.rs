@@ -312,17 +312,6 @@ pub struct AggregateSignal {
 }
 
 impl AggregateSignal {
-    /// Get inodes from metadata_json.
-    pub fn inodes(&self) -> Vec<i64> {
-        self.metadata_json
-            .as_ref()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.get("inodes").cloned())
-            .and_then(|v| v.as_array().cloned())
-            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-            .unwrap_or_default()
-    }
-
     /// Create a new aggregate signal with inodes embedded in metadata.
     pub fn with_inodes(mut self, ids: &[i64]) -> Self {
         let mut meta = self

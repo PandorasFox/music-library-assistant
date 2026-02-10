@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────┐┌──────────────┐
-//! │ Corpus Browser | Insights | Deploy  ││  mla beta 1  │
+//! │ Corpus Browser | Insights | Deploy  ││  mm beta 2  │
 //! └─────────────────────────────────────┘└──────────────┘
 //! ```
 
@@ -29,7 +29,7 @@ const TITLE_PANE_WIDTH: u16 = 16;
 ///
 /// Note: Deploy was removed from the lateral ring - it's now accessed via
 /// the Insights view by pressing Enter on deploy-related insights.
-/// FormatStandardization was also removed - handled by ShitFormat signal flow.
+/// FormatStandardization was also removed - handled by ShitFormat signal resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LateralView {
     TagSearch,
@@ -75,7 +75,7 @@ impl LateralView {
 ///
 /// Two bordered panes side by side:
 /// - Left: Tab switcher showing all views with current highlighted
-/// - Right: App title "mla beta 1" (16 chars wide)
+/// - Right: App title "mm beta 2" (16 chars wide)
 pub struct UnifiedTitleBar {
     current_view: LateralView,
 }
@@ -140,7 +140,7 @@ impl UnifiedTitleBar {
     }
 
     fn render_title(&self, f: &mut Frame, area: Rect) {
-        let paragraph = Paragraph::new("mla beta 1")
+        let paragraph = Paragraph::new("mm beta 2")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));

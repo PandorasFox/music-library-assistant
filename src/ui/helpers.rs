@@ -12,7 +12,7 @@ use ratatui::Frame;
 
 /// Render a block and return its inner area, properly cleared.
 ///
-/// This is the standard way to render panes in MLA. It:
+/// This is the standard way to render panes in MM. It:
 /// 1. Computes the inner area from the block
 /// 2. Renders the block (borders, title, etc.)
 /// 3. Clears the inner area to prevent leftover content from showing through

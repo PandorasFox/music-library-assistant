@@ -1,5 +1,5 @@
-// Music Library Assistant (MLA) Configuration
-// Save this as $XDG_CONFIG_HOME/mla/config.kdl (or ~/.config/mla/config.kdl if XDG_CONFIG_HOME is not set)
+// Music Magic (MM) Configuration
+// Save this as $XDG_CONFIG_HOME/mm/config.kdl (or ~/.config/mm/config.kdl if XDG_CONFIG_HOME is not set)
 
 // archive-root "/path/to/archive"
 
@@ -37,7 +37,7 @@ deploy "physical/vinyls" {
 }
 
 // ============================================================================
-// Opinions - Configure MLA's default behaviors
+// Opinions - Configure MM's default behaviors
 // ============================================================================
 // All opinions have sensible defaults. Uncomment and modify as needed.
 

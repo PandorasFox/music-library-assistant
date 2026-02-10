@@ -50,7 +50,7 @@ These are not signals but database columns that track synchronization state.
 
 ### Recovery via needs_disk_flush
 
-Tracks with `needs_disk_flush = TRUE` can be recovered via the OOB flow:
+Tracks with `needs_disk_flush = TRUE` can be recovered via the OOB modal:
 
 ```sql
 SELECT * FROM tracks WHERE needs_disk_flush = 1;

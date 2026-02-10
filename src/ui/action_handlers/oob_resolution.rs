@@ -1,9 +1,9 @@
 //! OOB (Out-of-Band) Tag Resolution
 //!
-//! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement flows.
+//! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement modals.
 
 use crate::corpus::paths;
-use crate::ui::{filter_popup, moved_file_flow, oob_sync_flow, oob_conflict_flow, transaction_review, ActiveView, FilterOverlay, FilterPopupContext};
+use crate::ui::{filter_popup, moved_file_modal, oob_sync_modal, oob_conflict_modal, transaction_review, ActiveView, FilterOverlay, FilterPopupContext};
 use super::super::App;
 
 impl App {
@@ -32,28 +32,28 @@ impl App {
             let _ = witch.start_transaction("OOB tag sync");
         }
 
-        let state = oob_sync_flow::OobSyncState::new(files);
+        let state = oob_sync_modal::OobSyncState::new(files);
         self.view = ActiveView::OobSyncResolution(state);
     }
 
     /// Handle OOB sync resolution actions.
-    pub(in crate::ui) fn handle_oob_sync_action(&mut self, action: oob_sync_flow::OobSyncAction) {
+    pub(in crate::ui) fn handle_oob_sync_action(&mut self, action: oob_sync_modal::OobSyncAction) {
         match action {
-            oob_sync_flow::OobSyncAction::None => {}
-            oob_sync_flow::OobSyncAction::AcceptDisk => {
+            oob_sync_modal::OobSyncAction::None => {}
+            oob_sync_modal::OobSyncAction::AcceptDisk => {
                 self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::DiskToIndex);
                 // Transition to review
                 self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
             }
-            oob_sync_flow::OobSyncAction::AcceptDb => {
+            oob_sync_modal::OobSyncAction::AcceptDb => {
                 self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::IndexToDisk);
                 // Transition to review
                 self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
             }
-            oob_sync_flow::OobSyncAction::Cancel => {
+            oob_sync_modal::OobSyncAction::Cancel => {
                 self.cancel_and_return_to_insights("OOB sync resolution cancelled");
             }
-            oob_sync_flow::OobSyncAction::OpenFilter => {
+            oob_sync_modal::OobSyncAction::OpenFilter => {
                 // Open filter popup overlay
                 self.filter_overlay = Some(FilterOverlay {
                     state: filter_popup::FilterPopupState::new(),
@@ -169,7 +169,7 @@ impl App {
             let _ = witch.start_transaction("OOB tag resolution");
         }
 
-        let mut state = oob_conflict_flow::OobConflictState::new(files);
+        let mut state = oob_conflict_modal::OobConflictState::new(files);
 
         // Second pass: compute initial diff for first file in the active bucket
         if let Some(file) = state.active_bucket_state().current_file() {
@@ -179,7 +179,7 @@ impl App {
                 let read_db = w.read_db();
                 let resolver = paths::get_resolver();
                 let abs_path = resolver.resolve(std::path::Path::new(&path));
-                state.current_diff = oob_conflict_flow::types::compute_tag_diff(&read_db, inode, &abs_path);
+                state.current_diff = oob_conflict_modal::types::compute_tag_diff(&read_db, inode, &abs_path);
             }
         }
 
@@ -187,26 +187,26 @@ impl App {
     }
 
     /// Handle OOB conflict inspection actions.
-    pub(in crate::ui) fn handle_oob_conflict_action(&mut self, action: oob_conflict_flow::OobConflictAction) {
+    pub(in crate::ui) fn handle_oob_conflict_action(&mut self, action: oob_conflict_modal::OobConflictAction) {
         match action {
-            oob_conflict_flow::OobConflictAction::None => {}
-            oob_conflict_flow::OobConflictAction::Navigate => {
+            oob_conflict_modal::OobConflictAction::None => {}
+            oob_conflict_modal::OobConflictAction::Navigate => {
                 // File or bucket selection changed -- recompute diff for the new file
                 let diff = self.compute_current_conflict_diff();
                 if let ActiveView::OobConflictInspection(ref mut state) = self.view {
                     state.current_diff = diff;
                 }
             }
-            oob_conflict_flow::OobConflictAction::Resolve => {
+            oob_conflict_modal::OobConflictAction::Resolve => {
                 self.stage_oob_bucket_resolution();
             }
-            oob_conflict_flow::OobConflictAction::Acknowledge => {
+            oob_conflict_modal::OobConflictAction::Acknowledge => {
                 self.stage_oob_mtime_acknowledgement();
             }
-            oob_conflict_flow::OobConflictAction::Cancel => {
+            oob_conflict_modal::OobConflictAction::Cancel => {
                 self.cancel_and_return_to_insights("OOB conflict inspection closed");
             }
-            oob_conflict_flow::OobConflictAction::OpenFilter => {
+            oob_conflict_modal::OobConflictAction::OpenFilter => {
                 // Open filter popup overlay
                 self.filter_overlay = Some(FilterOverlay {
                     state: filter_popup::FilterPopupState::new(),
@@ -235,7 +235,7 @@ impl App {
 
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(&path));
-        oob_conflict_flow::types::compute_tag_diff(&read_db, inode, &abs_path)
+        oob_conflict_modal::types::compute_tag_diff(&read_db, inode, &abs_path)
     }
 
     /// Stage resolution mutations for files in the active bucket.
@@ -249,7 +249,7 @@ impl App {
     fn stage_oob_bucket_resolution(&mut self) {
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
-        use crate::ui::oob_conflict_flow::types::ResolutionButton;
+        use crate::ui::oob_conflict_modal::types::ResolutionButton;
 
         let (files_data, button) = match &self.view {
             ActiveView::OobConflictInspection(ref state) => {
@@ -372,7 +372,7 @@ impl App {
     // Moved File Acknowledgement
     // ========================================================================
 
-    /// Start moved file acknowledgement flow.
+    /// Start moved file acknowledgement modal.
     pub(in crate::ui) fn start_moved_file_acknowledge(&mut self) {
         let Some(ref mut witch) = self.witch else {
             self.status_message = Some("No database connection".to_string());
@@ -404,20 +404,20 @@ impl App {
         // Start transaction for the acknowledgement
         let _ = witch.start_transaction("Moved file acknowledgement");
 
-        let state = moved_file_flow::MovedFileState::new(files);
+        let state = moved_file_modal::MovedFileState::new(files);
         self.view = ActiveView::MovedFileAcknowledge(state);
     }
 
     /// Handle moved file acknowledgement actions.
-    pub(in crate::ui) fn handle_moved_file_action(&mut self, action: moved_file_flow::MovedFileAction) {
+    pub(in crate::ui) fn handle_moved_file_action(&mut self, action: moved_file_modal::MovedFileAction) {
         match action {
-            moved_file_flow::MovedFileAction::None => {}
-            moved_file_flow::MovedFileAction::Acknowledge => {
+            moved_file_modal::MovedFileAction::None => {}
+            moved_file_modal::MovedFileAction::Acknowledge => {
                 self.stage_moved_file_acknowledge();
                 // Transition to review
                 self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
             }
-            moved_file_flow::MovedFileAction::Cancel => {
+            moved_file_modal::MovedFileAction::Cancel => {
                 self.cancel_and_return_to_insights("Moved file acknowledgement cancelled");
             }
         }

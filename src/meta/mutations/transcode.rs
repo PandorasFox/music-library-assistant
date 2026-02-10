@@ -3,7 +3,7 @@
 //! Handles execution of transcode mutations: converting audio files between
 //! container/codec formats while preserving the associated track record.
 //!
-//! Flow:
+//! Process:
 //! 1. Validate source file and target format
 //! 2. Transcode via ffmpeg subprocess
 //! 3. Stash original file under stash_name

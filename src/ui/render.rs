@@ -17,7 +17,7 @@ use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle};
 use super::{
-    compound_split_v2, filter_popup, insights_view, oob_conflict_flow, oob_sync_flow,
+    compound_split_v2, filter_popup, insights_view, oob_conflict_modal, oob_sync_modal,
     progressive_worker, tag_canonicity_v2, transaction_review,
 };
 
@@ -123,8 +123,8 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, view: &ActiveView) 
     let suffix = view.header_suffix();
 
     let title = match suffix {
-        Some(s) => format!("{} - {}", crate::MLA_TITLE, s),
-        None => crate::MLA_TITLE.to_string(),
+        Some(s) => format!("{} - {}", crate::MM_TITLE, s),
+        None => crate::MM_TITLE.to_string(),
     };
 
     let header = Paragraph::new(title)
@@ -199,15 +199,15 @@ fn render_content(
         }
         ActiveView::OobSyncResolution(ref mut state) => {
             vname = "oob_sync_resolution";
-            oob_sync_flow::render(f, area, state);
+            oob_sync_modal::render(f, area, state);
         }
         ActiveView::OobConflictInspection(ref mut state) => {
             vname = "oob_conflict_inspection";
-            oob_conflict_flow::render(f, area, state);
+            oob_conflict_modal::render(f, area, state);
         }
         ActiveView::MovedFileAcknowledge(ref mut state) => {
             vname = "moved_file_acknowledge";
-            super::moved_file_flow::render(state, f, area);
+            super::moved_file_modal::render(state, f, area);
         }
         ActiveView::TransactionReview { ref review, .. } => {
             vname = "transaction_review";
@@ -336,7 +336,7 @@ fn render_exit_confirm_modal(
         // Simple exit confirmation
         let content = vec![
             Line::from(""),
-            Line::from("Exit MLA?"),
+            Line::from("Exit MM?"),
             Line::from(""),
             Line::from(""),
             button_line,

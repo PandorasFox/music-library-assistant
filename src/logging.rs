@@ -12,7 +12,7 @@
 //!
 //! ## Log Files
 //!
-//! All under `~/.local/share/mla/logs/`:
+//! All under `~/.local/share/mm/logs/`:
 //! - `general.log` - Startup, state transitions, compute, UI, db_thread
 //! - `mutations.log` - Mutation execution lifecycle, transaction details
 //! - `errors.log` - All errors and warnings (also mirrored to general.log)
@@ -24,7 +24,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, OnceLock};
 use std::thread::JoinHandle;
 
-use mla_utils::paths::get_logs_dir;
+use mm_utils::paths::get_logs_dir;
 
 // ============================================================================
 // Types

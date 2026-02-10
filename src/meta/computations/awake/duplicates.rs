@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
-use mla_utils::tag_names::find_tag_in_map;
+use mm_utils::tag_names::find_tag_in_map;
 
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{

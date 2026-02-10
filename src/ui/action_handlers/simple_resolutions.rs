@@ -1,10 +1,10 @@
-//! Simple Resolution Flows
+//! Simple Resolution Modals
 //!
 //! Handles missing file, missing directory, corrupt file, shit format,
-//! subpar duplicate, and directory overlap resolution flows.
+//! subpar duplicate, and directory overlap resolution modals.
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
-use crate::ui::{corrupt_file_flow, missing_directory_flow, missing_file_flow, shit_format_flow, subpar_duplicate_flow, transaction_review, ActiveView};
+use crate::ui::{corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, transaction_review, ActiveView};
 use super::super::App;
 
 impl App {
@@ -18,7 +18,7 @@ impl App {
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                missing_file_flow::MissingFileModalData::load(&read_db).ok()
+                missing_file_modal::MissingFileModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
@@ -28,15 +28,15 @@ impl App {
         }
 
         // Create preview state with cached data
-        let preview = missing_file_flow::MissingFilePreviewState::new(data);
+        let preview = missing_file_modal::MissingFilePreviewState::new(data);
         self.view = ActiveView::MissingFileResolution(preview);
     }
 
     /// Handle missing file preview actions.
-    pub(in crate::ui) fn handle_missing_file_preview_action(&mut self, action: missing_file_flow::MissingFilePreviewAction) {
+    pub(in crate::ui) fn handle_missing_file_preview_action(&mut self, action: missing_file_modal::MissingFilePreviewAction) {
         match action {
-            missing_file_flow::MissingFilePreviewAction::None => {}
-            missing_file_flow::MissingFilePreviewAction::ConfirmRestore => {
+            missing_file_modal::MissingFilePreviewAction::None => {}
+            missing_file_modal::MissingFilePreviewAction::ConfirmRestore => {
                 // Generate restore mutations (HardLink) and stage for review
                 let mutations = match &self.view {
                     ActiveView::MissingFileResolution(ref preview) => preview.cached_data.restore_mutations(),
@@ -50,7 +50,7 @@ impl App {
                     self.status_message = Some("No files to restore".to_string());
                 }
             }
-            missing_file_flow::MissingFilePreviewAction::ConfirmDrop => {
+            missing_file_modal::MissingFilePreviewAction::ConfirmDrop => {
                 // Generate drop mutations (DropFromIndex) and stage for review
                 let mutations = match &self.view {
                     ActiveView::MissingFileResolution(ref preview) => preview.cached_data.drop_mutations(),
@@ -64,7 +64,7 @@ impl App {
                     self.status_message = Some("No files to drop".to_string());
                 }
             }
-            missing_file_flow::MissingFilePreviewAction::Cancel => {
+            missing_file_modal::MissingFilePreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Missing file resolution cancelled");
             }
         }
@@ -80,7 +80,7 @@ impl App {
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                missing_directory_flow::MissingDirectoryModalData::load(&read_db).ok()
+                missing_directory_modal::MissingDirectoryModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
@@ -90,15 +90,15 @@ impl App {
         }
 
         // Create preview state with cached data
-        let preview = missing_directory_flow::MissingDirectoryPreviewState::new(data);
+        let preview = missing_directory_modal::MissingDirectoryPreviewState::new(data);
         self.view = ActiveView::MissingDirectoryResolution(preview);
     }
 
     /// Handle missing directory preview actions.
-    pub(in crate::ui) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_flow::MissingDirectoryPreviewAction) {
+    pub(in crate::ui) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_modal::MissingDirectoryPreviewAction) {
         match action {
-            missing_directory_flow::MissingDirectoryPreviewAction::None => {}
-            missing_directory_flow::MissingDirectoryPreviewAction::ConfirmDrop => {
+            missing_directory_modal::MissingDirectoryPreviewAction::None => {}
+            missing_directory_modal::MissingDirectoryPreviewAction::ConfirmDrop => {
                 // Generate drop mutations (DropDirectoryFromIndex) and stage for review
                 let mutations = match &self.view {
                     ActiveView::MissingDirectoryResolution(ref preview) => preview.cached_data.drop_mutations(),
@@ -112,7 +112,7 @@ impl App {
                     self.status_message = Some("No directories to drop".to_string());
                 }
             }
-            missing_directory_flow::MissingDirectoryPreviewAction::Cancel => {
+            missing_directory_modal::MissingDirectoryPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Missing directory resolution cancelled");
             }
         }
@@ -128,7 +128,7 @@ impl App {
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                corrupt_file_flow::CorruptFileModalData::load(&read_db).ok()
+                corrupt_file_modal::CorruptFileModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
@@ -138,15 +138,15 @@ impl App {
         }
 
         // Create preview state with cached data
-        let preview = corrupt_file_flow::CorruptFilePreviewState::new(data);
+        let preview = corrupt_file_modal::CorruptFilePreviewState::new(data);
         self.view = ActiveView::CorruptFileResolution(preview);
     }
 
     /// Handle corrupt file preview actions.
-    pub(in crate::ui) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_flow::CorruptFilePreviewAction) {
+    pub(in crate::ui) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_modal::CorruptFilePreviewAction) {
         match action {
-            corrupt_file_flow::CorruptFilePreviewAction::None => {}
-            corrupt_file_flow::CorruptFilePreviewAction::ConfirmStashAll => {
+            corrupt_file_modal::CorruptFilePreviewAction::None => {}
+            corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
                 // Generate stash + drop mutations and stage for review
                 let mutations = match &self.view {
                     ActiveView::CorruptFileResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
@@ -160,7 +160,7 @@ impl App {
                     self.status_message = Some("No files to stash".to_string());
                 }
             }
-            corrupt_file_flow::CorruptFilePreviewAction::Cancel => {
+            corrupt_file_modal::CorruptFilePreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Corrupt file resolution cancelled");
             }
         }
@@ -176,7 +176,7 @@ impl App {
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                shit_format_flow::ShitFormatModalData::load(&read_db).ok()
+                shit_format_modal::ShitFormatModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
@@ -186,15 +186,15 @@ impl App {
         }
 
         // Create preview state with cached data
-        let preview = shit_format_flow::ShitFormatPreviewState::new(data);
+        let preview = shit_format_modal::ShitFormatPreviewState::new(data);
         self.view = ActiveView::ShitFormatResolution(preview);
     }
 
     /// Handle shit format preview actions.
-    pub(in crate::ui) fn handle_shit_format_preview_action(&mut self, action: shit_format_flow::ShitFormatPreviewAction) {
+    pub(in crate::ui) fn handle_shit_format_preview_action(&mut self, action: shit_format_modal::ShitFormatPreviewAction) {
         match action {
-            shit_format_flow::ShitFormatPreviewAction::None => {}
-            shit_format_flow::ShitFormatPreviewAction::ConfirmRemuxLossless => {
+            shit_format_modal::ShitFormatPreviewAction::None => {}
+            shit_format_modal::ShitFormatPreviewAction::ConfirmRemuxLossless => {
                 // Generate FLAC remux mutations for lossless files only
                 let mutations = match &self.view {
                     ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossless_mutations(),
@@ -207,7 +207,7 @@ impl App {
                     self.status_message = Some("No lossless files to remux".to_string());
                 }
             }
-            shit_format_flow::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
+            shit_format_modal::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
                 // Generate Opus transcode mutations for lossy files only
                 let mutations = match &self.view {
                     ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossy_mutations(),
@@ -220,7 +220,7 @@ impl App {
                     self.status_message = Some("No lossy files to transcode".to_string());
                 }
             }
-            shit_format_flow::ShitFormatPreviewAction::ConfirmConvertAll => {
+            shit_format_modal::ShitFormatPreviewAction::ConfirmConvertAll => {
                 // Generate mutations for all files (lossless -> FLAC, lossy -> Opus)
                 let mutations = match &self.view {
                     ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.all_mutations(),
@@ -233,7 +233,7 @@ impl App {
                     self.status_message = Some("No files to convert".to_string());
                 }
             }
-            shit_format_flow::ShitFormatPreviewAction::Cancel => {
+            shit_format_modal::ShitFormatPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Shit format resolution cancelled");
             }
         }
@@ -249,7 +249,7 @@ impl App {
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                subpar_duplicate_flow::SubparDuplicateModalData::load(&read_db).ok()
+                subpar_duplicate_modal::SubparDuplicateModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
@@ -259,15 +259,15 @@ impl App {
         }
 
         // Create preview state with cached data
-        let preview = subpar_duplicate_flow::SubparDuplicatePreviewState::new(data);
+        let preview = subpar_duplicate_modal::SubparDuplicatePreviewState::new(data);
         self.view = ActiveView::SubparDuplicateResolution(preview);
     }
 
     /// Handle subpar duplicate preview actions.
-    pub(in crate::ui) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_flow::SubparDuplicatePreviewAction) {
+    pub(in crate::ui) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_modal::SubparDuplicatePreviewAction) {
         match action {
-            subpar_duplicate_flow::SubparDuplicatePreviewAction::None => {}
-            subpar_duplicate_flow::SubparDuplicatePreviewAction::ConfirmStashAll => {
+            subpar_duplicate_modal::SubparDuplicatePreviewAction::None => {}
+            subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
                 // Generate stash + drop mutations and stage for review
                 let mutations = match &self.view {
                     ActiveView::SubparDuplicateResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
@@ -281,7 +281,7 @@ impl App {
                     self.status_message = Some("No files to stash".to_string());
                 }
             }
-            subpar_duplicate_flow::SubparDuplicatePreviewAction::Cancel => {
+            subpar_duplicate_modal::SubparDuplicatePreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Subpar duplicate resolution cancelled");
             }
         }
@@ -293,13 +293,13 @@ impl App {
 
     /// Start directory overlap cluster resolution modal from Insights view.
     pub(in crate::ui) fn start_directory_overlap_resolution(&mut self) {
-        use super::super::directory_cluster_flow;
+        use super::super::directory_cluster_modal;
 
         // Load directory overlap cluster data
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                directory_cluster_flow::DirectoryClusterModalData::load(&read_db).ok()
+                directory_cluster_modal::DirectoryClusterModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
@@ -309,16 +309,16 @@ impl App {
         }
 
         // Create preview state with cached data
-        let preview = directory_cluster_flow::DirectoryClusterPreviewState::new(data);
+        let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
         self.view = ActiveView::DirectoryClusterResolution(preview);
     }
 
     /// Handle directory cluster preview actions.
     pub(in crate::ui) fn handle_directory_cluster_preview_action(
         &mut self,
-        action: super::super::directory_cluster_flow::DirectoryClusterPreviewAction,
+        action: super::super::directory_cluster_modal::DirectoryClusterPreviewAction,
     ) {
-        use super::super::directory_cluster_flow::DirectoryClusterPreviewAction;
+        use super::super::directory_cluster_modal::DirectoryClusterPreviewAction;
 
         match action {
             DirectoryClusterPreviewAction::None => {}

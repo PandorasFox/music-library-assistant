@@ -1,5 +1,5 @@
 #!/bin/bash
-# Lines of Code Analysis for MLA
+# Lines of Code Analysis for MM
 # Analyzes .rs files for LoC metrics at file and module level
 
 set -e
@@ -8,7 +8,7 @@ PROJECT_ROOT="${1:-$(dirname "$0")/../..}"
 cd "$PROJECT_ROOT"
 
 echo "=============================================="
-echo "MLA Lines of Code Analysis"
+echo "MM Lines of Code Analysis"
 echo "Generated: $(date)"
 echo "=============================================="
 echo

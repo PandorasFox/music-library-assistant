@@ -1,5 +1,5 @@
 #!/bin/bash
-# Code Pockets Analysis for MLA
+# Code Pockets Analysis for MM
 # Identifies potentially isolated/dead code clusters
 #
 # Looks for:
@@ -13,7 +13,7 @@ PROJECT_ROOT="${1:-$(dirname "$0")/../..}"
 cd "$PROJECT_ROOT"
 
 echo "=============================================="
-echo "MLA Code Pockets Analysis"
+echo "MM Code Pockets Analysis"
 echo "Generated: $(date)"
 echo "=============================================="
 echo

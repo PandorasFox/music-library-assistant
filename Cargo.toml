@@ -1,14 +1,14 @@
 [workspace]
-members = [".", "crates/mla-utils"]
+members = [".", "crates/mm-utils"]
 
 [package]
-name = "mla"
+name = "mm"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 # Internal crates
-mla-utils = { path = "crates/mla-utils" }
+mm-utils = { path = "crates/mm-utils" }
 
 # Config parsing
 kdl = "4.7.0"
@@ -60,5 +60,5 @@ uuid = { version = "1.0", features = ["v4"] }
 rand = "0.8"
 
 [[bin]]
-name = "mla"
+name = "mm"
 path = "src/main.rs"

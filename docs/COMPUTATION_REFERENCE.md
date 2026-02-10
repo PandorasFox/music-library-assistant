@@ -16,7 +16,7 @@ All computation code lives in `src/meta/computations/`:
 
 ## Phase Overview
 
-MLA uses three-phase computations with compile-time enforced boundaries:
+MM uses three-phase computations with compile-time enforced boundaries:
 
 | Phase | Purpose | Triggers |
 |-------|---------|----------|

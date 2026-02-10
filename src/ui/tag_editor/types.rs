@@ -9,7 +9,7 @@ use crate::meta::mutations::Mutation;
 // Unified Types (New)
 // ============================================================================
 
-/// Source flow that spawned the tag editor (for navigation context)
+/// Source modal that spawned the tag editor (for navigation context)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagEditorSource {
     /// Single file from corpus browser

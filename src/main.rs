@@ -1,4 +1,4 @@
-//! Music Library Assistant (MLA)
+//! Music Magic (MM)
 //!
 //! A toolkit of precise, limited tools leveraging a common central database.
 //! Main operational areas: scan, report, repair, deploy.
@@ -14,11 +14,11 @@
 // Version Information
 // ============================================================================
 
-/// MLA release version string (shown in title bar and reports)
-pub const MLA_VERSION: &str = "beta 1";
+/// MM release version string (shown in title bar and reports)
+pub const MM_VERSION: &str = "beta 2";
 
 /// Full application title with version
-pub const MLA_TITLE: &str = "Music Library Assistant (mla beta 1)";
+pub const MM_TITLE: &str = "Music Magic (mm beta 2)";
 
 mod config;
 mod corpus;

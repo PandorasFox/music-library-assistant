@@ -1,7 +1,7 @@
 //! Database Migration UI
 //!
 //! Handles prompting the user to approve database schema migrations
-//! when upgrading to a new version of MLA.
+//! when upgrading to a new version of MM.
 //!
 //! ## Architecture
 //!
@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use crate::witch::Witch;
 
-/// Result of running the migration flow.
+/// Result of running the migrations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrationOutcome {
     /// Migrations completed successfully.
@@ -33,7 +33,7 @@ pub enum MigrationOutcome {
     NotNeeded,
 }
 
-/// Run migration flow with Witch orchestration.
+/// Run migrations with Witch orchestration.
 ///
 /// This function:
 /// 1. Shows approval dialog with pending migration descriptions
@@ -41,7 +41,7 @@ pub enum MigrationOutcome {
 /// 3. On Esc: returns error to abort startup
 ///
 /// Returns `MigrationOutcome::Completed` when migrations finish.
-pub fn run_migration_flow<B: ratatui::backend::Backend>(
+pub fn run_migrations<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     witch: &mut Witch,
 ) -> Result<MigrationOutcome> {
@@ -129,7 +129,7 @@ fn render_migration_approval(f: &mut ratatui::Frame, pending: &[String]) {
     // Build migration list text
     let mut lines = vec![
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from("MLA needs to upgrade your database.").style(
+        ratatui::text::Line::from("MM needs to upgrade your database.").style(
             Style::default().fg(Color::White),
         ),
         ratatui::text::Line::from(""),

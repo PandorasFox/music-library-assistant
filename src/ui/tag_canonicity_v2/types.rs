@@ -462,7 +462,7 @@ pub enum TagCanonicalityActionV2 {
     None,
     /// User confirmed current squash (Enter) - stage decision and advance
     Confirmed,
-    /// User cancelled entire flow (Esc)
+    /// User cancelled entire modal (Esc)
     Cancelled,
     /// User navigated to next/prev cluster (Tab/Shift-Tab) - does NOT stage decision
     Navigate {

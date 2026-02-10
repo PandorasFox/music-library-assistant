@@ -1,5 +1,5 @@
 #!/bin/bash
-# TODO/Stub/Technical Debt Finder for MLA
+# TODO/Stub/Technical Debt Finder for MM
 # Surfaces incomplete implementations and markers
 
 set -e
@@ -8,7 +8,7 @@ PROJECT_ROOT="${1:-$(dirname "$0")/../..}"
 cd "$PROJECT_ROOT"
 
 echo "=============================================="
-echo "MLA Technical Debt Analysis"
+echo "MM Technical Debt Analysis"
 echo "Generated: $(date)"
 echo "=============================================="
 

@@ -14,7 +14,7 @@
 //! ## Navigation
 //!
 //! - Up/Down: Navigate within and between buckets
-//! - Enter: Launch flow for selected insight (blocked when Witch is busy)
+//! - Enter: Launch modal for selected insight (blocked when Witch is busy)
 //! - Tab/Shift-Tab: Cycle to adjacent view
 //! - Esc: Return to main menu
 //!
@@ -46,8 +46,8 @@ pub enum InsightsAction {
     CycleNext,
     /// Cycle to previous view in ring
     CyclePrev,
-    /// Launch flow for selected insight
-    LaunchFlow,
+    /// Launch modal for selected insight
+    Launch,
     /// Confirm all safe compound splits and jump to review (Ctrl+A)
     ConfirmAllSafeCompoundSplits,
 }
@@ -158,35 +158,35 @@ pub enum InsightType {
 /// Actions that can be launched from specific insight types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsightAction {
-    /// Launch deployment preview flow
+    /// Launch deployment preview modal
     LaunchDeploymentPreview,
-    /// Launch missing file resolution flow
+    /// Launch missing file resolution modal
     LaunchMissingFileResolution,
-    /// Launch missing directory acknowledgment flow
+    /// Launch missing directory acknowledgment modal
     LaunchMissingDirectoryResolution,
-    /// Launch tag canonicity resolution flow
+    /// Launch tag canonicity resolution modal
     LaunchTagCanonicityResolution,
-    /// Launch compound tag split flow (safe - all parts exist)
+    /// Launch compound tag split modal (safe - all parts exist)
     LaunchCompoundTagSplitSafe,
-    /// Launch compound tag split flow (review - some parts new)
+    /// Launch compound tag split modal (review - some parts new)
     LaunchCompoundTagSplitReview,
-    /// Launch OOB tag sync resolution flow
+    /// Launch OOB tag sync resolution modal
     LaunchOobTagSync,
     /// Launch OOB tag conflict inspection
     LaunchOobTagConflict,
-    /// Launch moved file acknowledgement flow
+    /// Launch moved file acknowledgement modal
     LaunchMovedFileAcknowledge,
-    /// Launch corrupt file resolution flow (stash + drop)
+    /// Launch corrupt file resolution modal (stash + drop)
     LaunchCorruptFileResolution,
-    /// Launch shit format transcode flow
+    /// Launch shit format transcode modal
     LaunchShitFormatTranscode,
-    /// Launch intake confirmation flow for unindexed files
+    /// Launch intake confirmation for unindexed files
     LaunchIntakeConfirmation,
-    /// Launch fingerprint duplicate resolution flow
+    /// Launch fingerprint duplicate resolution modal
     LaunchDirectoryOverlapResolution,
-    /// Launch subpar duplicate stash flow
+    /// Launch subpar duplicate stash
     LaunchSubparDuplicateResolution,
-    /// Flow not yet implemented
+    /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available
     Informational,
@@ -363,7 +363,7 @@ impl CachedBucketEntries {
                 corpus.mtime_only_mismatch,
                 if corpus.mtime_only_mismatch > 0 { 0 } else { 2 },
                 if corpus.mtime_only_mismatch > 0 { Color::Yellow } else { Color::DarkGray },
-                InsightAction::LaunchOobTagConflict, // Same flow as conflict, handles MtimeOnly bucket
+                InsightAction::LaunchOobTagConflict, // Same modal as conflict, handles MtimeOnly bucket
             ),
             BucketEntry::corpus(
                 InsightType::CorpusOobTagSync,
@@ -833,8 +833,8 @@ impl InsightsViewState {
                 if self.is_witch_busy() {
                     return InsightsAction::None;
                 }
-                // TODO: Launch flow when implemented
-                InsightsAction::LaunchFlow
+                // TODO: Launch modal when implemented
+                InsightsAction::Launch
             }
 
             KeyCode::Tab => {
@@ -913,10 +913,10 @@ mod tests {
     fn test_witch_busy_blocks_enter() {
         let mut state = InsightsViewState::new();
 
-        // Not busy - Enter should launch flow
+        // Not busy - Enter should launch modal
         state.modal = InsightsModal::Ready;
         let action = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(action, InsightsAction::LaunchFlow);
+        assert_eq!(action, InsightsAction::Launch);
 
         // Busy - Enter should be blocked
         state.modal = InsightsModal::NotReady_WitchBusy;

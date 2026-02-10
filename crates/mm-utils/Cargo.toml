@@ -1,0 +1,10 @@
+[package]
+name = "mm-utils"
+version = "0.1.0"
+edition = "2021"
+description = "Shared utilities for MM (Music Magic)"
+
+[dependencies]
+anyhow = "1.0"
+dirs = "5.0"
+chrono = "0.4"

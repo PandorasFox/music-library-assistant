@@ -6,22 +6,22 @@
 
 use crate::ui::{
     compound_split_v2,
-    corrupt_file_flow,
-    deploy_flow,
-    directory_cluster_flow,
+    corrupt_file_modal,
+    deploy_modal,
+    directory_cluster_modal,
     eye::Eye,
     filter_popup,
     insights_view,
-    missing_directory_flow,
-    missing_file_flow,
-    moved_file_flow,
-    oob_conflict_flow,
-    oob_sync_flow,
+    missing_directory_modal,
+    missing_file_modal,
+    moved_file_modal,
+    oob_conflict_modal,
+    oob_sync_modal,
     progress_screen,
     progressive_worker,
-    shit_format_flow,
+    shit_format_modal,
     startup,
-    subpar_duplicate_flow,
+    subpar_duplicate_modal,
     tag_canonicity_v2,
     tag_editor,
     tag_search,
@@ -56,18 +56,18 @@ pub(crate) enum ActiveView {
 
     // Editors / previews
     UnifiedTagEditor(tag_editor::UnifiedTagEditorState),
-    DeploymentPreview(deploy_flow::DeploymentPreviewState),
+    DeploymentPreview(deploy_modal::DeploymentPreviewState),
 
     // Resolution flows (single state)
-    MissingFileResolution(missing_file_flow::MissingFilePreviewState),
-    MissingDirectoryResolution(missing_directory_flow::MissingDirectoryPreviewState),
-    CorruptFileResolution(corrupt_file_flow::CorruptFilePreviewState),
-    ShitFormatResolution(shit_format_flow::ShitFormatPreviewState),
-    SubparDuplicateResolution(subpar_duplicate_flow::SubparDuplicatePreviewState),
-    DirectoryClusterResolution(directory_cluster_flow::DirectoryClusterPreviewState),
-    MovedFileAcknowledge(moved_file_flow::MovedFileState),
-    OobSyncResolution(oob_sync_flow::OobSyncState),
-    OobConflictInspection(oob_conflict_flow::OobConflictState),
+    MissingFileResolution(missing_file_modal::MissingFilePreviewState),
+    MissingDirectoryResolution(missing_directory_modal::MissingDirectoryPreviewState),
+    CorruptFileResolution(corrupt_file_modal::CorruptFilePreviewState),
+    ShitFormatResolution(shit_format_modal::ShitFormatPreviewState),
+    SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicatePreviewState),
+    DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewState),
+    MovedFileAcknowledge(moved_file_modal::MovedFileState),
+    OobSyncResolution(oob_sync_modal::OobSyncState),
+    OobConflictInspection(oob_conflict_modal::OobConflictState),
 
     // Resolution flows (companion state bundled)
     TagCanonicityResolution {
@@ -156,16 +156,16 @@ pub(crate) enum ViewAction {
     ExitConfirm(ExitConfirmAction),
     IntakeConfirmation(startup::IntakeConfirmationAction),
     UnifiedTagEditor(tag_editor::UnifiedTagEditorAction),
-    DeploymentPreview(deploy_flow::DeploymentPreviewAction),
-    MissingFileResolution(missing_file_flow::MissingFilePreviewAction),
-    MissingDirectoryResolution(missing_directory_flow::MissingDirectoryPreviewAction),
-    CorruptFileResolution(corrupt_file_flow::CorruptFilePreviewAction),
-    ShitFormatResolution(shit_format_flow::ShitFormatPreviewAction),
-    SubparDuplicateResolution(subpar_duplicate_flow::SubparDuplicatePreviewAction),
-    DirectoryClusterResolution(directory_cluster_flow::DirectoryClusterPreviewAction),
-    MovedFileAcknowledge(moved_file_flow::MovedFileAction),
-    OobSyncResolution(oob_sync_flow::OobSyncAction),
-    OobConflictInspection(oob_conflict_flow::OobConflictAction),
+    DeploymentPreview(deploy_modal::DeploymentPreviewAction),
+    MissingFileResolution(missing_file_modal::MissingFilePreviewAction),
+    MissingDirectoryResolution(missing_directory_modal::MissingDirectoryPreviewAction),
+    CorruptFileResolution(corrupt_file_modal::CorruptFilePreviewAction),
+    ShitFormatResolution(shit_format_modal::ShitFormatPreviewAction),
+    SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicatePreviewAction),
+    DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewAction),
+    MovedFileAcknowledge(moved_file_modal::MovedFileAction),
+    OobSyncResolution(oob_sync_modal::OobSyncAction),
+    OobConflictInspection(oob_conflict_modal::OobConflictAction),
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
     TransactionReview(transaction_review::TransactionReviewAction),
@@ -211,9 +211,9 @@ pub(crate) struct FilterOverlay {
 pub(crate) enum FilterPopupContext {
     /// Filter for corpus browser tree
     CorpusBrowser,
-    /// Filter for OOB sync resolution flow
+    /// Filter for OOB sync resolution modal
     OobSync,
-    /// Filter for OOB conflict resolution flow
+    /// Filter for OOB conflict resolution modal
     OobConflict,
 }
 
@@ -221,7 +221,7 @@ pub(crate) enum FilterPopupContext {
 // TagCanonicityClusters - signal navigation
 // ============================================================================
 
-/// Which typed signal table this cluster flow targets.
+/// Which typed signal table this cluster modal targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CanonicitySignalKind {
     /// `signal_tag_canonicity` table (pre-fill enabled)

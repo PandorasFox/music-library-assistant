@@ -1,6 +1,6 @@
 //! Central Database Module
 //!
-//! Core of MLA's toolkit architecture. Common data layer for all operations.
+//! Core of MM's toolkit architecture. Common data layer for all operations.
 //!
 //! This module is organized into:
 //! - `types`: Core data structures (AudioFile, FileEntry, AudioInfo, DeploymentStats, Health types)

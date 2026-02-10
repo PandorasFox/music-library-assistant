@@ -4,11 +4,11 @@
 //! Actions that are handled here. These handlers coordinate state transitions,
 //! Witch interactions, and modal displays.
 //!
-//! Feature-specific flows are split into sub-modules:
+//! Feature-specific modals are split into sub-modules:
 //! - `compound_split`: Compound tag split resolution
 //! - `tag_canonicity`: Tag canonicity resolution
-//! - `oob_resolution`: OOB sync, OOB conflict, moved file flows
-//! - `deploy`: Deployment preview flow
+//! - `oob_resolution`: OOB sync, OOB conflict, moved file modals
+//! - `deploy`: Deployment preview modal
 //! - `simple_resolutions`: Missing file/dir, corrupt, shit format, subpar dupe, directory overlap
 
 mod compound_split;
@@ -17,7 +17,7 @@ mod oob_resolution;
 mod deploy;
 mod simple_resolutions;
 
-use crate::ui::{filter_popup, insights_view, oob_sync_flow, oob_conflict_flow, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
+use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
 use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, SuspendedView};
 use crate::ui::eye::Eye;
 use super::App;
@@ -30,7 +30,7 @@ impl App {
     /// Stage mutations into a new transaction for review.
     ///
     /// Starts a transaction with the given label, stages the mutations as a
-    /// single decision. Used by simple resolution flows that have a straightforward
+    /// single decision. Used by simple resolution modals that have a straightforward
     /// "collect mutations → review → commit" pattern.
     pub(in crate::ui) fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str) {
         let Some(ref mut witch) = self.witch else { return };
@@ -38,7 +38,7 @@ impl App {
         let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
     }
 
-    /// Cancel the current flow: discard any active transaction and return to Insights.
+    /// Cancel the current modal: discard any active transaction and return to Insights.
     ///
     /// Logs the provided message, discards any open transaction, and navigates
     /// back to the Insights view. The old view is dropped when we set self.view.
@@ -97,8 +97,8 @@ impl App {
             insights_view::InsightsAction::CyclePrev => {
                 self.start_lateral_view(widgets::LateralView::Insights.prev());
             }
-            insights_view::InsightsAction::LaunchFlow => {
-                // Use selected_action() to dispatch to appropriate flow
+            insights_view::InsightsAction::Launch => {
+                // Use selected_action() to dispatch to appropriate modal
                 let selected = if let ActiveView::Insights(ref v) = self.view {
                     v.selected_action()
                 } else {
@@ -168,7 +168,7 @@ impl App {
                         self.start_missing_directory_resolution();
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
-                        self.status_message = Some("Flow not yet implemented".to_string());
+                        self.status_message = Some("Not yet implemented".to_string());
                     }
                     Some(insights_view::InsightAction::Informational) | None => {
                         // Informational entries have no action
@@ -290,7 +290,7 @@ impl App {
                 // UnindexedFile signals remain for later handling
                 crate::logging::log_general("IntakeConfirmation: user skipped indexing, going to Insights");
 
-                // Discard any active transaction from review flow
+                // Discard any active transaction from review modal
                 if let Some(ref mut witch) = self.witch {
                     if witch.has_transaction() {
                         let _ = operator_decisions::discard_transaction(witch);
@@ -598,10 +598,10 @@ impl App {
                 if let Some(button_name) = state.button_rects.hit_test(x, y) {
                     // Simulate the button press action
                     let action = match button_name {
-                        "accept_disk" => oob_sync_flow::OobSyncAction::AcceptDisk,
-                        "accept_db" => oob_sync_flow::OobSyncAction::AcceptDb,
-                        "cancel" => oob_sync_flow::OobSyncAction::Cancel,
-                        _ => oob_sync_flow::OobSyncAction::None,
+                        "accept_disk" => oob_sync_modal::OobSyncAction::AcceptDisk,
+                        "accept_db" => oob_sync_modal::OobSyncAction::AcceptDb,
+                        "cancel" => oob_sync_modal::OobSyncAction::Cancel,
+                        _ => oob_sync_modal::OobSyncAction::None,
                     };
                     self.handle_oob_sync_action(action);
                 }
@@ -610,20 +610,20 @@ impl App {
                 if let Some(button_name) = state.button_rects.hit_test(x, y) {
                     // Determine action and button state from button name
                     let action = match button_name {
-                        "apply_db" => oob_conflict_flow::OobConflictAction::Resolve,
-                        "assimilate_disk" => oob_conflict_flow::OobConflictAction::Resolve,
-                        "acknowledge" => oob_conflict_flow::OobConflictAction::Acknowledge,
-                        "cancel" => oob_conflict_flow::OobConflictAction::Cancel,
-                        _ => oob_conflict_flow::OobConflictAction::None,
+                        "apply_db" => oob_conflict_modal::OobConflictAction::Resolve,
+                        "assimilate_disk" => oob_conflict_modal::OobConflictAction::Resolve,
+                        "acknowledge" => oob_conflict_modal::OobConflictAction::Acknowledge,
+                        "cancel" => oob_conflict_modal::OobConflictAction::Cancel,
+                        _ => oob_conflict_modal::OobConflictAction::None,
                     };
                     // Set button before handling (need mutable access)
                     if button_name == "apply_db" {
                         if let ActiveView::OobConflictInspection(ref mut state) = self.view {
-                            state.selected_button = oob_conflict_flow::types::ResolutionButton::ApplyDb;
+                            state.selected_button = oob_conflict_modal::types::ResolutionButton::ApplyDb;
                         }
                     } else if button_name == "assimilate_disk" {
                         if let ActiveView::OobConflictInspection(ref mut state) = self.view {
-                            state.selected_button = oob_conflict_flow::types::ResolutionButton::AssimilateDisk;
+                            state.selected_button = oob_conflict_modal::types::ResolutionButton::AssimilateDisk;
                         }
                     }
                     self.handle_oob_conflict_action(action);

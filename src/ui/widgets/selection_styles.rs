@@ -1,7 +1,7 @@
 //! Centralized cursor/selection style constants.
 //!
 //! Single source of truth for list item and cursor highlighting across all
-//! flows in MLA's TUI. Import these instead of defining inline styles.
+//! flows in MM's TUI. Import these instead of defining inline styles.
 
 use ratatui::style::{Color, Modifier, Style};
 

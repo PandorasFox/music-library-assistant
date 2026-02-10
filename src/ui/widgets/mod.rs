@@ -1,6 +1,6 @@
 //! Reusable UI Widget Primitives
 //!
-//! This module provides foundational UI components used across MLA's interface.
+//! This module provides foundational UI components used across MM's interface.
 //! These widgets encapsulate common patterns for layout, modals, controls hints,
 //! and text input.
 //!

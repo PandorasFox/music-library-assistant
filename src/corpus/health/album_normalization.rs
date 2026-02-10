@@ -1,18 +1,18 @@
 //! Album name normalization for fuzzy matching.
 //!
-//! Re-exports from mla-utils::metadata_magic::album for backward compatibility.
-//! New code should use `mla_utils::metadata_magic` directly.
+//! Re-exports from mm-utils::metadata_magic::album.
+//! New code should use `mm_utils::metadata_magic` directly.
 
-pub use mla_utils::metadata_magic::album::normalize_album;
+pub use mm_utils::metadata_magic::album::normalize_album;
 
 // Re-export for tests only
 #[cfg(test)]
-use mla_utils::metadata_magic::album::albums_equivalent;
+use mm_utils::metadata_magic::album::albums_equivalent;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mla_utils::metadata_magic::AlbumFormat;
+    use mm_utils::metadata_magic::AlbumFormat;
 
     // Basic smoke tests to verify re-exports work
     #[test]

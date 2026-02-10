@@ -1,6 +1,6 @@
-# MLA UX Patterns
+# MM UX Patterns
 
-Common UI patterns that should be observed across all MLA interfaces.
+Common UI patterns that should be observed across all MM interfaces.
 
 ## Navigation Consistency
 

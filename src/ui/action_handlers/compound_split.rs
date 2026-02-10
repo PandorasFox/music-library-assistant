@@ -1,13 +1,13 @@
 //! Compound Tag Split Resolution
 //!
-//! Handles the compound tag split flow: loading signals, navigating between
+//! Handles the compound tag split modal: loading signals, navigating between
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
 use crate::ui::{compound_split_v2, progressive_worker, transaction_review, ActiveView, SuspendedView};
 use super::super::App;
 
 impl App {
-    /// Start compound tag split resolution flow.
+    /// Start compound tag split resolution modal.
     ///
     /// Loads CompoundTagValue signals filtered by safety and enters the split modal.
     /// If `safe_only` is true, loads only signals where all split parts exist in corpus.
@@ -38,7 +38,7 @@ impl App {
         // Store signal keys for cluster navigation
         let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_keys);
 
-        // Start transaction ONCE for entire flow
+        // Start transaction ONCE for entire modal
         if let Some(ref mut witch) = self.witch {
             let mode_str = if safe_only { "safe" } else { "review" };
             let _ = witch.start_transaction(&format!("Compound tag split ({})", mode_str));
@@ -261,7 +261,7 @@ impl App {
 
     /// Confirm all safe compound splits directly from insights (Ctrl+A shortcut).
     ///
-    /// This is a one-shot flow: loads safe compound signals, starts the progressive
+    /// This is a one-shot operation: loads safe compound signals, starts the progressive
     /// worker to stage all splits, then shows the transaction review screen.
     /// If `tag_filter` is Some, only processes signals for that specific tag.
     pub(in crate::ui) fn confirm_all_safe_compound_splits_from_insights(&mut self, tag_filter: Option<&str>) {

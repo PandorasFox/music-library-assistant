@@ -287,15 +287,15 @@ impl<'a> DecisionScope<'a> {
 // All decision authority now flows through Witch::with_operator_decision()
 // which should ONLY be called from ui/operator_decisions.rs.
 //
-// Transaction flow for mutations:
+// Transaction pattern for mutations:
 //   1. operator_decisions::start_transaction()
 //   2. operator_decisions::stage_decision() - repeat for each decision
 //   3. operator_decisions::commit_transaction() or discard_transaction()
 //
 // NOTE: confirm_startup_migration() has been removed. The Witch now orchestrates
 // migrations via queue_pending_migrations() which uses with_operator_decision()
-// internally to get a proper DecisionWitness. See run_migration_flow() in
-// ui/startup/migrations.rs for the new flow.
+// internally to get a proper DecisionWitness. See run_migrations() in
+// ui/startup/migrations.rs for the new approach.
 
 // ============================================================================
 // Labels and Status Types

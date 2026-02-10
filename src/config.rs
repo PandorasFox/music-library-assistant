@@ -8,8 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-// Re-export utilities from mla-utils for backward compatibility
-pub use mla_utils::{
+// Re-export utilities from mm-utils
+pub use mm_utils::{
     get_config_dir, get_db_path, is_audio_extension,
     AUDIO_EXTENSIONS,
 };
@@ -490,7 +490,7 @@ pub fn load_config() -> Result<Config> {
     if !config_path.exists() {
         anyhow::bail!(
             "config.kdl not found at {:?}\n\
-            Please create a config file at $XDG_CONFIG_HOME/mla/config.kdl (or ~/.config/mla/config.kdl)",
+            Please create a config file at $XDG_CONFIG_HOME/mm/config.kdl (or ~/.config/mm/config.kdl)",
             config_path
         );
     }

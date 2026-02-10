@@ -432,7 +432,7 @@ pub enum CompoundSplitActionV2 {
     Confirmed,
     /// User chose to canonicalize (Ctrl+Q) - mark as single entity
     Canonicalize,
-    /// User cancelled entire flow (Esc)
+    /// User cancelled entire modal (Esc)
     Cancelled,
     /// User navigated to next/prev signal (Tab/Shift-Tab) - does NOT stage decision
     Navigate {

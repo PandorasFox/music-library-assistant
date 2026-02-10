@@ -24,23 +24,23 @@ pub mod transaction_review;
 
 pub mod bulk_selection;
 pub mod compound_split_v2;
-pub mod corrupt_file_flow;
-pub mod deploy_flow;
-pub mod directory_cluster_flow;
+pub mod corrupt_file_modal;
+pub mod deploy_modal;
+pub mod directory_cluster_modal;
 pub mod eye;
 pub mod filter_popup;
 pub mod helpers;
 pub mod insights_view;
-pub mod missing_file_flow;
-pub mod missing_directory_flow;
-pub mod moved_file_flow;
-pub mod oob_conflict_flow;
-pub mod oob_sync_flow;
+pub mod missing_file_modal;
+pub mod missing_directory_modal;
+pub mod moved_file_modal;
+pub mod oob_conflict_modal;
+pub mod oob_sync_modal;
 pub mod progress_screen;
 pub mod render;
-pub mod shit_format_flow;
+pub mod shit_format_modal;
 pub mod startup;
-pub mod subpar_duplicate_flow;
+pub mod subpar_duplicate_modal;
 pub mod tag_canonicity_v2;
 pub mod tag_editor;
 pub mod tag_search;
@@ -91,7 +91,7 @@ pub(crate) struct App {
     // Log channel receiver, held until the Witch takes ownership
     log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
 
-    // Filter popup overlay (Ctrl+F in resolution flows and corpus browser)
+    // Filter popup overlay (Ctrl+F in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
 }
 
@@ -398,7 +398,7 @@ fn render(f: &mut Frame, app: &mut App) {
 // ============================================================================
 
 pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>) -> Result<()> {
-    crate::logging::log_general("=== MLA startup ===");
+    crate::logging::log_general("=== MM startup ===");
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -418,7 +418,7 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     let mut witch = crate::witch::Witch::with_opinions(&config, false, force_freshen, force_check, Some(log_rx));
 
     if witch.needs_migrations() {
-        startup::run_migration_flow(&mut terminal, &mut witch)?;
+        startup::run_migrations(&mut terminal, &mut witch)?;
     }
 
     witch.spawn_db_thread();

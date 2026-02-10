@@ -116,7 +116,7 @@ pub struct Witch {
 
     /// Runtime safety latch: if Some, mutations are permanently disabled for this session.
     /// Contains the reason why the safety latch was triggered (e.g., mount boundary violation).
-    /// Once set, cannot be unset - operator must fix the issue and restart MLA.
+    /// Once set, cannot be unset - operator must fix the issue and restart MM.
     safety_latch_reason: Option<String>,
 
     /// Whether mutations have run this session.
@@ -327,7 +327,7 @@ impl Witch {
     /// Trigger the safety latch, permanently disabling mutations for this session.
     ///
     /// This is a one-way operation - once latched, cannot be unlatched.
-    /// The operator must fix the underlying issue and restart MLA.
+    /// The operator must fix the underlying issue and restart MM.
     ///
     /// Called when a runtime invariant is violated (e.g., mount boundary crossed).
     pub fn latch_read_only_for_safety(&mut self, reason: String) {

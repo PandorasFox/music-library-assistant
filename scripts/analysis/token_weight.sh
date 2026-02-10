@@ -1,5 +1,5 @@
 #!/bin/bash
-# Token/Context Weight Estimation for MLA
+# Token/Context Weight Estimation for MM
 # Estimates cognitive load and LLM context usage per file
 #
 # Approximation: ~4 characters per token (conservative for code)
@@ -11,7 +11,7 @@ PROJECT_ROOT="${1:-$(dirname "$0")/../..}"
 cd "$PROJECT_ROOT"
 
 echo "=============================================="
-echo "MLA Token/Context Weight Analysis"
+echo "MM Token/Context Weight Analysis"
 echo "Generated: $(date)"
 echo "=============================================="
 echo

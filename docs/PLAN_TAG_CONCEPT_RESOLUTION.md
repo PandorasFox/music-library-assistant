@@ -23,7 +23,7 @@ Music files use inconsistent tag naming conventions. The same semantic informati
 
 ## Existing Infrastructure
 
-We have `mla-utils::tag_names` with:
+We have `mm-utils::tag_names` with:
 - `normalize_tag_name()` - Strips separators, lowercases
 - `levenshtein_distance()` - Edit distance for spelling variants
 - `tag_names_match()` - Returns `Exact`, `LikelyVariant`, or `NoMatch`
@@ -137,7 +137,7 @@ fn build_tag_name_sql_condition(matching_names: &[String]) -> String
 
 5. **Concept resolution functions**
    - `resolve_tag_names_for_concept(concept, available) -> Vec<String>`
-   - Uses `mla-utils::tag_names` primitives internally
+   - Uses `mm-utils::tag_names` primitives internally
 
 6. **SQL condition builder**
    - `build_tag_name_condition(names) -> String`
@@ -186,7 +186,7 @@ New computation to detect when corpus has inconsistent tag names:
 
 - e.g., "Found 3414 tracks with 'catalog_number' and 9 with 'Catalog'"
 - Emit signals for bulk tag name normalization
-- UI flow for reviewing and fixing
+- UI modal for reviewing and fixing
 
 ---
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Master Analysis Runner for MLA
+# Master Analysis Runner for MM
 # Runs all analysis scripts and generates a combined report
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,13 +11,13 @@ mkdir -p "$OUTPUT_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 REPORT_FILE="$OUTPUT_DIR/analysis_$TIMESTAMP.txt"
 
-echo "Running MLA Codebase Analysis..."
+echo "Running MM Codebase Analysis..."
 echo "Output: $REPORT_FILE"
 echo
 
 {
     echo "################################################################"
-    echo "#                    MLA CODEBASE ANALYSIS                    #"
+    echo "#                    MM CODEBASE ANALYSIS                    #"
     echo "#                    $(date)                    #"
     echo "################################################################"
     echo

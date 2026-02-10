@@ -1,11 +1,11 @@
-//! Deployment Preview Flow
+//! Deployment Preview Modal
 //!
 //! Handles the deployment preview: loading deploy data, staging deploy mutations
 //! (leftovers, stale, new, conflicts), and the preview action handler.
 
 use crate::corpus::paths;
 use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, MoveToStashMutation};
-use crate::ui::{deploy_flow, transaction_review, ActiveView};
+use crate::ui::{deploy_modal, transaction_review, ActiveView};
 use super::super::App;
 
 impl App {
@@ -14,19 +14,19 @@ impl App {
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                deploy_flow::DeployModalData::load(&read_db).ok()
+                deploy_modal::DeployModalData::load(&read_db).ok()
             })
             .unwrap_or_default();
 
-        let preview = deploy_flow::DeploymentPreviewState::new(data);
+        let preview = deploy_modal::DeploymentPreviewState::new(data);
         self.view = ActiveView::DeploymentPreview(preview);
     }
 
     /// Handle deployment preview actions.
-    pub(in crate::ui) fn handle_deployment_preview_action(&mut self, action: deploy_flow::DeploymentPreviewAction) {
+    pub(in crate::ui) fn handle_deployment_preview_action(&mut self, action: deploy_modal::DeploymentPreviewAction) {
         match action {
-            deploy_flow::DeploymentPreviewAction::None => {}
-            deploy_flow::DeploymentPreviewAction::Confirm => {
+            deploy_modal::DeploymentPreviewAction::None => {}
+            deploy_modal::DeploymentPreviewAction::Confirm => {
                 // Generate deploy mutations and stage for review
                 // Clone the cached data to avoid borrow issues
                 let cached_data = match &self.view {
@@ -47,7 +47,7 @@ impl App {
                     self.start_insights_view();
                 }
             }
-            deploy_flow::DeploymentPreviewAction::Cancel => {
+            deploy_modal::DeploymentPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Deployment preview cancelled");
                 self.status_message = Some("Deployment cancelled".to_string());
             }
@@ -63,7 +63,7 @@ impl App {
     /// - deploy_path/library_path/expected_path: relative to libraries_root
     ///
     /// These must be resolved to absolute for filesystem mutations.
-    fn stage_deploy_mutations(&mut self, data: &deploy_flow::DeployModalData) -> usize {
+    fn stage_deploy_mutations(&mut self, data: &deploy_modal::DeployModalData) -> usize {
         use crate::meta::mutations::Mutation;
 
         let Some(ref mut witch) = self.witch else {

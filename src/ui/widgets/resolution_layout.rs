@@ -1,6 +1,6 @@
 //! Resolution Layout Widget
 //!
-//! Provides a standard two-pane layout for resolution flows with:
+//! Provides a standard two-pane layout for resolution modals with:
 //! - Info bar at top (full-width, shows untruncated path)
 //! - Left pane (~33%) for file list
 //! - Right pane (~67%) for details (informational, not focusable)
@@ -19,7 +19,7 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-/// Focus pane for resolution flows.
+/// Focus pane for resolution modals.
 ///
 /// Details pane is not focusable (informational only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -47,7 +47,7 @@ impl FocusPane {
     }
 }
 
-/// Layout areas for a resolution flow.
+/// Layout areas for a resolution modal.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolutionLayout {
     /// Area for the full-width info bar showing selected item's full path

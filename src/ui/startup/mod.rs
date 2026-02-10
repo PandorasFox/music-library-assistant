@@ -1,6 +1,6 @@
-//! Startup Flow Modals
+//! Startup Modals
 //!
-//! This module contains the UI modals for the startup flow:
+//! This module contains the UI modals for the startup:
 //! - First-time setup (database creation)
 //! - Database migrations (schema upgrades)
 //! - Intake confirmation (index unindexed files)
@@ -17,4 +17,4 @@ mod migrations;
 
 pub use first_time_setup::handle_first_time_setup;
 pub use intake_confirmation::{IntakeConfirmationState, IntakeConfirmationAction};
-pub use migrations::run_migration_flow;
+pub use migrations::run_migrations;

@@ -32,7 +32,7 @@
 //! - Tab/Shift-Tab: Navigate to next/prev signal (non-committal)
 //! - Ctrl+R: Stage current decision and jump to review screen
 //! - Ctrl+A: Stage ALL signals and jump to review (safe mode only)
-//! - Esc: Cancel entire flow (or cancel edit if editing)
+//! - Esc: Cancel entire modal (or cancel edit if editing)
 
 pub mod render;
 pub mod types;

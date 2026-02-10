@@ -50,11 +50,11 @@ pub fn handle_first_time_setup<B: Backend>(
 
             let lines = vec![
                 Line::from(""),
-                Line::from("Welcome to MLA!").style(
+                Line::from("Welcome to MM!").style(
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 ),
                 Line::from(""),
-                Line::from("No database found. MLA will create a new one at:").style(
+                Line::from("No database found. MM will create a new one at:").style(
                     Style::default().fg(Color::White),
                 ),
                 Line::from(""),

@@ -1,9 +1,9 @@
 # Rust build artifacts
 /target/
 Cargo.lock
-mla
+mm
 
-# MLA database
+# MM database
 *.db
 *.txt
 

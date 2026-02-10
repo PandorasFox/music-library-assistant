@@ -126,7 +126,7 @@ pub(super) fn enumerate_directories_recursive(dir: &Path, directories: &mut Vec<
                              Expected device: {}, found device: {}\n\
                              \n\
                              The corpus and libraries must not contain nested mount points.\n\
-                             Please unmount the nested filesystem and restart MLA.",
+                             Please unmount the nested filesystem and restart MM.",
                             path, expected, actual_dev
                         ));
                         // Skip this directory and its children - don't recurse into different filesystem

@@ -18,7 +18,7 @@
 //!
 //! # Why This Module Exists
 //!
-//! MLA enforces that all corpus mutations are attributable to explicit operator
+//! MM enforces that all corpus mutations are attributable to explicit operator
 //! decisions. The `DecisionWitness` type is a zero-sized proof that code is
 //! executing in a user-confirmed context.
 //!
@@ -27,7 +27,7 @@
 //! 2. That method should only be called from functions in THIS module
 //! 3. These functions are called from action handlers
 //!
-//! # Transaction Flow
+//! # Transaction Pattern
 //!
 //! All mutation flows now go through a standardized Transaction Review modal:
 //! 1. Source modal stages decision(s) via `stage_decision()`

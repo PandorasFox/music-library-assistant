@@ -1,6 +1,6 @@
 //! Eye Animation System
 //!
-//! The Eye is MLA's visual heartbeat - a Talos Principle-inspired animation
+//! The Eye is MM's visual heartbeat - a Talos Principle-inspired animation
 //! that blinks periodically. The daemon controls Eye lifecycle and eyeballing;
 //! this module handles only the visual animation.
 //!

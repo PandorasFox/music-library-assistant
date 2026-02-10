@@ -1,6 +1,6 @@
 //! Tag Canonicity Resolution
 //!
-//! Handles the tag canonicity flow: loading signals, navigating between
+//! Handles the tag canonicity modal: loading signals, navigating between
 //! clusters, staging canonicalization decisions.
 
 use crate::ui::{
@@ -71,7 +71,7 @@ impl App {
 
         let clusters = TagCanonicityClusters::new(signal_keys, kind);
 
-        // Start transaction ONCE for entire flow
+        // Start transaction ONCE for entire modal
         if let Some(ref mut witch) = self.witch {
             let _ = witch.start_transaction("Tag canonicalization");
         }

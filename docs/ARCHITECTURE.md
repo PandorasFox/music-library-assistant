@@ -1,6 +1,6 @@
-# MLA System Architecture
+# MM System Architecture
 
-This document describes the major subsystems of MLA and how they interact. For the conceptual foundations and design principles, see [PHILOSOPHY.md](PHILOSOPHY.md).
+This document describes the major subsystems of MM and how they interact. For the conceptual foundations and design principles, see [PHILOSOPHY.md](PHILOSOPHY.md).
 
 ## Module Organization
 
@@ -45,7 +45,7 @@ src/
 
 ## The Witch
 
-The core orchestrator of all the subsystems that make up MLA. All Data Flows Through Her.
+The core orchestrator of all the subsystems that make up MM. All Data Flows Through Her.
 
 The Witch is named such because She enforces orderliness in her domain, and provides all guarantees for data which flows properly through Her. She is where all operational logic flows through. To begin:
 
@@ -85,7 +85,7 @@ Signals are purely informational. Signals are stateless and should be consistent
 
 ## The Corpus and Index
 
-The corpus is the files on disk. They are sacred; MLA shall not mutate them without a corresponding Enter keypress from the user. The Index is the Librarian (user)'s record of the corpus, and should also be treated as sacred. Some initial operations - such as indexing all files upon initial startup - might seem a bit superfluous, but it's good to set the example early: we always need the user to press enter to add a decision to a transaction, then enter again to finalize a transaction.
+The corpus is the files on disk. They are sacred; MM shall not mutate them without a corresponding Enter keypress from the user. The Index is the Librarian (user)'s record of the corpus, and should also be treated as sacred. Some initial operations - such as indexing all files upon initial startup - might seem a bit superfluous, but it's good to set the example early: we always need the user to press enter to add a decision to a transaction, then enter again to finalize a transaction.
 
 ## The Mutation Engine
 
@@ -95,4 +95,4 @@ For example, edits are roughly `edit(inode, tag_name, old_value, new_value)` - w
 
 ## The UI Layer
 
-Everything else is fundamentally at the UI layer - all resolution flows, the corpus browser, the search interface, the tag editor.... they all just use the underlying architecture we've built up.
+Everything else is fundamentally at the UI layer - all resolution modals, the corpus browser, the search interface, the tag editor.... they all just use the underlying architecture we've built up.

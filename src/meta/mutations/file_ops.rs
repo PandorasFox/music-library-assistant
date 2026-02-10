@@ -24,7 +24,7 @@ use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
 /// Move a file from source to destination.
 ///
 /// NOTE: This mutation is fully plumbed but intentionally not yet utilized in UI.
-/// It will be used by the inbox intake flow for moving files from inbox to corpus.
+/// It will be used by the inbox intake for moving files from inbox to corpus.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MoveMutation {
     pub source: PathBuf,
@@ -249,7 +249,7 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
-    // Fail if destination already exists - MLA never overwrites files
+    // Fail if destination already exists - MM never overwrites files
     if destination.exists() {
         return Err(anyhow::anyhow!(
             "Destination already exists: {}",
@@ -274,7 +274,7 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
 /// Moves a file within a library (e.g., stale file to correct location).
 /// Unlike corpus moves, this does not update any database records.
 ///
-/// IMPORTANT: MLA never unlinks/destroys data. If destination exists:
+/// IMPORTANT: MM never unlinks/destroys data. If destination exists:
 /// - Same inode: File already correctly deployed, nothing to do (caller should
 ///   handle stale source path via separate MoveToStash if cleanup needed)
 /// - Different inode: Conflict - fails so caller can stash the conflicting file first

@@ -1,14 +1,14 @@
 //! Bespoke tag value normalization for collision detection.
 //!
-//! Re-exports from mla-utils::metadata_magic for backward compatibility.
-//! New code should use `mla_utils::metadata_magic` directly.
+//! Re-exports from mm-utils::metadata_magic.
+//! New code should use `mm_utils::metadata_magic` directly.
 //!
 //! Different tag types have different normalization rules:
 //! - Artist/AlbumArtist: Primarily casing and whitespace
 //! - Album: EP/LP suffix handling, edition preservation
 //! - Genre: Symbol substitution ("and" / "&" / "'n'"), common spelling variants
 
-pub use mla_utils::metadata_magic::{normalize_album_artist, normalize_artist, normalize_genre};
+pub use mm_utils::metadata_magic::{normalize_album_artist, normalize_artist, normalize_genre};
 
 use super::album_normalization;
 

@@ -1,10 +1,10 @@
-# Music Library Assistant (MLA)
+# Music Magic (MM)
 
 A high-performance music library management tool for managing large music collections.
 
 I recommend organizing your music by acquisition sources (physical/digital, bandcamp/itunes/qobuz, etc) for ease of long-term organization scaling - a basic "library/albumartist/album/track" structure scales poorly when you have thousands of distinct album artists!
 
-If you still want a flat albumartist/album/track library-presentation of your music corpus (consistent presentation of files, downstream music players or servers), MLA offers this functionality with its hard-link deployment model. I'll write up an organization_strategies.md doc later, I prommy.
+If you still want a flat albumartist/album/track library-presentation of your music corpus (consistent presentation of files, downstream music players or servers), MM offers this functionality with its hard-link deployment model. I'll write up an organization_strategies.md doc later, I prommy.
 
 **Repository**: https://git.hecate.pink/hecate/mla
 
@@ -24,7 +24,7 @@ Please note that the UI (positioning, text-wrapping, etc) is very unpolished bec
 cargo install --git 'https://git.hecate.pink/hecate/mla'
 ```
 
-This installs the `mla` binary to your Cargo bin directory (typically `~/.cargo/bin/`). Ensure this is in your PATH.
+This installs the `mm` binary to your Cargo bin directory (typically `~/.cargo/bin/`). Ensure this is in your PATH.
 
 ### Building from source
 
@@ -34,11 +34,11 @@ cd mla
 cargo build --release
 ```
 
-The binary will be at `target/release/mla`.
+The binary will be at `target/release/mm`.
 
 ## Configuration
 
-MLA requires a config file at `$XDG_CONFIG_HOME/mla/config.kdl` (or `~/.config/mla/config.kdl`):
+MM requires a config file at `$XDG_CONFIG_HOME/mm/config.kdl` (or `~/.config/mm/config.kdl`):
 
 There will, eventually, be a built-in config editor + first-time setup wizard. For now, though: woe, config file be upon ye.
 
@@ -62,7 +62,7 @@ See `config.kdl.example` for a complete example with additional options.
 Launch the TUI:
 
 ```bash
-mla
+mm
 ```
 
 ## Features
@@ -86,9 +86,9 @@ This is still 'unreleased' software, in that I haven't felt it appropriate to cu
 
 ## Other Notes
 
-my DB file is about 600MiB for ~25,000 files that take up ~700GiB on-disk. This includes a fair amount of binary chromaprint data, as well as some number of ephemeral signal data for health issues I've yet to resolve in my onw music library because I'm still working on the resolution flows, as well as a *lot* of development tag-edit tests.
+my DB file is about 600MiB for ~25,000 files that take up ~700GiB on-disk. This includes a fair amount of binary chromaprint data, as well as some number of ephemeral signal data for health issues I've yet to resolve in my own music library because I'm still working on the resolution modals, as well as a *lot* of development tag-edit tests.
 
-600MiB sqlite db file might sound like a lot, but this is still only 0.1% as large as all of the music files I have themselves. The db file is stored in `~/.local/share/mla/mla.db` (or whatever the appropriate XDG prefix is, if the value is set, i think - i know i did that for XDG_CONFIG_HOME....) so that it can be located on flash storage instead of spinning rust.
+600MiB sqlite db file might sound like a lot, but this is still only 0.1% as large as all of the music files I have themselves. The db file is stored in `~/.local/share/mm/mm.db` (or whatever the appropriate XDG prefix is, if the value is set, i think - i know i did that for XDG_CONFIG_HOME....) so that it can be located on flash storage instead of spinning rust.
 
 ## License
 

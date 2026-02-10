@@ -835,7 +835,7 @@ impl SignalWriteSender {
     /// Used by the DB-first tag editing pattern:
     /// - ApplyTagOps sets this to TRUE after writing tags to DB
     /// - ApplyDbTagsToDisk sets this to FALSE after syncing to disk
-    /// - Tracks with TRUE can be recovered via OOB flow
+    /// - Tracks with TRUE can be recovered via OOB modal
     pub fn set_needs_disk_flush(
         &self,
         path: &str,

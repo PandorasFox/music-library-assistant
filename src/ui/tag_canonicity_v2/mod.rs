@@ -32,7 +32,7 @@
 //! - Enter: Confirm current squash, stage decision, and advance to next group
 //! - Tab/Shift-Tab: Navigate to next/prev group (non-committal, does NOT stage)
 //! - Ctrl+R: Stage current decision and jump to review screen
-//! - Esc: Cancel entire flow
+//! - Esc: Cancel entire modal
 
 pub mod render;
 pub mod types;

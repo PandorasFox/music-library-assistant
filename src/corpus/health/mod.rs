@@ -3,7 +3,7 @@
 //! Health is a continuously maintained invariant - not computed on-demand.
 //! This module provides detection, filtering, and tracking of corpus health issues.
 //!
-//! Flow:
+//! Process:
 //! ```text
 //! SCAN/INDEX → detect issues → store in DB
 //!      ↓

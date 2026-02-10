@@ -65,10 +65,10 @@ Benefits:
 - **Validation**: Old values are checked before applying changes (prevents stale overwrites)
 - **Coalescing**: Multiple signals affecting same track are properly merged
 - DB is always ahead of or in sync with disk
-- If disk write fails/is interrupted, `needs_disk_flush=true` enables recovery via OOB flow
+- If disk write fails/is interrupted, `needs_disk_flush=true` enables recovery via OOB modal
 - Spawn chaining keeps DB write and disk sync atomic from user perspective
 
-Recovery flow: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue ApplyDbTagsToDisk for each.
+Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue ApplyDbTagsToDisk for each.
 
 ### Indexing Operations
 
@@ -188,7 +188,7 @@ Spawn chaining ensures:
 - Single-track mutations enable parallel execution
 - Type-level guarantee: spawned mutations must pass through authorized witness
 
-### Post-Mutation Signal Flow
+### Post-Mutation Signal Lifecycle
 
 All successful mutations that affect file paths:
 1. Spawn awakening-phase computations (`UpdateCorpusFileSignals` or `UpdateLibraryFileSignals`)

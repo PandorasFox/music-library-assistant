@@ -3,13 +3,14 @@
 //! These helpers are used across multiple computation modules for common tasks
 //! like file type detection, path parsing, signal emission, and configuration access.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
-use crate::meta::signals::{AggregateSignal, AggregateSignalType, CorpusFileSignalType};
+use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
+use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread::{self, SignalWitness};
 
@@ -180,23 +181,6 @@ pub(crate) fn ensure_corpus_signal(
     }
 }
 
-/// Ensure a corpus signal exists with additional metadata.
-///
-/// Uses the native inode column and merges path into the metadata.
-pub(crate) fn ensure_corpus_signal_with_metadata(
-    read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
-    signal_type: CorpusFileSignalType,
-    inode: i64,
-    path: &str,
-    extra_metadata: serde_json::Value,
-    witness: &impl SignalWitness,
-) {
-    if !read_only_db.corpus_signal_exists_by_inode(signal_type, inode) {
-        sender.ensure_corpus_signal_with_metadata(signal_type, inode, path, extra_metadata, witness);
-    }
-}
-
 /// Drop a stale corpus signal using the native inode column.
 ///
 /// Use when a computation determines the signal should not exist for this inode.
@@ -255,33 +239,20 @@ pub(crate) fn drop_stale_aggregate_signal(
 
 /// A computed aggregate signal ready for reconciliation.
 ///
-/// Contains the key, inodes, and optional extra metadata for comparison.
+/// Contains the key, inodes, and typed data for the signal write.
 pub(super) struct ComputedAggregateSignal {
     pub key: String,
     pub inodes: Vec<i64>,
-    pub metadata_json: String,
-}
-
-/// Extract inodes from metadata JSON string.
-///
-/// Returns empty vec if parsing fails or inodes not present.
-fn extract_inodes_from_metadata(metadata_json: Option<&str>) -> Vec<i64> {
-    metadata_json
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .and_then(|v| v.get("inodes").cloned())
-        .and_then(|arr| serde_json::from_value::<Vec<i64>>(arr).ok())
-        .unwrap_or_default()
+    pub typed_data: TypedSignalWrite,
 }
 
 /// Reconcile computed signals against existing DB signals.
 ///
 /// Computes set differences and queues appropriate operations:
 /// - Stale signals (exist in DB but not computed): cleared
-/// - New signals (computed but not in DB): ensured
-/// - Changed signals (exist in both but inodes differ): replaced with new timestamp
-/// - Unchanged signals (exist in both, same inodes): no-op
+/// - New + existing signals: always written (INSERT OR REPLACE)
 ///
-/// Returns (cleared_count, new_count, updated_count, unchanged_count).
+/// Returns (cleared_count, written_count, 0, 0).
 pub(super) fn reconcile_aggregate_signals(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
@@ -289,75 +260,29 @@ pub(super) fn reconcile_aggregate_signals(
     computed: Vec<ComputedAggregateSignal>,
     witness: &ComputationWitness,
 ) -> (usize, usize, usize, usize) {
-    // Get existing signals from DB
-    let existing = read_only_db
-        .get_aggregate_signal_keys_with_metadata(signal_type)
-        .unwrap_or_default();
-
-    // Build lookup maps
-    let computed_map: HashMap<&str, &ComputedAggregateSignal> =
-        computed.iter().map(|s| (s.key.as_str(), s)).collect();
-
-    let existing_map: HashMap<&str, Option<&str>> = existing
-        .iter()
-        .map(|(k, m)| (k.as_str(), m.as_deref()))
+    let existing_keys: HashSet<String> = read_only_db
+        .get_aggregate_signal_keys(signal_type)
+        .unwrap_or_default()
+        .into_iter()
         .collect();
 
-    let computed_keys: HashSet<&str> = computed_map.keys().copied().collect();
-    let existing_keys: HashSet<&str> = existing_map.keys().copied().collect();
+    let computed_keys: HashSet<&str> = computed.iter().map(|s| s.key.as_str()).collect();
+    let existing_key_refs: HashSet<&str> = existing_keys.iter().map(|s| s.as_str()).collect();
 
     let mut cleared = 0;
-    let mut new_count = 0;
-    let mut updated = 0;
-    let mut unchanged = 0;
+    let mut written = 0;
 
-    // Stale signals: exist in DB but not computed -> clear
-    for key in existing_keys.difference(&computed_keys) {
+    // Stale: exist in DB but not computed -> clear
+    for key in existing_key_refs.difference(&computed_keys) {
         sender.clear_aggregate_signal(signal_type, key, witness);
         cleared += 1;
     }
 
-    // New signals: computed but not in DB -> ensure
-    for key in computed_keys.difference(&existing_keys) {
-        let signal = computed_map[key];
-        sender.ensure_aggregate_signal(
-            signal_type,
-            &signal.key,
-            Some(&signal.metadata_json),
-            witness,
-        );
-        new_count += 1;
+    // New + existing: always write (INSERT OR REPLACE)
+    for signal in &computed {
+        sender.write_typed_signal(signal.typed_data.clone(), witness);
+        written += 1;
     }
 
-    // Existing signals: check if inodes changed
-    for key in computed_keys.intersection(&existing_keys) {
-        let computed_signal = computed_map[key];
-        let existing_metadata = existing_map[key];
-
-        let existing_inodes = extract_inodes_from_metadata(existing_metadata);
-
-        // Compare inodes (sorted for stable comparison)
-        let mut computed_ids = computed_signal.inodes.clone();
-        let mut existing_ids = existing_inodes;
-        computed_ids.sort();
-        existing_ids.sort();
-
-        if computed_ids != existing_ids {
-            // Inodes changed -> replace (updates timestamp)
-            let signal = AggregateSignal {
-                id: None,
-                signal_type,
-                key: computed_signal.key.clone(),
-                discovered_at: None, // Will use CURRENT_TIMESTAMP
-                metadata_json: Some(computed_signal.metadata_json.clone()),
-            };
-            sender.replace_aggregate_signal(signal, witness);
-            updated += 1;
-        } else {
-            // Unchanged
-            unchanged += 1;
-        }
-    }
-
-    (cleared, new_count, updated, unchanged)
+    (cleared, written, 0, 0)
 }

@@ -16,7 +16,12 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, SignalType};
+use crate::meta::signals::{AggregateSignalType, SignalType};
+use crate::meta::signals::data::{
+    TypedSignalWrite, FingerprintOverlapSignal, MetadataDuplicateSignal, MetadataDuplicateData,
+    DuplicateInodeSignal, SubparDuplicateSignal, SubparDuplicateData,
+    CrossSourceOverlapSignal, CrossSourceOverlapData, CrossSourceTrackPair,
+};
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread;
 
@@ -74,16 +79,13 @@ pub fn execute_detect_fingerprint_overlaps(
         let inodes = parse_inodes_csv(&inodes_str);
         total_tracks += inodes.len();
 
-        // Metadata no longer stores fingerprint (it's already the signal key)
-        let metadata = serde_json::json!({
-            "inodes": &inodes,
-        })
-        .to_string();
-
         computed.push(ComputedAggregateSignal {
-            key: fingerprint_text,
-            inodes,
-            metadata_json: metadata,
+            key: fingerprint_text.clone(),
+            inodes: inodes.clone(),
+            typed_data: TypedSignalWrite::FingerprintOverlap(FingerprintOverlapSignal {
+                key: fingerprint_text,
+                inodes,
+            }),
         });
     }
 
@@ -158,16 +160,14 @@ pub fn execute_detect_duplicate_inodes(
     for (inode, inodes_str) in duplicate_groups {
         let inodes = parse_inodes_csv(&inodes_str);
 
-        let metadata = serde_json::json!({
-            "inode": inode,
-            "inodes": &inodes,
-        })
-        .to_string();
-
         computed.push(ComputedAggregateSignal {
             key: inode.to_string(),
-            inodes,
-            metadata_json: metadata,
+            inodes: inodes.clone(),
+            typed_data: TypedSignalWrite::DuplicateInode(DuplicateInodeSignal {
+                key: inode.to_string(),
+                inode,
+                inodes,
+            }),
         });
     }
 
@@ -262,18 +262,13 @@ pub fn execute_detect_metadata_duplicates(
 
         let key_hash = format!("{:x}", md5_hash(&signature));
 
-        let signal = AggregateSignal {
-            id: None,
-            signal_type: AggregateSignalType::MetadataDuplicate,
+        sender.write_typed_signal(TypedSignalWrite::MetadataDuplicate(MetadataDuplicateSignal {
             key: key_hash,
-            discovered_at: None,
-            metadata_json: Some(serde_json::json!({
-                "tag_signature": signature,
-            }).to_string()),
-        }
-        .with_inodes(&inodes);
-
-        sender.replace_aggregate_signal(signal, witness);
+            data: MetadataDuplicateData {
+                tag_signature: signature,
+                inodes,
+            },
+        }), witness);
     }
 
     log_general(format!(
@@ -375,7 +370,7 @@ fn fingerprint_similarity(fp1: &[u32], fp2: &[u32]) -> f64 {
 
     // Compare overlapping portions, find best alignment
     // For simplicity, we compare the overlapping portion without sliding
-    // (sliding would be O(n²) and chromaprint handles alignment internally)
+    // (sliding would be O(n^2) and chromaprint handles alignment internally)
     let total_bits = (min_len * 32) as u64;
     let mut matching_bits = 0u64;
 
@@ -717,22 +712,18 @@ pub fn execute_analyze_fingerprint_overlaps(
                         SubparReason::SubparBitrate
                     };
 
-                    let metadata = serde_json::json!({
-                        "reason": reason.as_str(),
-                        "superior_inode": best_identity.inode,
-                        "superior_path": best_identity.path,
-                        "dupe_group_fingerprint": signal.key.clone(),
-                        "quality_score": score,
-                        "superior_quality_score": best_score,
-                    });
-
-                    sender.ensure_corpus_signal_with_metadata(
-                        CorpusFileSignalType::SubparDuplicate,
-                        audio_file.inode(),
-                        audio_file.path(),
-                        metadata,
-                        witness,
-                    );
+                    sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
+                        inode: audio_file.inode(),
+                        path: audio_file.path().to_string(),
+                        data: SubparDuplicateData {
+                            reason: reason.as_str().to_string(),
+                            superior_inode: best_identity.inode,
+                            superior_path: best_identity.path.clone(),
+                            dupe_group_fingerprint: signal.key.clone(),
+                            quality_score: score as i32,
+                            superior_quality_score: best_score as i32,
+                        },
+                    }), witness);
 
                     subpar_count += 1;
                 }
@@ -852,11 +843,13 @@ pub fn execute_detect_cross_source_overlaps(
     // =========================================================================
     // Key: sorted source pair (e.g., "web/releases/bandcamp|web/releases/indie")
     // Value: (fingerprint_keys, track_pairs)
-    // track_pairs: Vec<(source_a_inode, source_b_inode)>
     let mut source_pair_overlaps: HashMap<String, SourcePairOverlap> = HashMap::new();
 
     let mut total_overlaps = 0;
     let mut within_source_skipped = 0;
+
+    // Build an inode->path lookup for generating track pairs with paths
+    let mut inode_path_map: HashMap<i64, String> = HashMap::new();
 
     for signal in &fp_overlap_signals {
         let inodes = signal.inodes.clone();
@@ -882,6 +875,9 @@ pub fn execute_detect_cross_source_overlaps(
         for audio_file in &audio_files {
             let path = audio_file.path();
             let inode = audio_file.inode();
+
+            // Cache inode->path for track pair construction
+            inode_path_map.insert(inode, path.to_string());
 
             // Strip "corpus/" prefix if present to get relative path
             let relative_path = if path.starts_with("corpus/") {
@@ -943,13 +939,29 @@ pub fn execute_detect_cross_source_overlaps(
 
                 for &inode_a in inodes_a {
                     for &inode_b in inodes_b {
-                        let pair = if source_a < source_b {
+                        let (pair_a_inode, pair_b_inode) = if source_a < source_b {
                             (inode_a, inode_b)
                         } else {
                             (inode_b, inode_a)
                         };
-                        if !overlap.track_pairs.contains(&pair) {
-                            overlap.track_pairs.push(pair);
+
+                        // Deduplicate by checking if this exact pair already exists
+                        let already_exists = overlap.track_pairs.iter().any(|tp| {
+                            tp.source_a_inode == pair_a_inode && tp.source_b_inode == pair_b_inode
+                        });
+
+                        if !already_exists {
+                            overlap.track_pairs.push(CrossSourceTrackPair {
+                                fingerprint_key: signal.key.clone(),
+                                source_a_inode: pair_a_inode,
+                                source_a_path: inode_path_map.get(&pair_a_inode)
+                                    .cloned()
+                                    .unwrap_or_default(),
+                                source_b_inode: pair_b_inode,
+                                source_b_path: inode_path_map.get(&pair_b_inode)
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            });
                         }
                     }
                 }
@@ -971,23 +983,19 @@ pub fn execute_detect_cross_source_overlaps(
         let source_a_config = config.get_source_for_relative_path(Path::new(&overlap.source_a));
         let source_b_config = config.get_source_for_relative_path(Path::new(&overlap.source_b));
 
-        let metadata = serde_json::json!({
-            "source_a": overlap.source_a,
-            "source_b": overlap.source_b,
-            "source_a_can_stash": source_a_config.map(|s| s.can_stash_dupes).unwrap_or(true),
-            "source_b_can_stash": source_b_config.map(|s| s.can_stash_dupes).unwrap_or(true),
-            "overlap_count": overlap.track_pairs.len(),
-            "fingerprint_count": overlap.fingerprint_keys.len(),
-            "fingerprint_keys": overlap.fingerprint_keys,
-            "track_pairs": overlap.track_pairs,
-        });
-
-        sender.ensure_aggregate_signal(
-            AggregateSignalType::CrossSourceOverlap,
-            &pair_key,
-            Some(&metadata.to_string()),
-            witness,
-        );
+        sender.write_typed_signal(TypedSignalWrite::CrossSourceOverlap(CrossSourceOverlapSignal {
+            key: pair_key,
+            data: CrossSourceOverlapData {
+                source_a: overlap.source_a,
+                source_b: overlap.source_b,
+                source_a_can_stash: source_a_config.map(|s| s.can_stash_dupes).unwrap_or(true),
+                source_b_can_stash: source_b_config.map(|s| s.can_stash_dupes).unwrap_or(true),
+                overlap_count: overlap.track_pairs.len(),
+                fingerprint_count: overlap.fingerprint_keys.len(),
+                fingerprint_keys: overlap.fingerprint_keys,
+                track_pairs: overlap.track_pairs,
+            },
+        }), witness);
 
         emitted_count += 1;
     }
@@ -1005,6 +1013,5 @@ struct SourcePairOverlap {
     source_a: String,
     source_b: String,
     fingerprint_keys: Vec<String>,
-    /// (source_a_inode, source_b_inode) pairs
-    track_pairs: Vec<(i64, i64)>,
+    track_pairs: Vec<CrossSourceTrackPair>,
 }

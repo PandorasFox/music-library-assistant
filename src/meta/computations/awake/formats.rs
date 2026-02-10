@@ -7,7 +7,8 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::{CorpusFileSignalType, SignalType};
+use crate::meta::signals::SignalType;
+use crate::meta::signals::data::{ShitFormatSignal, TypedSignalWrite};
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread;
 
@@ -63,16 +64,12 @@ pub fn execute_detect_shit_formats(
     for audio_file in audio_files {
         let file_type_lower = audio_file.audio.file_type.to_lowercase();
         if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
-            let extra_metadata = serde_json::json!({
-                "file_type": audio_file.audio.file_type
-            });
-
-            // Use inode-keyed signal (path stored in metadata by ensure_corpus_signal_with_metadata)
-            sender.ensure_corpus_signal_with_metadata(
-                CorpusFileSignalType::ShitFormat,
-                audio_file.inode(),
-                audio_file.path(),
-                extra_metadata,
+            sender.write_typed_signal(
+                TypedSignalWrite::ShitFormat(ShitFormatSignal {
+                    inode: audio_file.inode(),
+                    path: audio_file.path().to_string(),
+                    file_type: audio_file.audio.file_type.clone(),
+                }),
                 witness,
             );
 

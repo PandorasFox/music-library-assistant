@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use crate::meta::computations::Computation;
 use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
+use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::tags::TagSet;
 
 use super::file_ops::{MoveMutation, MoveToStashMutation, HardLinkMutation, LibraryMoveMutation};
@@ -120,6 +121,8 @@ pub enum PendingSignal {
         path: String,
         metadata_json: String,
     },
+    /// Typed signal write (bypasses JSON serialization entirely)
+    Typed(TypedSignalWrite),
 }
 
 // ============================================================================

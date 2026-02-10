@@ -12,7 +12,11 @@ use crate::meta::computations::helpers::{
     ensure_aggregate_signal_if_missing,
 };
 use crate::meta::computations::types::ComputationWitness;
-use crate::meta::signals::{AggregateSignal, AggregateSignalType, CorpusFileSignalType, SignalType};
+use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType, SignalType};
+use crate::meta::signals::data::{
+    TypedSignalWrite, DeployConflictSignal, DeployReadySignal, DeployedHealthySignal,
+    LibraryStaleSignal,
+};
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread;
@@ -72,21 +76,14 @@ pub fn execute_detect_deploy_conflicts(
     for (deploy_path, inodes) in deploy_path_to_tracks {
         if inodes.len() > 1 {
             conflict_count += 1;
-            let signal = AggregateSignal {
-                id: None,
-                signal_type: AggregateSignalType::DeployConflict,
-                key: deploy_path.clone(),
-                discovered_at: None,
-                metadata_json: Some(
-                    serde_json::json!({
-                        "deploy_path": deploy_path,
-                    })
-                    .to_string(),
-                ),
-            }
-            .with_inodes(&inodes);
-
-            sender.replace_aggregate_signal(signal, witness);
+            sender.write_typed_signal(
+                TypedSignalWrite::DeployConflict(DeployConflictSignal {
+                    key: deploy_path.clone(),
+                    deploy_path: deploy_path.clone(),
+                    inodes: inodes.clone(),
+                }),
+                witness,
+            );
         }
     }
 
@@ -172,8 +169,8 @@ pub fn execute_derive_deploy_health_signals(
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
             drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryLeftover, &leftover_key, witness);
 
-            // Check if stale and capture metadata for the signal
-            let stale_metadata = if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
+            // Check if stale and emit typed signal
+            let is_stale = if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
                 let inode = audio_file.inode();
                 let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
                 let tag_map: std::collections::HashMap<String, String> = tags
@@ -196,29 +193,28 @@ pub fn execute_derive_deploy_health_signals(
                     // Stale: store paths with consistent library prefix for display and mutations
                     // Both paths stored as "{library_name}/path/..." for consistency
                     let expected_with_prefix = std::path::Path::new(library_name).join(&expected_relative);
-                    Some(serde_json::json!({
-                        "library_path": library_path.to_string_lossy(),
-                        "expected_path": expected_with_prefix.to_string_lossy(),
-                        "corpus_path": corpus_path,
-                        "inode": inode
-                    }))
+                    if !read_only_db.aggregate_signal_exists(AggregateSignalType::LibraryStale, &stale_key) {
+                        sender.write_typed_signal(
+                            TypedSignalWrite::LibraryStale(LibraryStaleSignal {
+                                key: stale_key.clone(),
+                                library_path: library_path.to_string_lossy().to_string(),
+                                expected_path: expected_with_prefix.to_string_lossy().to_string(),
+                                corpus_path: corpus_path.clone(),
+                                inode,
+                            }),
+                            witness,
+                        );
+                    }
+                    true
                 } else {
-                    None
+                    false
                 }
             } else {
-                None
+                false
             };
 
-            if let Some(metadata) = stale_metadata {
+            if is_stale {
                 stale_count += 1;
-                ensure_aggregate_signal_if_missing(
-                    read_only_db,
-                    &sender,
-                    AggregateSignalType::LibraryStale,
-                    &stale_key,
-                    Some(&metadata.to_string()),
-                    witness,
-                );
             } else {
                 healthy_count += 1;
                 drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryStale, &stale_key, witness);
@@ -348,41 +344,35 @@ pub fn execute_derive_corpus_deploy_status(
             if let Some(lib_path) = matching_path {
                 // Correctly deployed
                 deployed_healthy_count += 1;
-                let metadata = serde_json::json!({
-                    "library_path": lib_path.to_string_lossy(),
-                });
-                sender.ensure_corpus_signal_with_metadata(
-                    CorpusFileSignalType::DeployedHealthy,
-                    inode,
-                    &corpus_path,
-                    metadata,
+                sender.write_typed_signal(
+                    TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
+                        inode,
+                        path: corpus_path.to_string(),
+                        library_path: lib_path.to_string_lossy().to_string(),
+                    }),
                     witness,
                 );
             } else {
                 // Deployed but at wrong path (stale) — mark as deploy-ready
                 deploy_ready_count += 1;
-                let metadata = serde_json::json!({
-                    "deploy_path": expected_relative.to_string_lossy(),
-                });
-                sender.ensure_corpus_signal_with_metadata(
-                    CorpusFileSignalType::DeployReady,
-                    inode,
-                    &corpus_path,
-                    metadata,
+                sender.write_typed_signal(
+                    TypedSignalWrite::DeployReady(DeployReadySignal {
+                        inode,
+                        path: corpus_path.to_string(),
+                        deploy_path: expected_relative.to_string_lossy().to_string(),
+                    }),
                     witness,
                 );
             }
         } else {
             // Not deployed at all — deploy-ready
             deploy_ready_count += 1;
-            let metadata = serde_json::json!({
-                "deploy_path": expected_relative.to_string_lossy(),
-            });
-            sender.ensure_corpus_signal_with_metadata(
-                CorpusFileSignalType::DeployReady,
-                inode,
-                &corpus_path,
-                metadata,
+            sender.write_typed_signal(
+                TypedSignalWrite::DeployReady(DeployReadySignal {
+                    inode,
+                    path: corpus_path.to_string(),
+                    deploy_path: expected_relative.to_string_lossy().to_string(),
+                }),
                 witness,
             );
         }

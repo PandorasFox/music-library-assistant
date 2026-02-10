@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::corpus::db::types::FileSource;
 use crate::meta::signals::CorpusFileSignalType;
+use crate::meta::signals::data::{TypedSignalWrite, ShitFormatSignal, CanonicalTagSignal};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
@@ -445,13 +446,13 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
 
         // ShitFormat if non-Vorbis container
         if is_shit_format(&extracted.file_type) {
-            let metadata_json = serde_json::json!({ "file_type": extracted.file_type }).to_string();
-            pending_signals.push(PendingSignal::CorpusSignalWithMetadata {
-                signal_type: CorpusFileSignalType::ShitFormat,
-                inode: extracted.inode,
-                path: rel_str,
-                metadata_json,
-            });
+            pending_signals.push(PendingSignal::Typed(
+                TypedSignalWrite::ShitFormat(ShitFormatSignal {
+                    inode: extracted.inode,
+                    path: rel_str,
+                    file_type: extracted.file_type.clone(),
+                }),
+            ));
         }
     }
 
@@ -974,18 +975,14 @@ pub fn execute_emit_canonical_tag(
     // Key format: "{tag_name}:{tag_value}" (e.g., "artist:Rinse & Repeat")
     let canonical_key = format!("{}:{}", tag_name, canonical_value);
 
-    // Metadata for the CanonicalTag signal
-    let metadata = serde_json::json!({
-        "tag_name": tag_name,
-        "canonical_value": canonical_value,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-    });
-
-    // Emit CanonicalTag signal
-    sender.ensure_aggregate_signal(
-        AggregateSignalType::CanonicalTag,
-        &canonical_key,
-        Some(&metadata.to_string()),
+    // Emit CanonicalTag signal via typed path
+    sender.write_typed_signal(
+        TypedSignalWrite::CanonicalTag(CanonicalTagSignal {
+            key: canonical_key,
+            tag_name: tag_name.to_string(),
+            canonical_value: canonical_value.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }),
         witness,
     );
 

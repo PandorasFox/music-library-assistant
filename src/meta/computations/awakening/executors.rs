@@ -9,11 +9,12 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    drop_stale_corpus_signal, ensure_corpus_signal, ensure_corpus_signal_with_metadata,
+    drop_stale_corpus_signal, ensure_corpus_signal,
     enumerate_all_directories, get_configured_library_names, is_audio_file,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
+use crate::meta::signals::data::{TypedSignalWrite, DeployedHealthySignal};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -753,19 +754,17 @@ pub fn execute_update_deploy_signals(
         witness,
     );
 
-    // Ensure DeployedHealthy with library_path in metadata (inode-keyed, path in metadata)
-    let metadata = serde_json::json!({
-        "library_path": library_path_str,
-    });
-    ensure_corpus_signal_with_metadata(
-        read_only_db,
-        &sender,
-        CorpusFileSignalType::DeployedHealthy,
-        corpus_inode,
-        &corpus_path_str,
-        metadata,
-        witness,
-    );
+    // Ensure DeployedHealthy with library_path (inode-keyed)
+    if !read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::DeployedHealthy, corpus_inode) {
+        sender.write_typed_signal(
+            TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
+                inode: corpus_inode,
+                path: corpus_path_str.clone(),
+                library_path: library_path_str,
+            }),
+            witness,
+        );
+    }
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

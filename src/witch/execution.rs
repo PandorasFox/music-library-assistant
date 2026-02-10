@@ -431,6 +431,9 @@ fn emit_pending_signals(
                     witness,
                 );
             }
+            PendingSignal::Typed(typed_signal) => {
+                sender.write_typed_signal(typed_signal.clone(), witness);
+            }
         }
     }
 }

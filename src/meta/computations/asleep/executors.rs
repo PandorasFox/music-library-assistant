@@ -10,9 +10,10 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
-    ensure_corpus_signal, ensure_corpus_signal_with_metadata,
+    ensure_corpus_signal,
     drop_stale_corpus_signal,
 };
+use crate::meta::signals::data::{TypedSignalWrite, MovedFileSignal, MissingFileSignal, OutOfBandTagSyncSignal, OutOfBandTagConflictSignal, TagMismatchEntry};
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::FileSource;
 use crate::meta::signals::{CorpusFileSignalType, SignalType};
@@ -212,18 +213,16 @@ pub fn execute_scan_corpus_directory(
                 if db_path != &relative_path_str {
                     // Same inode but different path - file was moved
                     // Signal keyed by inode, with old_path and new_path in metadata
-                    let extra_metadata = serde_json::json!({
-                        "old_path": db_path,
-                    });
-                    ensure_corpus_signal_with_metadata(
-                        read_only_db,
-                        &sender,
-                        CorpusFileSignalType::MovedFile,
-                        *inode,
-                        &relative_path_str, // new_path stored as "path" in metadata
-                        extra_metadata,
-                        witness,
-                    );
+                    if !read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::MovedFile, *inode) {
+                        sender.write_typed_signal(
+                            TypedSignalWrite::MovedFile(MovedFileSignal {
+                                inode: *inode,
+                                path: relative_path_str.clone(),
+                                old_path: db_path.to_string(),
+                            }),
+                            witness,
+                        );
+                    }
                 }
             }
 
@@ -266,19 +265,16 @@ pub fn execute_scan_corpus_directory(
                     let old_inode = audio_file.inode();
 
                     // Emit MissingFile for the old inode (file at that inode is gone)
-                    let metadata = serde_json::json!({
-                        "path": relative_path_str,
-                        "replaced_by_inode": inode,
-                    });
-                    ensure_corpus_signal_with_metadata(
-                        read_only_db,
-                        &sender,
-                        CorpusFileSignalType::MissingFile,
-                        old_inode,
-                        &relative_path_str,
-                        metadata,
-                        witness,
-                    );
+                    if !read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::MissingFile, old_inode) {
+                        sender.write_typed_signal(
+                            TypedSignalWrite::MissingFile(MissingFileSignal {
+                                inode: old_inode,
+                                path: relative_path_str.clone(),
+                                replaced_by_inode: Some(*inode),
+                            }),
+                            witness,
+                        );
+                    }
 
                     // Spawn VerifyTags on the new inode to check for tag differences
                     spawn.push(Computation::VerifyTags {
@@ -591,16 +587,17 @@ pub fn execute_verify_tags(
                     witness,
                 );
                 // Create fresh signal with mismatch metadata (keyed by inode)
-                let extra_metadata = serde_json::json!({
-                    "mismatches": verify_result.mismatches
-                });
-                ensure_corpus_signal_with_metadata(
-                    read_only_db,
-                    &sender,
-                    CorpusFileSignalType::OutOfBandTagConflict,
-                    inode,
-                    &rel_str,
-                    extra_metadata,
+                let mismatches: Vec<TagMismatchEntry> = verify_result.mismatches.into_iter().map(|m| TagMismatchEntry {
+                    tag_name: m.field,
+                    disk_value: m.disk_value,
+                    db_value: m.db_value,
+                }).collect();
+                sender.write_typed_signal(
+                    TypedSignalWrite::OutOfBandTagConflict(OutOfBandTagConflictSignal {
+                        inode,
+                        path: rel_str.clone(),
+                        mismatches,
+                    }),
                     witness,
                 );
             } else {
@@ -632,16 +629,17 @@ pub fn execute_verify_tags(
                     witness,
                 );
                 // Create fresh signal with mismatch metadata (keyed by inode)
-                let extra_metadata = serde_json::json!({
-                    "mismatches": verify_result.mismatches
-                });
-                ensure_corpus_signal_with_metadata(
-                    read_only_db,
-                    &sender,
-                    CorpusFileSignalType::OutOfBandTagSync,
-                    inode,
-                    &rel_str,
-                    extra_metadata,
+                let mismatches: Vec<TagMismatchEntry> = verify_result.mismatches.into_iter().map(|m| TagMismatchEntry {
+                    tag_name: m.field,
+                    disk_value: m.disk_value,
+                    db_value: m.db_value,
+                }).collect();
+                sender.write_typed_signal(
+                    TypedSignalWrite::OutOfBandTagSync(OutOfBandTagSyncSignal {
+                        inode,
+                        path: rel_str.clone(),
+                        mismatches,
+                    }),
                     witness,
                 );
             }

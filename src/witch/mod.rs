@@ -659,6 +659,16 @@ impl Witch {
         self.current_label = None;
         self.mutations_ran_this_session = false;
 
+        // Flush all pending db_thread writes before queueing the next phase.
+        // Computation tasks fire writes asynchronously via db_thread (fire-and-forget).
+        // The task completes when the worker returns, NOT when db_thread commits the
+        // writes. Without this barrier, the next phase's computations could read stale
+        // data (e.g., DeriveDeployHealthSignals reading library files written by
+        // ScanLibraryDirectory, or Awake-phase computations reading Awakening signals).
+        if queue_awakening_after_reset || queue_content_analysis_after_reset || queue_reobservation_after_reset {
+            db_thread::wait_for_queue_drain();
+        }
+
         // Queue follow-up computations AFTER reset to fix off-by-one counting
         // (if queued before reset, the task's queue count gets wiped but it still completes)
         if queue_reobservation_after_reset {

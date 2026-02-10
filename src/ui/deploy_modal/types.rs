@@ -54,6 +54,11 @@ impl DeployModalData {
         let leftover = read_db.get_library_leftover_files()?;
         let stale = read_db.get_library_stale_files()?;
 
+        crate::logging::log_general(format!(
+            "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}",
+            healthy.len(), new.len(), conflicts.len(), leftover.len(), stale.len(),
+        ));
+
         // Aggregate new files by directory (using corpus_path)
         let new_by_dir = Self::aggregate_by_directory(
             new.iter().map(|f| f.corpus_path.as_str())

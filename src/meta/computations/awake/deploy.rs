@@ -128,6 +128,11 @@ pub fn execute_derive_deploy_health_signals(
         }
     };
 
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': starting (root={:?}, prefixes={:?})",
+        library_name, library_root, corpus_path_prefixes,
+    ));
+
     // Query library file data from Awakening phase
     let library_scan_entries = match read_only_db.get_library_files(library_name) {
         Ok(entries) => entries,
@@ -140,6 +145,19 @@ pub fn execute_derive_deploy_health_signals(
         }
     };
 
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': got {} library scan entries from DB",
+        library_name, library_scan_entries.len(),
+    ));
+
+    // Log first few entries for debugging
+    for (i, entry) in library_scan_entries.iter().take(3).enumerate() {
+        log_general(format!(
+            "[COMPUTE] DeriveDeployHealthSignals '{}': sample lib[{}] path={:?} inode={}",
+            library_name, i, entry.file_path, entry.inode,
+        ));
+    }
+
     // Convert to (path, inode) tuples for processing
     let library_files: Vec<(std::path::PathBuf, i64)> = library_scan_entries
         .into_iter()
@@ -149,11 +167,26 @@ pub fn execute_derive_deploy_health_signals(
     // Get all corpus audio file inodes
     let corpus_inodes = read_only_db.get_all_corpus_inodes().unwrap_or_default();
 
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': {} corpus inodes loaded",
+        library_name, corpus_inodes.len(),
+    ));
+
     let mut healthy_count: usize = 0;
     let mut stale_count: usize = 0;
     let mut leftover_count: usize = 0;
+    let mut debug_logged = 0usize;
 
     for (library_path, library_inode) in &library_files {
+        // Log first few inode lookups to trace match/miss behavior
+        if debug_logged < 5 {
+            let corpus_match = corpus_inodes.get(library_inode);
+            log_general(format!(
+                "[COMPUTE] DeriveDeployHealthSignals '{}': lib inode {} path={:?} -> corpus={:?}",
+                library_name, library_inode, library_path, corpus_match,
+            ));
+            debug_logged += 1;
+        }
         let leftover_key = format!(
             "library_leftover:{}:{}",
             library_name,
@@ -280,12 +313,24 @@ pub fn execute_derive_corpus_deploy_status(
     // This replaces the old stale_signals/stale_inodes approach that had a race
     // condition with DeriveDeployHealthSignals. We compute stale status inline.
     let mut library_inode_to_paths: HashMap<i64, Vec<PathBuf>> = HashMap::new();
-    if let Ok(all_library_files) = read_only_db.get_all_library_files() {
-        for entry in all_library_files {
-            library_inode_to_paths
-                .entry(entry.inode)
-                .or_default()
-                .push(entry.file_path);
+    match read_only_db.get_all_library_files() {
+        Ok(all_library_files) => {
+            log_general(format!(
+                "[COMPUTE] DeriveCorpusDeployStatus: loaded {} library files from DB",
+                all_library_files.len(),
+            ));
+            for entry in all_library_files {
+                library_inode_to_paths
+                    .entry(entry.inode)
+                    .or_default()
+                    .push(entry.file_path);
+            }
+        }
+        Err(e) => {
+            log_general(format!(
+                "[COMPUTE] DeriveCorpusDeployStatus: WARNING - get_all_library_files failed: {}",
+                e,
+            ));
         }
     }
 

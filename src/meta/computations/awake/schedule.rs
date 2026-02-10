@@ -37,15 +37,26 @@ pub fn execute_schedule_content_analysis(
     // The scan data was stored in files table (source='library') during Awakening phase
     if let Ok(config) = crate::config::load_config() {
         let library_names = get_configured_library_names(&config);
+        log_general(format!(
+            "[COMPUTE] ScheduleContentAnalysis: libraries_dir={:?}, configured_libraries={:?}",
+            config.libraries_dir(),
+            library_names,
+        ));
         for library_name in library_names {
             let library_root = config.libraries_dir().join(&library_name);
             let corpus_path_prefixes = config.get_corpus_paths_for_library(&library_name);
+            log_general(format!(
+                "[COMPUTE] ScheduleContentAnalysis: spawning DeriveDeployHealthSignals for '{}' root={:?} prefixes={:?}",
+                library_name, library_root, corpus_path_prefixes,
+            ));
             spawn.push(Computation::DeriveDeployHealthSignals {
                 library_name,
                 library_root,
                 corpus_path_prefixes,
             });
         }
+    } else {
+        log_general("[COMPUTE] ScheduleContentAnalysis: WARNING - failed to load config, no library health computations spawned");
     }
 
     // Suppress unused read_only_db warning - not used in this function

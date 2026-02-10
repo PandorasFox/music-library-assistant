@@ -633,6 +633,14 @@ pub fn execute_scan_library_directory(
         }
     }
 
+    // Log per-directory scan results (only non-empty directories to avoid noise)
+    if !library_files.is_empty() {
+        log_general(format!(
+            "[COMPUTE] ScanLibraryDirectory '{}': {} audio files in {:?}",
+            library_name, library_files.len(), directory,
+        ));
+    }
+
     // Store library scan results via db_thread for Awake phase to process
     if !library_files.is_empty() {
         let resolver = paths::get_resolver();

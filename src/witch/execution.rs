@@ -15,7 +15,7 @@
 //! pipeline. Each mutation struct implements `MutationExecutor` (in `meta/mutations/traits.rs`)
 //! which defines its post-execution behavior:
 //!
-//! 1. **Signal clearing** - Clear signals for affected paths (scope from `signal_clear_scope()`)
+//! 1. **Signal clearing** - Clear corpus signals by inode (scope from `signal_clear_scope()`)
 //! 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
 //! 3. **Signal update spawning** - Spawn UpdateFileSignals (from `paths_for_signal_updates()`)
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
@@ -101,7 +101,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     let loaded_config = config::load_config().ok();
     let stash_root = loaded_config.as_ref().map(|c| c.stash_dir());
 
-    let session_id = "witch";
+    let session_id = mutation.label();
 
     // Execute mutation via MutationExecutor trait dispatch.
     // All writes go through db_thread::signal_sender() (fire-and-forget).
@@ -115,18 +115,18 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                     session_id,
                 };
                 let r = executor.execute(&ctx);
-                (r.success, r.error, r.spawn_mutations, r.pending_signals)
+                (r.success, r.error, r.spawn_mutations, r.pending_signals, r.discovered_inodes)
             }
             None => {
                 // DbMigration - handled separately via execute_migration()
-                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new(), Vec::new())
+                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new(), Vec::new(), Vec::new())
             }
         }
     });
 
     // Handle DB access failure
-    let (success, error, spawn_mutations, pending_signals) = match result {
-        Ok((s, e, sm, ps)) => (s, e, sm, ps),
+    let (success, error, spawn_mutations, pending_signals, discovered_inodes) = match result {
+        Ok((s, e, sm, ps, di)) => (s, e, sm, ps, di),
         Err(db_err) => {
             crate::logging::log_error(format!(
                 "[EXECUTION] DB access FAILED: {}",
@@ -191,7 +191,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     }
 
     // Apply structured post-execution pipeline
-    let spawn = apply_post_execution(&mutation, success, &pending_signals, &witness);
+    let spawn = apply_post_execution(&mutation, success, &pending_signals, &discovered_inodes, &witness);
 
     TaskResult {
         success,
@@ -279,17 +279,20 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
 ///
 /// ## Phases
 ///
-/// 1. **Signal clearing** - Clear signals for affected paths based on `signal_clear_scope()`
-/// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals or `checks_*` methods
+/// 1. **Inode signal clearing** - Clear corpus signals by inode based on `signal_clear_scope()`
+/// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
 /// 3. **Signal update spawning** - Spawn UpdateFileSignals for `paths_for_signal_updates()`
 /// 4. **Additional computations** - Spawn extra computations from `additional_computations()`
-/// 5. **Specific signal clearing** - Clear signals by type+key from `specific_signals_to_clear()`
+/// 5. **Specific signal clearing** - Clear aggregate signals by type+key from `specific_signals_to_clear()`
 fn apply_post_execution(
     mutation: &Mutation,
     success: bool,
     pending_signals: &[PendingSignal],
+    discovered_inodes: &[i64],
     witness: &MutationExecutionWitness,
 ) -> Vec<Computation> {
+    use crate::meta::mutations::SignalClearScope;
+
     if !success {
         return Vec::new();
     }
@@ -298,11 +301,37 @@ fn apply_post_execution(
     let mut spawned = Vec::new();
 
     // Phase 1: Inode-based corpus signal clearing
-    // The old path-based clearing was removed (signals are inode-keyed, not path-keyed).
-    // Corpus signal clearing is now handled by:
-    //   - ClearAllCorpusSignals (for affected inodes, driven by mutation executors)
-    //   - ClearCorpusSignal (for specific signal types)
-    //   - Dirty inode system (for recomputation after mutations)
+    // Combine pre-known inodes (from trait) with inodes discovered at execution time.
+    // Signal clearing scope determines which signals are cleared:
+    //   - All: clear everything (file gone/replaced)
+    //   - MutableOnly: preserve CorruptFile/ShitFormat (file still exists)
+    //   - None: skip clearing (DB-only operations)
+    if let Some(executor) = mutation.as_executor() {
+        let scope = executor.signal_clear_scope();
+        if scope != SignalClearScope::None {
+            let pre_known = executor.affected_inodes();
+            let all_inodes: Vec<i64> = pre_known
+                .into_iter()
+                .chain(discovered_inodes.iter().copied())
+                .collect();
+
+            if !all_inodes.is_empty() {
+                if let Some(sender) = db_thread::signal_sender() {
+                    for inode in &all_inodes {
+                        match scope {
+                            SignalClearScope::All => {
+                                sender.clear_all_corpus_signals(*inode, witness);
+                            }
+                            SignalClearScope::MutableOnly => {
+                                sender.clear_mutable_corpus_signals(*inode, witness);
+                            }
+                            SignalClearScope::None => unreachable!(),
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Phase 1b: Drop files table entry for MoveToStash
     // When stashing a file, we must also remove it from the files table (not just signals).

@@ -75,14 +75,4 @@ pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
     fn paths_for_signal_updates(&self) -> Vec<std::path::PathBuf> {
         Vec::new()
     }
-
-    /// File paths affected by this mutation (used for path-based signal clearing).
-    ///
-    /// Transitional: the path-based clearing in Phase 1 of apply_post_execution
-    /// is architecturally buggy (corpus signals are inode-keyed, but this clears
-    /// by path). Kept during transition; will be removed once inode-based clearing
-    /// is fully wired.
-    fn affected_paths(&self) -> Vec<std::path::PathBuf> {
-        Vec::new()
-    }
 }

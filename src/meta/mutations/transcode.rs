@@ -85,11 +85,6 @@ impl MutationExecutor for TranscodeMutation {
 
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
 
-    fn affected_paths(&self) -> Vec<PathBuf> {
-        let new_path = self.source_path.with_extension(self.target_format.extension());
-        vec![self.source_path.clone(), new_path]
-    }
-
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         // Transcode: only spawn for NEW path (source is stashed, would race)
         vec![self.source_path.with_extension(self.target_format.extension())]

@@ -106,7 +106,7 @@ impl MutationExecutor for IndexFileFromPathMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        match execute_index_file_from_path(ctx.read_db, &self.path, &self.source, ctx.witness) {
+        match execute_index_file_from_path(ctx.read_db, &self.path, &self.source, ctx.session_id, ctx.witness) {
             Ok(pending_signals) => MutationResult {
                 _mutation: Mutation::IndexFileFromPath(self.clone()),
                 success: true,
@@ -130,8 +130,6 @@ impl MutationExecutor for IndexFileFromPathMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-
-    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 }
@@ -159,8 +157,6 @@ impl MutationExecutor for UpdateFilePathMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-
-    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.new_path.clone()] }
 }
 
 impl MutationExecutor for DropFromIndexMutation {
@@ -186,8 +182,6 @@ impl MutationExecutor for DropFromIndexMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-
-    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 }
 
 impl MutationExecutor for DropDirectoryFromIndexMutation {
@@ -213,8 +207,6 @@ impl MutationExecutor for DropDirectoryFromIndexMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-
-    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.directory_path.clone()] }
 }
 
 impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
@@ -240,10 +232,6 @@ impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-
-    fn affected_paths(&self) -> Vec<PathBuf> {
-        self.tracks.iter().map(|(_, path)| path.clone()).collect()
-    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         self.tracks.iter().map(|(_, path)| path.clone()).collect()
@@ -274,8 +262,6 @@ impl MutationExecutor for ApplyDbTagsToDiskMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
 
-    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
-
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 }
 
@@ -284,7 +270,7 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_assimilate_disk_tags_to_db(ctx.read_db, self.inode, &self.path, ctx.witness);
+        let result = execute_assimilate_disk_tags_to_db(ctx.read_db, self.inode, &self.path, ctx.session_id, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -302,8 +288,6 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
-
-    fn affected_paths(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 }
@@ -344,6 +328,7 @@ fn index_track_from_metadata(
     path: &Path,
     source: &str,
     metadata: &ExtractedMetadata,
+    session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db_thread::{self, FileData, AudioData};
@@ -399,6 +384,7 @@ fn index_track_from_metadata(
         file_data,
         audio_data,
         metadata.tags.clone(),
+        session_id,
         witness,
     );
 
@@ -415,7 +401,7 @@ fn index_track_from_metadata(
 /// Returns pending signals to emit post-execution. Signals are determined from
 /// extracted metadata BEFORE the async DB write, avoiding race conditions where
 /// a post-execution DB read might not see the write yet.
-pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &str, witness: &MutationExecutionWitness) -> Result<Vec<PendingSignal>> {
+pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &str, session_id: &str, witness: &MutationExecutionWitness) -> Result<Vec<PendingSignal>> {
     use crate::corpus::metadata;
 
     // Extract audio properties (returns ExtractedMetadata with empty tags)
@@ -453,7 +439,7 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
     }
 
     // Note: _db is unused - index_track_from_metadata routes through signal_sender
-    index_track_from_metadata(_db, path, source, &extracted, witness)?;
+    index_track_from_metadata(_db, path, source, &extracted, session_id, witness)?;
 
     Ok(pending_signals)
 }
@@ -857,6 +843,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     db: &ReadOnlyDb<'_>,
     inode: i64,
     abs_path: &std::path::Path,
+    session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::corpus::paths;
@@ -894,7 +881,7 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     // Update DB with disk tags via db_thread
     // Use rel_path_str (from mutation param), not track.path (potentially stale)
-    sender.set_index_track_tags(&rel_path_str, disk_tagset, witness);
+    sender.set_index_track_tags(&rel_path_str, disk_tagset, session_id, witness);
 
     // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)

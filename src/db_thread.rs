@@ -164,6 +164,10 @@ enum SignalWriteOp {
     ClearAllCorpusSignals {
         inode: i64,
     },
+    /// Clear mutable corpus signals for an inode (preserves CorruptFile, ShitFormat).
+    ClearMutableCorpusSignals {
+        inode: i64,
+    },
     /// Clear a single aggregate signal by key (function pointer resolved at send time).
     ClearAggregateSignalByKey {
         clear_fn: fn(&rusqlite::Connection, &str) -> rusqlite::Result<()>,
@@ -228,6 +232,7 @@ enum SignalWriteOp {
         file_data: FileData,
         audio_data: AudioData,
         tags: TagSet,
+        session_id: String,
     },
 
     /// Drop file from index (file no longer exists or excluded).
@@ -241,6 +246,7 @@ enum SignalWriteOp {
     SetIndexTrackTags {
         path: String,
         tags: TagSet,
+        session_id: String,
     },
 
     /// Apply incremental tag operations directly.
@@ -248,6 +254,7 @@ enum SignalWriteOp {
     ApplyIndexTagOps {
         path: String,
         ops: Vec<crate::meta::mutations::TagOp>,
+        session_id: String,
     },
 
     /// Update track path and file metadata (for transcode/format conversion).
@@ -493,6 +500,16 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::ClearAllCorpusSignals { inode });
     }
 
+    /// Clear mutable corpus signals for an inode (preserves CorruptFile, ShitFormat).
+    ///
+    /// Used post-mutation when the file still exists but its state changed.
+    /// File-inherent signals (CorruptFile, ShitFormat) are preserved because
+    /// they represent intrinsic file properties, not computed state.
+    pub fn clear_mutable_corpus_signals(&self, inode: i64, _witness: &impl SignalWitness) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearMutableCorpusSignals { inode });
+    }
+
     // =========================================================================
     // Aggregate signal operations
     // =========================================================================
@@ -649,6 +666,7 @@ impl SignalWriteSender {
         file_data: FileData,
         audio_data: AudioData,
         tags: TagSet,
+        session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -657,6 +675,7 @@ impl SignalWriteSender {
             file_data,
             audio_data,
             tags,
+            session_id: session_id.to_string(),
         });
     }
 
@@ -676,12 +695,14 @@ impl SignalWriteSender {
         &self,
         path: &str,
         tags: TagSet,
+        session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::SetIndexTrackTags {
             path: path.to_string(),
             tags,
+            session_id: session_id.to_string(),
         });
     }
 
@@ -696,12 +717,14 @@ impl SignalWriteSender {
         &self,
         path: &str,
         ops: Vec<crate::meta::mutations::TagOp>,
+        session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::ApplyIndexTagOps {
             path: path.to_string(),
             ops,
+            session_id: session_id.to_string(),
         });
     }
 
@@ -1052,6 +1075,29 @@ fn typed_clear_all_corpus_signals(db: &Database, inode: i64) {
     let _ = DeployedHealthySignal::clear_by_inode(conn, inode);
 }
 
+/// Clear mutable corpus signals for an inode (preserves CorruptFile, ShitFormat).
+///
+/// File-inherent signals (CorruptFile, ShitFormat) represent intrinsic file
+/// properties discovered during indexing. They should persist across mutations
+/// that don't remove/replace the file.
+fn typed_clear_mutable_corpus_signals(db: &Database, inode: i64) {
+    let conn = db.conn();
+    let _ = FileInCorpusSignal::clear_by_inode(conn, inode);
+    let _ = UnindexedFileSignal::clear_by_inode(conn, inode);
+    let _ = HealthyFileSignal::clear_by_inode(conn, inode);
+    let _ = MissingFileSignal::clear_by_inode(conn, inode);
+    let _ = MissingDirectorySignal::clear_by_inode(conn, inode);
+    let _ = MovedFileSignal::clear_by_inode(conn, inode);
+    let _ = OutOfBandTagSyncSignal::clear_by_inode(conn, inode);
+    let _ = OutOfBandTagConflictSignal::clear_by_inode(conn, inode);
+    let _ = MtimeOnlyMismatchSignal::clear_by_inode(conn, inode);
+    // CorruptFile and ShitFormat intentionally preserved
+    let _ = SubparDuplicateSignal::clear_by_inode(conn, inode);
+    let _ = CompoundTagSignal::clear_by_inode(conn, inode);
+    let _ = DeployReadySignal::clear_by_inode(conn, inode);
+    let _ = DeployedHealthySignal::clear_by_inode(conn, inode);
+}
+
 /// Execute a single signal write operation.
 fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
     // Note: We don't have a ComputationWitness here, but we need one for the db methods.
@@ -1069,6 +1115,9 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         }
         SignalWriteOp::ClearAllCorpusSignals { inode } => {
             typed_clear_all_corpus_signals(db, *inode);
+        }
+        SignalWriteOp::ClearMutableCorpusSignals { inode } => {
+            typed_clear_mutable_corpus_signals(db, *inode);
         }
         SignalWriteOp::ClearAggregateSignalByKey { clear_fn, key, label } => {
             if let Err(e) = clear_fn(db.conn(), key) {
@@ -1158,9 +1207,10 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             file_data,
             audio_data,
             tags,
+            session_id,
         } => {
             with_retry("index_audio_file", path, || {
-                execute_index_audio_file(db, path, file_data, audio_data, tags)
+                execute_index_audio_file(db, path, file_data, audio_data, tags, session_id)
             });
         }
 
@@ -1170,15 +1220,15 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::SetIndexTrackTags { path, tags } => {
+        SignalWriteOp::SetIndexTrackTags { path, tags, session_id } => {
             with_retry("set_index_track_tags", path, || {
-                execute_set_index_track_tags(db, path, tags)
+                execute_set_index_track_tags(db, path, tags, session_id)
             });
         }
 
-        SignalWriteOp::ApplyIndexTagOps { path, ops } => {
+        SignalWriteOp::ApplyIndexTagOps { path, ops, session_id } => {
             with_retry("apply_index_tag_ops", path, || {
-                execute_apply_index_tag_ops(db, path, ops)
+                execute_apply_index_tag_ops(db, path, ops, session_id)
             });
         }
 
@@ -1440,6 +1490,7 @@ fn execute_index_audio_file(
     file_data: &FileData,
     audio_data: &AudioData,
     tags: &TagSet,
+    session_id: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1503,9 +1554,8 @@ fn execute_index_audio_file(
 
     // Write history for discovered/changed tags and mark dirty for recomputation
     if result.has_changes() {
-        let session_id = format!("index:{}", path);
         let changes = result.to_history_entries();
-        write_tag_edit_history(&tx, file_data.inode, &changes, &session_id)?;
+        write_tag_edit_history(&tx, file_data.inode, &changes, session_id)?;
 
         // Mark inode dirty for tag-dependent computations (only for corpus files)
         if file_data.source == "corpus" {
@@ -1566,8 +1616,7 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
 /// Writes tag edit history for all changes (this IS an edit, not discovery).
 ///
 /// Used by AssimilateDiskTagsToDb when accepting disk changes.
-fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet) -> anyhow::Result<()> {
-    use std::time::{SystemTime, UNIX_EPOCH};
+fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet, session_id: &str) -> anyhow::Result<()> {
 
     let inode = get_inode_by_path(db, path)?
         .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
@@ -1581,14 +1630,9 @@ fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet) -> any
         // Increment tags_version using the helper
         increment_tags_version(&tx, inode)?;
 
-        // Write tag edit history using the helper
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let session_id = format!("set_tags:{}", now);
+        // Write tag edit history using the caller-provided session identifier
         let changes = result.to_history_entries();
-        write_tag_edit_history(&tx, inode, &changes, &session_id)?;
+        write_tag_edit_history(&tx, inode, &changes, session_id)?;
 
         // Mark inode dirty for tag-dependent computations
         mark_inode_dirty(&tx, inode)?;
@@ -1610,9 +1654,9 @@ fn execute_apply_index_tag_ops(
     db: &Database,
     path: &str,
     ops: &[crate::meta::mutations::TagOp],
+    session_id: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     let inode = get_inode_by_path(db, path)?
         .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
@@ -1666,13 +1710,8 @@ fn execute_apply_index_tag_ops(
         ));
     }
 
-    // Write history entries using the helper
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let session_id = format!("apply_ops:{}", now);
-    write_tag_edit_history(&tx, inode, &history_entries, &session_id)?;
+    // Write history entries using the caller-provided session identifier
+    write_tag_edit_history(&tx, inode, &history_entries, session_id)?;
 
     // Increment tags_version using the helper
     increment_tags_version(&tx, inode)?;

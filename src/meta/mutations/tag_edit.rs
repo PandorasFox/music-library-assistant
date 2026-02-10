@@ -47,7 +47,7 @@ impl MutationExecutor for ApplyTagOpsMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let (result, spawn_mutations) = match execute_apply_tag_ops(ctx.read_db, &self.ops, ctx.witness) {
+        let (result, spawn_mutations) = match execute_apply_tag_ops(ctx.read_db, &self.ops, ctx.session_id, ctx.witness) {
             Ok(spawned) => (Ok(()), spawned),
             Err(e) => (Err(e), Vec::new()),
         };
@@ -83,6 +83,7 @@ impl MutationExecutor for ApplyTagOpsMutation {
 fn execute_apply_tag_ops(
     db: &ReadOnlyDb<'_>,
     ops: &[TagOp],
+    session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<SpawnedMutation>> {
     let sender = db_thread::signal_sender()
@@ -149,7 +150,7 @@ fn execute_apply_tag_ops(
         }
 
         // Send ops directly to DB - TagOps map to INSERT/UPDATE/DELETE
-        sender.apply_index_tag_ops(file_path, validated_ops, witness);
+        sender.apply_index_tag_ops(file_path, validated_ops, session_id, witness);
         sender.set_needs_disk_flush(file_path, true, witness);
 
         // Spawn disk sync

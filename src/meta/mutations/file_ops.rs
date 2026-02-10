@@ -84,10 +84,6 @@ impl MutationExecutor for MoveMutation {
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
 
-    fn affected_paths(&self) -> Vec<PathBuf> {
-        vec![self.source.clone(), self.destination.clone()]
-    }
-
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
     }
@@ -124,10 +120,6 @@ impl MutationExecutor for MoveToStashMutation {
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
 
-    fn affected_paths(&self) -> Vec<PathBuf> {
-        vec![self.path.clone()]
-    }
-
     // MoveToStash: no signal updates needed (file is gone)
 }
 
@@ -155,10 +147,6 @@ impl MutationExecutor for HardLinkMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-
-    fn affected_paths(&self) -> Vec<PathBuf> {
-        vec![self.source.clone(), self.destination.clone()]
-    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
@@ -196,10 +184,6 @@ impl MutationExecutor for LibraryMoveMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-
-    fn affected_paths(&self) -> Vec<PathBuf> {
-        vec![self.source.clone(), self.destination.clone()]
-    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]

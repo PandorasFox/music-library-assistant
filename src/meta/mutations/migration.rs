@@ -18,9 +18,38 @@
 //! This is a fresh start - no migrations from previous schemas exist.
 
 use anyhow::{Context, Result};
+use rusqlite::params;
 
 use crate::corpus::db::Database;
 use crate::witch::MigrationWitness;
+
+/// Re-seed all corpus inodes as dirty for a given computation type.
+///
+/// Use this in migrations when signal data has been lost or invalidated
+/// (e.g., table migrations that don't carry data forward) and the
+/// incremental dirty-inode system needs a full recomputation pass.
+///
+/// Only seeds corpus files (not library files), using `INSERT OR IGNORE`
+/// so already-dirty inodes are preserved.
+pub fn seed_dirty_inodes_for(db: &Database, computation_type: &str) -> Result<()> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    db.conn().execute(
+        r#"
+        INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at)
+        SELECT a.inode, ?1, ?2
+        FROM audio_info a
+        JOIN files f ON a.inode = f.inode
+        WHERE f.source = 'corpus'
+        "#,
+        params![computation_type, now],
+    )?;
+    Ok(())
+}
 
 /// A single database migration.
 pub struct Migration {
@@ -176,6 +205,22 @@ impl MigrationRegistry {
             },
         });
 
+        // v5→v6: Re-seed dirty inodes for compound tag detection
+        //
+        // The v3→v4 typed table migration created signal_compound_tag fresh but
+        // did not migrate data from the old signals table. v4→v5 then dropped
+        // the old table, losing all compound tag signals. Since dirty inode flags
+        // were already consumed, detection never re-runs. This re-seeds all corpus
+        // inodes so compound tag detection repopulates the typed table.
+        registry.register(Migration {
+            from_version: 5,
+            to_version: 6,
+            description: "Re-seed dirty inodes for compound tag detection after typed table migration data loss",
+            apply: |db| {
+                seed_dirty_inodes_for(db, "compound_tag")
+            },
+        });
+
         registry
     }
 
@@ -265,14 +310,11 @@ mod tests {
         // v1→v2: tags_version + dirty_inodes
         // v2→v3: inode column in signals table
         // v3→v4: per-signal typed tables
-        assert_eq!(registry.latest_version(), 4);
-        // From v1, there should be 3 pending migrations
-        assert_eq!(registry.pending_migrations(1).len(), 3);
-        // From v2, there should be 2 pending migrations
-        assert_eq!(registry.pending_migrations(2).len(), 2);
-        // From v3, there should be 1 pending migration
-        assert_eq!(registry.pending_migrations(3).len(), 1);
-        // From v4, no pending migrations
-        assert!(registry.pending_migrations(4).is_empty());
+        // v4→v5: drop old signals table
+        // v5→v6: re-seed dirty inodes for compound tag detection
+        assert_eq!(registry.latest_version(), 6);
+        assert_eq!(registry.pending_migrations(1).len(), 5);
+        assert_eq!(registry.pending_migrations(5).len(), 1);
+        assert!(registry.pending_migrations(6).is_empty());
     }
 }

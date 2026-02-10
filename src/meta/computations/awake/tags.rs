@@ -237,7 +237,7 @@ const COMPOUND_TAG_COMPUTATION: &str = "compound_tag";
 ///
 /// Uses incremental dirty-inode tracking: only spawns DetectCompoundTagsForInode
 /// for inodes that have been marked dirty (tags changed since last computation).
-/// On first run after migration, all inodes are marked dirty for bootstrap.
+/// Migration v5→v6 seeds all corpus inodes as dirty for initial population.
 pub fn execute_detect_compound_tag_values(
     read_only_db: &ReadOnlyDb<'_>,
     _witness: &ComputationWitness,

@@ -16,9 +16,6 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 
 use crate::config;
-use crate::meta::signals::{
-    AggregateSignalType, CorpusFileSignalType,
-};
 
 // Types are re-exported from db/mod.rs, not here.
 // This module only exposes the Database struct.
@@ -470,30 +467,42 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_fingerprint_overlap_signals()
     }
 
-    /// Query all keys for a given aggregate signal type.
-    pub fn get_aggregate_signal_keys(&self, signal_type: AggregateSignalType) -> Result<Vec<String>> {
-        self.db.get_aggregate_signal_keys(signal_type)
+    /// Check if an inode-keyed corpus signal exists (generic, type-safe).
+    pub fn corpus_signal_exists<S: crate::meta::signals::store::CorpusSignalStore>(&self, inode: i64) -> bool {
+        S::exists(self.db.conn(), inode).unwrap_or(false)
+    }
+
+    /// Check if an aggregate signal exists by key (generic, type-safe).
+    pub fn aggregate_signal_exists<S: crate::meta::signals::store::AggregateSignalStore>(&self, key: &str) -> bool {
+        S::exists(self.db.conn(), key).unwrap_or(false)
+    }
+
+    /// Query all keys for an aggregate signal type (generic, type-safe).
+    pub fn aggregate_signal_keys<S: crate::meta::signals::store::AggregateSignalStore>(&self) -> Result<Vec<String>> {
+        S::query_keys(self.db.conn())
+            .map_err(|e| anyhow::anyhow!("Failed to query signal keys for {}: {}", S::TABLE_NAME, e))
+    }
+
+    /// Check if a TypedSignalWrite already exists in its typed table.
+    pub fn signal_exists(&self, signal: &crate::meta::signals::data::TypedSignalWrite) -> bool {
+        signal.exists(self.db.conn())
+    }
+
+    /// Execute an aggregate key query via a pre-resolved function pointer.
+    ///
+    /// Used by `SignalToClear` where the signal type is determined at construction
+    /// time and carried as a function pointer.
+    pub fn run_aggregate_keys_query(
+        &self,
+        query_fn: fn(&rusqlite::Connection) -> rusqlite::Result<Vec<String>>,
+    ) -> Result<Vec<String>> {
+        query_fn(self.db.conn())
+            .map_err(|e| anyhow::anyhow!("Failed to query aggregate signal keys: {}", e))
     }
 
     /// Get compound tag signal keys filtered by safety classification and optional tag name.
     pub fn get_compound_signal_keys_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<String>> {
         self.db.get_compound_signal_keys_by_safety(safe_only, tag_filter)
-    }
-
-    /// Check if an aggregate signal exists (semantic-keyed).
-    pub fn aggregate_signal_exists(&self, signal_type: AggregateSignalType, key: &str) -> bool {
-        self.db.aggregate_signal_exists(signal_type, key)
-    }
-
-    /// Check if an inode-keyed corpus signal exists.
-    ///
-    /// Uses the native `inode` column for efficient lookup.
-    pub fn corpus_signal_exists_by_inode(
-        &self,
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-    ) -> bool {
-        self.db.corpus_signal_exists_by_inode(signal_type, inode)
     }
 
     // =========================================================================

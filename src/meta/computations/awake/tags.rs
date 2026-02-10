@@ -9,7 +9,6 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
-use crate::meta::signals::{CorpusFileSignalType, SignalType};
 use crate::meta::signals::data::{
     TypedSignalWrite, TagCanonicitySignal, TagCanonicityData,
     InconsistentAlbumArtistSignal, InconsistentAlbumArtistData,
@@ -66,7 +65,7 @@ pub fn execute_detect_missing_tags(
         .collect();
 
     // Clear all existing MissingTag signals (routes through db_thread)
-    sender.clear_signals_by_type(SignalType::MissingTag, witness);
+    sender.clear_all_of_aggregate_type::<MissingTagSignal>(witness);
 
     let tracks_with_tags = match read_only_db.get_audio_files_with_tag_presence() {
         Ok(rows) => rows,
@@ -170,7 +169,7 @@ pub fn execute_detect_tag_canonicalizations(
     };
 
     // Clear stale TagCanonicity signals before re-detecting
-    sender.clear_signals_by_type(SignalType::TagCanonicity, witness);
+    sender.clear_all_of_aggregate_type::<TagCanonicitySignal>(witness);
 
     let mut signal_count = 0;
 
@@ -329,7 +328,7 @@ pub fn execute_detect_compound_tags_for_inode(
     let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
     if tags.is_empty() {
         // No tags - clear any existing signal and dirty flag
-        sender.clear_corpus_signal(CorpusFileSignalType::CompoundTag, inode, witness);
+        sender.clear_corpus_signal::<CompoundTagSignal>(inode, witness);
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
@@ -411,7 +410,7 @@ pub fn execute_detect_compound_tags_for_inode(
 
     // If no compounds found, clear any existing signal
     if compounds.is_empty() {
-        sender.clear_corpus_signal(CorpusFileSignalType::CompoundTag, inode, witness);
+        sender.clear_corpus_signal::<CompoundTagSignal>(inode, witness);
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
@@ -486,7 +485,7 @@ pub fn execute_detect_inconsistent_album_artist(
     };
 
     // Clear stale InconsistentAlbumArtist signals before re-detecting
-    sender.clear_signals_by_type(SignalType::InconsistentAlbumArtist, witness);
+    sender.clear_all_of_aggregate_type::<InconsistentAlbumArtistSignal>(witness);
 
     let issues = match detect_inconsistent_album_artist(read_only_db) {
         Ok(i) => i,

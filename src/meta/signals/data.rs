@@ -381,34 +381,6 @@ pub enum TypedSignalWrite {
 }
 
 impl TypedSignalWrite {
-    /// Construct a TypedSignalWrite for simple corpus signals (inode + path only).
-    ///
-    /// Panics if the signal type requires extra fields (e.g., ShitFormat, MovedFile).
-    /// Those must be constructed directly with their full data.
-    pub fn simple_corpus(signal_type: crate::meta::signals::types::CorpusFileSignalType, inode: i64, path: String) -> Self {
-        use crate::meta::signals::types::CorpusFileSignalType;
-        match signal_type {
-            CorpusFileSignalType::FileInCorpus => Self::FileInCorpus(FileInCorpusSignal { inode, path }),
-            CorpusFileSignalType::UnindexedFile => Self::UnindexedFile(UnindexedFileSignal { inode, path }),
-            CorpusFileSignalType::HealthyFile => Self::HealthyFile(HealthyFileSignal { inode, path }),
-            CorpusFileSignalType::MissingFile => Self::MissingFile(MissingFileSignal { inode, path, replaced_by_inode: None }),
-            CorpusFileSignalType::MissingDirectory => Self::MissingDirectory(MissingDirectorySignal { inode, path }),
-            CorpusFileSignalType::CorruptFile => Self::CorruptFile(CorruptFileSignal { inode, path }),
-            CorpusFileSignalType::MtimeOnlyMismatch => Self::MtimeOnlyMismatch(MtimeOnlyMismatchSignal { inode, path }),
-            // These signal types require extra data — cannot be constructed from (inode, path) alone
-            CorpusFileSignalType::MovedFile
-            | CorpusFileSignalType::ShitFormat
-            | CorpusFileSignalType::SubparDuplicate
-            | CorpusFileSignalType::OutOfBandTagSync
-            | CorpusFileSignalType::OutOfBandTagConflict
-            | CorpusFileSignalType::CompoundTag
-            | CorpusFileSignalType::DeployReady
-            | CorpusFileSignalType::DeployedHealthy => {
-                panic!("TypedSignalWrite::simple_corpus called with signal type {:?} that requires extra data", signal_type)
-            }
-        }
-    }
-
     /// Insert this signal into its typed table.
     pub fn insert(self, conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
@@ -441,5 +413,40 @@ impl TypedSignalWrite {
             Self::CompoundTagValue(s) => s.insert(conn),
             Self::CrossSourceOverlap(s) => s.insert(conn),
         }
+    }
+
+    /// Check if this signal already exists in its typed table.
+    pub fn exists(&self, conn: &rusqlite::Connection) -> bool {
+        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
+        let result = match self {
+            Self::FileInCorpus(s) => FileInCorpusSignal::exists(conn, s.inode),
+            Self::UnindexedFile(s) => UnindexedFileSignal::exists(conn, s.inode),
+            Self::HealthyFile(s) => HealthyFileSignal::exists(conn, s.inode),
+            Self::CorruptFile(s) => CorruptFileSignal::exists(conn, s.inode),
+            Self::MtimeOnlyMismatch(s) => MtimeOnlyMismatchSignal::exists(conn, s.inode),
+            Self::MissingDirectory(s) => MissingDirectorySignal::exists(conn, s.inode),
+            Self::MissingFile(s) => MissingFileSignal::exists(conn, s.inode),
+            Self::MovedFile(s) => MovedFileSignal::exists(conn, s.inode),
+            Self::ShitFormat(s) => ShitFormatSignal::exists(conn, s.inode),
+            Self::DeployReady(s) => DeployReadySignal::exists(conn, s.inode),
+            Self::DeployedHealthy(s) => DeployedHealthySignal::exists(conn, s.inode),
+            Self::OutOfBandTagSync(s) => OutOfBandTagSyncSignal::exists(conn, s.inode),
+            Self::OutOfBandTagConflict(s) => OutOfBandTagConflictSignal::exists(conn, s.inode),
+            Self::SubparDuplicate(s) => SubparDuplicateSignal::exists(conn, s.inode),
+            Self::CompoundTag(s) => CompoundTagSignal::exists(conn, s.inode),
+            Self::CanonicalTag(s) => CanonicalTagSignal::exists(conn, &s.key),
+            Self::LibraryLeftover(s) => LibraryLeftoverSignal::exists(conn, &s.key),
+            Self::LibraryStale(s) => LibraryStaleSignal::exists(conn, &s.key),
+            Self::FingerprintOverlap(s) => FingerprintOverlapSignal::exists(conn, &s.key),
+            Self::MetadataDuplicate(s) => MetadataDuplicateSignal::exists(conn, &s.key),
+            Self::DuplicateInode(s) => DuplicateInodeSignal::exists(conn, &s.key),
+            Self::MissingTag(s) => MissingTagSignal::exists(conn, &s.key),
+            Self::DeployConflict(s) => DeployConflictSignal::exists(conn, &s.key),
+            Self::TagCanonicity(s) => TagCanonicitySignal::exists(conn, &s.key),
+            Self::InconsistentAlbumArtist(s) => InconsistentAlbumArtistSignal::exists(conn, &s.key),
+            Self::CompoundTagValue(s) => CompoundTagValueSignal::exists(conn, &s.key),
+            Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
+        };
+        result.unwrap_or(false)
     }
 }

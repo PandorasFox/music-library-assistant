@@ -26,7 +26,6 @@ use std::time::Instant;
 
 use crate::config;
 use crate::meta::computations::{Computation, awakening, with_read_only_db};
-use crate::meta::signals::CorpusFileSignalType;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::db::{Database, ReadOnlyDb};
 use crate::meta::mutations::{Mutation, PendingSignal, SignalToClear};
@@ -173,10 +172,11 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                     if let Some(rel) = resolver.to_relative(path) {
                         let rel_str = rel.to_string_lossy();
                         sender.write_typed_signal(
-                            TypedSignalWrite::simple_corpus(
-                                CorpusFileSignalType::CorruptFile,
-                                inode,
-                                rel_str.to_string(),
+                            TypedSignalWrite::CorruptFile(
+                                crate::meta::signals::data::CorruptFileSignal {
+                                    inode,
+                                    path: rel_str.to_string(),
+                                },
                             ),
                             &witness,
                         );
@@ -379,15 +379,15 @@ fn clear_signals_by_pattern(
     spec: &SignalToClear,
     witness: &MutationExecutionWitness,
 ) {
-    // Query existing aggregate signal keys of this type and clear those matching the pattern
-    if let Ok(keys) = db.get_aggregate_signal_keys(spec.signal_type) {
+    // Query existing aggregate signal keys and clear those matching the pattern
+    if let Ok(keys) = db.run_aggregate_keys_query(spec.query_keys_fn) {
         for key in keys {
             // Match if key ends with the pattern (compound key format)
             // or if key equals the pattern exactly
             if key.ends_with(&format!(":{}", spec.key_pattern))
                || key == spec.key_pattern
             {
-                sender.clear_aggregate_signal(spec.signal_type, &key, witness);
+                sender.clear_aggregate_signal_fn(spec.clear_by_key_fn, &key, spec.label, witness);
             }
         }
     }
@@ -403,15 +403,7 @@ fn emit_pending_signals(
     witness: &MutationExecutionWitness,
 ) {
     for signal in pending_signals {
-        match signal {
-            PendingSignal::CorpusSignal { signal_type, inode, path } => {
-                let typed = TypedSignalWrite::simple_corpus(*signal_type, *inode, path.clone());
-                sender.write_typed_signal(typed, witness);
-            }
-            PendingSignal::Typed(typed_signal) => {
-                sender.write_typed_signal(typed_signal.clone(), witness);
-            }
-        }
+        sender.write_typed_signal(signal.clone(), witness);
     }
 }
 

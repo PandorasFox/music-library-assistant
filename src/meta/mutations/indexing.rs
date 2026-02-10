@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::CorpusFileSignalType;
-use crate::meta::signals::data::{TypedSignalWrite, ShitFormatSignal, CanonicalTagSignal};
+use crate::meta::signals::data::*;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
@@ -437,22 +436,19 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
 
         // CorruptFile if fingerprint extraction failed
         if extracted.fingerprint.is_none() {
-            pending_signals.push(PendingSignal::CorpusSignal {
-                signal_type: CorpusFileSignalType::CorruptFile,
+            pending_signals.push(TypedSignalWrite::CorruptFile(CorruptFileSignal {
                 inode: extracted.inode,
                 path: rel_str.clone(),
-            });
+            }));
         }
 
         // ShitFormat if non-Vorbis container
         if is_shit_format(&extracted.file_type) {
-            pending_signals.push(PendingSignal::Typed(
-                TypedSignalWrite::ShitFormat(ShitFormatSignal {
-                    inode: extracted.inode,
-                    path: rel_str,
-                    file_type: extracted.file_type.clone(),
-                }),
-            ));
+            pending_signals.push(TypedSignalWrite::ShitFormat(ShitFormatSignal {
+                inode: extracted.inode,
+                path: rel_str,
+                file_type: extracted.file_type.clone(),
+            }));
         }
     }
 
@@ -512,7 +508,6 @@ pub fn execute_drop_directory_from_index(
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db_thread;
-    use crate::meta::signals::CorpusFileSignalType;
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
@@ -543,8 +538,7 @@ pub fn execute_drop_directory_from_index(
     if let Ok(Some(dir_entry)) = db.get_file_entry_by_path(&dir_str, "corpus") {
         sender.drop_file_index_by_inode("corpus", dir_entry.inode, witness);
         // Clear MissingDirectory signal (inode-keyed)
-        sender.clear_corpus_signal(
-            CorpusFileSignalType::MissingDirectory,
+        sender.clear_corpus_signal::<MissingDirectorySignal>(
             dir_entry.inode,
             witness,
         );
@@ -751,7 +745,6 @@ pub fn execute_acknowledge_mtime_only(
     tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
-    use crate::meta::signals::CorpusFileSignalType;
     use crate::db_thread;
     use std::time::UNIX_EPOCH;
 
@@ -788,8 +781,7 @@ pub fn execute_acknowledge_mtime_only(
 
         // Clear MtimeOnlyMismatch signal via db_thread
         // NOTE: Corpus file signals are keyed by inode, NOT by path
-        sender.clear_corpus_signal(
-            CorpusFileSignalType::MtimeOnlyMismatch,
+        sender.clear_corpus_signal::<MtimeOnlyMismatchSignal>(
             *inode,
             witness,
         );
@@ -867,7 +859,6 @@ pub fn execute_assimilate_disk_tags_to_db(
     abs_path: &std::path::Path,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::meta::signals::CorpusFileSignalType;
     use crate::corpus::paths;
     use crate::corpus::tags::TagSet;
     use crate::db_thread;
@@ -933,18 +924,15 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     // Clear OOB signals via db_thread
     // NOTE: New signals are keyed by inode. Clear both inode-keyed (new) and path-keyed (legacy) signals.
-    sender.clear_corpus_signal(
-        CorpusFileSignalType::OutOfBandTagSync,
+    sender.clear_corpus_signal::<OutOfBandTagSyncSignal>(
         inode,
         witness,
     );
-    sender.clear_corpus_signal(
-        CorpusFileSignalType::OutOfBandTagConflict,
+    sender.clear_corpus_signal::<OutOfBandTagConflictSignal>(
         inode,
         witness,
     );
-    sender.clear_corpus_signal(
-        CorpusFileSignalType::MtimeOnlyMismatch,
+    sender.clear_corpus_signal::<MtimeOnlyMismatchSignal>(
         inode,
         witness,
     );
@@ -966,7 +954,6 @@ pub fn execute_emit_canonical_tag(
     canonical_value: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::meta::signals::AggregateSignalType;
     use crate::db_thread;
 
     let sender = db_thread::signal_sender()
@@ -989,8 +976,7 @@ pub fn execute_emit_canonical_tag(
     // Clear CompoundTagValue signal for this value (it's now whitelisted)
     // Key format for CompoundTagValue: "{tag_name}:{compound_value}"
     let compound_key = format!("{}:{}", tag_name, canonical_value);
-    sender.clear_aggregate_signal(
-        AggregateSignalType::CompoundTagValue,
+    sender.clear_aggregate_signal::<CompoundTagValueSignal>(
         &compound_key,
         witness,
     );

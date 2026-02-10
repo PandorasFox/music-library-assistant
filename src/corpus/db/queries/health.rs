@@ -9,9 +9,6 @@ use rusqlite::params;
 
 use super::Database;
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::{
-    AggregateSignalType, CorpusFileSignalType,
-};
 
 impl Database {
     // ========================================================================
@@ -96,84 +93,6 @@ impl Database {
     pub fn get_fingerprint_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
         crate::meta::signals::data::FingerprintOverlapSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query fingerprint overlap signals: {}", e))
-    }
-
-    /// Query all keys for a given aggregate signal type.
-    ///
-    /// Returns just the key strings from the per-signal typed table.
-    pub fn get_aggregate_signal_keys(&self, signal_type: AggregateSignalType) -> Result<Vec<String>> {
-        use crate::meta::signals::data::*;
-        use crate::meta::signals::store::AggregateSignalStore;
-        let result = match signal_type {
-            AggregateSignalType::FingerprintOverlap => FingerprintOverlapSignal::query_keys(&self.conn),
-            AggregateSignalType::MetadataDuplicate => MetadataDuplicateSignal::query_keys(&self.conn),
-            AggregateSignalType::DuplicateInode => DuplicateInodeSignal::query_keys(&self.conn),
-            AggregateSignalType::MissingTag => MissingTagSignal::query_keys(&self.conn),
-            AggregateSignalType::DeployConflict => DeployConflictSignal::query_keys(&self.conn),
-            AggregateSignalType::TagCanonicity => TagCanonicitySignal::query_keys(&self.conn),
-            AggregateSignalType::InconsistentAlbumArtist => InconsistentAlbumArtistSignal::query_keys(&self.conn),
-            AggregateSignalType::CompoundTagValue => CompoundTagValueSignal::query_keys(&self.conn),
-            AggregateSignalType::CrossSourceOverlap => CrossSourceOverlapSignal::query_keys(&self.conn),
-            AggregateSignalType::CanonicalTag => CanonicalTagSignal::query_keys(&self.conn),
-            AggregateSignalType::LibraryLeftover => LibraryLeftoverSignal::query_keys(&self.conn),
-            AggregateSignalType::LibraryStale => LibraryStaleSignal::query_keys(&self.conn),
-        };
-        result.map_err(|e| anyhow::anyhow!("Failed to query aggregate signal keys for {:?}: {}", signal_type, e))
-    }
-
-    /// Fast existence check for an aggregate signal (semantic-keyed).
-    ///
-    /// Queries the per-signal typed table directly.
-    pub fn aggregate_signal_exists(&self, signal_type: AggregateSignalType, key: &str) -> bool {
-        use crate::meta::signals::data::*;
-        use crate::meta::signals::store::AggregateSignalStore;
-        match signal_type {
-            AggregateSignalType::FingerprintOverlap => FingerprintOverlapSignal::exists(&self.conn, key),
-            AggregateSignalType::MetadataDuplicate => MetadataDuplicateSignal::exists(&self.conn, key),
-            AggregateSignalType::DuplicateInode => DuplicateInodeSignal::exists(&self.conn, key),
-            AggregateSignalType::MissingTag => MissingTagSignal::exists(&self.conn, key),
-            AggregateSignalType::DeployConflict => DeployConflictSignal::exists(&self.conn, key),
-            AggregateSignalType::TagCanonicity => TagCanonicitySignal::exists(&self.conn, key),
-            AggregateSignalType::InconsistentAlbumArtist => InconsistentAlbumArtistSignal::exists(&self.conn, key),
-            AggregateSignalType::CompoundTagValue => CompoundTagValueSignal::exists(&self.conn, key),
-            AggregateSignalType::CrossSourceOverlap => CrossSourceOverlapSignal::exists(&self.conn, key),
-            AggregateSignalType::CanonicalTag => CanonicalTagSignal::exists(&self.conn, key),
-            AggregateSignalType::LibraryLeftover => LibraryLeftoverSignal::exists(&self.conn, key),
-            AggregateSignalType::LibraryStale => LibraryStaleSignal::exists(&self.conn, key),
-        }.unwrap_or(false)
-    }
-
-    // ========================================================================
-    // Inode-Native Signal Operations
-    // ========================================================================
-
-    /// Fast existence check for an inode-keyed corpus signal.
-    ///
-    /// Queries the per-signal typed table directly.
-    pub fn corpus_signal_exists_by_inode(
-        &self,
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-    ) -> bool {
-        use crate::meta::signals::data::*;
-        use crate::meta::signals::store::CorpusSignalStore;
-        match signal_type {
-            CorpusFileSignalType::FileInCorpus => FileInCorpusSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::UnindexedFile => UnindexedFileSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::HealthyFile => HealthyFileSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::MissingFile => MissingFileSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::MissingDirectory => MissingDirectorySignal::exists(&self.conn, inode),
-            CorpusFileSignalType::MovedFile => MovedFileSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::OutOfBandTagSync => OutOfBandTagSyncSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::OutOfBandTagConflict => OutOfBandTagConflictSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::MtimeOnlyMismatch => MtimeOnlyMismatchSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::CorruptFile => CorruptFileSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::ShitFormat => ShitFormatSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::SubparDuplicate => SubparDuplicateSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::CompoundTag => CompoundTagSignal::exists(&self.conn, inode),
-            CorpusFileSignalType::DeployReady => DeployReadySignal::exists(&self.conn, inode),
-            CorpusFileSignalType::DeployedHealthy => DeployedHealthySignal::exists(&self.conn, inode),
-        }.unwrap_or(false)
     }
 
     /// Get compound tag signal keys (inode strings) filtered by safety classification.

@@ -7,7 +7,6 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::SignalType;
 use crate::meta::signals::data::{ShitFormatSignal, TypedSignalWrite};
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread;
@@ -45,7 +44,7 @@ pub fn execute_detect_shit_formats(
     const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
 
     // Clear all existing ShitFormat signals and rebuild
-    sender.clear_signals_by_type(SignalType::ShitFormat, witness);
+    sender.clear_all_of_corpus_type::<ShitFormatSignal>(witness);
 
     // Query all audio files and filter for shit formats
     let audio_files = match read_only_db.get_all_audio_files(FileSource::Corpus) {

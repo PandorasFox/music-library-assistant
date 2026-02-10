@@ -16,7 +16,6 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::{AggregateSignalType, SignalType};
 use crate::meta::signals::data::{
     TypedSignalWrite, FingerprintOverlapSignal, MetadataDuplicateSignal, MetadataDuplicateData,
     DuplicateInodeSignal, SubparDuplicateSignal, SubparDuplicateData,
@@ -89,10 +88,9 @@ pub fn execute_detect_fingerprint_overlaps(
     }
 
     // Reconcile with existing signals (handles stale/new/changed/unchanged)
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals(
+    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<FingerprintOverlapSignal>(
         read_only_db,
         &sender,
-        AggregateSignalType::FingerprintOverlap,
         computed,
         witness,
     );
@@ -170,10 +168,9 @@ pub fn execute_detect_duplicate_inodes(
     }
 
     // Reconcile with existing signals (handles stale/new/changed/unchanged)
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals(
+    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<DuplicateInodeSignal>(
         read_only_db,
         &sender,
-        AggregateSignalType::DuplicateInode,
         computed,
         witness,
     );
@@ -211,7 +208,7 @@ pub fn execute_detect_metadata_duplicates(
     };
 
     // Clear all MetadataDuplicate signals (routes through db_thread)
-    sender.clear_signals_by_type(SignalType::MetadataDuplicate, witness);
+    sender.clear_all_of_aggregate_type::<MetadataDuplicateSignal>(witness);
 
     let all_tags = match read_only_db.get_all_tags_ordered() {
         Ok(rows) => rows,
@@ -565,7 +562,7 @@ pub fn execute_analyze_fingerprint_overlaps(
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
 
     // Clear all existing SubparDuplicate signals
-    sender.clear_signals_by_type(SignalType::SubparDuplicate, witness);
+    sender.clear_all_of_corpus_type::<SubparDuplicateSignal>(witness);
 
     // Get all FingerprintOverlap signals
     let fp_dup_signals = read_only_db
@@ -824,7 +821,7 @@ pub fn execute_detect_cross_source_overlaps(
     };
 
     // Clear all existing CrossSourceOverlap signals
-    sender.clear_signals_by_type(SignalType::CrossSourceOverlap, witness);
+    sender.clear_all_of_aggregate_type::<CrossSourceOverlapSignal>(witness);
 
     // Get all FingerprintOverlap signals
     let fp_overlap_signals = read_only_db

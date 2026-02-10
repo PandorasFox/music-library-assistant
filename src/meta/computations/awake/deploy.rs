@@ -12,10 +12,9 @@ use crate::meta::computations::helpers::{
     ensure_library_leftover_if_missing,
 };
 use crate::meta::computations::types::ComputationWitness;
-use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType, SignalType};
 use crate::meta::signals::data::{
     TypedSignalWrite, DeployConflictSignal, DeployReadySignal, DeployedHealthySignal,
-    LibraryStaleSignal,
+    LibraryLeftoverSignal, LibraryStaleSignal,
 };
 use crate::corpus::deploy::compute_deployment_path_with_tags;
 use crate::corpus::db::ReadOnlyDb;
@@ -47,7 +46,7 @@ pub fn execute_detect_deploy_conflicts(
     };
 
     // Clear all existing DeployConflict signals (routes through db_thread)
-    sender.clear_signals_by_type(SignalType::DeployConflict, witness);
+    sender.clear_all_of_aggregate_type::<DeployConflictSignal>(witness);
 
     let healthy_signals = read_only_db
         .get_healthy_file_signals()
@@ -167,7 +166,7 @@ pub fn execute_derive_deploy_health_signals(
         );
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryLeftover, &leftover_key, witness);
+            drop_stale_aggregate_signal::<LibraryLeftoverSignal>(read_only_db, &sender, &leftover_key, witness);
 
             // Check if stale and emit typed signal
             let is_stale = if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
@@ -193,7 +192,7 @@ pub fn execute_derive_deploy_health_signals(
                     // Stale: store paths with consistent library prefix for display and mutations
                     // Both paths stored as "{library_name}/path/..." for consistency
                     let expected_with_prefix = std::path::Path::new(library_name).join(&expected_relative);
-                    if !read_only_db.aggregate_signal_exists(AggregateSignalType::LibraryStale, &stale_key) {
+                    if !read_only_db.aggregate_signal_exists::<LibraryStaleSignal>(&stale_key) {
                         sender.write_typed_signal(
                             TypedSignalWrite::LibraryStale(LibraryStaleSignal {
                                 key: stale_key.clone(),
@@ -217,12 +216,12 @@ pub fn execute_derive_deploy_health_signals(
                 stale_count += 1;
             } else {
                 healthy_count += 1;
-                drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryStale, &stale_key, witness);
+                drop_stale_aggregate_signal::<LibraryStaleSignal>(read_only_db, &sender, &stale_key, witness);
             }
         } else {
             leftover_count += 1;
             ensure_library_leftover_if_missing(read_only_db, &sender, &leftover_key, witness);
-            drop_stale_aggregate_signal(read_only_db, &sender, AggregateSignalType::LibraryStale, &stale_key, witness);
+            drop_stale_aggregate_signal::<LibraryStaleSignal>(read_only_db, &sender, &stale_key, witness);
         }
     }
 
@@ -269,8 +268,8 @@ pub fn execute_derive_corpus_deploy_status(
     // Bulk clear all existing deploy status signals before recomputing.
     // This prevents stale signals from prior runs (with outdated metadata)
     // from persisting and inflating counts.
-    sender.clear_corpus_signals_by_type(CorpusFileSignalType::DeployReady, witness);
-    sender.clear_corpus_signals_by_type(CorpusFileSignalType::DeployedHealthy, witness);
+    sender.clear_all_of_corpus_type::<DeployReadySignal>(witness);
+    sender.clear_all_of_corpus_type::<DeployedHealthySignal>(witness);
 
     // Get all HealthyFile signals
     let healthy_signals = read_only_db

@@ -27,7 +27,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::meta::signals::CorpusFileSignalType;
+use crate::meta::signals::data::*;
 use crate::meta::mutations::MutationToken;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -396,18 +396,15 @@ pub fn write_file_tags(
 
     // Clear OOB/tag signals after successful write - they'll be recomputed next cycle
     // This ensures mutations don't leave stale signals behind (inode-keyed)
-    sender.clear_corpus_signal(
-        CorpusFileSignalType::OutOfBandTagSync,
+    sender.clear_corpus_signal::<OutOfBandTagSyncSignal>(
         inode,
         witness,
     );
-    sender.clear_corpus_signal(
-        CorpusFileSignalType::OutOfBandTagConflict,
+    sender.clear_corpus_signal::<OutOfBandTagConflictSignal>(
         inode,
         witness,
     );
-    sender.clear_corpus_signal(
-        CorpusFileSignalType::MtimeOnlyMismatch,
+    sender.clear_corpus_signal::<MtimeOnlyMismatchSignal>(
         inode,
         witness,
     );

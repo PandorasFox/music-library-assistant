@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::meta::computations::{Computation, awakening};
-use crate::meta::signals::AggregateSignalType;
+use crate::meta::signals::data::*;
 
 use super::traits::{MutationContext, MutationExecutor};
 use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
@@ -206,10 +206,7 @@ impl MutationExecutor for LibraryMoveMutation {
     }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
-        vec![SignalToClear {
-            signal_type: AggregateSignalType::LibraryStale,
-            key_pattern: self.source.to_string_lossy().to_string(),
-        }]
+        vec![SignalToClear::new::<LibraryStaleSignal>(self.source.to_string_lossy().to_string())]
     }
 }
 

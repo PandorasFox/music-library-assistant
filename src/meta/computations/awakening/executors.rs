@@ -9,12 +9,11 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    drop_stale_corpus_signal, ensure_corpus_signal,
+    drop_stale_corpus_signal, ensure_typed_signal,
     enumerate_all_directories, get_configured_library_names, is_audio_file,
 };
 use crate::meta::computations::types::ComputationWitness;
-use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
-use crate::meta::signals::data::{TypedSignalWrite, DeployedHealthySignal};
+use crate::meta::signals::data::*;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -63,22 +62,22 @@ pub fn execute_schedule_second_level_derivations(
 
         if abs_path.exists() && abs_path.is_dir() {
             // Directory exists - clear any stale MissingDirectory signal
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<MissingDirectorySignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::MissingDirectory,
                 *inode,
                 witness,
             );
             existing_dir_count += 1;
         } else {
             // Directory is missing - emit MissingDirectory signal
-            ensure_corpus_signal(
+            ensure_typed_signal(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::MissingDirectory,
-                *inode,
-                &dir_str,
+                TypedSignalWrite::MissingDirectory(MissingDirectorySignal {
+                    inode: *inode,
+                    path: dir_str.clone(),
+                }),
                 witness,
             );
             missing_dir_count += 1;
@@ -203,12 +202,13 @@ pub fn execute_derive_corpus_signals(
     // Emit UnindexedFile signals for files on disk but not indexed
     for inode in &disk_only {
         if let Some(path) = disk_inodes.get(inode) {
-            ensure_corpus_signal(
+            ensure_typed_signal(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::UnindexedFile,
-                *inode,
-                path,
+                TypedSignalWrite::UnindexedFile(UnindexedFileSignal {
+                    inode: *inode,
+                    path: path.to_string(),
+                }),
                 witness,
             );
         }
@@ -217,19 +217,20 @@ pub fn execute_derive_corpus_signals(
     // Emit MissingFile signals for indexed files not on disk
     for inode in &index_only {
         if let Some(path) = indexed_inodes.get(inode) {
-            ensure_corpus_signal(
+            ensure_typed_signal(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::MissingFile,
-                *inode,
-                path,
+                TypedSignalWrite::MissingFile(MissingFileSignal {
+                    inode: *inode,
+                    path: path.to_string(),
+                    replaced_by_inode: None,
+                }),
                 witness,
             );
             // Clear any stale HealthyFile signal
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<HealthyFileSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::HealthyFile,
                 *inode,
                 witness,
             );
@@ -242,43 +243,41 @@ pub fn execute_derive_corpus_signals(
         let path_str = path.map(|p| p.as_str()).unwrap_or("");
 
         // Clear any stale MissingFile/UnindexedFile signals
-        drop_stale_corpus_signal(
+        drop_stale_corpus_signal::<MissingFileSignal>(
             read_only_db,
             &sender,
-            CorpusFileSignalType::MissingFile,
             *inode,
             witness,
         );
-        drop_stale_corpus_signal(
+        drop_stale_corpus_signal::<UnindexedFileSignal>(
             read_only_db,
             &sender,
-            CorpusFileSignalType::UnindexedFile,
             *inode,
             witness,
         );
 
         // Check if file has any OOB signal - if so, don't mark as HealthyFile
         let has_oob_signal =
-            read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::OutOfBandTagConflict, *inode) ||
-            read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::OutOfBandTagSync, *inode) ||
-            read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::MtimeOnlyMismatch, *inode);
+            read_only_db.corpus_signal_exists::<OutOfBandTagConflictSignal>(*inode) ||
+            read_only_db.corpus_signal_exists::<OutOfBandTagSyncSignal>(*inode) ||
+            read_only_db.corpus_signal_exists::<MtimeOnlyMismatchSignal>(*inode);
 
         if has_oob_signal {
             // File has OOB signal - NOT healthy
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<HealthyFileSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::HealthyFile,
                 *inode,
                 witness,
             );
         } else {
-            ensure_corpus_signal(
+            ensure_typed_signal(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::HealthyFile,
-                *inode,
-                path_str,
+                TypedSignalWrite::HealthyFile(HealthyFileSignal {
+                    inode: *inode,
+                    path: path_str.to_string(),
+                }),
                 witness,
             );
         }
@@ -344,111 +343,108 @@ pub fn execute_update_corpus_file_signals(
         let inode = disk_inode.expect("file exists but no inode");
 
         // FileInCorpus: keyed by inode
-        ensure_corpus_signal(
+        ensure_typed_signal(
             read_only_db,
             &sender,
-            CorpusFileSignalType::FileInCorpus,
-            inode,
-            &path_str,
+            TypedSignalWrite::FileInCorpus(FileInCorpusSignal {
+                inode,
+                path: path_str.clone(),
+            }),
             witness,
         );
 
         if indexed_info.is_some() {
             // File is indexed - clear unindexed/missing
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<UnindexedFileSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::UnindexedFile,
                 inode,
                 witness,
             );
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<MissingFileSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::MissingFile,
                 inode,
                 witness,
             );
 
             // Check if file has any OOB signal (using native inode column)
             let has_oob_signal =
-                read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::OutOfBandTagConflict, inode) ||
-                read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::OutOfBandTagSync, inode) ||
-                read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::MtimeOnlyMismatch, inode);
+                read_only_db.corpus_signal_exists::<OutOfBandTagConflictSignal>(inode) ||
+                read_only_db.corpus_signal_exists::<OutOfBandTagSyncSignal>(inode) ||
+                read_only_db.corpus_signal_exists::<MtimeOnlyMismatchSignal>(inode);
 
             if has_oob_signal {
                 // File has OOB signal - NOT healthy
-                drop_stale_corpus_signal(
+                drop_stale_corpus_signal::<HealthyFileSignal>(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::HealthyFile,
                     inode,
                     witness,
                 );
             } else {
-                ensure_corpus_signal(
+                ensure_typed_signal(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::HealthyFile,
-                    inode,
-                    &path_str,
+                    TypedSignalWrite::HealthyFile(HealthyFileSignal {
+                        inode,
+                        path: path_str.clone(),
+                    }),
                     witness,
                 );
             }
         } else {
             // File not indexed - mark as unindexed
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<HealthyFileSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::HealthyFile,
                 inode,
                 witness,
             );
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<MissingFileSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::MissingFile,
                 inode,
                 witness,
             );
-            ensure_corpus_signal(
+            ensure_typed_signal(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::UnindexedFile,
-                inode,
-                &path_str,
+                TypedSignalWrite::UnindexedFile(UnindexedFileSignal {
+                    inode,
+                    path: path_str.clone(),
+                }),
                 witness,
             );
         }
     } else if let Some(inode) = indexed_inode {
         // File doesn't exist but was indexed - clear disk signals, mark missing
-        drop_stale_corpus_signal(
+        drop_stale_corpus_signal::<FileInCorpusSignal>(
             read_only_db,
             &sender,
-            CorpusFileSignalType::FileInCorpus,
             inode,
             witness,
         );
-        drop_stale_corpus_signal(
+        drop_stale_corpus_signal::<UnindexedFileSignal>(
             read_only_db,
             &sender,
-            CorpusFileSignalType::UnindexedFile,
             inode,
             witness,
         );
-        drop_stale_corpus_signal(
+        drop_stale_corpus_signal::<HealthyFileSignal>(
             read_only_db,
             &sender,
-            CorpusFileSignalType::HealthyFile,
             inode,
             witness,
         );
-        ensure_corpus_signal(
+        ensure_typed_signal(
             read_only_db,
             &sender,
-            CorpusFileSignalType::MissingFile,
-            inode,
-            &path_str,
+            TypedSignalWrite::MissingFile(MissingFileSignal {
+                inode,
+                path: path_str.clone(),
+                replaced_by_inode: None,
+            }),
             witness,
         );
     }
@@ -746,16 +742,15 @@ pub fn execute_update_deploy_signals(
     };
 
     // Clear DeployReady for corpus file (inode-keyed)
-    drop_stale_corpus_signal(
+    drop_stale_corpus_signal::<DeployReadySignal>(
         read_only_db,
         &sender,
-        CorpusFileSignalType::DeployReady,
         corpus_inode,
         witness,
     );
 
     // Ensure DeployedHealthy with library_path (inode-keyed)
-    if !read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::DeployedHealthy, corpus_inode) {
+    if !read_only_db.corpus_signal_exists::<DeployedHealthySignal>(corpus_inode) {
         sender.write_typed_signal(
             TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
                 inode: corpus_inode,
@@ -780,21 +775,21 @@ fn clear_library_signals_for_path(
     witness: &ComputationWitness,
 ) {
     // Check for LibraryLeftover signals matching this path
-    if let Ok(keys) = read_only_db.get_aggregate_signal_keys(AggregateSignalType::LibraryLeftover) {
+    if let Ok(keys) = read_only_db.aggregate_signal_keys::<LibraryLeftoverSignal>() {
         for key in keys {
             // Key format: "{name}:{path}"
             if key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_aggregate_signal(AggregateSignalType::LibraryLeftover, &key, witness);
+                sender.clear_aggregate_signal::<LibraryLeftoverSignal>(&key, witness);
             }
         }
     }
 
     // Check for LibraryStale signals matching this path
-    if let Ok(keys) = read_only_db.get_aggregate_signal_keys(AggregateSignalType::LibraryStale) {
+    if let Ok(keys) = read_only_db.aggregate_signal_keys::<LibraryStaleSignal>() {
         for key in keys {
             // Key format: "{name}:{path}"
             if key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_aggregate_signal(AggregateSignalType::LibraryStale, &key, witness);
+                sender.clear_aggregate_signal::<LibraryStaleSignal>(&key, witness);
             }
         }
     }

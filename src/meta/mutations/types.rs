@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::meta::computations::Computation;
-use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::tags::TagSet;
 
@@ -98,25 +97,11 @@ impl TagOp {
 
 /// Signal to be emitted post-execution.
 ///
+/// Signal data carried from mutation execution time for post-execution emission.
+///
 /// Avoids race condition with async DB writes by carrying signal data from
 /// execution time rather than querying DB after the write is sent.
-///
-/// When a mutation executes and sends a fire-and-forget write to db_thread,
-/// querying the read-only connection immediately may not see the write yet.
-/// By embedding the signal data in the MutationResult, we avoid this race.
-///
-/// All pending signals are corpus file signals, keyed by inode.
-#[derive(Debug, Clone)]
-pub enum PendingSignal {
-    /// Corpus file signal without extra metadata
-    CorpusSignal {
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: String,
-    },
-    /// Typed signal write (bypasses JSON serialization entirely)
-    Typed(TypedSignalWrite),
-}
+pub type PendingSignal = TypedSignalWrite;
 
 // ============================================================================
 // Post-Execution Behavior Types
@@ -139,14 +124,37 @@ pub enum SignalClearScope {
     None,
 }
 
-/// Specific signal to clear by type and key pattern (beyond path-based clearing).
+/// Specific aggregate signal to clear by key pattern.
 ///
-/// Used for targeted signal clearing like LibraryStale, aggregate tag signals, etc.
-/// where the signal key doesn't match the mutation's affected paths.
-#[derive(Debug, Clone)]
+/// Used for targeted signal clearing like LibraryStale after library moves,
+/// where the signal key doesn't match the mutation's affected inodes.
+/// Function pointers are resolved at construction time via `SignalToClear::new::<S>()`.
+#[derive(Clone)]
 pub struct SignalToClear {
-    pub signal_type: AggregateSignalType,
+    pub query_keys_fn: fn(&rusqlite::Connection) -> rusqlite::Result<Vec<String>>,
+    pub clear_by_key_fn: fn(&rusqlite::Connection, &str) -> rusqlite::Result<()>,
     pub key_pattern: String,
+    pub label: &'static str,
+}
+
+impl SignalToClear {
+    pub fn new<S: crate::meta::signals::store::AggregateSignalStore>(key_pattern: String) -> Self {
+        Self {
+            query_keys_fn: S::query_keys,
+            clear_by_key_fn: S::clear_by_key,
+            key_pattern,
+            label: S::TABLE_NAME,
+        }
+    }
+}
+
+impl std::fmt::Debug for SignalToClear {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignalToClear")
+            .field("label", &self.label)
+            .field("key_pattern", &self.key_pattern)
+            .finish()
+    }
 }
 
 /// Extracted metadata from an audio file, ready for indexing.

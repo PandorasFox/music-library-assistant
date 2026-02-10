@@ -1,9 +1,7 @@
 //! Signal types for the MLA signal system.
 //!
-//! Canonical home for all signal type definitions: SignalType, CorpusFileSignalType,
-//! AggregateSignalType, Signal, SignalSummary, CorpusSummary.
+//! Per-signal typed data structs live in `data.rs`. Per-signal typed table
+//! storage traits and implementations live in `store.rs`.
 
-pub mod types;
 pub mod data;
 pub mod store;
-pub use types::*;

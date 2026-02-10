@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
-use crate::meta::signals::{AggregateSignalType, CorpusFileSignalType};
 use crate::meta::signals::data::TypedSignalWrite;
+use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread::{self, SignalWitness};
 
@@ -164,48 +164,38 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 // inode-keyed corpus signals. This is the preferred pattern for all
 // corpus file signals.
 
-/// Ensure a simple corpus signal exists (inode + path only).
+/// Ensure a typed signal exists in the database.
 ///
-/// Uses `read_only_db.corpus_signal_exists_by_inode()` for efficient freshness check,
-/// then queues a typed write to the signal's per-type table if needed.
-///
-/// Only valid for simple signal types (FileInCorpus, UnindexedFile, HealthyFile,
-/// MissingFile, MissingDirectory, CorruptFile, MtimeOnlyMismatch). Signal types
-/// with extra data (MovedFile, ShitFormat, etc.) must construct TypedSignalWrite directly.
-pub(crate) fn ensure_corpus_signal(
+/// Uses `ReadOnlyDb::signal_exists()` for efficient freshness check,
+/// then queues a typed write if the signal doesn't already exist.
+pub(crate) fn ensure_typed_signal(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: CorpusFileSignalType,
-    inode: i64,
-    path: &str,
+    signal: TypedSignalWrite,
     witness: &impl SignalWitness,
 ) {
-    if !read_only_db.corpus_signal_exists_by_inode(signal_type, inode) {
-        let typed = TypedSignalWrite::simple_corpus(signal_type, inode, path.to_string());
-        sender.write_typed_signal(typed, witness);
+    if !read_only_db.signal_exists(&signal) {
+        sender.write_typed_signal(signal, witness);
     }
 }
 
-/// Drop a stale corpus signal using the native inode column.
+/// Drop a stale corpus signal by inode.
 ///
 /// Use when a computation determines the signal should not exist for this inode.
-pub(crate) fn drop_stale_corpus_signal(
+pub(crate) fn drop_stale_corpus_signal<S: CorpusSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: CorpusFileSignalType,
     inode: i64,
     witness: &impl SignalWitness,
 ) {
-    if read_only_db.corpus_signal_exists_by_inode(signal_type, inode) {
-        sender.clear_corpus_signal(signal_type, inode, witness);
+    if read_only_db.corpus_signal_exists::<S>(inode) {
+        sender.clear_corpus_signal::<S>(inode, witness);
     }
 }
 
 // ============================================================================
 // Signal Emission Helpers (Aggregate - Semantic Keys)
 // ============================================================================
-// These helpers use semantic string keys for aggregate signals.
-// Used for LibraryStale, LibraryLeftover, and other semantic-keyed signals.
 
 /// Ensure a LibraryLeftover aggregate signal exists.
 ///
@@ -216,26 +206,26 @@ pub(crate) fn ensure_library_leftover_if_missing(
     key: &str,
     witness: &impl SignalWitness,
 ) {
-    if !read_only_db.aggregate_signal_exists(AggregateSignalType::LibraryLeftover, key) {
+    use crate::meta::signals::data::LibraryLeftoverSignal;
+    if !read_only_db.aggregate_signal_exists::<LibraryLeftoverSignal>(key) {
         let typed = TypedSignalWrite::LibraryLeftover(
-            crate::meta::signals::data::LibraryLeftoverSignal { key: key.to_string() }
+            LibraryLeftoverSignal { key: key.to_string() }
         );
         sender.write_typed_signal(typed, witness);
     }
 }
 
-/// Drop a stale aggregate signal that this computation determined should not exist.
+/// Drop a stale aggregate signal by key.
 ///
 /// Use when a computation definitively determines "signal X should NOT exist for this key".
-pub(crate) fn drop_stale_aggregate_signal(
+pub(crate) fn drop_stale_aggregate_signal<S: AggregateSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: AggregateSignalType,
     key: &str,
     witness: &impl SignalWitness,
 ) {
-    if read_only_db.aggregate_signal_exists(signal_type, key) {
-        sender.clear_aggregate_signal(signal_type, key, witness);
+    if read_only_db.aggregate_signal_exists::<S>(key) {
+        sender.clear_aggregate_signal::<S>(key, witness);
     }
 }
 
@@ -258,15 +248,14 @@ pub(super) struct ComputedAggregateSignal {
 /// - New + existing signals: always written (INSERT OR REPLACE)
 ///
 /// Returns (cleared_count, written_count, 0, 0).
-pub(super) fn reconcile_aggregate_signals(
+pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
-    signal_type: AggregateSignalType,
     computed: Vec<ComputedAggregateSignal>,
     witness: &ComputationWitness,
 ) -> (usize, usize, usize, usize) {
     let existing_keys: HashSet<String> = read_only_db
-        .get_aggregate_signal_keys(signal_type)
+        .aggregate_signal_keys::<S>()
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -279,7 +268,7 @@ pub(super) fn reconcile_aggregate_signals(
 
     // Stale: exist in DB but not computed -> clear
     for key in existing_key_refs.difference(&computed_keys) {
-        sender.clear_aggregate_signal(signal_type, key, witness);
+        sender.clear_aggregate_signal::<S>(key, witness);
         cleared += 1;
     }
 

@@ -30,9 +30,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::meta::computations::ComputationWitness;
-use crate::meta::signals::{
-    AggregateSignalType, CorpusFileSignalType, SignalType,
-};
 use crate::corpus::db::Database;
 use crate::corpus::tags::TagSet;
 use crate::witch::MutationExecutionWitness;
@@ -154,23 +151,24 @@ pub fn request_shutdown() {
 #[derive(Debug)]
 enum SignalWriteOp {
     // =========================================================================
-    // Inode-Keyed Corpus Signal Operations
+    // Signal Clear Operations (function-pointer dispatch)
     // =========================================================================
 
-    /// Clear an inode-keyed corpus signal
-    ClearCorpusSignal {
-        signal_type: CorpusFileSignalType,
+    /// Clear a single corpus signal by inode (function pointer resolved at send time).
+    ClearCorpusSignalByInode {
+        clear_fn: fn(&rusqlite::Connection, i64) -> rusqlite::Result<()>,
         inode: i64,
+        label: &'static str,
     },
-    /// Clear all corpus signals for an inode
+    /// Clear all corpus signals for an inode (hardcoded list).
     ClearAllCorpusSignals {
         inode: i64,
     },
-
-    /// Clear an aggregate signal
-    ClearAggregateSignal {
-        signal_type: AggregateSignalType,
+    /// Clear a single aggregate signal by key (function pointer resolved at send time).
+    ClearAggregateSignalByKey {
+        clear_fn: fn(&rusqlite::Connection, &str) -> rusqlite::Result<()>,
         key: String,
+        label: &'static str,
     },
 
     // =========================================================================
@@ -197,13 +195,10 @@ enum SignalWriteOp {
     // Bulk Operations (Awake phase content analysis)
     // =========================================================================
 
-    /// Clear all health issues of a specific type (for bulk re-computation).
-    ClearSignalsByType {
-        issue_type: SignalType,
-    },
-    /// Clear all corpus file signals of a specific type (for bulk re-computation).
-    ClearCorpusSignalsByType {
-        signal_type: CorpusFileSignalType,
+    /// Clear all signals of a type (function pointer resolved at send time).
+    ClearAllOfSignalType {
+        clear_fn: fn(&rusqlite::Connection) -> rusqlite::Result<()>,
+        label: &'static str,
     },
 
     /// Write a typed signal directly to its per-signal table.
@@ -470,20 +465,23 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
-    // Inode-keyed corpus signal operations (uses native inode column)
+    // Signal clear operations (generic, resolved to function pointers at send time)
     // =========================================================================
 
     /// Clear an inode-keyed corpus signal.
-    pub fn clear_corpus_signal(
+    ///
+    /// The type parameter resolves to a concrete `clear_by_inode` function pointer
+    /// at compile time via the `CorpusSignalStore` trait.
+    pub fn clear_corpus_signal<S: crate::meta::signals::store::CorpusSignalStore>(
         &self,
-        signal_type: CorpusFileSignalType,
         inode: i64,
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearCorpusSignal {
-            signal_type,
+        let _ = self.tx.send(SignalWriteOp::ClearCorpusSignalByInode {
+            clear_fn: S::clear_by_inode,
             inode,
+            label: S::TABLE_NAME,
         });
     }
 
@@ -499,17 +497,39 @@ impl SignalWriteSender {
     // Aggregate signal operations
     // =========================================================================
 
-    /// Clear an aggregate signal (idempotent delete).
-    pub fn clear_aggregate_signal(
+    /// Clear an aggregate signal by key.
+    ///
+    /// The type parameter resolves to a concrete `clear_by_key` function pointer
+    /// at compile time via the `AggregateSignalStore` trait.
+    pub fn clear_aggregate_signal<S: crate::meta::signals::store::AggregateSignalStore>(
         &self,
-        signal_type: AggregateSignalType,
         key: &str,
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignal {
-            signal_type,
+        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignalByKey {
+            clear_fn: S::clear_by_key,
             key: key.to_string(),
+            label: S::TABLE_NAME,
+        });
+    }
+
+    /// Clear an aggregate signal by key using a pre-resolved function pointer.
+    ///
+    /// Used by `SignalToClear` where the signal type is determined at construction
+    /// time and carried as a function pointer rather than a type parameter.
+    pub fn clear_aggregate_signal_fn(
+        &self,
+        clear_fn: fn(&rusqlite::Connection, &str) -> rusqlite::Result<()>,
+        key: &str,
+        label: &'static str,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignalByKey {
+            clear_fn,
+            key: key.to_string(),
+            label,
         });
     }
 
@@ -568,24 +588,32 @@ impl SignalWriteSender {
     // Bulk Operations (Awake phase content analysis)
     // =========================================================================
 
-    /// Clear all health issues of a specific type (for bulk re-computation).
-    pub fn clear_signals_by_type(
+    /// Clear all signals of a corpus type (for bulk re-computation).
+    ///
+    /// The type parameter resolves to a concrete `clear_all` function pointer.
+    pub fn clear_all_of_corpus_type<S: crate::meta::signals::store::CorpusSignalStore>(
         &self,
-        issue_type: SignalType,
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearSignalsByType { issue_type });
+        let _ = self.tx.send(SignalWriteOp::ClearAllOfSignalType {
+            clear_fn: S::clear_all,
+            label: S::TABLE_NAME,
+        });
     }
 
-    /// Clear all corpus file signals of a specific type (for bulk re-computation).
-    pub fn clear_corpus_signals_by_type(
+    /// Clear all signals of an aggregate type (for bulk re-computation).
+    ///
+    /// The type parameter resolves to a concrete `clear_all` function pointer.
+    pub fn clear_all_of_aggregate_type<S: crate::meta::signals::store::AggregateSignalStore>(
         &self,
-        signal_type: CorpusFileSignalType,
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearCorpusSignalsByType { signal_type });
+        let _ = self.tx.send(SignalWriteOp::ClearAllOfSignalType {
+            clear_fn: S::clear_all,
+            label: S::TABLE_NAME,
+        });
     }
 
     /// Update file mtime in files table (after OOB verification).
@@ -1002,29 +1030,7 @@ where
 // of truth for signal data.
 
 use crate::meta::signals::data::*;
-use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
-
-/// Clear a corpus signal from its typed table.
-fn typed_clear_corpus_signal(db: &Database, signal_type: CorpusFileSignalType, inode: i64) {
-    let conn = db.conn();
-    let _ = match signal_type {
-        CorpusFileSignalType::FileInCorpus => FileInCorpusSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::UnindexedFile => UnindexedFileSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::HealthyFile => HealthyFileSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::MissingFile => MissingFileSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::MissingDirectory => MissingDirectorySignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::MovedFile => MovedFileSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::OutOfBandTagSync => OutOfBandTagSyncSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::OutOfBandTagConflict => OutOfBandTagConflictSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::MtimeOnlyMismatch => MtimeOnlyMismatchSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::CorruptFile => CorruptFileSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::ShitFormat => ShitFormatSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::SubparDuplicate => SubparDuplicateSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::CompoundTag => CompoundTagSignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::DeployReady => DeployReadySignal::clear_by_inode(conn, inode),
-        CorpusFileSignalType::DeployedHealthy => DeployedHealthySignal::clear_by_inode(conn, inode),
-    };
-}
+use crate::meta::signals::store::CorpusSignalStore;
 
 /// Clear ALL corpus signals for an inode from typed tables.
 fn typed_clear_all_corpus_signals(db: &Database, inode: i64) {
@@ -1046,78 +1052,6 @@ fn typed_clear_all_corpus_signals(db: &Database, inode: i64) {
     let _ = DeployedHealthySignal::clear_by_inode(conn, inode);
 }
 
-/// Clear an aggregate signal from its typed table.
-fn typed_clear_aggregate_signal(db: &Database, signal_type: AggregateSignalType, key: &str) {
-    let conn = db.conn();
-    let _ = match signal_type {
-        AggregateSignalType::FingerprintOverlap => FingerprintOverlapSignal::clear_by_key(conn, key),
-        AggregateSignalType::MetadataDuplicate => MetadataDuplicateSignal::clear_by_key(conn, key),
-        AggregateSignalType::DuplicateInode => DuplicateInodeSignal::clear_by_key(conn, key),
-        AggregateSignalType::MissingTag => MissingTagSignal::clear_by_key(conn, key),
-        AggregateSignalType::DeployConflict => DeployConflictSignal::clear_by_key(conn, key),
-        AggregateSignalType::TagCanonicity => TagCanonicitySignal::clear_by_key(conn, key),
-        AggregateSignalType::InconsistentAlbumArtist => InconsistentAlbumArtistSignal::clear_by_key(conn, key),
-        AggregateSignalType::CompoundTagValue => CompoundTagValueSignal::clear_by_key(conn, key),
-        AggregateSignalType::CrossSourceOverlap => CrossSourceOverlapSignal::clear_by_key(conn, key),
-        AggregateSignalType::CanonicalTag => CanonicalTagSignal::clear_by_key(conn, key),
-        AggregateSignalType::LibraryLeftover => LibraryLeftoverSignal::clear_by_key(conn, key),
-        AggregateSignalType::LibraryStale => LibraryStaleSignal::clear_by_key(conn, key),
-    };
-}
-
-/// Clear all signals of a given type from typed tables.
-fn typed_clear_signals_by_type(db: &Database, issue_type: &SignalType) {
-    let conn = db.conn();
-    let _ = match issue_type {
-        SignalType::FileInCorpus => FileInCorpusSignal::clear_all(conn),
-        SignalType::UnindexedFile => UnindexedFileSignal::clear_all(conn),
-        SignalType::HealthyFile => HealthyFileSignal::clear_all(conn),
-        SignalType::MissingFile => MissingFileSignal::clear_all(conn),
-        SignalType::MissingDirectory => MissingDirectorySignal::clear_all(conn),
-        SignalType::MovedFile => MovedFileSignal::clear_all(conn),
-        SignalType::OutOfBandTagSync => OutOfBandTagSyncSignal::clear_all(conn),
-        SignalType::OutOfBandTagConflict => OutOfBandTagConflictSignal::clear_all(conn),
-        SignalType::MtimeOnlyMismatch => MtimeOnlyMismatchSignal::clear_all(conn),
-        SignalType::CorruptFile => CorruptFileSignal::clear_all(conn),
-        SignalType::ShitFormat => ShitFormatSignal::clear_all(conn),
-        SignalType::SubparDuplicate => SubparDuplicateSignal::clear_all(conn),
-        SignalType::CompoundTagValue => CompoundTagValueSignal::clear_all(conn),
-        SignalType::DeployConflict => DeployConflictSignal::clear_all(conn),
-        SignalType::FingerprintOverlap => FingerprintOverlapSignal::clear_all(conn),
-        SignalType::MetadataDuplicate => MetadataDuplicateSignal::clear_all(conn),
-        SignalType::DuplicateInode => DuplicateInodeSignal::clear_all(conn),
-        SignalType::MissingTag => MissingTagSignal::clear_all(conn),
-        SignalType::TagCanonicity => TagCanonicitySignal::clear_all(conn),
-        SignalType::InconsistentAlbumArtist => InconsistentAlbumArtistSignal::clear_all(conn),
-        SignalType::CrossSourceOverlap => CrossSourceOverlapSignal::clear_all(conn),
-        SignalType::LibraryStale => LibraryStaleSignal::clear_all(conn),
-        SignalType::LibraryLeftover => LibraryLeftoverSignal::clear_all(conn),
-    };
-}
-
-/// Clear all corpus signals of a specific corpus file type from typed tables.
-fn typed_clear_corpus_signals_by_type(db: &Database, signal_type: &CorpusFileSignalType) {
-    let conn = db.conn();
-    let _ = match signal_type {
-        CorpusFileSignalType::FileInCorpus => FileInCorpusSignal::clear_all(conn),
-        CorpusFileSignalType::UnindexedFile => UnindexedFileSignal::clear_all(conn),
-        CorpusFileSignalType::HealthyFile => HealthyFileSignal::clear_all(conn),
-        CorpusFileSignalType::MissingFile => MissingFileSignal::clear_all(conn),
-        CorpusFileSignalType::MissingDirectory => MissingDirectorySignal::clear_all(conn),
-        CorpusFileSignalType::MovedFile => MovedFileSignal::clear_all(conn),
-        CorpusFileSignalType::OutOfBandTagSync => OutOfBandTagSyncSignal::clear_all(conn),
-        CorpusFileSignalType::OutOfBandTagConflict => OutOfBandTagConflictSignal::clear_all(conn),
-        CorpusFileSignalType::MtimeOnlyMismatch => MtimeOnlyMismatchSignal::clear_all(conn),
-        CorpusFileSignalType::CorruptFile => CorruptFileSignal::clear_all(conn),
-        CorpusFileSignalType::ShitFormat => ShitFormatSignal::clear_all(conn),
-        CorpusFileSignalType::SubparDuplicate => SubparDuplicateSignal::clear_all(conn),
-        CorpusFileSignalType::CompoundTag => CompoundTagSignal::clear_all(conn),
-        CorpusFileSignalType::DeployReady => DeployReadySignal::clear_all(conn),
-        CorpusFileSignalType::DeployedHealthy => DeployedHealthySignal::clear_all(conn),
-    };
-}
-
-
 /// Execute a single signal write operation.
 fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
     // Note: We don't have a ComputationWitness here, but we need one for the db methods.
@@ -1125,17 +1059,23 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
     let witness = crate::meta::computations::ComputationWitness::new_for_db_thread();
 
     match op {
-        // Inode-keyed corpus signal operations
-        SignalWriteOp::ClearCorpusSignal { signal_type, inode } => {
-            typed_clear_corpus_signal(db, *signal_type, *inode);
+        // Signal clear operations (function-pointer dispatch)
+        SignalWriteOp::ClearCorpusSignalByInode { clear_fn, inode, label } => {
+            if let Err(e) = clear_fn(db.conn(), *inode) {
+                crate::logging::log_error(format!(
+                    "[DB_THREAD] clear {} by inode {} failed: {}", label, inode, e
+                ));
+            }
         }
         SignalWriteOp::ClearAllCorpusSignals { inode } => {
             typed_clear_all_corpus_signals(db, *inode);
         }
-
-        // Aggregate signal operations
-        SignalWriteOp::ClearAggregateSignal { signal_type, key } => {
-            typed_clear_aggregate_signal(db, *signal_type, key);
+        SignalWriteOp::ClearAggregateSignalByKey { clear_fn, key, label } => {
+            if let Err(e) = clear_fn(db.conn(), key) {
+                crate::logging::log_error(format!(
+                    "[DB_THREAD] clear {} by key '{}' failed: {}", label, key, e
+                ));
+            }
         }
 
         // Library file operations (Awakening phase)
@@ -1170,12 +1110,13 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        // Bulk operations (Awake phase content analysis)
-        SignalWriteOp::ClearSignalsByType { issue_type } => {
-            typed_clear_signals_by_type(db, issue_type);
-        }
-        SignalWriteOp::ClearCorpusSignalsByType { signal_type } => {
-            typed_clear_corpus_signals_by_type(db, signal_type);
+        // Bulk clear (function-pointer dispatch)
+        SignalWriteOp::ClearAllOfSignalType { clear_fn, label } => {
+            if let Err(e) = clear_fn(db.conn()) {
+                crate::logging::log_error(format!(
+                    "[DB_THREAD] clear_all {} failed: {}", label, e
+                ));
+            }
         }
         SignalWriteOp::WriteTypedSignal { signal } => {
             if let Err(e) = signal.clone().insert(db.conn()) {

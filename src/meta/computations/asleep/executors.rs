@@ -10,13 +10,12 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
     enumerate_all_directories, extract_mtime, is_audio_file,
-    ensure_corpus_signal,
+    ensure_typed_signal,
     drop_stale_corpus_signal,
 };
-use crate::meta::signals::data::{TypedSignalWrite, MovedFileSignal, MissingFileSignal, OutOfBandTagSyncSignal, OutOfBandTagConflictSignal, TagMismatchEntry};
+use crate::meta::signals::data::*;
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::FileSource;
-use crate::meta::signals::{CorpusFileSignalType, SignalType};
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -50,7 +49,7 @@ pub fn execute_clear_existing_observation_state(
     };
 
     // Clear all FileInCorpus signals - they'll be rebuilt during the corpus walk
-    sender.clear_signals_by_type(SignalType::FileInCorpus, witness);
+    sender.clear_all_of_corpus_type::<FileInCorpusSignal>(witness);
 
     log_general("[COMPUTE] ClearExistingObservationState: complete");
 
@@ -203,7 +202,7 @@ pub fn execute_scan_corpus_directory(
 
         // Create FileInCorpus signal for every file on disk (keyed by inode, path in metadata)
         // (ClearExistingObservationState cleared all stale signals at start of observation)
-        ensure_corpus_signal(read_only_db, &sender, CorpusFileSignalType::FileInCorpus, *inode, &relative_path_str, witness);
+        ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInCorpus(FileInCorpusSignal { inode: *inode, path: relative_path_str.clone() }), witness);
 
         // Check if file is indexed and needs verification
         // indexed_by_inode returns HashMap<inode, (mtime_secs, mtime_nanos)>
@@ -213,7 +212,7 @@ pub fn execute_scan_corpus_directory(
                 if db_path != &relative_path_str {
                     // Same inode but different path - file was moved
                     // Signal keyed by inode, with old_path and new_path in metadata
-                    if !read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::MovedFile, *inode) {
+                    if !read_only_db.corpus_signal_exists::<MovedFileSignal>(*inode) {
                         sender.write_typed_signal(
                             TypedSignalWrite::MovedFile(MovedFileSignal {
                                 inode: *inode,
@@ -265,7 +264,7 @@ pub fn execute_scan_corpus_directory(
                     let old_inode = audio_file.inode();
 
                     // Emit MissingFile for the old inode (file at that inode is gone)
-                    if !read_only_db.corpus_signal_exists_by_inode(CorpusFileSignalType::MissingFile, old_inode) {
+                    if !read_only_db.corpus_signal_exists::<MissingFileSignal>(old_inode) {
                         sender.write_typed_signal(
                             TypedSignalWrite::MissingFile(MissingFileSignal {
                                 inode: old_inode,
@@ -507,26 +506,22 @@ pub fn execute_verify_tags(
                         "[COMPUTE] VerifyTags: mtime-only change for inode {} ({})",
                         inode, path.display()
                     ));
-                    ensure_corpus_signal(
+                    ensure_typed_signal(
                         read_only_db,
                         &sender,
-                        CorpusFileSignalType::MtimeOnlyMismatch,
-                        inode,
-                        &rel_str,
+                        TypedSignalWrite::MtimeOnlyMismatch(MtimeOnlyMismatchSignal { inode, path: rel_str.clone() }),
                         witness,
                     );
                     // Clear mutually exclusive signals
-                    drop_stale_corpus_signal(
+                    drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
                         read_only_db,
                         &sender,
-                        CorpusFileSignalType::OutOfBandTagConflict,
                         inode,
                         witness,
                     );
-                    drop_stale_corpus_signal(
+                    drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
                         read_only_db,
                         &sender,
-                        CorpusFileSignalType::OutOfBandTagSync,
                         inode,
                         witness,
                     );
@@ -536,24 +531,21 @@ pub fn execute_verify_tags(
                         "[COMPUTE] VerifyTags: file healthy for inode {} ({})",
                         inode, path.display()
                     ));
-                    drop_stale_corpus_signal(
+                    drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
                         read_only_db,
                         &sender,
-                        CorpusFileSignalType::MtimeOnlyMismatch,
                         inode,
                         witness,
                     );
-                    drop_stale_corpus_signal(
+                    drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
                         read_only_db,
                         &sender,
-                        CorpusFileSignalType::OutOfBandTagConflict,
                         inode,
                         witness,
                     );
-                    drop_stale_corpus_signal(
+                    drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
                         read_only_db,
                         &sender,
-                        CorpusFileSignalType::OutOfBandTagSync,
                         inode,
                         witness,
                     );
@@ -565,24 +557,21 @@ pub fn execute_verify_tags(
                     inode, path.display()
                 ));
                 // Clear all OOB signals first (including target type to refresh metadata)
-                drop_stale_corpus_signal(
+                drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::OutOfBandTagConflict,
                     inode,
                     witness,
                 );
-                drop_stale_corpus_signal(
+                drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::OutOfBandTagSync,
                     inode,
                     witness,
                 );
-                drop_stale_corpus_signal(
+                drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::MtimeOnlyMismatch,
                     inode,
                     witness,
                 );
@@ -607,24 +596,21 @@ pub fn execute_verify_tags(
                     inode, path.display()
                 ));
                 // Clear all OOB signals first (including target type to refresh metadata)
-                drop_stale_corpus_signal(
+                drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::OutOfBandTagSync,
                     inode,
                     witness,
                 );
-                drop_stale_corpus_signal(
+                drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::OutOfBandTagConflict,
                     inode,
                     witness,
                 );
-                drop_stale_corpus_signal(
+                drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
                     read_only_db,
                     &sender,
-                    CorpusFileSignalType::MtimeOnlyMismatch,
                     inode,
                     witness,
                 );
@@ -659,33 +645,28 @@ pub fn execute_verify_tags(
             );
             log_general(&err_msg);
             crate::logging::log_error(&err_msg);
-            ensure_corpus_signal(
+            ensure_typed_signal(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::CorruptFile,
-                inode,
-                &rel_str,
+                TypedSignalWrite::CorruptFile(CorruptFileSignal { inode, path: rel_str.clone() }),
                 witness,
             );
             // Clear OOB signals on parse error - we can't classify what we can't read
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::OutOfBandTagConflict,
                 inode,
                 witness,
             );
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::OutOfBandTagSync,
                 inode,
                 witness,
             );
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::MtimeOnlyMismatch,
                 inode,
                 witness,
             );
@@ -749,10 +730,9 @@ pub fn execute_verify_audio(
     match crate::corpus::metadata::verify_audio_integrity(path) {
         Ok(()) => {
             // Audio is valid - clear any stale CorruptFile signal (keyed by inode)
-            drop_stale_corpus_signal(
+            drop_stale_corpus_signal::<CorruptFileSignal>(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::CorruptFile,
                 inode,
                 witness,
             );
@@ -771,12 +751,10 @@ pub fn execute_verify_audio(
             );
             log_general(&err_msg);
             crate::logging::log_error(&err_msg);
-            ensure_corpus_signal(
+            ensure_typed_signal(
                 read_only_db,
                 &sender,
-                CorpusFileSignalType::CorruptFile,
-                inode,
-                &rel_str,
+                TypedSignalWrite::CorruptFile(CorruptFileSignal { inode, path: rel_str.clone() }),
                 witness,
             );
             // Return success so computation continues processing other files

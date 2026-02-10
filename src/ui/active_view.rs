@@ -224,23 +224,23 @@ pub(crate) enum FilterPopupContext {
 /// Tracks the list of signals for Tab/Shift-Tab navigation in tag canonicity modal.
 #[derive(Debug, Clone)]
 pub(crate) struct TagCanonicityClusters {
-    /// Signal IDs in navigation order
-    pub signal_ids: Vec<i64>,
-    /// Current index into signal_ids
+    /// Signal keys in navigation order
+    pub signal_keys: Vec<String>,
+    /// Current index into signal_keys
     pub current_index: usize,
 }
 
 impl TagCanonicityClusters {
-    pub fn new(signal_ids: Vec<i64>) -> Self {
-        Self { signal_ids, current_index: 0 }
+    pub fn new(signal_keys: Vec<String>) -> Self {
+        Self { signal_keys, current_index: 0 }
     }
 
-    pub fn current_signal_id(&self) -> Option<i64> {
-        self.signal_ids.get(self.current_index).copied()
+    pub fn current_signal_key(&self) -> Option<&str> {
+        self.signal_keys.get(self.current_index).map(|s| s.as_str())
     }
 
     pub fn next(&mut self) -> bool {
-        if self.current_index + 1 < self.signal_ids.len() {
+        if self.current_index + 1 < self.signal_keys.len() {
             self.current_index += 1;
             true
         } else {
@@ -258,6 +258,6 @@ impl TagCanonicityClusters {
     }
 
     pub fn is_last(&self) -> bool {
-        self.current_index + 1 >= self.signal_ids.len()
+        self.current_index + 1 >= self.signal_keys.len()
     }
 }

@@ -480,22 +480,22 @@ pub enum CompoundSplitActionV2 {
 /// Tracks navigation through compound tag split signals.
 #[derive(Debug, Clone)]
 pub struct CompoundSplitClustersV2 {
-    /// Signal IDs in display order
-    signal_ids: Vec<i64>,
+    /// Signal keys in display order
+    signal_keys: Vec<String>,
     /// Current index
     current: usize,
 }
 
 impl CompoundSplitClustersV2 {
-    pub fn new(signal_ids: Vec<i64>) -> Self {
+    pub fn new(signal_keys: Vec<String>) -> Self {
         Self {
-            signal_ids,
+            signal_keys,
             current: 0,
         }
     }
 
-    pub fn current_signal_id(&self) -> Option<i64> {
-        self.signal_ids.get(self.current).copied()
+    pub fn current_signal_key(&self) -> Option<&str> {
+        self.signal_keys.get(self.current).map(|s| s.as_str())
     }
 
     pub fn current_index(&self) -> usize {
@@ -503,15 +503,15 @@ impl CompoundSplitClustersV2 {
     }
 
     pub fn total(&self) -> usize {
-        self.signal_ids.len()
+        self.signal_keys.len()
     }
 
-    pub fn all_signal_ids(&self) -> &[i64] {
-        &self.signal_ids
+    pub fn all_signal_keys(&self) -> &[String] {
+        &self.signal_keys
     }
 
     pub fn is_last(&self) -> bool {
-        self.current >= self.signal_ids.len().saturating_sub(1)
+        self.current >= self.signal_keys.len().saturating_sub(1)
     }
 
     pub fn is_first(&self) -> bool {
@@ -519,7 +519,7 @@ impl CompoundSplitClustersV2 {
     }
 
     pub fn next(&mut self) -> bool {
-        if self.current < self.signal_ids.len().saturating_sub(1) {
+        if self.current < self.signal_keys.len().saturating_sub(1) {
             self.current += 1;
             true
         } else {

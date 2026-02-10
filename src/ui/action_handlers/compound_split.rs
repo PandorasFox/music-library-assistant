@@ -35,9 +35,9 @@ impl App {
             return;
         }
 
-        // Store signal IDs for cluster navigation
-        let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_ids);
+        // Store signal keys for cluster navigation
+        let signal_keys: Vec<String> = signals.iter().map(|s| s.key.clone()).collect();
+        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_keys);
 
         // Start transaction ONCE for entire flow
         if let Some(ref mut witch) = self.witch {
@@ -228,14 +228,14 @@ impl App {
     /// Uses the progressive worker to process items in timed chunks with progress bar.
     fn start_progressive_compound_split_staging(&mut self) {
         // Extract clusters and safe_mode from current view, replacing with a temporary
-        let (signal_ids, is_safe_mode, clusters, safe_mode) = match &self.view {
+        let (signal_keys, is_safe_mode, clusters, safe_mode) = match &self.view {
             ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
-                let ids = clusters.all_signal_ids().to_vec();
-                if ids.is_empty() {
+                let keys = clusters.all_signal_keys().to_vec();
+                if keys.is_empty() {
                     self.status_message = Some("No compound splits to stage".to_string());
                     return;
                 }
-                (ids, *safe_mode, clusters.clone(), *safe_mode)
+                (keys, *safe_mode, clusters.clone(), *safe_mode)
             }
             _ => {
                 self.status_message = Some("No compound splits to stage".to_string());
@@ -245,7 +245,7 @@ impl App {
 
         // Start progressive worker with return context to restore compound split view
         let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
-            signal_ids,
+            signal_keys,
             is_safe_mode,
         );
         let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
@@ -277,9 +277,9 @@ impl App {
             return;
         }
 
-        // Store signal IDs for cluster tracking
-        let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_ids.clone());
+        // Store signal keys for cluster tracking
+        let signal_keys: Vec<String> = signals.iter().map(|s| s.key.clone()).collect();
+        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_keys.clone());
 
         // Start transaction
         if let Some(ref mut witch) = self.witch {
@@ -288,7 +288,7 @@ impl App {
 
         // Start progressive worker to stage all splits
         let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
-            signal_ids,
+            signal_keys,
             true, // safe mode
         );
         let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
@@ -301,13 +301,13 @@ impl App {
     /// Load the compound split signal at the current cluster index into modal state.
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_compound_split_signal(&mut self) -> bool {
-        use crate::meta::signals::{AggregateSignal, AggregateSignalType};
+        use crate::meta::signals::AggregateSignalType;
 
         // Extract cluster info from current view
-        let (signal_id, group_index, total, safe_mode) = match &self.view {
+        let (signal_key, group_index, total, safe_mode) = match &self.view {
             ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
-                match clusters.current_signal_id() {
-                    Some(id) => (id, clusters.current_index(), clusters.total(), *safe_mode),
+                match clusters.current_signal_key() {
+                    Some(key) => (key.to_string(), clusters.current_index(), clusters.total(), *safe_mode),
                     None => return false,
                 }
             }
@@ -319,28 +319,13 @@ impl App {
             None => return false,
         };
 
-        // Fetch the signal by ID
-        let signal = match read_db.get_signal_by_id(signal_id) {
+        // Fetch the signal by key
+        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
                 return false;
             }
-        };
-
-        // Convert to AggregateSignal
-        let agg_signal = AggregateSignal {
-            id: signal.id,
-            signal_type: match AggregateSignalType::from_str(signal.issue_type.as_str()) {
-                Some(t) => t,
-                None => {
-                    self.status_message = Some("Invalid signal type".to_string());
-                    return false;
-                }
-            },
-            key: signal.issue_key,
-            discovered_at: signal.discovered_at,
-            metadata_json: signal.metadata_json,
         };
 
         // Verify signal type
@@ -394,10 +379,10 @@ impl App {
         clusters: compound_split_v2::CompoundSplitClustersV2,
         safe_mode: bool,
     ) -> bool {
-        use crate::meta::signals::{AggregateSignal, AggregateSignalType};
+        use crate::meta::signals::AggregateSignalType;
 
-        let signal_id = match clusters.current_signal_id() {
-            Some(id) => id,
+        let signal_key = match clusters.current_signal_key() {
+            Some(key) => key.to_string(),
             None => return false,
         };
 
@@ -408,28 +393,13 @@ impl App {
             None => return false,
         };
 
-        // Fetch the signal by ID
-        let signal = match read_db.get_signal_by_id(signal_id) {
+        // Fetch the signal by key
+        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
                 return false;
             }
-        };
-
-        // Convert to AggregateSignal
-        let agg_signal = AggregateSignal {
-            id: signal.id,
-            signal_type: match AggregateSignalType::from_str(signal.issue_type.as_str()) {
-                Some(t) => t,
-                None => {
-                    self.status_message = Some("Invalid signal type".to_string());
-                    return false;
-                }
-            },
-            key: signal.issue_key,
-            discovered_at: signal.discovered_at,
-            metadata_json: signal.metadata_json,
         };
 
         // Verify signal type

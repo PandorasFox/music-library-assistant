@@ -138,13 +138,11 @@ impl App {
 
         let read_db = self.read_db();
 
-        // Query signal count - this can be slow with many signals
+        // Query signal count from typed tables
         let signals_start = std::time::Instant::now();
-        let signal_count = read_db.get_signals(None)
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let signal_count = read_db.count_all_signals();
         crate::logging::log_general(format!(
-            "[TRANSITION] get_signals(None) took {}ms, {} signals",
+            "[TRANSITION] count_all_signals took {}ms, {} signals",
             signals_start.elapsed().as_millis(),
             signal_count
         ));
@@ -206,8 +204,8 @@ impl App {
     /// Process a single work item.
     fn process_work_item(&mut self, item: &WorkItem, worker: &mut ProgressiveWorkerState) {
         match item {
-            WorkItem::StageCompoundSplit { signal_id, idx } => {
-                self.process_compound_split_item(*signal_id, *idx, worker);
+            WorkItem::StageCompoundSplit { signal_key, idx } => {
+                self.process_compound_split_item(signal_key, *idx, worker);
             }
         }
     }
@@ -215,11 +213,11 @@ impl App {
     /// Process a single compound split work item.
     fn process_compound_split_item(
         &mut self,
-        signal_id: i64,
+        signal_key: &str,
         idx: usize,
         worker: &mut ProgressiveWorkerState,
     ) {
-        use crate::meta::signals::{AggregateSignal, AggregateSignalType};
+        use crate::meta::signals::AggregateSignalType;
 
         let is_safe_mode = worker.is_safe_mode;
         let total = worker.total;
@@ -234,28 +232,13 @@ impl App {
                 }
             };
 
-            // Get signal by ID
-            let signal = match read_db.get_signal_by_id(signal_id) {
+            // Get signal by key
+            let agg_signal = match read_db.get_aggregate_signal_by_key(signal_key) {
                 Ok(Some(s)) => s,
                 _ => {
                     worker.nops_elided += 1;
                     return;
                 }
-            };
-
-            // Convert to AggregateSignal
-            let agg_signal = AggregateSignal {
-                id: signal.id,
-                signal_type: match AggregateSignalType::from_str(signal.issue_type.as_str()) {
-                    Some(t) => t,
-                    None => {
-                        worker.nops_elided += 1;
-                        return;
-                    }
-                },
-                key: signal.issue_key,
-                discovered_at: signal.discovered_at,
-                metadata_json: signal.metadata_json,
             };
 
             // Skip if wrong type

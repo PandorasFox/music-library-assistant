@@ -12,8 +12,8 @@ use std::collections::VecDeque;
 pub enum WorkItem {
     /// Stage mutations for a compound split signal.
     StageCompoundSplit {
-        /// The signal ID to process
-        signal_id: i64,
+        /// The signal key to process
+        signal_key: String,
         /// Index in the overall work queue (for decision numbering)
         idx: usize,
     },
@@ -74,11 +74,11 @@ impl ProgressiveWorkerState {
     }
 
     /// Create a new progressive worker for compound splits.
-    pub fn for_compound_splits(signal_ids: Vec<i64>, is_safe_mode: bool) -> Self {
-        let items: Vec<WorkItem> = signal_ids
-            .iter()
+    pub fn for_compound_splits(signal_keys: Vec<String>, is_safe_mode: bool) -> Self {
+        let items: Vec<WorkItem> = signal_keys
+            .into_iter()
             .enumerate()
-            .map(|(idx, &signal_id)| WorkItem::StageCompoundSplit { signal_id, idx })
+            .map(|(idx, signal_key)| WorkItem::StageCompoundSplit { signal_key, idx })
             .collect();
 
         let mut state = Self::new(

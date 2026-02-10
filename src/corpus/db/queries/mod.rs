@@ -452,9 +452,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_signals(issue_type)
     }
 
-    /// Get a signal by its ID.
-    pub fn get_signal_by_id(&self, signal_id: i64) -> Result<Option<Signal>> {
-        self.db.get_signal_by_id(signal_id)
+
+    /// Count total signals across all typed tables.
+    pub fn count_all_signals(&self) -> usize {
+        self.db.count_all_signals()
     }
 
     /// Get aggregate signals, optionally filtered by type.
@@ -465,6 +466,11 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get compound tag signals filtered by safety classification and optional tag name.
     pub fn get_compound_signals_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<AggregateSignal>> {
         self.db.get_compound_signals_by_safety(safe_only, tag_filter)
+    }
+
+    /// Get an aggregate signal by its natural key.
+    pub fn get_aggregate_signal_by_key(&self, key: &str) -> Result<Option<AggregateSignal>> {
+        self.db.get_aggregate_signal_by_key(key)
     }
 
     /// Check if an aggregate signal exists (semantic-keyed).

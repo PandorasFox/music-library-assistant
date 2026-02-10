@@ -67,9 +67,9 @@ impl App {
             return;
         }
 
-        // Store signal IDs for cluster navigation
-        let signal_ids: Vec<i64> = signals.iter().filter_map(|s| s.id).collect();
-        let clusters = TagCanonicityClusters::new(signal_ids);
+        // Store signal keys for cluster navigation
+        let signal_keys: Vec<String> = signals.iter().map(|s| s.key.clone()).collect();
+        let clusters = TagCanonicityClusters::new(signal_keys);
 
         // Start transaction ONCE for entire flow
         if let Some(ref mut witch) = self.witch {
@@ -102,7 +102,7 @@ impl App {
         };
 
         // Get group info from clusters
-        let (group_index, total_groups) = (clusters.current_index, clusters.signal_ids.len());
+        let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
 
         let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
         self.view = ActiveView::TagCanonicityResolution { state, clusters };
@@ -238,10 +238,10 @@ impl App {
         use crate::meta::signals::AggregateSignalType;
 
         // Extract cluster info from current view
-        let (signal_id, current_index, total) = match &self.view {
+        let (signal_key, current_index, total) = match &self.view {
             ActiveView::TagCanonicityResolution { clusters, .. } => {
-                match clusters.current_signal_id() {
-                    Some(id) => (id, clusters.current_index, clusters.signal_ids.len()),
+                match clusters.current_signal_key() {
+                    Some(key) => (key.to_string(), clusters.current_index, clusters.signal_keys.len()),
                     None => return false,
                 }
             }
@@ -253,28 +253,13 @@ impl App {
             None => return false,
         };
 
-        // Load signal by ID
-        let signal = match read_db.get_signal_by_id(signal_id) {
+        // Load signal by key
+        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
                 return false;
             }
-        };
-
-        // Convert to AggregateSignal for modal data loading
-        let agg_signal = crate::meta::signals::AggregateSignal {
-            id: signal.id,
-            signal_type: match crate::meta::signals::AggregateSignalType::from_str(signal.issue_type.as_str()) {
-                Some(t) => t,
-                None => {
-                    self.status_message = Some("Invalid signal type".to_string());
-                    return false;
-                }
-            },
-            key: signal.issue_key,
-            discovered_at: signal.discovered_at,
-            metadata_json: signal.metadata_json,
         };
 
         let data = match tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(&agg_signal, &read_db) {
@@ -311,40 +296,25 @@ impl App {
     pub(in crate::ui) fn load_current_cluster_signal_with_clusters(&mut self, clusters: TagCanonicityClusters) -> bool {
         use crate::meta::signals::AggregateSignalType;
 
-        let signal_id = match clusters.current_signal_id() {
-            Some(id) => id,
+        let signal_key = match clusters.current_signal_key() {
+            Some(key) => key.to_string(),
             None => return false,
         };
 
-        let (current_index, total) = (clusters.current_index, clusters.signal_ids.len());
+        let (current_index, total) = (clusters.current_index, clusters.signal_keys.len());
 
         let read_db = match self.witch.as_mut() {
             Some(w) => w.read_db(),
             None => return false,
         };
 
-        // Load signal by ID
-        let signal = match read_db.get_signal_by_id(signal_id) {
+        // Load signal by key
+        let agg_signal = match read_db.get_aggregate_signal_by_key(&signal_key) {
             Ok(Some(s)) => s,
             _ => {
                 self.status_message = Some("Signal not found".to_string());
                 return false;
             }
-        };
-
-        // Convert to AggregateSignal for modal data loading
-        let agg_signal = crate::meta::signals::AggregateSignal {
-            id: signal.id,
-            signal_type: match crate::meta::signals::AggregateSignalType::from_str(signal.issue_type.as_str()) {
-                Some(t) => t,
-                None => {
-                    self.status_message = Some("Invalid signal type".to_string());
-                    return false;
-                }
-            },
-            key: signal.issue_key,
-            discovered_at: signal.discovered_at,
-            metadata_json: signal.metadata_json,
         };
 
         let data = match tag_canonicity_v2::TagCanonicalityModalDataV2::from_signal_with_files(&agg_signal, &read_db) {

@@ -292,23 +292,6 @@ pub struct InconsistentAlbumArtistData {
     pub inodes: Vec<i64>,
 }
 
-/// Tag value contains separator characters needing to be split.
-#[derive(Debug, Clone)]
-pub struct CompoundTagValueSignal {
-    pub key: String,
-    pub tag_name: String,
-    /// Serialized as bincode BLOB.
-    pub data: CompoundTagValueData,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompoundTagValueData {
-    pub compound_value: String,
-    pub split_parts: Vec<String>,
-    pub separator: String,
-    pub inodes: Vec<i64>,
-}
-
 /// Cross-source fingerprint overlap cluster.
 #[derive(Debug, Clone)]
 pub struct CrossSourceOverlapSignal {
@@ -376,7 +359,6 @@ pub enum TypedSignalWrite {
     DeployConflict(DeployConflictSignal),
     TagCanonicity(TagCanonicitySignal),
     InconsistentAlbumArtist(InconsistentAlbumArtistSignal),
-    CompoundTagValue(CompoundTagValueSignal),
     CrossSourceOverlap(CrossSourceOverlapSignal),
 }
 
@@ -410,7 +392,6 @@ impl TypedSignalWrite {
             Self::DeployConflict(s) => s.insert(conn),
             Self::TagCanonicity(s) => s.insert(conn),
             Self::InconsistentAlbumArtist(s) => s.insert(conn),
-            Self::CompoundTagValue(s) => s.insert(conn),
             Self::CrossSourceOverlap(s) => s.insert(conn),
         }
     }
@@ -444,7 +425,6 @@ impl TypedSignalWrite {
             Self::DeployConflict(s) => DeployConflictSignal::exists(conn, &s.key),
             Self::TagCanonicity(s) => TagCanonicitySignal::exists(conn, &s.key),
             Self::InconsistentAlbumArtist(s) => InconsistentAlbumArtistSignal::exists(conn, &s.key),
-            Self::CompoundTagValue(s) => CompoundTagValueSignal::exists(conn, &s.key),
             Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)

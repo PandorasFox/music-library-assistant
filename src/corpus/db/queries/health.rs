@@ -48,7 +48,6 @@ impl Database {
         total += DeployConflictSignal::count(&self.conn).unwrap_or(0) as usize;
         total += TagCanonicitySignal::count(&self.conn).unwrap_or(0) as usize;
         total += InconsistentAlbumArtistSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += CompoundTagValueSignal::count(&self.conn).unwrap_or(0) as usize;
         total += CrossSourceOverlapSignal::count(&self.conn).unwrap_or(0) as usize;
         total += CanonicalTagSignal::count(&self.conn).unwrap_or(0) as usize;
         total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0) as usize;
@@ -472,7 +471,6 @@ impl Database {
             "deploy_conflict" => DeployConflictSignal::count(&self.conn)?,
             "tag_canonicity" => TagCanonicitySignal::count(&self.conn)?,
             "inconsistent_album_artist" => InconsistentAlbumArtistSignal::count(&self.conn)?,
-            "compound_tag_value" => CompoundTagValueSignal::count(&self.conn)?,
             "cross_source_overlap" => CrossSourceOverlapSignal::count(&self.conn)?,
             "canonical_tag" => CanonicalTagSignal::count(&self.conn)?,
             "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,

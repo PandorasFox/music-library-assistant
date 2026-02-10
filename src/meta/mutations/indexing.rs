@@ -935,7 +935,7 @@ pub fn execute_assimilate_disk_tags_to_db(
 ///
 /// Creates a CanonicalTag aggregate signal that marks a compound-looking value as
 /// a single canonical entity (e.g., "Rinse & Repeat" is a band name, not a collaboration).
-/// Also clears the CompoundTagValue signal for this value so it won't be flagged again.
+/// Future compound detection runs check CanonicalTag and skip whitelisted values.
 pub fn execute_emit_canonical_tag(
     tag_name: &str,
     canonical_value: &str,
@@ -957,14 +957,6 @@ pub fn execute_emit_canonical_tag(
             canonical_value: canonical_value.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
         }),
-        witness,
-    );
-
-    // Clear CompoundTagValue signal for this value (it's now whitelisted)
-    // Key format for CompoundTagValue: "{tag_name}:{compound_value}"
-    let compound_key = format!("{}:{}", tag_name, canonical_value);
-    sender.clear_aggregate_signal::<CompoundTagValueSignal>(
-        &compound_key,
         witness,
     );
 

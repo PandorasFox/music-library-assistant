@@ -123,13 +123,9 @@ Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutation
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| EmitCanonicalTag | — | CanonicalTag | CompoundTagValue | Whitelist a tag value as canonical (not compound) |
+| EmitCanonicalTag | — | CanonicalTag | — | Whitelist a tag value as canonical (not compound) |
 
-The EmitCanonicalTag mutation is used when an operator confirms that a compound-looking value (e.g., "Rinse & Repeat") is actually a single canonical entity (band name) and should not be split. It:
-1. Emits a CanonicalTag signal with key `{tag_name}:{tag_value}` (whitelist entry)
-2. Clears the CompoundTagValue signal for this value (removes from detection list)
-
-Future compound detection runs will check for CanonicalTag signals and skip whitelisted values.
+The EmitCanonicalTag mutation is used when an operator confirms that a compound-looking value (e.g., "Rinse & Repeat") is actually a single canonical entity (band name) and should not be split. It emits a CanonicalTag signal with key `{tag_name}:{tag_value}` (whitelist entry). Future compound detection runs check for CanonicalTag signals and skip whitelisted values.
 
 ---
 

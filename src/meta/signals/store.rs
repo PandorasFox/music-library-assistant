@@ -990,39 +990,6 @@ impl InconsistentAlbumArtistSignal {
     }
 }
 
-impl AggregateSignalStore for CompoundTagValueSignal {
-    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_compound_tag_value (
-        key TEXT PRIMARY KEY,
-        tag_name TEXT NOT NULL,
-        data BLOB NOT NULL,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )";
-    const TABLE_NAME: &'static str = "signal_compound_tag_value";
-
-    fn insert(&self, conn: &Connection) -> Result<()> {
-        let data = bincode::serialize(&self.data)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO signal_compound_tag_value (key, tag_name, data) VALUES (?1, ?2, ?3)",
-            rusqlite::params![self.key, self.tag_name, data],
-        )?;
-        Ok(())
-    }
-
-    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_compound_tag_value WHERE key = ?1", [key])?;
-        Ok(())
-    }
-
-    fn exists(conn: &Connection, key: &str) -> Result<bool> {
-        conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM signal_compound_tag_value WHERE key = ?1)",
-            [key],
-            |row| row.get(0),
-        )
-    }
-}
-
 impl AggregateSignalStore for CrossSourceOverlapSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_cross_source_overlap (
         key TEXT PRIMARY KEY,
@@ -1104,7 +1071,6 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(DeployConflictSignal::TABLE_SQL)?;
     conn.execute_batch(TagCanonicitySignal::TABLE_SQL)?;
     conn.execute_batch(InconsistentAlbumArtistSignal::TABLE_SQL)?;
-    conn.execute_batch(CompoundTagValueSignal::TABLE_SQL)?;
     conn.execute_batch(CrossSourceOverlapSignal::TABLE_SQL)?;
 
     Ok(())

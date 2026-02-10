@@ -4,7 +4,7 @@
 //! - Tab navigation with Left/Right arrows
 //! - Scrollable list of signals sorted by path (non-interactable)
 //! - Info pane showing context for selected signal type
-//! - Enter opens confirmation dialog
+//! - Enter stages mutations and goes directly to TransactionReview
 //! - Escape returns to Insights view
 
 use crossterm::event::{KeyCode, KeyEvent};
@@ -16,8 +16,8 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{DeployConfirmModal, DeployModalData};
-use crate::ui::widgets::{DeployTab, ModalStyle, SignalInfo, SignalInfoPane, TabbedSignalList};
+use super::types::DeployModalData;
+use crate::ui::widgets::{DeployTab, SignalInfo, SignalInfoPane, TabbedSignalList};
 
 /// Actions returned from the deployment preview.
 #[derive(Debug, Clone)]
@@ -39,8 +39,6 @@ pub struct DeploymentPreviewState {
     pub tab_scroll: [usize; 5],
     /// Cached signal data (loaded once on init).
     pub cached_data: DeployModalData,
-    /// Confirmation dialog (if open).
-    pub confirm_modal: Option<DeployConfirmModal>,
 }
 
 impl DeploymentPreviewState {
@@ -69,17 +67,11 @@ impl DeploymentPreviewState {
             active_tab,
             tab_scroll: [0; 5],
             cached_data,
-            confirm_modal: None,
         }
     }
 
     /// Handle key input.
     pub fn handle_key(&mut self, key: KeyEvent) -> DeploymentPreviewAction {
-        // If confirmation dialog is open, handle its keys
-        if self.confirm_modal.is_some() {
-            return self.handle_confirm_key(key);
-        }
-
         match key.code {
             // Tab navigation (arrows and Tab/Shift-Tab)
             KeyCode::Left | KeyCode::BackTab => {
@@ -117,65 +109,11 @@ impl DeploymentPreviewState {
                 DeploymentPreviewAction::None
             }
 
-            // Open confirmation dialog (wanting to confirm - default to Cancel for safety)
-            KeyCode::Enter => {
-                let summary = self.cached_data.summary();
-                self.confirm_modal = Some(DeployConfirmModal::for_confirm(summary));
-                DeploymentPreviewAction::None
-            }
+            // Stage & review directly
+            KeyCode::Enter => DeploymentPreviewAction::Confirm,
 
-            // Open confirmation dialog (wanting to leave - default to Discard, changes are trivial to re-stage)
-            KeyCode::Esc => {
-                let summary = self.cached_data.summary();
-                self.confirm_modal = Some(DeployConfirmModal::for_escape(summary));
-                DeploymentPreviewAction::None
-            }
-
-            _ => DeploymentPreviewAction::None,
-        }
-    }
-
-    fn handle_confirm_key(&mut self, key: KeyEvent) -> DeploymentPreviewAction {
-        match key.code {
-            // Navigate button selection
-            KeyCode::Left | KeyCode::BackTab => {
-                if let Some(ref mut modal) = self.confirm_modal {
-                    modal.select_prev();
-                }
-                DeploymentPreviewAction::None
-            }
-            KeyCode::Right | KeyCode::Tab => {
-                if let Some(ref mut modal) = self.confirm_modal {
-                    modal.select_next();
-                }
-                DeploymentPreviewAction::None
-            }
-
-            // Execute selected button action
-            KeyCode::Enter => {
-                let selected = self.confirm_modal.as_ref()
-                    .map(|m| m.selected_button);
-                self.confirm_modal = None;
-
-                match selected {
-                    Some(super::types::DeployConfirmButton::Confirm) => {
-                        DeploymentPreviewAction::Confirm
-                    }
-                    Some(super::types::DeployConfirmButton::Discard) => {
-                        DeploymentPreviewAction::Cancel
-                    }
-                    Some(super::types::DeployConfirmButton::Cancel) | None => {
-                        // Cancel = go back to preview (don't close)
-                        DeploymentPreviewAction::None
-                    }
-                }
-            }
-
-            // Close dialog without action (same as Cancel button)
-            KeyCode::Esc => {
-                self.confirm_modal = None;
-                DeploymentPreviewAction::None
-            }
+            // Cancel and return to Insights
+            KeyCode::Esc => DeploymentPreviewAction::Cancel,
 
             _ => DeploymentPreviewAction::None,
         }
@@ -197,11 +135,14 @@ impl DeploymentPreviewState {
         // Clear background
         f.render_widget(Clear, area);
 
-        // Layout: title (3) + main content
+        // Title height: 3 normally, 4 with per-library subtitle
+        let title_height = if self.cached_data.per_library.is_empty() { 3 } else { 4 };
+
+        // Layout: title + main content + controls
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Title bar
+                Constraint::Length(title_height),
                 Constraint::Min(10),   // Content
                 Constraint::Length(2), // Controls hint
             ])
@@ -215,29 +156,80 @@ impl DeploymentPreviewState {
 
         // Render controls hint
         self.render_controls(f, main_chunks[2]);
-
-        // Render confirmation dialog if open
-        if let Some(ref modal) = self.confirm_modal {
-            self.render_confirm_dialog(f, area, modal);
-        }
     }
 
     fn render_title(&self, f: &mut Frame, area: Rect) {
-        let title = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " Deploy Preview ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({} total operations)", self.cached_data.summary().total_operations()),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]))
-        .block(Block::default().borders(Borders::ALL));
+        let data = &self.cached_data;
+        let total_ops = data.total_operations();
 
-        f.render_widget(title, area);
+        // Build summary line
+        let mut summary_parts: Vec<String> = Vec::new();
+        if !data.new.is_empty() {
+            summary_parts.push(format!("{} new", data.new.len()));
+        }
+        if !data.leftover.is_empty() {
+            if data.replaced_count > 0 {
+                summary_parts.push(format!(
+                    "{} leftover ({} replaced)", data.leftover.len(), data.replaced_count
+                ));
+            } else {
+                summary_parts.push(format!("{} leftover", data.leftover.len()));
+            }
+        }
+        if !data.stale.is_empty() {
+            summary_parts.push(format!("{} stale", data.stale.len()));
+        }
+        if !data.conflicts.is_empty() {
+            summary_parts.push(format!("{} conflicts", data.conflicts.len()));
+        }
+
+        let summary_str = if summary_parts.is_empty() {
+            format!("({} total operations)", total_ops)
+        } else {
+            format!("({} — {})", total_ops, summary_parts.join(", "))
+        };
+
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled(
+                    " Deploy Preview ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" {}", summary_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+        ];
+
+        // Per-library subtitle when multiple libraries
+        if !data.per_library.is_empty() {
+            let lib_parts: Vec<String> = data.per_library.iter().map(|lib| {
+                let mut parts = Vec::new();
+                if lib.new_count > 0 { parts.push(format!("{}n", lib.new_count)); }
+                if lib.leftover_count > 0 {
+                    if lib.replaced_count > 0 {
+                        parts.push(format!("{}l({}r)", lib.leftover_count, lib.replaced_count));
+                    } else {
+                        parts.push(format!("{}l", lib.leftover_count));
+                    }
+                }
+                if lib.stale_count > 0 { parts.push(format!("{}s", lib.stale_count)); }
+                format!("{}: {}", lib.library_name, parts.join(", "))
+            }).collect();
+
+            lines.push(Line::from(Span::styled(
+                format!(" {}", lib_parts.join("  |  ")),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL));
+
+        f.render_widget(paragraph, area);
     }
 
     fn render_content(&self, f: &mut Frame, area: Rect) {
@@ -347,11 +339,7 @@ impl DeploymentPreviewState {
     }
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {
-        let controls = if self.confirm_modal.is_some() {
-            "[←/→] Select  [Enter] Execute  [Esc] Back to preview"
-        } else {
-            "[Tab/Arrows] Switch Tab  [Up/Down] Scroll  [Enter] Deploy  [Esc] Leave"
-        };
+        let controls = "[Tab/Arrows] Switch Tab  [Up/Down] Scroll  [Enter] Stage & Review  [Esc] Cancel";
 
         let paragraph = Paragraph::new(controls)
             .style(Style::default().fg(Color::DarkGray))
@@ -359,123 +347,4 @@ impl DeploymentPreviewState {
 
         f.render_widget(paragraph, area);
     }
-
-    fn render_confirm_dialog(&self, f: &mut Frame, area: Rect, modal: &DeployConfirmModal) {
-        use super::types::DeployConfirmButton;
-
-        let summary = &modal.summary;
-        let selected = modal.selected_button;
-
-        // Build message lines
-        let mut lines = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "Deploy Summary",
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-        ];
-
-        if summary.new_count > 0 {
-            lines.push(Line::from(format!(
-                "  New files to deploy: {}",
-                summary.new_count
-            )));
-        }
-        if summary.stale_count > 0 {
-            lines.push(Line::from(format!(
-                "  Stale files to fix: {}",
-                summary.stale_count
-            )));
-        }
-        if summary.leftover_count > 0 {
-            lines.push(Line::from(format!(
-                "  Leftover files to remove: {}",
-                summary.leftover_count
-            )));
-        }
-        if summary.healthy_count > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("  Already healthy: {}", summary.healthy_count),
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        lines.push(Line::from(""));
-
-        // Show conflict info (auto-resolved by picking first alphabetical)
-        if summary.conflict_count > 0 {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "{} conflicts (first alphabetical path wins)",
-                    summary.conflict_count
-                ),
-                Style::default().fg(Color::Yellow),
-            )));
-            lines.push(Line::from(""));
-        }
-
-        lines.push(Line::from(format!(
-            "Total operations: {}",
-            summary.total_operations()
-        )));
-
-        // Library size change overview
-        let delta = summary.library_after as isize - summary.library_before as isize;
-        let delta_str = if delta >= 0 {
-            format!("+{}", delta)
-        } else {
-            format!("{}", delta)
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Library: {} \u{2192} {} files (net {})",
-                summary.library_before, summary.library_after, delta_str
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
-
-        // Button styles: selected gets highlighted, others are dim
-        let style_for = |btn: DeployConfirmButton, color: Color| {
-            if selected == btn {
-                Style::default().fg(Color::Black).bg(color)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            }
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(" Cancel ", style_for(DeployConfirmButton::Cancel, Color::Gray)),
-            Span::raw("  "),
-            Span::styled(" Confirm ", style_for(DeployConfirmButton::Confirm, Color::Green)),
-            Span::raw("  "),
-            Span::styled(" Discard ", style_for(DeployConfirmButton::Discard, Color::Red)),
-        ]));
-
-        // Render as centered modal
-        let modal_style = ModalStyle::info();
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(modal_style.border_color))
-            .title("Confirm Deployment")
-            .style(Style::default().bg(Color::Black));
-
-        // Calculate centered area (fixed size - won't shrink on small windows)
-        let popup_area = centered_rect_fixed(60, 20, area);
-        f.render_widget(Clear, popup_area);
-
-        let paragraph = Paragraph::new(lines).block(block);
-        f.render_widget(paragraph, popup_area);
-    }
-}
-
-/// Compute a centered rectangle with fixed dimensions.
-fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width, height)
 }

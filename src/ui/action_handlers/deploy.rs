@@ -11,10 +11,11 @@ use super::super::App;
 impl App {
     /// Start deployment preview from Insights view.
     pub(in crate::ui) fn start_deployment_preview_from_insights(&mut self) {
+        let config = crate::config::load_config().ok();
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
-                deploy_modal::DeployModalData::load(&read_db).ok()
+                deploy_modal::DeployModalData::load(&read_db, config.as_ref()).ok()
             })
             .unwrap_or_default();
 
@@ -70,7 +71,6 @@ impl App {
             return 0;
         };
         let resolver = paths::get_resolver();
-        let config = crate::config::load_config().ok();
         let mut mutations = Vec::new();
 
         // ORDERING IS CRITICAL:
@@ -105,38 +105,23 @@ impl App {
         }
 
         // 3. New files: create hard links
-        // corpus_path is "corpus/..." and deploy_path is "Artist/Album/..."
-        // We need to determine target library from config and build full path
+        // library_name is already assigned during DeployModalData::load() via config lookup
+        // deploy_path is "Artist/Album/..." (relative to library root)
         for file in &data.new {
-            // Skip files with empty deploy_path (data integrity check)
-            if file.deploy_path.is_empty() {
+            if file.deploy_path.is_empty() || file.library_name.is_empty() {
                 continue;
             }
 
-            // Source: corpus path resolves directly
             let source = resolver.resolve(std::path::Path::new(&file.corpus_path));
-
-            // Destination: look up target library from config, build full path
-            let corpus_path = std::path::Path::new(&file.corpus_path);
-            let library_name = config
-                .as_ref()
-                .and_then(|c| c.get_libraries_for_corpus_path(corpus_path).first().cloned());
-
-            let dest_rel = if let Some(lib) = library_name {
-                std::path::Path::new("libraries")
-                    .join(&lib)
-                    .join(&file.deploy_path)
-            } else {
-                // Fallback: use first configured library or skip
-                // This shouldn't happen if signals are correctly generated
-                continue;
-            };
+            let dest_rel = std::path::Path::new("libraries")
+                .join(&file.library_name)
+                .join(&file.deploy_path);
             let destination = resolver.resolve(&dest_rel);
             mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
         }
 
         // 4. Conflicts: pick first alphabetical corpus path and deploy it
-        // Same path resolution as new files - need target library from config
+        // Find matching new file's library_name for the deploy_path
         for group in &data.conflicts {
             if let Some((corpus_path, _inode)) = group
                 .conflicting_files
@@ -145,19 +130,19 @@ impl App {
             {
                 let source = resolver.resolve(std::path::Path::new(corpus_path));
 
-                // Look up target library from config
-                let corpus_path_obj = std::path::Path::new(corpus_path);
-                let library_name = config
-                    .as_ref()
-                    .and_then(|c| c.get_libraries_for_corpus_path(corpus_path_obj).first().cloned());
+                // Find library_name from a new file with matching corpus_path
+                let library_name = data.new.iter()
+                    .find(|f| f.corpus_path == *corpus_path)
+                    .map(|f| f.library_name.as_str())
+                    .unwrap_or("");
 
-                let dest_rel = if let Some(lib) = library_name {
-                    std::path::Path::new("libraries")
-                        .join(&lib)
-                        .join(&group.deploy_path)
-                } else {
-                    continue; // Skip if no library mapping
-                };
+                if library_name.is_empty() {
+                    continue;
+                }
+
+                let dest_rel = std::path::Path::new("libraries")
+                    .join(library_name)
+                    .join(&group.deploy_path);
                 let destination = resolver.resolve(&dest_rel);
                 mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
             }

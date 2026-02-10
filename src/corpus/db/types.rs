@@ -242,25 +242,31 @@ pub struct DirectoryBreakdownEntry {
 /// A file with deploy info (for healthy/new files).
 #[derive(Debug, Clone)]
 pub struct DeploySignalFile {
+    /// Target library name (e.g., "music", "soundtracks")
+    pub library_name: String,
     /// Path in the corpus
     pub corpus_path: String,
-    /// Computed deploy path in library
+    /// Computed deploy path in library (relative to library root, no library prefix)
     pub deploy_path: String,
 }
 
 /// A stale library file (deployed path differs from expected).
 #[derive(Debug, Clone)]
 pub struct StaleSignalFile {
-    /// Current path in library (wrong)
+    /// Library this file belongs to (e.g., "music")
+    pub library_name: String,
+    /// Current path in library (wrong) — "{library_name}/path/..."
     pub library_path: String,
-    /// Expected path (computed from current tags)
+    /// Expected path (computed from current tags) — "{library_name}/path/..."
     pub expected_path: String,
 }
 
 /// A leftover file (in library but no corpus backing).
 #[derive(Debug, Clone)]
 pub struct LeftoverSignalFile {
-    /// Path in the library
+    /// Library this file belongs to (e.g., "music")
+    pub library_name: String,
+    /// Path in the library — "{library_name}/path/..."
     pub library_path: String,
 }
 

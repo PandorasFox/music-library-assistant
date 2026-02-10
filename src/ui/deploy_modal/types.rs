@@ -1,9 +1,9 @@
 //! Deploy Modal Types
 //!
 //! Data structures for the deploy modal, including cached signal data
-//! and confirmation dialog state.
+//! and per-library breakdown.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::corpus::db::types::{ConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
@@ -18,6 +18,18 @@ pub struct DirectoryAggregate {
     pub directory: String,
     /// Number of files in this directory
     pub count: usize,
+}
+
+/// Per-library breakdown of deploy operations.
+#[derive(Debug, Clone)]
+pub struct LibrarySummary {
+    pub library_name: String,
+    pub healthy_count: usize,
+    pub new_count: usize,
+    pub leftover_count: usize,
+    pub stale_count: usize,
+    /// Leftovers whose library_path matches a pending new deployment destination
+    pub replaced_count: usize,
 }
 
 /// Cached data for the deploy modal.
@@ -40,6 +52,10 @@ pub struct DeployModalData {
     pub leftover_by_dir: Vec<DirectoryAggregate>,
     /// Stale files: deployed at wrong path (tags changed)
     pub stale: Vec<StaleSignalFile>,
+    /// Per-library breakdown (only populated when > 1 library)
+    pub per_library: Vec<LibrarySummary>,
+    /// Total leftovers that will be replaced by new deployments
+    pub replaced_count: usize,
 }
 
 impl DeployModalData {
@@ -47,12 +63,25 @@ impl DeployModalData {
     ///
     /// Called once when the modal opens. All subsequent renders
     /// use this cached data.
-    pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
+    ///
+    /// `config` is used to assign library_name to deploy-ready files
+    /// (which don't carry library info in the signal itself).
+    pub fn load(read_db: &ReadOnlyDb<'_>, config: Option<&crate::config::Config>) -> Result<Self> {
         let healthy = read_db.get_deployed_healthy_files()?;
-        let new = read_db.get_deploy_ready_files()?;
+        let mut new = read_db.get_deploy_ready_files()?;
         let conflicts = read_db.get_deploy_conflict_groups()?;
         let leftover = read_db.get_library_leftover_files()?;
         let stale = read_db.get_library_stale_files()?;
+
+        // Assign library_name to deploy-ready files via config lookup
+        if let Some(cfg) = config {
+            for file in &mut new {
+                let corpus_path = std::path::Path::new(&file.corpus_path);
+                if let Some(lib) = cfg.get_libraries_for_corpus_path(corpus_path).into_iter().next() {
+                    file.library_name = lib;
+                }
+            }
+        }
 
         crate::logging::log_general(format!(
             "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}",
@@ -69,6 +98,22 @@ impl DeployModalData {
             leftover.iter().map(|f| f.library_path.as_str())
         );
 
+        // Compute "replaced" leftovers: leftovers whose library_path matches a new deployment
+        // New files deploy to "{library_name}/{deploy_path}", which matches leftover library_path format
+        let new_destinations: HashSet<String> = new.iter()
+            .filter(|f| !f.library_name.is_empty())
+            .map(|f| format!("{}/{}", f.library_name, f.deploy_path))
+            .collect();
+
+        let replaced_count = leftover.iter()
+            .filter(|f| new_destinations.contains(&f.library_path))
+            .count();
+
+        // Build per-library breakdown
+        let per_library = Self::compute_per_library(
+            &healthy, &new, &leftover, &stale, &conflicts, &new_destinations,
+        );
+
         Ok(Self {
             healthy,
             new,
@@ -77,7 +122,63 @@ impl DeployModalData {
             leftover,
             leftover_by_dir,
             stale,
+            per_library,
+            replaced_count,
         })
+    }
+
+    /// Compute per-library summaries. Only populated when 2+ libraries are present.
+    fn compute_per_library(
+        healthy: &[DeploySignalFile],
+        new: &[DeploySignalFile],
+        leftover: &[LeftoverSignalFile],
+        stale: &[StaleSignalFile],
+        _conflicts: &[ConflictGroup],
+        new_destinations: &HashSet<String>,
+    ) -> Vec<LibrarySummary> {
+        let mut libs: HashMap<String, LibrarySummary> = HashMap::new();
+
+        for f in healthy {
+            let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
+                library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
+                leftover_count: 0, stale_count: 0, replaced_count: 0,
+            });
+            entry.healthy_count += 1;
+        }
+        for f in new {
+            if !f.library_name.is_empty() {
+                let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
+                    library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
+                    leftover_count: 0, stale_count: 0, replaced_count: 0,
+                });
+                entry.new_count += 1;
+            }
+        }
+        for f in leftover {
+            let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
+                library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
+                leftover_count: 0, stale_count: 0, replaced_count: 0,
+            });
+            entry.leftover_count += 1;
+            if new_destinations.contains(&f.library_path) {
+                entry.replaced_count += 1;
+            }
+        }
+        for f in stale {
+            let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
+                library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
+                leftover_count: 0, stale_count: 0, replaced_count: 0,
+            });
+            entry.stale_count += 1;
+        }
+
+        if libs.len() < 2 {
+            return Vec::new();
+        }
+
+        let mut result: Vec<_> = libs.into_values().collect();
+        result.sort_by(|a, b| a.library_name.cmp(&b.library_name));
+        result
     }
 
     /// Aggregate paths by their parent directory, sorted by count descending.
@@ -112,122 +213,9 @@ impl DeployModalData {
         ]
     }
 
-    /// Get summary for confirmation dialog.
-    pub fn summary(&self) -> DeploySummary {
-        let healthy = self.healthy.len();
-        let stale = self.stale.len();
-        let leftover = self.leftover.len();
-        let new = self.new.len();
-        let conflicts = self.conflicts.len();
-
-        // Library before: all files currently in library = healthy + stale + leftover
-        let library_before = healthy + stale + leftover;
-        // Library after: healthy stay, new get deployed, stale get moved (already in
-        // library_before and re-deployed via "new"), leftovers removed.
-        // Conflict losers are a small subset of "new" that won't deploy, ignored here.
-        let library_after = healthy + new;
-
-        DeploySummary {
-            new_count: new,
-            stale_count: stale,
-            leftover_count: leftover,
-            conflict_count: conflicts,
-            healthy_count: healthy,
-            library_before,
-            library_after,
-        }
-    }
-}
-
-/// Summary of deploy operations for confirmation dialog.
-#[derive(Debug, Clone, Default)]
-pub struct DeploySummary {
-    /// New files to deploy
-    pub new_count: usize,
-    /// Stale files to redeploy
-    pub stale_count: usize,
-    /// Leftover files to remove
-    pub leftover_count: usize,
-    /// Conflicts blocking deployment
-    pub conflict_count: usize,
-    /// Already healthy (no action needed)
-    pub healthy_count: usize,
-    /// Files currently in library (before deploy)
-    pub library_before: usize,
-    /// Files in library after deploy
-    pub library_after: usize,
-}
-
-impl DeploySummary {
     /// Total operations that will be performed (excluding healthy).
     /// Conflicts are auto-resolved by picking first alphabetical path.
     pub fn total_operations(&self) -> usize {
-        self.new_count + self.stale_count + self.leftover_count + self.conflict_count
-    }
-}
-
-/// Buttons on the deploy confirmation modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeployConfirmButton {
-    /// Go back to editing/preview (safe default for Enter-triggered modal)
-    Cancel,
-    /// Execute the deployment
-    Confirm,
-    /// Discard staged changes and return to insights (safe default for Esc-triggered modal)
-    Discard,
-}
-
-impl DeployConfirmButton {
-    /// Cycle to next button (left direction).
-    pub fn prev(self) -> Self {
-        match self {
-            Self::Cancel => Self::Discard,
-            Self::Confirm => Self::Cancel,
-            Self::Discard => Self::Confirm,
-        }
-    }
-
-    /// Cycle to next button (right direction).
-    pub fn next(self) -> Self {
-        match self {
-            Self::Cancel => Self::Confirm,
-            Self::Confirm => Self::Discard,
-            Self::Discard => Self::Cancel,
-        }
-    }
-}
-
-/// State for the confirmation dialog.
-#[derive(Debug, Clone)]
-pub struct DeployConfirmModal {
-    pub summary: DeploySummary,
-    pub selected_button: DeployConfirmButton,
-}
-
-impl DeployConfirmModal {
-    /// Create modal for Enter key (wanting to confirm) - defaults to Cancel (safe).
-    pub fn for_confirm(summary: DeploySummary) -> Self {
-        Self {
-            summary,
-            selected_button: DeployConfirmButton::Cancel,
-        }
-    }
-
-    /// Create modal for Esc key (wanting to leave) - defaults to Discard (safe, changes are trivial to re-stage).
-    pub fn for_escape(summary: DeploySummary) -> Self {
-        Self {
-            summary,
-            selected_button: DeployConfirmButton::Discard,
-        }
-    }
-
-    /// Navigate button selection left.
-    pub fn select_prev(&mut self) {
-        self.selected_button = self.selected_button.prev();
-    }
-
-    /// Navigate button selection right.
-    pub fn select_next(&mut self) {
-        self.selected_button = self.selected_button.next();
+        self.new.len() + self.stale.len() + self.leftover.len() + self.conflicts.len()
     }
 }

@@ -595,6 +595,7 @@ impl Database {
 
         let results = stmt.query_map(params![], |row| {
             Ok(DeploySignalFile {
+                library_name: String::new(), // populated by caller via config lookup
                 corpus_path: row.get(0)?,
                 deploy_path: row.get(1)?,
             })
@@ -616,9 +617,13 @@ impl Database {
         )?;
 
         let results = stmt.query_map(params![], |row| {
+            let library_path: String = row.get(1)?;
+            // library_path is "{library_name}/relative/path" — extract library_name
+            let library_name = library_path.split('/').next().unwrap_or("").to_string();
             Ok(DeploySignalFile {
+                library_name,
                 corpus_path: row.get(0)?,
-                deploy_path: row.get(1)?,
+                deploy_path: library_path,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -638,8 +643,12 @@ impl Database {
         )?;
 
         let results = stmt.query_map(params![], |row| {
+            let library_path: String = row.get(0)?;
+            // library_path is "{library_name}/relative/path" — extract library_name
+            let library_name = library_path.split('/').next().unwrap_or("").to_string();
             Ok(StaleSignalFile {
-                library_path: row.get(0)?,
+                library_name,
+                library_path,
                 expected_path: row.get(1)?,
             })
         })?
@@ -654,20 +663,21 @@ impl Database {
     pub fn get_library_leftover_files(&self) -> Result<Vec<crate::corpus::db::types::LeftoverSignalFile>> {
         use crate::corpus::db::types::LeftoverSignalFile;
 
-        // key = "library_leftover:{library_name}:{library_path}"
+        // key = "library_leftover:{library_name}:{library_name}/path/..."
         let mut stmt = self.conn.prepare(
             "SELECT key FROM signal_library_leftover ORDER BY key"
         )?;
 
         let results = stmt.query_map(params![], |row| {
             let key: String = row.get(0)?;
-            // Extract library_path from key — paths start with '/'
-            let library_path = if let Some(path_start) = key.find(":/") {
-                key[path_start + 1..].to_string()
-            } else {
-                key
+            // Strip "library_leftover:" prefix, then split on first ":" to get
+            // library_name and library_path (which is "{library_name}/relative/path")
+            let after_prefix = key.strip_prefix("library_leftover:").unwrap_or(&key);
+            let (library_name, library_path) = match after_prefix.find(':') {
+                Some(idx) => (after_prefix[..idx].to_string(), after_prefix[idx + 1..].to_string()),
+                None => (String::new(), after_prefix.to_string()),
             };
-            Ok(LeftoverSignalFile { library_path })
+            Ok(LeftoverSignalFile { library_name, library_path })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 

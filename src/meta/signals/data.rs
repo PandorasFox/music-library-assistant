@@ -338,3 +338,80 @@ pub struct CrossSourceTrackPair {
     pub source_b_inode: i64,
     pub source_b_path: String,
 }
+
+// ============================================================================
+// Typed Signal Write Envelope
+// ============================================================================
+
+/// Typed signal data for direct writes to per-signal tables.
+///
+/// Sent through the db_thread channel to avoid JSON serialization.
+/// Each variant wraps the typed signal data struct and maps 1:1 to a table.
+#[derive(Debug, Clone)]
+pub enum TypedSignalWrite {
+    // Corpus file signals (inode-keyed)
+    FileInCorpus(FileInCorpusSignal),
+    UnindexedFile(UnindexedFileSignal),
+    HealthyFile(HealthyFileSignal),
+    CorruptFile(CorruptFileSignal),
+    MtimeOnlyMismatch(MtimeOnlyMismatchSignal),
+    MissingDirectory(MissingDirectorySignal),
+    MissingFile(MissingFileSignal),
+    MovedFile(MovedFileSignal),
+    ShitFormat(ShitFormatSignal),
+    DeployReady(DeployReadySignal),
+    DeployedHealthy(DeployedHealthySignal),
+    OutOfBandTagSync(OutOfBandTagSyncSignal),
+    OutOfBandTagConflict(OutOfBandTagConflictSignal),
+    SubparDuplicate(SubparDuplicateSignal),
+    CompoundTag(CompoundTagSignal),
+    // Aggregate signals (semantic-keyed)
+    CanonicalTag(CanonicalTagSignal),
+    LibraryLeftover(LibraryLeftoverSignal),
+    LibraryStale(LibraryStaleSignal),
+    FingerprintOverlap(FingerprintOverlapSignal),
+    MetadataDuplicate(MetadataDuplicateSignal),
+    DuplicateInode(DuplicateInodeSignal),
+    MissingTag(MissingTagSignal),
+    DeployConflict(DeployConflictSignal),
+    TagCanonicity(TagCanonicitySignal),
+    InconsistentAlbumArtist(InconsistentAlbumArtistSignal),
+    CompoundTagValue(CompoundTagValueSignal),
+    CrossSourceOverlap(CrossSourceOverlapSignal),
+}
+
+impl TypedSignalWrite {
+    /// Insert this signal into its typed table.
+    pub fn insert(self, conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
+        match self {
+            Self::FileInCorpus(s) => s.insert(conn),
+            Self::UnindexedFile(s) => s.insert(conn),
+            Self::HealthyFile(s) => s.insert(conn),
+            Self::CorruptFile(s) => s.insert(conn),
+            Self::MtimeOnlyMismatch(s) => s.insert(conn),
+            Self::MissingDirectory(s) => s.insert(conn),
+            Self::MissingFile(s) => s.insert(conn),
+            Self::MovedFile(s) => s.insert(conn),
+            Self::ShitFormat(s) => s.insert(conn),
+            Self::DeployReady(s) => s.insert(conn),
+            Self::DeployedHealthy(s) => s.insert(conn),
+            Self::OutOfBandTagSync(s) => s.insert(conn),
+            Self::OutOfBandTagConflict(s) => s.insert(conn),
+            Self::SubparDuplicate(s) => s.insert(conn),
+            Self::CompoundTag(s) => s.insert(conn),
+            Self::CanonicalTag(s) => s.insert(conn),
+            Self::LibraryLeftover(s) => s.insert(conn),
+            Self::LibraryStale(s) => s.insert(conn),
+            Self::FingerprintOverlap(s) => s.insert(conn),
+            Self::MetadataDuplicate(s) => s.insert(conn),
+            Self::DuplicateInode(s) => s.insert(conn),
+            Self::MissingTag(s) => s.insert(conn),
+            Self::DeployConflict(s) => s.insert(conn),
+            Self::TagCanonicity(s) => s.insert(conn),
+            Self::InconsistentAlbumArtist(s) => s.insert(conn),
+            Self::CompoundTagValue(s) => s.insert(conn),
+            Self::CrossSourceOverlap(s) => s.insert(conn),
+        }
+    }
+}

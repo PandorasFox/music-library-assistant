@@ -232,6 +232,14 @@ enum SignalWriteOp {
     ClearCorpusSignalsByType {
         signal_type: CorpusFileSignalType,
     },
+
+    /// Write a typed signal directly to its per-signal table.
+    ///
+    /// Bypasses JSON serialization entirely — the typed data struct is sent
+    /// through the channel and inserted directly via CorpusSignalStore/AggregateSignalStore.
+    WriteTypedSignal {
+        signal: crate::meta::signals::data::TypedSignalWrite,
+    },
     /// Update file mtime in files table (after OOB verification).
     /// Uses (source, inode) as the unique key for reliable updates.
     UpdateFileMtime {
@@ -606,6 +614,19 @@ impl SignalWriteSender {
             signal_type,
             key: key.to_string(),
         });
+    }
+
+    /// Write a typed signal directly to its per-signal table.
+    ///
+    /// This is the typed-data path that bypasses JSON serialization.
+    /// Computations construct the typed data struct and send it directly.
+    pub fn write_typed_signal(
+        &self,
+        signal: crate::meta::signals::data::TypedSignalWrite,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::WriteTypedSignal { signal });
     }
 
     // =========================================================================
@@ -1631,6 +1652,13 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
             });
             typed_clear_corpus_signals_by_type(db, signal_type);
+        }
+        SignalWriteOp::WriteTypedSignal { signal } => {
+            if let Err(e) = signal.clone().insert(db.conn()) {
+                crate::logging::log_error(format!(
+                    "[DB_THREAD] write_typed_signal failed: {}", e
+                ));
+            }
         }
         SignalWriteOp::UpdateFileMtime {
             source,

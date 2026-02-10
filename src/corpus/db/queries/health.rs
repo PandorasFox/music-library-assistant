@@ -20,7 +20,7 @@ use super::Database;
 use crate::db_thread::SignalWitness;
 use crate::corpus::db::types::FileSource;
 use crate::meta::signals::{
-    AggregateSignal, AggregateSignalType, CorpusFileSignalType,
+    AggregateSignalType, CorpusFileSignalType,
 };
 
 impl Database {
@@ -214,33 +214,6 @@ impl Database {
         Ok(self.conn.changes() > 0)
     }
 
-    /// Ensure an inode-keyed corpus signal with additional metadata.
-    ///
-    /// Merges the path into the provided metadata and stores the signal.
-    pub fn ensure_corpus_signal_with_metadata(
-        &self,
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: &str,
-        mut extra_metadata: serde_json::Value,
-        _witness: &impl SignalWitness,
-    ) -> Result<bool> {
-        let key = inode.to_string();
-        extra_metadata["path"] = serde_json::json!(path);
-        self.conn
-            .execute(
-                r#"
-                INSERT OR IGNORE INTO signals
-                (issue_type, issue_key, inode, discovered_at, metadata_json)
-                VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, ?4)
-                "#,
-                params![signal_type.as_str(), key, inode, extra_metadata.to_string()],
-            )
-            .context("Failed to ensure corpus signal with metadata")?;
-
-        Ok(self.conn.changes() > 0)
-    }
-
     /// Clear an inode-keyed corpus signal (idempotent delete).
     pub fn clear_corpus_signal(
         &self,
@@ -340,38 +313,6 @@ impl Database {
         Ok(self.conn.changes() > 0)
     }
 
-    /// Replace an aggregate signal (delete + insert).
-    pub fn replace_aggregate_signal(
-        &self,
-        signal: &AggregateSignal,
-        _witness: &impl SignalWitness,
-    ) -> Result<i64> {
-        self.conn
-            .execute(
-                "DELETE FROM signals WHERE issue_type = ?1 AND issue_key = ?2",
-                params![signal.signal_type.as_str(), &signal.key],
-            )
-            .context("Failed to delete existing aggregate signal")?;
-
-        self.conn
-            .execute(
-                r#"
-                INSERT INTO signals
-                (issue_type, issue_key, discovered_at, metadata_json)
-                VALUES (?1, ?2, COALESCE(?3, CURRENT_TIMESTAMP), ?4)
-                "#,
-                params![
-                    signal.signal_type.as_str(),
-                    &signal.key,
-                    &signal.discovered_at,
-                    &signal.metadata_json,
-                ],
-            )
-            .context("Failed to replace aggregate signal")?;
-
-        Ok(self.conn.last_insert_rowid())
-    }
-
     /// Clear an aggregate signal (idempotent delete).
     pub fn clear_aggregate_signal(
         &self,
@@ -388,50 +329,6 @@ impl Database {
             .context("Failed to clear aggregate signal")?;
 
         Ok(deleted > 0)
-    }
-
-    /// Get all aggregate signal keys and their metadata for a given type.
-    ///
-    /// Returns (key, metadata_json) pairs for set-difference computations.
-    pub fn get_aggregate_signal_keys_with_metadata(
-        &self,
-        signal_type: AggregateSignalType,
-    ) -> Result<Vec<(String, Option<String>)>> {
-        // Read from typed table, reconstruct metadata JSON for callers
-        let table = aggregate_signal_table_name(signal_type);
-        let has_data = aggregate_signal_has_data_blob(signal_type);
-
-        if has_data {
-            let sql = format!("SELECT key, data FROM {}", table);
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![], |row| {
-                let key: String = row.get(0)?;
-                let blob: Vec<u8> = row.get(1)?;
-                Ok((key, blob))
-            })?;
-
-            let mut results = Vec::new();
-            for row in rows {
-                let (key, blob) = row?;
-                // Reconstruct JSON from bincode for backwards compat
-                let json = reconstruct_aggregate_metadata_json(signal_type, &key, &blob);
-                results.push((key, Some(json)));
-            }
-            Ok(results)
-        } else {
-            let sql = format!("SELECT key FROM {}", table);
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![], |row| {
-                let key: String = row.get(0)?;
-                Ok((key, None))
-            })?;
-
-            let mut results = Vec::new();
-            for row in rows {
-                results.push(row?);
-            }
-            Ok(results)
-        }
     }
 
     /// Get compound tag signal keys (inode strings) filtered by safety classification.
@@ -1194,118 +1091,3 @@ impl Database {
     }
 }
 
-// ============================================================================
-// Signal Typed-Table Helpers
-// ============================================================================
-
-/// Get the typed table name for an aggregate signal type.
-fn aggregate_signal_table_name(signal_type: AggregateSignalType) -> &'static str {
-    match signal_type {
-        AggregateSignalType::FingerprintOverlap => "signal_fingerprint_overlap",
-        AggregateSignalType::MetadataDuplicate => "signal_metadata_duplicate",
-        AggregateSignalType::DuplicateInode => "signal_duplicate_inode",
-        AggregateSignalType::MissingTag => "signal_missing_tag",
-        AggregateSignalType::DeployConflict => "signal_deploy_conflict",
-        AggregateSignalType::TagCanonicity => "signal_tag_canonicity",
-        AggregateSignalType::InconsistentAlbumArtist => "signal_inconsistent_album_artist",
-        AggregateSignalType::CompoundTagValue => "signal_compound_tag_value",
-        AggregateSignalType::CrossSourceOverlap => "signal_cross_source_overlap",
-        AggregateSignalType::CanonicalTag => "signal_canonical_tag",
-        AggregateSignalType::LibraryLeftover => "signal_library_leftover",
-        AggregateSignalType::LibraryStale => "signal_library_stale",
-    }
-}
-
-/// Whether an aggregate signal type stores a bincode data BLOB.
-fn aggregate_signal_has_data_blob(signal_type: AggregateSignalType) -> bool {
-    !matches!(signal_type,
-        AggregateSignalType::CanonicalTag
-        | AggregateSignalType::LibraryLeftover
-        | AggregateSignalType::LibraryStale
-    )
-}
-
-/// Reconstruct JSON metadata from bincode BLOB for backwards compatibility.
-///
-/// This is a transitional bridge — callers that consume metadata_json will be
-/// migrated to use typed structs directly, at which point this goes away.
-fn reconstruct_aggregate_metadata_json(
-    signal_type: AggregateSignalType,
-    key: &str,
-    blob: &[u8],
-) -> String {
-    use crate::meta::signals::data::*;
-
-    match signal_type {
-        AggregateSignalType::FingerprintOverlap => {
-            let inodes: Vec<i64> = bincode::deserialize(blob).unwrap_or_default();
-            serde_json::json!({"inodes": inodes, "inode_count": inodes.len()}).to_string()
-        }
-        AggregateSignalType::MetadataDuplicate => {
-            let data: MetadataDuplicateData = bincode::deserialize(blob).unwrap_or_else(|_| MetadataDuplicateData {
-                tag_signature: String::new(), inodes: Vec::new(),
-            });
-            serde_json::json!({"tag_signature": data.tag_signature, "inodes": data.inodes, "inode_count": data.inodes.len()}).to_string()
-        }
-        AggregateSignalType::DuplicateInode => {
-            let inodes: Vec<i64> = bincode::deserialize(blob).unwrap_or_default();
-            // Extract inode from key
-            let inode: i64 = key.parse().unwrap_or(0);
-            serde_json::json!({"inode": inode, "inodes": inodes, "inode_count": inodes.len()}).to_string()
-        }
-        AggregateSignalType::MissingTag => {
-            let data: MissingTagData = bincode::deserialize(blob).unwrap_or_else(|_| MissingTagData {
-                missing_tags: Vec::new(), inodes: Vec::new(),
-            });
-            serde_json::json!({"missing_tags": data.missing_tags, "inodes": data.inodes, "inode_count": data.inodes.len()}).to_string()
-        }
-        AggregateSignalType::DeployConflict => {
-            let inodes: Vec<i64> = bincode::deserialize(blob).unwrap_or_default();
-            serde_json::json!({"deploy_path": key, "inodes": inodes, "inode_count": inodes.len()}).to_string()
-        }
-        AggregateSignalType::TagCanonicity => {
-            let data: TagCanonicityData = bincode::deserialize(blob).unwrap_or_else(|_| TagCanonicityData {
-                variants: Vec::new(), inodes: Vec::new(),
-            });
-            let variants_obj: serde_json::Map<String, serde_json::Value> = data.variants.into_iter()
-                .map(|(k, v)| (k, serde_json::json!(v)))
-                .collect();
-            serde_json::json!({"variants": variants_obj, "inodes": data.inodes, "inode_count": data.inodes.len()}).to_string()
-        }
-        AggregateSignalType::InconsistentAlbumArtist => {
-            let data: InconsistentAlbumArtistData = bincode::deserialize(blob).unwrap_or_else(|_| InconsistentAlbumArtistData {
-                album: String::new(), artist_variants: Vec::new(), album_artist_variants: Vec::new(), inodes: Vec::new(),
-            });
-            let av: serde_json::Map<String, serde_json::Value> = data.artist_variants.into_iter().map(|(k, v)| (k, serde_json::json!(v))).collect();
-            let aav: serde_json::Map<String, serde_json::Value> = data.album_artist_variants.into_iter().map(|(k, v)| (k, serde_json::json!(v))).collect();
-            serde_json::json!({"album": data.album, "artist_variants": av, "album_artist_variants": aav, "inodes": data.inodes, "inode_count": data.inodes.len()}).to_string()
-        }
-        AggregateSignalType::CompoundTagValue => {
-            let data: CompoundTagValueData = bincode::deserialize(blob).unwrap_or_else(|_| CompoundTagValueData {
-                compound_value: String::new(), split_parts: Vec::new(), separator: String::new(), inodes: Vec::new(),
-            });
-            serde_json::json!({"compound_value": data.compound_value, "split_parts": data.split_parts, "separator": data.separator, "inodes": data.inodes, "inode_count": data.inodes.len()}).to_string()
-        }
-        AggregateSignalType::CrossSourceOverlap => {
-            let data: CrossSourceOverlapData = bincode::deserialize(blob).unwrap_or_else(|_| CrossSourceOverlapData {
-                source_a: String::new(), source_b: String::new(),
-                source_a_can_stash: false, source_b_can_stash: false,
-                overlap_count: 0, fingerprint_count: 0,
-                fingerprint_keys: Vec::new(), track_pairs: Vec::new(),
-            });
-            serde_json::json!({
-                "source_a": data.source_a, "source_b": data.source_b,
-                "source_a_can_stash": data.source_a_can_stash, "source_b_can_stash": data.source_b_can_stash,
-                "overlap_count": data.overlap_count, "fingerprint_count": data.fingerprint_count,
-                "fingerprint_keys": data.fingerprint_keys,
-                "track_pairs": data.track_pairs.iter().map(|tp| serde_json::json!({
-                    "fingerprint_key": tp.fingerprint_key,
-                    "source_a_inode": tp.source_a_inode, "source_a_path": tp.source_a_path,
-                    "source_b_inode": tp.source_b_inode, "source_b_path": tp.source_b_path,
-                })).collect::<Vec<_>>()
-            }).to_string()
-        }
-        // These don't have BLOB data — shouldn't be called but handle gracefully
-        _ => "{}".to_string(),
-    }
-}

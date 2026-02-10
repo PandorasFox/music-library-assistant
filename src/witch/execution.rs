@@ -420,17 +420,6 @@ fn emit_pending_signals(
             PendingSignal::CorpusSignal { signal_type, inode, path } => {
                 sender.ensure_corpus_signal(*signal_type, *inode, path, witness);
             }
-            PendingSignal::CorpusSignalWithMetadata { signal_type, inode, path, metadata_json } => {
-                let extra_metadata: serde_json::Value = serde_json::from_str(metadata_json)
-                    .unwrap_or_else(|_| serde_json::json!({}));
-                sender.ensure_corpus_signal_with_metadata(
-                    *signal_type,
-                    *inode,
-                    path,
-                    extra_metadata,
-                    witness,
-                );
-            }
             PendingSignal::Typed(typed_signal) => {
                 sender.write_typed_signal(typed_signal.clone(), witness);
             }

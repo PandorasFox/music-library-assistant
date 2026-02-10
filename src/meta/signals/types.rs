@@ -304,27 +304,12 @@ impl std::fmt::Display for CorpusFileSignalType {
 /// Groups multiple tracks under a common key. Metadata contains details.
 #[derive(Debug, Clone)]
 pub struct AggregateSignal {
-    pub id: Option<i64>,
     pub signal_type: AggregateSignalType,
     pub key: String,
     pub discovered_at: Option<String>,
     pub metadata_json: Option<String>,
 }
 
-impl AggregateSignal {
-    /// Create a new aggregate signal with inodes embedded in metadata.
-    pub fn with_inodes(mut self, ids: &[i64]) -> Self {
-        let mut meta = self
-            .metadata_json
-            .as_ref()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        meta["inodes"] = serde_json::json!(ids);
-        meta["inode_count"] = serde_json::json!(ids.len());
-        self.metadata_json = Some(meta.to_string());
-        self
-    }
-}
 
 /// Types of aggregate signals (semantic-keyed).
 ///
@@ -406,49 +391,4 @@ impl AggregateSignalType {
         }
     }
 }
-
-// ============================================================================
-// Signal (Unified Signal Type)
-// ============================================================================
-
-/// Unified signal representing a fact about corpus state.
-///
-/// Signals are created by computations and deleted when stale. They record
-/// file health, duplicate detection, missing tags, deploy conflicts, etc.
-///
-/// ## Key Types
-///
-/// - **File signals** (FileInCorpus, UnindexedFile, HealthyFile, MissingFile, etc.):
-///   `issue_key` stores the inode as a string. Path is in `metadata_json.path`.
-/// - **Library signals** (LibraryStale, LibraryLeftover):
-///   `issue_key` uses compound format like `"library_leftover:{name}:{path}"`.
-/// - **Aggregate signals** (FingerprintOverlap, TagCanonicity, etc.):
-///   `issue_key` uses semantic string keys.
-#[derive(Debug, Clone)]
-pub struct Signal {
-    pub id: Option<i64>,
-    pub issue_type: SignalType,
-    pub issue_key: String,
-    pub discovered_at: Option<String>,
-    pub metadata_json: Option<String>,
-    /// Native inode for inode-keyed signals (corpus file signals).
-    /// Path-keyed signals (MissingDirectory, library signals) have None.
-    pub inode: Option<i64>,
-}
-
-
-impl From<AggregateSignal> for Signal {
-    fn from(sig: AggregateSignal) -> Self {
-        Self {
-            id: sig.id,
-            issue_type: SignalType::from_str(sig.signal_type.as_str())
-                .unwrap_or(SignalType::FingerprintOverlap),
-            issue_key: sig.key,
-            discovered_at: sig.discovered_at,
-            metadata_json: sig.metadata_json,
-            inode: None, // AggregateSignal is semantic-keyed, not inode-keyed
-        }
-    }
-}
-
 

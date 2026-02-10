@@ -508,14 +508,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.corpus_signal_exists_by_inode(signal_type, inode)
     }
 
-    /// Get aggregate signal keys with metadata for a given type.
-    pub fn get_aggregate_signal_keys_with_metadata(
-        &self,
-        signal_type: AggregateSignalType,
-    ) -> Result<Vec<(String, Option<String>)>> {
-        self.db.get_aggregate_signal_keys_with_metadata(signal_type)
-    }
-
     // =========================================================================
     // OOB / Tag Mismatch Queries
     // =========================================================================

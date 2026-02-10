@@ -31,7 +31,7 @@ use std::time::Instant;
 
 use crate::meta::computations::ComputationWitness;
 use crate::meta::signals::{
-    AggregateSignal, AggregateSignalType, CorpusFileSignalType, SignalType,
+    AggregateSignalType, CorpusFileSignalType, SignalType,
 };
 use crate::corpus::db::Database;
 use crate::corpus::tags::TagSet;
@@ -167,13 +167,6 @@ enum SignalWriteOp {
         inode: i64,
         path: String,
     },
-    /// Ensure an inode-keyed corpus signal with additional metadata
-    EnsureCorpusSignalWithMetadata {
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: String,
-        extra_metadata: String,
-    },
     /// Clear an inode-keyed corpus signal
     ClearCorpusSignal {
         signal_type: CorpusFileSignalType,
@@ -189,10 +182,6 @@ enum SignalWriteOp {
         signal_type: AggregateSignalType,
         key: String,
         metadata_json: Option<String>,
-    },
-    /// Replace an aggregate signal (delete + insert)
-    ReplaceAggregateSignal {
-        signal: AggregateSignal,
     },
     /// Clear an aggregate signal
     ClearAggregateSignal {
@@ -536,24 +525,6 @@ impl SignalWriteSender {
         });
     }
 
-    /// Enqueue an inode-keyed corpus signal with additional metadata.
-    pub fn ensure_corpus_signal_with_metadata(
-        &self,
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: &str,
-        extra_metadata: serde_json::Value,
-        _witness: &impl SignalWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::EnsureCorpusSignalWithMetadata {
-            signal_type,
-            inode,
-            path: path.to_string(),
-            extra_metadata: extra_metadata.to_string(),
-        });
-    }
-
     /// Clear an inode-keyed corpus signal.
     pub fn clear_corpus_signal(
         &self,
@@ -594,12 +565,6 @@ impl SignalWriteSender {
             key: key.to_string(),
             metadata_json: metadata_json.map(|s| s.to_string()),
         });
-    }
-
-    /// Replace an aggregate signal (delete + insert).
-    pub fn replace_aggregate_signal(&self, signal: AggregateSignal, _witness: &ComputationWitness) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ReplaceAggregateSignal { signal });
     }
 
     /// Clear an aggregate signal (idempotent delete).
@@ -1171,73 +1136,6 @@ fn typed_write_corpus_signal(db: &Database, signal_type: CorpusFileSignalType, i
     };
 }
 
-/// Write a corpus signal with extra metadata to its typed table.
-/// Parses the JSON metadata to extract type-specific fields.
-fn typed_write_corpus_signal_with_metadata(
-    db: &Database,
-    signal_type: CorpusFileSignalType,
-    inode: i64,
-    path: &str,
-    extra_metadata: &str,
-) {
-    let conn = db.conn();
-    let meta: serde_json::Value = match serde_json::from_str(extra_metadata) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-
-    let _ = match signal_type {
-        CorpusFileSignalType::MovedFile => {
-            let old_path = meta["old_path"].as_str().unwrap_or("").to_string();
-            MovedFileSignal { inode, path: path.to_string(), old_path }.insert(conn)
-        }
-        CorpusFileSignalType::MissingFile => {
-            let replaced_by_inode = meta["replaced_by_inode"].as_i64();
-            MissingFileSignal { inode, path: path.to_string(), replaced_by_inode }.insert(conn)
-        }
-        CorpusFileSignalType::ShitFormat => {
-            let file_type = meta["file_type"].as_str().unwrap_or("unknown").to_string();
-            ShitFormatSignal { inode, path: path.to_string(), file_type }.insert(conn)
-        }
-        CorpusFileSignalType::DeployReady => {
-            let deploy_path = meta["deploy_path"].as_str().unwrap_or("").to_string();
-            DeployReadySignal { inode, path: path.to_string(), deploy_path }.insert(conn)
-        }
-        CorpusFileSignalType::DeployedHealthy => {
-            let library_path = meta["library_path"].as_str().unwrap_or("").to_string();
-            DeployedHealthySignal { inode, path: path.to_string(), library_path }.insert(conn)
-        }
-        CorpusFileSignalType::OutOfBandTagSync => {
-            let mismatches = parse_tag_mismatches(&meta);
-            OutOfBandTagSyncSignal { inode, path: path.to_string(), mismatches }.insert(conn)
-        }
-        CorpusFileSignalType::OutOfBandTagConflict => {
-            let mismatches = parse_tag_mismatches(&meta);
-            OutOfBandTagConflictSignal { inode, path: path.to_string(), mismatches }.insert(conn)
-        }
-        CorpusFileSignalType::SubparDuplicate => {
-            let data = SubparDuplicateData {
-                reason: meta["reason"].as_str().unwrap_or("").to_string(),
-                superior_inode: meta["superior_inode"].as_i64().unwrap_or(0),
-                superior_path: meta["superior_path"].as_str().unwrap_or("").to_string(),
-                dupe_group_fingerprint: meta["dupe_group_fingerprint"].as_str().unwrap_or("").to_string(),
-                quality_score: meta["quality_score"].as_i64().unwrap_or(0) as i32,
-                superior_quality_score: meta["superior_quality_score"].as_i64().unwrap_or(0) as i32,
-            };
-            SubparDuplicateSignal { inode, path: path.to_string(), data }.insert(conn)
-        }
-        CorpusFileSignalType::CompoundTag => {
-            let compounds = parse_compound_tag_entries(&meta);
-            CompoundTagSignal { inode, path: path.to_string(), compounds }.insert(conn)
-        }
-        // Simple types — delegate to the no-metadata path
-        _ => {
-            typed_write_corpus_signal(db, signal_type, inode, path);
-            return;
-        }
-    };
-}
-
 /// Write an aggregate signal to its typed table.
 fn typed_write_aggregate_signal(
     db: &Database,
@@ -1475,32 +1373,6 @@ fn parse_inodes_array(meta: &serde_json::Value) -> Vec<i64> {
         .unwrap_or_default()
 }
 
-fn parse_tag_mismatches(meta: &serde_json::Value) -> Vec<TagMismatchEntry> {
-    meta["mismatches"].as_array()
-        .map(|arr| arr.iter().map(|m| TagMismatchEntry {
-            tag_name: m["tag_name"].as_str().unwrap_or("").to_string(),
-            disk_value: m["disk_value"].as_str().map(|s| s.to_string()),
-            db_value: m["db_value"].as_str().map(|s| s.to_string()),
-        }).collect())
-        .unwrap_or_default()
-}
-
-fn parse_compound_tag_entries(meta: &serde_json::Value) -> Vec<CompoundTagEntry> {
-    meta["compounds"].as_array()
-        .map(|arr| arr.iter().map(|c| CompoundTagEntry {
-            tag_name: c["tag_name"].as_str().unwrap_or("").to_string(),
-            compound_value: c["compound_value"].as_str().unwrap_or("").to_string(),
-            split_parts: c["split_parts"].as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default(),
-            separator: c["separator"].as_str().unwrap_or("").to_string(),
-            matching_parts: c["matching_parts"].as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default(),
-        }).collect())
-        .unwrap_or_default()
-}
-
 fn parse_variants_map(meta: &serde_json::Value) -> Vec<(String, usize)> {
     parse_variants_map_from(meta, "variants")
 }
@@ -1542,19 +1414,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
             typed_write_corpus_signal(db, *signal_type, *inode, path);
         }
-        SignalWriteOp::EnsureCorpusSignalWithMetadata {
-            signal_type,
-            inode,
-            path,
-            extra_metadata,
-        } => {
-            with_retry("ensure_corpus_signal_with_metadata", path, || {
-                let metadata: serde_json::Value = serde_json::from_str(extra_metadata)
-                    .unwrap_or_else(|_| serde_json::json!({}));
-                db.ensure_corpus_signal_with_metadata(*signal_type, *inode, path, metadata, &witness).map(|_| ())
-            });
-            typed_write_corpus_signal_with_metadata(db, *signal_type, *inode, path, extra_metadata);
-        }
         SignalWriteOp::ClearCorpusSignal { signal_type, inode } => {
             with_retry("clear_corpus_signal", &inode.to_string(), || {
                 db.clear_corpus_signal(*signal_type, *inode, &witness).map(|_| ())
@@ -1578,12 +1437,6 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                 db.ensure_aggregate_signal(*signal_type, key, metadata_json.as_deref(), &witness).map(|_| ())
             });
             typed_write_aggregate_signal(db, *signal_type, key, metadata_json.as_deref());
-        }
-        SignalWriteOp::ReplaceAggregateSignal { signal } => {
-            with_retry("replace_aggregate_signal", &signal.key, || {
-                db.replace_aggregate_signal(signal, &witness).map(|_| ())
-            });
-            typed_write_aggregate_signal(db, signal.signal_type, &signal.key, signal.metadata_json.as_deref());
         }
         SignalWriteOp::ClearAggregateSignal { signal_type, key } => {
             with_retry("clear_aggregate_signal", key, || {

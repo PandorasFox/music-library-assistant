@@ -114,13 +114,6 @@ pub enum PendingSignal {
         inode: i64,
         path: String,
     },
-    /// Corpus file signal with extra JSON metadata
-    CorpusSignalWithMetadata {
-        signal_type: CorpusFileSignalType,
-        inode: i64,
-        path: String,
-        metadata_json: String,
-    },
     /// Typed signal write (bypasses JSON serialization entirely)
     Typed(TypedSignalWrite),
 }

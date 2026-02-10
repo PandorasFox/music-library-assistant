@@ -40,6 +40,7 @@ impl Database {
     ///
     /// Stores the file in the `files` table with source = 'library'.
     /// The path is stored as `library_name/relative_path_within_library`.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_library_file(
         &self,
         library_name: &str,

@@ -129,7 +129,7 @@ pub fn get_album_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
             .entry(key)
             .or_default()
             .entry(album)
-            .or_insert_with(VariantData::default);
+            .or_default();
 
         variant_data.count += 1;
         if !isrc.is_empty() {

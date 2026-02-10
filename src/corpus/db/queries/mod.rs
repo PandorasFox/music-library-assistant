@@ -627,6 +627,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get audio files with their present tag names (for missing tag detection).
+    #[allow(clippy::type_complexity)]
     pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
         self.db.get_audio_files_with_tag_presence()
     }
@@ -687,6 +688,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get album artist data for inconsistency detection.
+    #[allow(clippy::type_complexity)]
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String)>> {
         self.db.get_album_artist_data()
     }

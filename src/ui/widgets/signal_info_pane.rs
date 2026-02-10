@@ -16,7 +16,7 @@ use crate::ui::helpers::render_pane;
 use super::tabbed_signal_list::DeployTab;
 
 /// Information about a deploy signal for display in the info pane.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SignalInfo {
     /// Healthy file: corpus path and library path match.
     Healthy {
@@ -44,13 +44,8 @@ pub enum SignalInfo {
         expected_path: String,
     },
     /// No selection.
+    #[default]
     None,
-}
-
-impl Default for SignalInfo {
-    fn default() -> Self {
-        SignalInfo::None
-    }
 }
 
 /// Info pane widget showing contextual information about a selected signal.

@@ -175,6 +175,7 @@ use super::{BucketSelection, InsightsClickTargets};
 
 /// Build list items from pre-sorted bucket entries with click target tracking.
 /// Returns the items and the next Y position.
+#[allow(clippy::too_many_arguments)]
 fn bucket_items_with_targets(
     title: &str,
     entries: &[BucketEntry],

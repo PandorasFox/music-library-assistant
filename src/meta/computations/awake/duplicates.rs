@@ -441,12 +441,7 @@ const VARIANT_KEYWORDS: &[&str] = &[
 /// Check if a title contains variant keywords.
 fn has_variant_keyword(title: &str) -> Option<&'static str> {
     let lower = title.to_lowercase();
-    for keyword in VARIANT_KEYWORDS {
-        if lower.contains(keyword) {
-            return Some(keyword);
-        }
-    }
-    None
+    VARIANT_KEYWORDS.iter().find(|&&kw| lower.contains(kw)).copied()
 }
 
 /// Release identity information for variant detection.
@@ -735,10 +730,10 @@ pub fn execute_analyze_fingerprint_overlaps(
 }
 
 /// Cluster audio files by duration within tolerance.
-fn cluster_by_duration<'a>(
-    audio_files: &'a [crate::corpus::db::types::AudioFile],
+fn cluster_by_duration(
+    audio_files: &[crate::corpus::db::types::AudioFile],
     tolerance_ms: i64,
-) -> Vec<Vec<&'a crate::corpus::db::types::AudioFile>> {
+) -> Vec<Vec<&crate::corpus::db::types::AudioFile>> {
     if audio_files.is_empty() {
         return Vec::new();
     }
@@ -875,11 +870,7 @@ pub fn execute_detect_cross_source_overlaps(
             inode_path_map.insert(inode, path.to_string());
 
             // Strip "corpus/" prefix if present to get relative path
-            let relative_path = if path.starts_with("corpus/") {
-                &path[7..]
-            } else {
-                path
-            };
+            let relative_path = path.strip_prefix("corpus/").unwrap_or(path);
 
             // Look up source directory from config
             let source_key = config

@@ -162,7 +162,7 @@ pub fn execute_scan_corpus_directory(
     let file_source = FileSource::from_str(source).unwrap_or(FileSource::Corpus);
 
     // Index this directory in the files table
-    index_directory(&sender, directory, source, &resolver, witness);
+    index_directory(&sender, directory, source, resolver, witness);
 
     // Collect disk state for files DIRECTLY in this directory (not recursive)
     let disk_state = collect_directory_files(directory);

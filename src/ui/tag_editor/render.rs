@@ -633,6 +633,7 @@ impl UnifiedTagEditorState {
         f.render_widget(paragraph, inner);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_multi_value_editor_modal(
         &self,
         f: &mut Frame,

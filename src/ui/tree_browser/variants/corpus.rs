@@ -381,10 +381,8 @@ impl CorpusBrowserVariant {
                 }
 
                 // Check if name contains query (case-insensitive)
-                if name.to_lowercase().contains(query) {
-                    if path.is_dir() || include_files {
-                        matches.push(path.clone());
-                    }
+                if name.to_lowercase().contains(query) && (path.is_dir() || include_files) {
+                    matches.push(path.clone());
                 }
 
                 // Recurse into subdirectories

@@ -25,33 +25,33 @@ impl Database {
 
         let mut total: usize = 0;
         // Corpus signal tables
-        total += FileInCorpusSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += UnindexedFileSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += HealthyFileSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += CorruptFileSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += MtimeOnlyMismatchSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += MissingDirectorySignal::count(&self.conn).unwrap_or(0) as usize;
-        total += MissingFileSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += MovedFileSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += ShitFormatSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += DeployReadySignal::count(&self.conn).unwrap_or(0) as usize;
-        total += DeployedHealthySignal::count(&self.conn).unwrap_or(0) as usize;
-        total += OutOfBandTagSyncSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += OutOfBandTagConflictSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += SubparDuplicateSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += CompoundTagSignal::count(&self.conn).unwrap_or(0) as usize;
+        total += FileInCorpusSignal::count(&self.conn).unwrap_or(0);
+        total += UnindexedFileSignal::count(&self.conn).unwrap_or(0);
+        total += HealthyFileSignal::count(&self.conn).unwrap_or(0);
+        total += CorruptFileSignal::count(&self.conn).unwrap_or(0);
+        total += MtimeOnlyMismatchSignal::count(&self.conn).unwrap_or(0);
+        total += MissingDirectorySignal::count(&self.conn).unwrap_or(0);
+        total += MissingFileSignal::count(&self.conn).unwrap_or(0);
+        total += MovedFileSignal::count(&self.conn).unwrap_or(0);
+        total += ShitFormatSignal::count(&self.conn).unwrap_or(0);
+        total += DeployReadySignal::count(&self.conn).unwrap_or(0);
+        total += DeployedHealthySignal::count(&self.conn).unwrap_or(0);
+        total += OutOfBandTagSyncSignal::count(&self.conn).unwrap_or(0);
+        total += OutOfBandTagConflictSignal::count(&self.conn).unwrap_or(0);
+        total += SubparDuplicateSignal::count(&self.conn).unwrap_or(0);
+        total += CompoundTagSignal::count(&self.conn).unwrap_or(0);
         // Aggregate signal tables
-        total += FingerprintOverlapSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += MetadataDuplicateSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += DuplicateInodeSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += MissingTagSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += DeployConflictSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += TagCanonicitySignal::count(&self.conn).unwrap_or(0) as usize;
-        total += InconsistentAlbumArtistSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += CrossSourceOverlapSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += CanonicalTagSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0) as usize;
-        total += LibraryStaleSignal::count(&self.conn).unwrap_or(0) as usize;
+        total += FingerprintOverlapSignal::count(&self.conn).unwrap_or(0);
+        total += MetadataDuplicateSignal::count(&self.conn).unwrap_or(0);
+        total += DuplicateInodeSignal::count(&self.conn).unwrap_or(0);
+        total += MissingTagSignal::count(&self.conn).unwrap_or(0);
+        total += DeployConflictSignal::count(&self.conn).unwrap_or(0);
+        total += TagCanonicitySignal::count(&self.conn).unwrap_or(0);
+        total += InconsistentAlbumArtistSignal::count(&self.conn).unwrap_or(0);
+        total += CrossSourceOverlapSignal::count(&self.conn).unwrap_or(0);
+        total += CanonicalTagSignal::count(&self.conn).unwrap_or(0);
+        total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0);
+        total += LibraryStaleSignal::count(&self.conn).unwrap_or(0);
         total
     }
 
@@ -317,15 +317,13 @@ impl Database {
                 let blob: Vec<u8> = row.get(1)?;
                 Ok((tag_name, blob))
             })?;
-            for row in rows {
-                if let Ok((tag_name, blob)) = row {
-                    let inode_count = bincode::deserialize::<crate::meta::signals::data::TagCanonicityData>(&blob)
-                        .map(|d| d.inodes.len())
-                        .unwrap_or(0);
-                    let entry = tag_map.entry(tag_name).or_insert((0, 0));
-                    entry.0 += 1; // cluster_count
-                    entry.1 += inode_count; // total_tracks
-                }
+            for (tag_name, blob) in rows.flatten() {
+                let inode_count = bincode::deserialize::<crate::meta::signals::data::TagCanonicityData>(&blob)
+                    .map(|d| d.inodes.len())
+                    .unwrap_or(0);
+                let entry = tag_map.entry(tag_name).or_insert((0, 0));
+                entry.0 += 1; // cluster_count
+                entry.1 += inode_count; // total_tracks
             }
         }
         // Drop the unused stmt (was a false start)
@@ -501,12 +499,10 @@ impl Database {
         })?;
 
         let mut total = 0usize;
-        for row in rows {
-            if let Ok(blob) = row {
-                // All these types have an inodes: Vec<i64> field in their data
-                if let Ok(inodes) = bincode::deserialize::<Vec<i64>>(&blob) {
-                    total += inodes.len();
-                }
+        for blob in rows.flatten() {
+            // All these types have an inodes: Vec<i64> field in their data
+            if let Ok(inodes) = bincode::deserialize::<Vec<i64>>(&blob) {
+                total += inodes.len();
             }
         }
         Ok(total)

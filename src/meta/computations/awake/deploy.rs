@@ -368,7 +368,7 @@ pub fn execute_derive_corpus_deploy_status(
             .into_iter()
             .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
             .collect();
-        let expected_relative = compute_deployment_path_with_tags(&corpus_path, &tag_map);
+        let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
 
         // Check if this inode is deployed in any library
         if let Some(library_paths) = library_inode_to_paths.get(&inode) {

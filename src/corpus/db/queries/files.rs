@@ -351,6 +351,7 @@ impl Database {
 
     /// Get audio files with their present tag names (for missing tag detection, corpus only).
     /// Returns: Vec<(inode, path, album_or_none, comma_separated_lowercase_tags)>
+    #[allow(clippy::type_complexity)]
     pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
         // Only check missing tags for corpus files
         let query = r#"
@@ -474,6 +475,7 @@ impl Database {
 
     /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection, corpus only).
     /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc, year)>
+    #[allow(clippy::type_complexity)]
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String)>> {
         // Only detect inconsistent album artist within corpus files
         let sql = r#"

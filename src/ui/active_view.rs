@@ -34,6 +34,7 @@ use crate::ui::{
 // ============================================================================
 
 /// The active view and its state. One variant is active at a time.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ActiveView {
     // Lateral view ring
     Insights(insights_view::InsightsViewState),
@@ -155,6 +156,7 @@ impl ActiveView {
 
 /// Captures enough context to restore the previous view when returning from
 /// TransactionReview (Cancel) or ProgressiveWork (completion).
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum SuspendedView {
     /// Restore view directly (most modals).
     Direct(ActiveView),

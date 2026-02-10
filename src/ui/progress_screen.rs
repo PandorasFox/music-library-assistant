@@ -503,7 +503,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
 
     let eye_lines: Vec<Line> = eye_art
         .lines()
-        .map(|line| Line::from(line))
+        .map(Line::from)
         .collect();
 
     let eye_widget = Paragraph::new(eye_lines)

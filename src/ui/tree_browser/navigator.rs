@@ -12,7 +12,7 @@ use crate::config::AUDIO_EXTENSIONS;
 use super::entry::TreeEntry;
 
 /// Filter configuration for entry loading.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct EntryFilter {
     /// Include audio files in tree (false = directories only)
     pub include_files: bool,
@@ -20,14 +20,6 @@ pub struct EntryFilter {
     pub include_hidden: bool,
 }
 
-impl Default for EntryFilter {
-    fn default() -> Self {
-        Self {
-            include_files: false,
-            include_hidden: false,
-        }
-    }
-}
 
 impl EntryFilter {
     /// Filter that shows only directories.
@@ -267,7 +259,7 @@ impl TreeNavigator {
         }
 
         // Move cursor to target
-        if let Some(idx) = self.entries.iter().position(|e| &e.path == target) {
+        if let Some(idx) = self.entries.iter().position(|e| e.path == *target) {
             self.cursor_idx = idx;
             self.ensure_visible();
         }

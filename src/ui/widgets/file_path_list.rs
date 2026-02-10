@@ -69,7 +69,7 @@ pub fn render_file_path_list(
 
     // Check if the cursor item's path needs a balloon
     let cursor_entry = entries.get(cursor);
-    let needs_balloon = cursor_entry.map_or(false, |entry| {
+    let needs_balloon = cursor_entry.is_some_and(|entry| {
         let prefix_width = span_char_width(&entry.prefix);
         let suffix_width = span_char_width(&entry.suffix);
         let path_budget = total_width.saturating_sub(prefix_width + suffix_width);

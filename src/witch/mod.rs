@@ -449,7 +449,7 @@ impl Witch {
                         result.queue_wait_ms, total_qw_now, max_qw_now
                     ));
                 }
-                if self.total_processed <= 50 || self.total_processed % 500 == 0 || result.queue_wait_ms > 50000 {
+                if self.total_processed <= 50 || self.total_processed.is_multiple_of(500) || result.queue_wait_ms > 50000 {
                     crate::logging::log_perf(format!(
                         "[PERF DEBUG] queue_wait_ms={} for task={}, total_processed={}, total_queue_wait_ms={}, max_queue_wait_ms={}",
                         result.queue_wait_ms, result.label, self.total_processed, total_qw_now, max_qw_now

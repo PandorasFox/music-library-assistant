@@ -131,23 +131,24 @@ impl MissingFileModalData {
     /// Generate HardLink mutations for restorable files.
     ///
     /// Paths stored in RestorableMissingFile are relative to their roots:
-    /// - library_path: relative to libraries_root
-    /// - corpus_path: relative to corpus_root
+    ///   - library_path: relative to libraries_root
+    ///   - corpus_path: relative to corpus_root
+    ///
     /// These must be resolved to absolute for HardLink filesystem operations.
     pub fn restore_mutations(&self) -> Vec<crate::meta::mutations::Mutation> {
         let resolver = paths::get_resolver();
         self.restorable
             .iter()
-            .filter_map(|f| {
+            .map(|f| {
                 // Resolve relative paths to absolute
                 let source = resolver.resolve(std::path::Path::new(&f.library_path));
                 let destination = resolver.resolve(std::path::Path::new(&f.corpus_path));
-                Some(crate::meta::mutations::Mutation::HardLink(
+                crate::meta::mutations::Mutation::HardLink(
                     crate::meta::mutations::file_ops::HardLinkMutation {
                         source,
                         destination,
                     }
-                ))
+                )
             })
             .collect()
     }

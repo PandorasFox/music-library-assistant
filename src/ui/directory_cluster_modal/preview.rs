@@ -221,10 +221,8 @@ impl DirectoryClusterPreviewState {
         }
 
         // Ctrl+R: show review
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if key.code == KeyCode::Char('r') {
-                return DirectoryClusterPreviewAction::ShowReview;
-            }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
+            return DirectoryClusterPreviewAction::ShowReview;
         }
 
         match key.code {

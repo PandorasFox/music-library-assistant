@@ -43,8 +43,9 @@ use super::types::{Migration, MigrationWitness, MutationExecutionWitness, Spawne
 /// Migrations require write access because they may alter the database schema.
 /// Regular mutations and computations use thread-local read-only connections
 /// via `with_read_only_db()` and route writes through `db_thread::signal_sender()`.
+#[allow(clippy::result_large_err)]
 fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> Result<Database, TaskResult> {
-    match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
+    match config::get_db_path().and_then(|p| Database::open(&p)) {
         Ok(db) => Ok(db),
         Err(e) => {
             crate::logging::log_error(format!(
@@ -389,7 +390,7 @@ fn apply_post_execution(
         let _ = with_read_only_db(|read_db| {
             if let Some(sender) = db_thread::signal_sender() {
                 for spec in &signals_to_clear {
-                    clear_signals_by_pattern(read_db, &sender, spec, witness);
+                    clear_signals_by_pattern(read_db, sender, spec, witness);
                 }
             }
         });
@@ -448,7 +449,7 @@ fn emit_file_inherent_signals(
     // Only IndexFileFromPath emits file-inherent signals
     if let Mutation::IndexFileFromPath(_) = mutation {
         if let Some(sender) = db_thread::signal_sender() {
-            emit_pending_signals(pending_signals, &sender, witness);
+            emit_pending_signals(pending_signals, sender, witness);
         }
     }
 }

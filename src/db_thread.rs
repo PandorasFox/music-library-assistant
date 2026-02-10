@@ -576,6 +576,7 @@ impl SignalWriteSender {
     }
 
     /// Record a file discovered during library scanning.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_library_file(
         &self,
         library_name: &str,
@@ -915,7 +916,7 @@ fn run_db_thread(
     stats: Arc<SharedStats>,
 ) {
     // Open database connection (this thread owns the write connection)
-    let db = match config::get_db_path().and_then(|p| Database::open(&p).map_err(|e| e.into())) {
+    let db = match config::get_db_path().and_then(|p| Database::open(&p)) {
         Ok(db) => db,
         Err(e) => {
             crate::logging::log_error(format!("[DB_THREAD] Failed to open database: {}", e));

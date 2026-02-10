@@ -645,7 +645,7 @@ fn parse_size_mb(s: &str) -> Option<u32> {
         num_str.trim().parse::<u32>().ok()
     } else if let Some(num_str) = s.strip_suffix("kb") {
         // KB rounds up to nearest MB (minimum 1MB)
-        num_str.trim().parse::<u32>().ok().map(|n| (n + 1023) / 1024)
+        num_str.trim().parse::<u32>().ok().map(|n| n.div_ceil(1024))
     } else {
         // Plain number = MB
         s.parse::<u32>().ok()

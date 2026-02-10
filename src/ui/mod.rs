@@ -363,7 +363,7 @@ fn render(f: &mut Frame, app: &mut App) {
     // Fetch decision summaries from Witch if transaction review is active
     let transaction_review_decisions = if matches!(app.view, ActiveView::TransactionReview { .. }) {
         app.witch.as_ref()
-            .map(|w| transaction_review::fetch_decision_summaries(w))
+            .map(transaction_review::fetch_decision_summaries)
             .unwrap_or_default()
     } else {
         Vec::new()

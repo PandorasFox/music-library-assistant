@@ -426,7 +426,7 @@ impl TagCanonicalityStateV2 {
                 //
                 // Edge case: if canonical already exists on the file (e.g., file has both
                 // "RIOT" and "RIOT "), we just drop the non-canonical variants.
-                let canonical_already_exists = current_values.iter().any(|&v| v == canonical);
+                let canonical_already_exists = current_values.contains(&canonical);
                 let mut added_canonical = canonical_already_exists;
 
                 for variant in &matching_variants {

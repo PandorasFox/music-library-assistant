@@ -53,19 +53,14 @@ pub enum InsightsAction {
 }
 
 /// State for the insights view modal/status
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[allow(non_camel_case_types)]
 pub enum InsightsModal {
     /// Ready for user interaction
+    #[default]
     Ready,
     /// The Witch has operations in-flight - actions blocked
     NotReady_WitchBusy,
-}
-
-impl Default for InsightsModal {
-    fn default() -> Self {
-        Self::Ready
-    }
 }
 
 /// Which bucket currently has focus for navigation

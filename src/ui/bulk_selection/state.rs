@@ -96,6 +96,14 @@ impl BulkSelectionState {
         }
     }
 
+    /// Select all items up to the given count.
+    ///
+    /// Activates selection mode and selects indices 0..count.
+    pub fn select_all(&mut self, count: usize) {
+        self.selected_indices = (0..count).collect();
+        self.mode = if count > 0 { SelectionMode::Active } else { SelectionMode::None };
+    }
+
     /// Get all selected indices as a sorted vector.
     pub fn selected_indices(&self) -> Vec<usize> {
         let mut indices: Vec<_> = self.selected_indices.iter().copied().collect();

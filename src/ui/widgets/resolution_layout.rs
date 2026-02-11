@@ -94,15 +94,6 @@ impl ResolutionLayout {
         }
     }
 
-    /// Default resolution layout (33% list, 67% details).
-    ///
-    /// * Info bar: 3 lines
-    /// * Buttons: 2 lines
-    /// * List: 33% width
-    pub fn default_split(area: Rect) -> Self {
-        Self::new(area, 3, 2, 33)
-    }
-
     /// Apply 1-cell padding to an area (for full-area modals).
     pub fn padded(area: Rect) -> Rect {
         Rect {

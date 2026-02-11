@@ -93,6 +93,10 @@ impl OobSyncState {
             OobSyncButton::AcceptDb
         };
 
+        let file_count = files.len();
+        let mut selection = BulkSelectionState::new();
+        selection.select_all(file_count);
+
         Self {
             files,
             current_file: 0,
@@ -100,7 +104,7 @@ impl OobSyncState {
             selected_button: default_button,
             focus_pane: FocusPane::List,
             button_rects: ButtonRects::new(),
-            selection: BulkSelectionState::new(),
+            selection,
             filter: None,
             filtered_indices: None,
         }

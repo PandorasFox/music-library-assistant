@@ -22,8 +22,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
     let padded = ResolutionLayout::padded(area);
     f.render_widget(Clear, padded);
 
-    // Get layout areas
-    let layout = ResolutionLayout::default_split(padded);
+    // Get layout areas (3-line buttons area: border + buttons + hints)
+    let layout = ResolutionLayout::new(padded, 3, 3, 33);
 
     // Render each section
     render_info_bar(f, layout.info_bar, state);
@@ -271,7 +271,7 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
         Style::default().fg(Color::White)
     };
 
-    let buttons = Line::from(vec![
+    let buttons_line = Line::from(vec![
         Span::raw("  "),
         Span::styled(disk_label, disk_style),
         Span::raw("  "),
@@ -281,6 +281,21 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
         Span::raw("  "),
     ]);
 
-    let para = Paragraph::new(buttons).alignment(Alignment::Center);
+    let hint_style = Style::default().fg(Color::DarkGray);
+    let hint_line = Line::from(vec![
+        Span::styled("Shift+\u{2191}\u{2193}", hint_style),
+        Span::styled(" focus", hint_style),
+        Span::styled("  \u{00b7}  ", hint_style),
+        Span::styled("^A", hint_style),
+        Span::styled(" select all", hint_style),
+        Span::styled("  \u{00b7}  ", hint_style),
+        Span::styled("Space", hint_style),
+        Span::styled(" toggle", hint_style),
+        Span::styled("  \u{00b7}  ", hint_style),
+        Span::styled("Enter", hint_style),
+        Span::styled(" confirm", hint_style),
+    ]);
+
+    let para = Paragraph::new(vec![buttons_line, hint_line]).alignment(Alignment::Center);
     f.render_widget(para, inner);
 }

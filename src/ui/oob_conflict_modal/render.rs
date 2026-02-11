@@ -22,8 +22,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
     let padded = ResolutionLayout::padded(area);
     f.render_widget(Clear, padded);
 
-    // Custom layout for conflict modal: tab bar takes more space
-    let layout = ResolutionLayout::new(padded, 4, 2, 33);
+    // Custom layout for conflict modal: tab bar takes more space, 3-line buttons for hints
+    let layout = ResolutionLayout::new(padded, 4, 3, 33);
 
     // Render each section
     render_info_bar(f, layout.info_bar, state);
@@ -234,7 +234,7 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
     // Clear stored button rects
     state.button_rects.clear();
 
-    let content = match state.active_bucket {
+    let buttons_line = match state.active_bucket {
         ConflictBucket::DbOnly | ConflictBucket::DiskOnly | ConflictBucket::Conflict => {
             let apply_label = " Apply DB -> Files ";
             let assimilate_label = " Assimilate Files -> DB ";
@@ -327,6 +327,21 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
         }
     };
 
-    let para = Paragraph::new(content).alignment(Alignment::Center);
+    let hint_style = Style::default().fg(Color::DarkGray);
+    let hint_line = Line::from(vec![
+        Span::styled("Shift+\u{2191}\u{2193}", hint_style),
+        Span::styled(" focus", hint_style),
+        Span::styled("  \u{00b7}  ", hint_style),
+        Span::styled("^A", hint_style),
+        Span::styled(" select all", hint_style),
+        Span::styled("  \u{00b7}  ", hint_style),
+        Span::styled("Space", hint_style),
+        Span::styled(" toggle", hint_style),
+        Span::styled("  \u{00b7}  ", hint_style),
+        Span::styled("Enter", hint_style),
+        Span::styled(" confirm", hint_style),
+    ]);
+
+    let para = Paragraph::new(vec![buttons_line, hint_line]).alignment(Alignment::Center);
     f.render_widget(para, inner);
 }

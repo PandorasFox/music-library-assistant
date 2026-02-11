@@ -46,11 +46,15 @@ pub struct BucketFileState {
 
 impl BucketFileState {
     pub fn new(files: Vec<BucketedOobFile>) -> Self {
+        let file_count = files.len();
+        let mut selection = BulkSelectionState::new();
+        selection.select_all(file_count);
+
         Self {
             files,
             cursor: 0,
             scroll: 0,
-            selection: BulkSelectionState::new(),
+            selection,
             filter: None,
             filtered_indices: None,
         }

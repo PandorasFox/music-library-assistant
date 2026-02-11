@@ -10,14 +10,14 @@ use ratatui::{
     Frame,
 };
 
-use crate::ui::widgets::{PaneConfig, ThreePaneLayout};
+use crate::ui::widgets::{ConfirmationButton, ConfirmationModal, PaneConfig, ThreePaneLayout};
 
 use super::mutations::compute_changes;
 use super::state::UnifiedTagEditorState;
 use super::types::{
-    AggregatedTagField, AggregatedValue, FieldEditState,
-    TagEditContext, TagEditorButton, TagEditorSource, UnifiedTagEditorFocus,
-    UnifiedTagEditorModal, UnsavedChangesButton,
+    AggregatedTagField, AggregatedValue, FieldEditState, NavigationDirection,
+    StageChangesButton, TagEditContext, TagEditorButton, TagEditorSource,
+    UnifiedTagEditorFocus, UnifiedTagEditorModal, UnsavedChangesButton,
 };
 
 impl UnifiedTagEditorState {
@@ -632,6 +632,9 @@ impl UnifiedTagEditorState {
                     f, area, *field_idx, values, *current_value_idx, *editing, edit_buffer,
                 );
             }
+            UnifiedTagEditorModal::StageChangesConfirm { direction, selected_button } => {
+                self.render_stage_changes_modal(f, area, *direction, *selected_button);
+            }
         }
     }
 
@@ -641,51 +644,23 @@ impl UnifiedTagEditorState {
         area: Rect,
         selected_button: UnsavedChangesButton,
     ) {
-        let modal_area = crate::ui::helpers::centered_rect_fixed(60, 12, area);
-        f.render_widget(Clear, modal_area);
-
-        let modal_block = Block::default()
-            .borders(Borders::ALL)
-            .title("Unsaved Changes")
-            .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(Color::Black));
-
-        let inner = modal_block.inner(modal_area);
-        f.render_widget(modal_block, modal_area);
-
-        // Style buttons based on selection state (safe option selected by default)
-        let (keep_style, discard_style) = match selected_button {
-            UnsavedChangesButton::KeepEditing => (
-                Style::default().fg(Color::Black).bg(Color::Green),
-                Style::default().fg(Color::Red),
-            ),
-            UnsavedChangesButton::DiscardAndProceed => (
-                Style::default().fg(Color::Green),
-                Style::default().fg(Color::Black).bg(Color::Red),
-            ),
-        };
-
-        let lines = vec![
-            Line::from(""),
-            Line::from("You have unsaved changes."),
-            Line::from("Discard changes and exit the editor?"),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(" Keep Editing ", keep_style),
-                Span::raw("    "),
-                Span::styled(" Discard ", discard_style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "←/→/Tab to switch  •  Enter to confirm  •  Esc to cancel",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ];
-
-        let paragraph = Paragraph::new(lines)
-            .alignment(Alignment::Center)
-            .style(Style::default().bg(Color::Black));
-        f.render_widget(paragraph, inner);
+        ConfirmationModal::new("Unsaved Changes")
+            .border_color(Color::Yellow)
+            .fixed_size(60, 10)
+            .message(vec![
+                Line::from(""),
+                Line::from("You have unsaved changes."),
+                Line::from("Discard changes and exit the editor?"),
+                Line::from(""),
+            ])
+            .buttons(vec![
+                ConfirmationButton::new("Keep Editing", Color::Green)
+                    .selected(selected_button == UnsavedChangesButton::KeepEditing),
+                ConfirmationButton::new("Discard", Color::Red)
+                    .selected(selected_button == UnsavedChangesButton::DiscardAndProceed),
+            ])
+            .hint("←/→/Tab to switch  •  Enter to confirm  •  Esc to cancel")
+            .render(f, area);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -770,5 +745,41 @@ impl UnifiedTagEditorState {
 
         let paragraph = Paragraph::new(lines).style(Style::default().bg(Color::Black));
         f.render_widget(paragraph, inner);
+    }
+
+    fn render_stage_changes_modal(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        direction: NavigationDirection,
+        selected_button: StageChangesButton,
+    ) {
+        let filename = self.current_item_label();
+        let direction_label = match direction {
+            NavigationDirection::Next => "next",
+            NavigationDirection::Prev => "previous",
+        };
+
+        ConfirmationModal::new("Stage Changes?")
+            .border_color(Color::Yellow)
+            .fixed_size(50, 10)
+            .message(vec![
+                Line::from(""),
+                Line::from(format!("Stage changes for {}?", filename)),
+                Line::from(""),
+            ])
+            .buttons(vec![
+                ConfirmationButton::new("Yes", Color::Green)
+                    .selected(selected_button == StageChangesButton::Yes),
+                ConfirmationButton::new("No", Color::Yellow)
+                    .selected(selected_button == StageChangesButton::No),
+                ConfirmationButton::new("Cancel", Color::White)
+                    .selected(selected_button == StageChangesButton::Cancel),
+            ])
+            .hint(format!(
+                "Yes: stage & go {}  No: skip & go {}  Cancel: stay",
+                direction_label, direction_label
+            ))
+            .render(f, area);
     }
 }

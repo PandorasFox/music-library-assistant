@@ -130,6 +130,16 @@ pub enum UnifiedTagEditorModal {
         /// Edit buffer for the current value
         edit_buffer: String,
     },
+    /// Confirm staging changes before Tab/Shift-Tab navigation.
+    ///
+    /// Shown when the user presses Tab/Shift-Tab with unsaved changes.
+    /// Requires an explicit Enter keypress to stage the decision (witness provenance).
+    StageChangesConfirm {
+        /// Which direction to navigate after
+        direction: NavigationDirection,
+        /// Selected button (defaults to Yes for easy single-Enter confirmation)
+        selected_button: StageChangesButton,
+    },
 }
 
 
@@ -141,6 +151,25 @@ pub enum UnsavedChangesButton {
     KeepEditing,
     /// Discard changes and proceed with navigation
     DiscardAndProceed,
+}
+
+/// Direction for Tab/Shift-Tab navigation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationDirection {
+    Next,
+    Prev,
+}
+
+/// Buttons on the stage-changes confirmation modal
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StageChangesButton {
+    /// Stage changes and navigate (safe default - easy single Enter)
+    #[default]
+    Yes,
+    /// Skip staging, navigate anyway (edits remain in local state)
+    No,
+    /// Cancel - stay on current file
+    Cancel,
 }
 
 

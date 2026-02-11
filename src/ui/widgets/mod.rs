@@ -30,7 +30,10 @@ pub use list_click_targets::ListClickTargets;
 pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout};
 
 // Modal widgets
-pub use modal::{centered_rect_fixed, Modal, ModalButton, ModalStyle};
+pub use modal::{
+    centered_rect_fixed, ConfirmationButton, ConfirmationModal, Modal, ModalButton, ModalStyle,
+    render_button_row,
+};
 
 // Title bar widgets
 pub use titlebar::{LateralView, UnifiedTitleBar};

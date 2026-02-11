@@ -13,12 +13,12 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::meta::mutations::Mutation;
-use crate::ui::widgets::centered_rect_fixed;
+use crate::ui::widgets::{centered_rect_fixed, ConfirmationButton, render_button_row};
 use crate::witch::Witch;
 
 // ============================================================================
@@ -304,7 +304,14 @@ pub fn render(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisio
     render_decision_list(f, chunks[0], decisions, cursor, state.scroll);
 
     // Render buttons
-    render_buttons(f, chunks[2], state.button_focus);
+    render_button_row(f, chunks[2], &[
+        ConfirmationButton::new("Cancel", Color::White)
+            .selected(state.button_focus == ReviewButtonFocus::Cancel),
+        ConfirmationButton::new("Discard", Color::Red)
+            .selected(state.button_focus == ReviewButtonFocus::Discard),
+        ConfirmationButton::new("Confirm", Color::Green)
+            .selected(state.button_focus == ReviewButtonFocus::Confirm),
+    ]);
 
     // Render hints
     use crate::ui::widgets::control_colors as cc;
@@ -400,35 +407,3 @@ fn render_decision_list(
     }
 }
 
-fn render_buttons(f: &mut Frame, area: Rect, focus: ReviewButtonFocus) {
-    let cancel_style = if focus == ReviewButtonFocus::Cancel {
-        Style::default().fg(Color::Black).bg(Color::White)
-    } else {
-        Style::default().fg(Color::White)
-    };
-
-    let discard_style = if focus == ReviewButtonFocus::Discard {
-        Style::default().fg(Color::Black).bg(Color::Red)
-    } else {
-        Style::default().fg(Color::Red)
-    };
-
-    let confirm_style = if focus == ReviewButtonFocus::Confirm {
-        Style::default().fg(Color::Black).bg(Color::Green)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-
-    let buttons = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(" Cancel ", cancel_style),
-        Span::raw("  "),
-        Span::styled(" Discard ", discard_style),
-        Span::raw("  "),
-        Span::styled(" Confirm ", confirm_style),
-        Span::raw("  "),
-    ]);
-
-    let buttons_para = Paragraph::new(buttons).alignment(Alignment::Center);
-    f.render_widget(buttons_para, area);
-}

@@ -270,3 +270,182 @@ impl ModalButton {
         ]
     }
 }
+
+// ============================================================================
+// Confirmation Button (simple horizontal button row pattern)
+// ============================================================================
+
+/// A button for horizontal button rows in confirmation modals.
+///
+/// Simpler than `ModalButton` — just a label, accent color, and selected state.
+/// Selected: `fg(Black) bg(color)`. Unselected: `fg(color)`.
+///
+/// This follows the TransactionReview button pattern.
+pub struct ConfirmationButton {
+    label: String,
+    color: Color,
+    selected: bool,
+}
+
+impl ConfirmationButton {
+    pub fn new(label: impl Into<String>, color: Color) -> Self {
+        Self {
+            label: label.into(),
+            color,
+            selected: false,
+        }
+    }
+
+    pub fn selected(mut self, is_selected: bool) -> Self {
+        self.selected = is_selected;
+        self
+    }
+
+    fn render_span(&self) -> Span<'static> {
+        let style = if self.selected {
+            Style::default().fg(Color::Black).bg(self.color)
+        } else {
+            Style::default().fg(self.color)
+        };
+        Span::styled(format!(" {} ", self.label), style)
+    }
+}
+
+/// Render a horizontal row of `ConfirmationButton`s, centered in the given area.
+///
+/// Used by `ConfirmationModal` and can also be used standalone (e.g., TransactionReview).
+pub fn render_button_row(f: &mut Frame, area: Rect, buttons: &[ConfirmationButton]) {
+    let mut spans = vec![Span::raw("  ")];
+    for (i, btn) in buttons.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(btn.render_span());
+    }
+    spans.push(Span::raw("  "));
+
+    let line = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
+    f.render_widget(line, area);
+}
+
+// ============================================================================
+// Confirmation Modal (structured: message + buttons + hint)
+// ============================================================================
+
+/// A structured confirmation modal: title, message lines, horizontal button row, hint.
+///
+/// ```ignore
+/// ConfirmationModal::new("Stage Changes?")
+///     .border_color(Color::Yellow)
+///     .fixed_size(50, 10)
+///     .message(vec![
+///         Line::from("Stage changes for track.flac?"),
+///     ])
+///     .buttons(vec![
+///         ConfirmationButton::new("Yes", Color::Green).selected(true),
+///         ConfirmationButton::new("No", Color::Yellow),
+///         ConfirmationButton::new("Cancel", Color::White),
+///     ])
+///     .hint("←/→ switch  •  Enter confirm  •  Esc cancel")
+///     .render(f, area);
+/// ```
+pub struct ConfirmationModal<'a> {
+    title: String,
+    border_color: Color,
+    width: u16,
+    height: u16,
+    message: Vec<Line<'a>>,
+    buttons: Vec<ConfirmationButton>,
+    hint: Option<String>,
+}
+
+impl<'a> ConfirmationModal<'a> {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            border_color: Color::Yellow,
+            width: 50,
+            height: 10,
+            message: Vec::new(),
+            buttons: Vec::new(),
+            hint: None,
+        }
+    }
+
+    pub fn border_color(mut self, color: Color) -> Self {
+        self.border_color = color;
+        self
+    }
+
+    pub fn fixed_size(mut self, width: u16, height: u16) -> Self {
+        self.width = width;
+        self.height = height;
+        self
+    }
+
+    pub fn message(mut self, lines: Vec<Line<'a>>) -> Self {
+        self.message = lines;
+        self
+    }
+
+    pub fn buttons(mut self, buttons: Vec<ConfirmationButton>) -> Self {
+        self.buttons = buttons;
+        self
+    }
+
+    pub fn hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn render(self, f: &mut Frame, area: Rect) {
+        let modal_area = centered_rect_fixed(self.width, self.height, area);
+        f.render_widget(Clear, modal_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(self.title)
+            .border_style(Style::default().fg(self.border_color))
+            .style(Style::default().bg(Color::Black));
+
+        let inner = block.inner(modal_area);
+        f.render_widget(block, modal_area);
+
+        // Layout: message | buttons | hint
+        let has_hint = self.hint.is_some();
+        let constraints = if has_hint {
+            vec![
+                Constraint::Min(1),    // Message
+                Constraint::Length(1), // Buttons
+                Constraint::Length(1), // Hint
+            ]
+        } else {
+            vec![
+                Constraint::Min(1),    // Message
+                Constraint::Length(1), // Buttons
+            ]
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(inner);
+
+        // Message
+        let msg = Paragraph::new(self.message)
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(msg, chunks[0]);
+
+        // Buttons
+        render_button_row(f, chunks[1], &self.buttons);
+
+        // Hint
+        if let Some(hint_text) = self.hint {
+            let hint = Paragraph::new(
+                Line::from(Span::styled(hint_text, Style::default().fg(Color::DarkGray)))
+            ).alignment(Alignment::Center);
+            f.render_widget(hint, chunks[2]);
+        }
+    }
+}

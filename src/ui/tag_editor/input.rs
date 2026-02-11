@@ -7,8 +7,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::state::UnifiedTagEditorState;
 use super::types::{
-    FieldEditState, TagEditorButton, UnifiedTagEditorAction,
-    UnifiedTagEditorFocus, UnifiedTagEditorModal, UnsavedChangesButton,
+    FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton,
+    UnifiedTagEditorAction, UnifiedTagEditorFocus, UnifiedTagEditorModal,
+    UnsavedChangesButton,
 };
 
 impl UnifiedTagEditorState {
@@ -144,6 +145,64 @@ impl UnifiedTagEditorState {
                     _ => UnifiedTagEditorAction::None,
                 }
             }
+            Some(UnifiedTagEditorModal::StageChangesConfirm { direction, selected_button }) => {
+                match key.code {
+                    KeyCode::Enter => {
+                        let direction = *direction;
+                        match selected_button {
+                            StageChangesButton::Yes => {
+                                // Stage decision via proper Enter keypress, then navigate
+                                let mutations = self.generate_mutations_for_current_item();
+                                self.modal = None;
+                                match direction {
+                                    NavigationDirection::Next => UnifiedTagEditorAction::StageDecisionAndNext {
+                                        index: self.current_item_idx,
+                                        mutations,
+                                    },
+                                    NavigationDirection::Prev => UnifiedTagEditorAction::StageDecisionAndPrev {
+                                        index: self.current_item_idx,
+                                        mutations,
+                                    },
+                                }
+                            }
+                            StageChangesButton::No => {
+                                // Navigate without staging - edits remain in local state
+                                self.modal = None;
+                                match direction {
+                                    NavigationDirection::Next => UnifiedTagEditorAction::NextItem,
+                                    NavigationDirection::Prev => UnifiedTagEditorAction::PrevItem,
+                                }
+                            }
+                            StageChangesButton::Cancel => {
+                                // Stay on current file
+                                self.modal = None;
+                                UnifiedTagEditorAction::CloseModal
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        self.modal = None;
+                        UnifiedTagEditorAction::CloseModal
+                    }
+                    KeyCode::Left => {
+                        *selected_button = match selected_button {
+                            StageChangesButton::Yes => StageChangesButton::Yes,
+                            StageChangesButton::No => StageChangesButton::Yes,
+                            StageChangesButton::Cancel => StageChangesButton::No,
+                        };
+                        UnifiedTagEditorAction::None
+                    }
+                    KeyCode::Right | KeyCode::Tab => {
+                        *selected_button = match selected_button {
+                            StageChangesButton::Yes => StageChangesButton::No,
+                            StageChangesButton::No => StageChangesButton::Cancel,
+                            StageChangesButton::Cancel => StageChangesButton::Cancel,
+                        };
+                        UnifiedTagEditorAction::None
+                    }
+                    _ => UnifiedTagEditorAction::None,
+                }
+            }
             None => UnifiedTagEditorAction::None,
         }
     }
@@ -214,32 +273,32 @@ impl UnifiedTagEditorState {
             }
             KeyCode::Tab => {
                 // Tab: advance to next item (individual mode only)
-                // In aggregated mode, Tab does nothing - use Confirm button to stage
+                // In aggregated mode, Tab does nothing - use ReviewAll button
                 if self.is_aggregated_mode() {
                     UnifiedTagEditorAction::None
                 } else if self.has_changes_for_current_item() && !self.changes_match_staged() {
-                    // Stage decision and navigate forward
-                    let mutations = self.generate_mutations_for_current_item();
-                    UnifiedTagEditorAction::StageDecisionAndNext {
-                        index: self.current_item_idx,
-                        mutations,
-                    }
+                    // Unsaved changes - show confirmation modal (requires Enter to stage)
+                    self.modal = Some(UnifiedTagEditorModal::StageChangesConfirm {
+                        direction: NavigationDirection::Next,
+                        selected_button: StageChangesButton::default(),
+                    });
+                    UnifiedTagEditorAction::None
                 } else {
                     UnifiedTagEditorAction::NextItem
                 }
             }
             KeyCode::BackTab => {
                 // Shift-Tab: go to previous item (individual mode only)
-                // In aggregated mode, Shift-Tab does nothing - use Confirm button to stage
+                // In aggregated mode, Shift-Tab does nothing - use ReviewAll button
                 if self.is_aggregated_mode() {
                     UnifiedTagEditorAction::None
                 } else if self.has_changes_for_current_item() && !self.changes_match_staged() {
-                    // Stage decision and navigate backward
-                    let mutations = self.generate_mutations_for_current_item();
-                    UnifiedTagEditorAction::StageDecisionAndPrev {
-                        index: self.current_item_idx,
-                        mutations,
-                    }
+                    // Unsaved changes - show confirmation modal (requires Enter to stage)
+                    self.modal = Some(UnifiedTagEditorModal::StageChangesConfirm {
+                        direction: NavigationDirection::Prev,
+                        selected_button: StageChangesButton::default(),
+                    });
+                    UnifiedTagEditorAction::None
                 } else {
                     UnifiedTagEditorAction::PrevItem
                 }

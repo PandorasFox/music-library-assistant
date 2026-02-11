@@ -171,6 +171,26 @@ pub struct CompoundTagEntry {
     pub matching_parts: Vec<String>,
 }
 
+impl CompoundTagEntry {
+    /// Whether this compound split is "safe" (can be auto-applied without review).
+    ///
+    /// Safe if:
+    /// - All split parts already exist as standalone values in the corpus, OR
+    /// - Tag is "artist" and the separator is semicolon-based (artist names
+    ///   delimited by semicolons are an unambiguous multi-value encoding).
+    pub fn is_safe(&self) -> bool {
+        if self.split_parts.is_empty() {
+            return false;
+        }
+        // All parts already known in corpus
+        if self.split_parts.len() == self.matching_parts.len() {
+            return true;
+        }
+        // Artist semicolon splits are always safe
+        self.tag_name.eq_ignore_ascii_case("artist") && self.separator.contains(';')
+    }
+}
+
 // ============================================================================
 // Aggregate Signals (semantic-keyed)
 // ============================================================================

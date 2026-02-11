@@ -126,9 +126,7 @@ impl Database {
                 continue;
             }
 
-            let is_safe = compounds.iter().all(|c| {
-                !c.split_parts.is_empty() && c.split_parts.len() == c.matching_parts.len()
-            });
+            let is_safe = compounds.iter().all(|c| c.is_safe());
 
             if is_safe != safe_only {
                 continue;
@@ -380,8 +378,7 @@ impl Database {
             };
 
             for compound in &compounds {
-                let is_safe = !compound.split_parts.is_empty()
-                    && compound.split_parts.len() == compound.matching_parts.len();
+                let is_safe = compound.is_safe();
 
                 let entry = by_tag.entry(compound.tag_name.clone()).or_insert((0, 0));
                 if is_safe {

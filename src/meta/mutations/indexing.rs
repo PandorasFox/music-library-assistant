@@ -90,6 +90,22 @@ pub struct AssimilateDiskTagsToDbMutation {
     pub path: PathBuf,
 }
 
+/// Flush carried tags to disk file (no DB read needed).
+///
+/// Unlike ApplyDbTagsToDisk which reads tags from DB at execution time,
+/// this mutation carries the TagSet directly from ApplyTagOps execution.
+/// This eliminates the race condition where the async DB write hasn't
+/// committed yet when the disk flush runs.
+///
+/// ApplyDbTagsToDisk remains for standalone OOB resolution where the DB
+/// write happened in a previous operator session (no race).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlushTagsToDiskMutation {
+    pub inode: i64,
+    pub path: PathBuf,
+    pub tags: TagSet,
+}
+
 /// Emit a CanonicalTag signal to whitelist a tag value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmitCanonicalTagMutation {
@@ -250,6 +266,33 @@ impl MutationExecutor for ApplyDbTagsToDiskMutation {
         };
         MutationResult {
             _mutation: Mutation::ApplyDbTagsToDisk(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+}
+
+impl MutationExecutor for FlushTagsToDiskMutation {
+    fn label(&self) -> &'static str { "Tag flush" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_flush_tags_to_disk(self.inode, &self.path, &self.tags, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::FlushTagsToDisk(self.clone()),
             success,
             error,
             _duration_ms: start.elapsed().as_millis() as u64,
@@ -826,6 +869,48 @@ pub fn execute_apply_db_tags_to_disk(
         .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
 
     // Clear needs_disk_flush flag
+    sender.set_needs_disk_flush(&rel_path_str, false, witness);
+
+    Ok(())
+}
+
+/// Execute FlushTagsToDisk mutation - write carried tags to disk.
+///
+/// Unlike execute_apply_db_tags_to_disk, this uses the TagSet carried in the
+/// mutation rather than reading from DB. This eliminates the race condition
+/// where an async DB write from ApplyTagOps hasn't committed yet.
+///
+/// On success: clears needs_disk_flush flag.
+/// On failure (write validation fails): leaves needs_disk_flush raised so
+/// OOB resolution or retry can pick it up.
+pub fn execute_flush_tags_to_disk(
+    _inode: i64,
+    abs_path: &std::path::Path,
+    tags: &TagSet,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::corpus::paths;
+    use crate::corpus::tags::write_file_tags;
+    use crate::db_thread;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    let resolver = paths::get_resolver();
+    let relative_path = resolver
+        .to_relative(abs_path)
+        .with_context(|| format!(
+            "Path {} does not match root. Check config.kdl roots.",
+            abs_path.display(),
+        ))?;
+    let rel_path_str = relative_path.to_string_lossy();
+
+    // Write carried tags to disk (includes read-back validation)
+    let token = super::sealed::MutationToken::new();
+    write_file_tags(abs_path, tags, &token, witness)
+        .with_context(|| format!("Failed to flush tags to {}", abs_path.display()))?;
+
+    // Clear needs_disk_flush flag only on success
     sender.set_needs_disk_flush(&rel_path_str, false, witness);
 
     Ok(())

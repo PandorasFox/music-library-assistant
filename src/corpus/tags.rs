@@ -335,7 +335,7 @@ pub fn write_file_tags(
 
     // Apply each key's values
     for (key, values) in grouped {
-        let item_key = string_to_item_key(&key, tag_type);
+        let item_key = string_to_item_key(&key);
 
         // Remove all existing values for this key
         tag.remove_key(&item_key);
@@ -356,6 +356,23 @@ pub fn write_file_tags(
     tagged_file
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to file: {}", path.display()))?;
+
+    // Read back and verify tags actually persisted
+    let readback = TagSet::from_file(path)
+        .with_context(|| format!("Failed to read back tags after write: {}", path.display()))?;
+
+    let diff = tags.diff(&readback);
+    let missing_count = diff.only_left.iter().count();
+    if missing_count > 0 {
+        // Tags we tried to write that aren't in the file
+        let missing_sample: Vec<_> = diff.only_left.iter().take(5).collect();
+        return Err(anyhow::anyhow!(
+            "Tag write verification failed for {}: {} tag(s) not persisted. Missing: {:?}",
+            path.display(),
+            missing_count,
+            missing_sample,
+        ));
+    }
 
     // Update file mtime after successful disk write
     let sender = db_thread::signal_sender()
@@ -470,9 +487,43 @@ fn item_key_to_string(key: &lofty::tag::ItemKey) -> String {
 
 /// Convert a string tag name to a lofty ItemKey.
 ///
-/// Uses ItemKey::from_key for format-aware mapping.
-fn string_to_item_key(key: &str, tag_type: lofty::tag::TagType) -> lofty::tag::ItemKey {
-    lofty::tag::ItemKey::from_key(tag_type, key)
+/// Explicit reverse mapping that mirrors `item_key_to_string`. Our DB key names
+/// are format-agnostic; lofty handles format-specific mapping when writing
+/// through the ItemKey enum.
+fn string_to_item_key(key: &str) -> lofty::tag::ItemKey {
+    use lofty::tag::ItemKey;
+    match key {
+        "artist" => ItemKey::TrackArtist,
+        "album_artist" => ItemKey::AlbumArtist,
+        "title" => ItemKey::TrackTitle,
+        "album" => ItemKey::AlbumTitle,
+        "track_number" => ItemKey::TrackNumber,
+        "disc_number" => ItemKey::DiscNumber,
+        "genre" => ItemKey::Genre,
+        "year" => ItemKey::Year,
+        "date" => ItemKey::RecordingDate,
+        "comment" => ItemKey::Comment,
+        "composer" => ItemKey::Composer,
+        "conductor" => ItemKey::Conductor,
+        "label" => ItemKey::Label,
+        "remixer" => ItemKey::Remixer,
+        "lyricist" => ItemKey::Lyricist,
+        "writer" => ItemKey::Writer,
+        "bpm" => ItemKey::Bpm,
+        "catalog_number" => ItemKey::CatalogNumber,
+        "barcode" => ItemKey::Barcode,
+        "isrc" => ItemKey::Isrc,
+        "musicbrainz_trackid" => ItemKey::MusicBrainzTrackId,
+        "musicbrainz_recordingid" => ItemKey::MusicBrainzRecordingId,
+        "musicbrainz_releaseid" => ItemKey::MusicBrainzReleaseId,
+        "musicbrainz_artistid" => ItemKey::MusicBrainzArtistId,
+        "musicbrainz_releaseartistid" => ItemKey::MusicBrainzReleaseArtistId,
+        "musicbrainz_releasegroupid" => ItemKey::MusicBrainzReleaseGroupId,
+        "musicbrainz_workid" => ItemKey::MusicBrainzWorkId,
+        "encodersoftware" => ItemKey::EncoderSoftware,
+        // Anything not in our mapping: keep as Unknown (custom Vorbis fields, etc.)
+        other => ItemKey::Unknown(other.to_string()),
+    }
 }
 
 // =============================================================================
@@ -542,7 +593,7 @@ mod tests {
         let a = TagSet::new(vec![("artist".to_string(), "Foo".to_string())]);
         let b = TagSet::new(vec![("artist".to_string(), "Foo".to_string())]);
         let diff = a.diff(&b);
-        assert!(diff.is_empty());
+        assert!(diff.only_left.is_empty() && diff.only_right.is_empty());
         assert_eq!(diff.classify(), DiffClassification::Identical);
     }
 
@@ -554,7 +605,7 @@ mod tests {
         ]);
         let b = TagSet::new(vec![("artist".to_string(), "Foo".to_string())]);
         let diff = a.diff(&b);
-        assert!(!diff.is_empty());
+        assert!(!diff.only_left.is_empty());
         assert_eq!(diff.classify(), DiffClassification::LeftOnly);
         assert_eq!(diff.only_left.len(), 1);
         assert!(diff.only_left.contains("album", "Bar"));
@@ -586,7 +637,9 @@ mod tests {
         assert_eq!(diff.classify(), DiffClassification::Conflict);
         assert!(diff.only_left.contains("extra_a", "A"));
         assert!(diff.only_right.contains("extra_b", "B"));
-        assert!(diff.common.contains("artist", "Foo"));
+        // "artist=Foo" is in both, so it should NOT be in only_left or only_right
+        assert!(!diff.only_left.contains("artist", "Foo"));
+        assert!(!diff.only_right.contains("artist", "Foo"));
     }
 
     #[test]

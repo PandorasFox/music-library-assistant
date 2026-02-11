@@ -18,7 +18,7 @@ use super::file_ops::{MoveMutation, MoveToStashMutation, HardLinkMutation, Libra
 use super::indexing::{
     IndexFileFromPathMutation, UpdateFilePathMutation, DropFromIndexMutation,
     DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
-    AssimilateDiskTagsToDbMutation, EmitCanonicalTagMutation,
+    FlushTagsToDiskMutation, AssimilateDiskTagsToDbMutation, EmitCanonicalTagMutation,
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
@@ -253,6 +253,9 @@ pub enum Mutation {
     /// Apply DB tags to disk file (defer to db / reject disk changes).
     ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation),
 
+    /// Flush carried tags to disk (no DB read — avoids race with async DB writes).
+    FlushTagsToDisk(FlushTagsToDiskMutation),
+
     /// Assimilate disk tags into DB (defer to corpus / accept disk changes).
     AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation),
 
@@ -282,6 +285,7 @@ impl Mutation {
             Mutation::DropDirectoryFromIndex(m) => Some(m),
             Mutation::AcknowledgeMtimeOnly(m) => Some(m),
             Mutation::ApplyDbTagsToDisk(m) => Some(m),
+            Mutation::FlushTagsToDisk(m) => Some(m),
             Mutation::AssimilateDiskTagsToDb(m) => Some(m),
             Mutation::EmitCanonicalTag(m) => Some(m),
             Mutation::DbMigration { .. } => None,
@@ -326,6 +330,7 @@ impl Mutation {
         match self {
             Mutation::Transcode(ref m) => Some(m.inode),
             Mutation::ApplyDbTagsToDisk(ref m) => Some(m.inode),
+            Mutation::FlushTagsToDisk(ref m) => Some(m.inode),
             Mutation::AssimilateDiskTagsToDb(ref m) => Some(m.inode),
 
             // These don't have a single inode directly (batch operations or no inode)
@@ -358,6 +363,11 @@ impl Mutation {
 
             // Single-track tag sync operations affect the file's directory
             Mutation::ApplyDbTagsToDisk(m) => {
+                if let Some(parent) = m.path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::FlushTagsToDisk(m) => {
                 if let Some(parent) = m.path.parent() {
                     dirs.push(parent.to_path_buf());
                 }

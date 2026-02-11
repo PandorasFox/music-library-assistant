@@ -181,6 +181,9 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             Mutation::ApplyDbTagsToDisk(ref m) => {
                 inodes.insert(m.inode);
             }
+            Mutation::FlushTagsToDisk(ref m) => {
+                inodes.insert(m.inode);
+            }
             Mutation::AssimilateDiskTagsToDb(ref m) => {
                 inodes.insert(m.inode);
             }

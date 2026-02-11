@@ -21,7 +21,9 @@ use crate::corpus::paths;
 use crate::db_thread;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
-use super::indexing::ApplyDbTagsToDiskMutation;
+use crate::corpus::tags::TagSet;
+
+use super::indexing::FlushTagsToDiskMutation;
 use super::traits::{MutationContext, MutationExecutor};
 use super::types::{Mutation, MutationResult, SignalClearScope, TagOp};
 
@@ -149,14 +151,47 @@ fn execute_apply_tag_ops(
             continue; // All ops were no-ops
         }
 
+        // Build the expected tag set: current DB state + validated ops applied.
+        // This is computed within the same read transaction — no race condition.
+        let mut expected: Vec<(String, String)> = current_tags
+            .iter()
+            .map(|t| (t.tag_name.to_lowercase(), t.tag_value.clone()))
+            .collect();
+
+        for op in &validated_ops {
+            let key = op.tag_name.to_lowercase();
+            match (&op.old_value, &op.new_value) {
+                // Drop: remove the (key, old) pair
+                (Some(old), None) => {
+                    expected.retain(|(k, v)| !(k == &key && v == old));
+                }
+                // Replace: remove (key, old), add (key, new)
+                (Some(old), Some(new)) => {
+                    expected.retain(|(k, v)| !(k == &key && v == old));
+                    expected.push((key, new.clone()));
+                }
+                // Add: add (key, new)
+                (None, Some(new)) => {
+                    expected.push((key, new.clone()));
+                }
+                // No-op (already filtered above)
+                (None, None) => {}
+            }
+        }
+        let expected_tags = TagSet::new(expected);
+
         // Send ops directly to DB - TagOps map to INSERT/UPDATE/DELETE
         sender.apply_index_tag_ops(file_path, validated_ops, session_id, witness);
         sender.set_needs_disk_flush(file_path, true, witness);
 
-        // Spawn disk sync
+        // Spawn disk flush with carried tags (no DB read needed — avoids race)
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(file_path));
-        spawned.push(witness.spawn_mutation(Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path: abs_path })));
+        spawned.push(witness.spawn_mutation(Mutation::FlushTagsToDisk(FlushTagsToDiskMutation {
+            inode,
+            path: abs_path,
+            tags: expected_tags,
+        })));
     }
 
     // Report errors but don't fail entire mutation (partial success)

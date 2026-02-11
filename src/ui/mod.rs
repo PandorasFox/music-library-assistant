@@ -217,34 +217,12 @@ impl App {
             ActiveView::TransactionReview { review, .. } => ViewAction::TransactionReview(review.handle_key(key)),
         };
 
-        // Phase 2: dispatch action (borrows self freely)
-        self.dispatch_action(action);
-    }
-
-    /// Dispatch a view action to the appropriate handler.
-    fn dispatch_action(&mut self, action: ViewAction) {
-        match action {
-            ViewAction::None => {}
-            ViewAction::Insights(a) => self.handle_insights_action(a),
-            ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
-            ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
-            ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
-            ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a),
-            ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a),
-            ViewAction::DeploymentPreview(a) => self.handle_deployment_preview_action(a),
-            ViewAction::MissingFileResolution(a) => self.handle_missing_file_preview_action(a),
-            ViewAction::MissingDirectoryResolution(a) => self.handle_missing_directory_preview_action(a),
-            ViewAction::CorruptFileResolution(a) => self.handle_corrupt_file_preview_action(a),
-            ViewAction::ShitFormatResolution(a) => self.handle_shit_format_preview_action(a),
-            ViewAction::SubparDuplicateResolution(a) => self.handle_subpar_duplicate_preview_action(a),
-            ViewAction::DirectoryClusterResolution(a) => self.handle_directory_cluster_preview_action(a),
-            ViewAction::MovedFileAcknowledge(a) => self.handle_moved_file_action(a),
-            ViewAction::OobSyncResolution(a) => self.handle_oob_sync_action(a),
-            ViewAction::OobConflictInspection(a) => self.handle_oob_conflict_action(a),
-            ViewAction::TagCanonicityResolution(a) => self.handle_tag_canonicity_action(a),
-            ViewAction::CompoundTagSplit(a) => self.handle_compound_split_action(a),
-            ViewAction::TransactionReview(a) => self.handle_transaction_review_action(a),
-        }
+        // Phase 2: dispatch with confirmation flag
+        let is_confirmation = matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('y') | KeyCode::Char('Y')
+        );
+        self.dispatch_action(action, is_confirmation);
     }
 
     /// Handle exit confirm modal action.
@@ -268,23 +246,6 @@ impl App {
     /// Start the insights view.
     pub(super) fn start_insights_view(&mut self) {
         self.view = ActiveView::Insights(insights_view::InsightsViewState::new());
-    }
-
-    /// Stage a decision to the Witch's transaction and update editor state.
-    pub(super) fn stage_decision(&mut self, index: usize, mutations: Vec<crate::meta::mutations::Mutation>) {
-        if let Some(the_witch) = self.witch.as_mut() {
-            let label = if let ActiveView::UnifiedTagEditor(ref editor) = self.view {
-                editor.current_item_label()
-            } else {
-                "Tag edit".to_string()
-            };
-            let _ = operator_decisions::stage_decision(the_witch, index, &label, mutations.clone());
-        }
-        if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-            editor.set_staged_mutations(mutations);
-            editor.staged_decision_count += 1;
-        }
-        self.status_message = Some(format!("Decision staged (item {})", index + 1));
     }
 
     /// Abort current operation and return to insights view with a status message.

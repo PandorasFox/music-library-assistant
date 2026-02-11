@@ -154,15 +154,10 @@ impl UnifiedTagEditorState {
                                 // Stage decision via proper Enter keypress, then navigate
                                 let mutations = self.generate_mutations_for_current_item();
                                 self.modal = None;
-                                match direction {
-                                    NavigationDirection::Next => UnifiedTagEditorAction::StageDecisionAndNext {
-                                        index: self.current_item_idx,
-                                        mutations,
-                                    },
-                                    NavigationDirection::Prev => UnifiedTagEditorAction::StageDecisionAndPrev {
-                                        index: self.current_item_idx,
-                                        mutations,
-                                    },
+                                UnifiedTagEditorAction::StageDecisionAndNavigate {
+                                    index: self.current_item_idx,
+                                    mutations,
+                                    direction,
                                 }
                             }
                             StageChangesButton::No => {

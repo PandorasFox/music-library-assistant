@@ -86,10 +86,8 @@ pub enum TagEditorButton {
 pub enum UnifiedTagEditorAction {
     /// No action
     None,
-    /// Stage decision AND navigate to next item (Tab with changes)
-    StageDecisionAndNext { index: usize, mutations: Vec<Mutation> },
-    /// Stage decision AND navigate to previous item (Shift-Tab with changes)
-    StageDecisionAndPrev { index: usize, mutations: Vec<Mutation> },
+    /// Stage decision AND navigate (confirmation modal approved staging)
+    StageDecisionAndNavigate { index: usize, mutations: Vec<Mutation>, direction: NavigationDirection },
     /// Stage decision AND show transaction review (for aggregated mode or single-item contexts)
     StageDecisionAndReview { index: usize, mutations: Vec<Mutation> },
     /// Discard all staged decisions and exit

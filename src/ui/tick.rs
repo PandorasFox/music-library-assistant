@@ -285,7 +285,7 @@ impl App {
         );
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, idx, &description, mutations);
+            let _ = super::operator_decisions::stage_decision_unwitnessed(witch, idx, &description, mutations);
             worker.mutations_generated += 1;
         } else {
             worker.nops_elided += 1;

@@ -5,6 +5,7 @@
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
 use crate::ui::{corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, transaction_review, ActiveView};
+use super::witness;
 use super::super::App;
 
 impl App {
@@ -33,17 +34,18 @@ impl App {
     }
 
     /// Handle missing file preview actions.
-    pub(in crate::ui) fn handle_missing_file_preview_action(&mut self, action: missing_file_modal::MissingFilePreviewAction) {
+    pub(super) fn handle_missing_file_preview_action(&mut self, action: missing_file_modal::MissingFilePreviewAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             missing_file_modal::MissingFilePreviewAction::None => {}
             missing_file_modal::MissingFilePreviewAction::ConfirmRestore => {
+                let Some(w) = witness else { return };
                 // Generate restore mutations (HardLink) and stage for review
                 let mutations = match &self.view {
                     ActiveView::MissingFileResolution(ref preview) => preview.cached_data.restore_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Restore missing files");
+                    self.stage_mutations_with_transaction(mutations, "Restore missing files", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
                 } else {
@@ -51,13 +53,14 @@ impl App {
                 }
             }
             missing_file_modal::MissingFilePreviewAction::ConfirmDrop => {
+                let Some(w) = witness else { return };
                 // Generate drop mutations (DropFromIndex) and stage for review
                 let mutations = match &self.view {
                     ActiveView::MissingFileResolution(ref preview) => preview.cached_data.drop_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Drop non-restorable files");
+                    self.stage_mutations_with_transaction(mutations, "Drop non-restorable files", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
                 } else {
@@ -95,17 +98,18 @@ impl App {
     }
 
     /// Handle missing directory preview actions.
-    pub(in crate::ui) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_modal::MissingDirectoryPreviewAction) {
+    pub(super) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_modal::MissingDirectoryPreviewAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             missing_directory_modal::MissingDirectoryPreviewAction::None => {}
             missing_directory_modal::MissingDirectoryPreviewAction::ConfirmDrop => {
+                let Some(w) = witness else { return };
                 // Generate drop mutations (DropDirectoryFromIndex) and stage for review
                 let mutations = match &self.view {
                     ActiveView::MissingDirectoryResolution(ref preview) => preview.cached_data.drop_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Drop missing directories");
+                    self.stage_mutations_with_transaction(mutations, "Drop missing directories", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.start_transaction_review(transaction_review::TransactionReviewSource::MissingDirectoryResolution);
                 } else {
@@ -143,17 +147,18 @@ impl App {
     }
 
     /// Handle corrupt file preview actions.
-    pub(in crate::ui) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_modal::CorruptFilePreviewAction) {
+    pub(super) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_modal::CorruptFilePreviewAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             corrupt_file_modal::CorruptFilePreviewAction::None => {}
             corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
+                let Some(w) = witness else { return };
                 // Generate stash + drop mutations and stage for review
                 let mutations = match &self.view {
                     ActiveView::CorruptFileResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash corrupt files");
+                    self.stage_mutations_with_transaction(mutations, "Stash corrupt files", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.start_transaction_review(transaction_review::TransactionReviewSource::CorruptFileResolution);
                 } else {
@@ -191,43 +196,46 @@ impl App {
     }
 
     /// Handle shit format preview actions.
-    pub(in crate::ui) fn handle_shit_format_preview_action(&mut self, action: shit_format_modal::ShitFormatPreviewAction) {
+    pub(super) fn handle_shit_format_preview_action(&mut self, action: shit_format_modal::ShitFormatPreviewAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             shit_format_modal::ShitFormatPreviewAction::None => {}
             shit_format_modal::ShitFormatPreviewAction::ConfirmRemuxLossless => {
+                let Some(w) = witness else { return };
                 // Generate FLAC remux mutations for lossless files only
                 let mutations = match &self.view {
                     ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossless_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Remux to FLAC");
+                    self.stage_mutations_with_transaction(mutations, "Remux to FLAC", w);
                     self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
                 } else {
                     self.status_message = Some("No lossless files to remux".to_string());
                 }
             }
             shit_format_modal::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
+                let Some(w) = witness else { return };
                 // Generate Opus transcode mutations for lossy files only
                 let mutations = match &self.view {
                     ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossy_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Transcode to Opus");
+                    self.stage_mutations_with_transaction(mutations, "Transcode to Opus", w);
                     self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
                 } else {
                     self.status_message = Some("No lossy files to transcode".to_string());
                 }
             }
             shit_format_modal::ShitFormatPreviewAction::ConfirmConvertAll => {
+                let Some(w) = witness else { return };
                 // Generate mutations for all files (lossless -> FLAC, lossy -> Opus)
                 let mutations = match &self.view {
                     ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.all_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Convert all formats");
+                    self.stage_mutations_with_transaction(mutations, "Convert all formats", w);
                     self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
                 } else {
                     self.status_message = Some("No files to convert".to_string());
@@ -264,17 +272,18 @@ impl App {
     }
 
     /// Handle subpar duplicate preview actions.
-    pub(in crate::ui) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_modal::SubparDuplicatePreviewAction) {
+    pub(super) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_modal::SubparDuplicatePreviewAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             subpar_duplicate_modal::SubparDuplicatePreviewAction::None => {}
             subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
+                let Some(w) = witness else { return };
                 // Generate stash + drop mutations and stage for review
                 let mutations = match &self.view {
                     ActiveView::SubparDuplicateResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates");
+                    self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.start_transaction_review(transaction_review::TransactionReviewSource::SubparDuplicateResolution);
                 } else {
@@ -314,15 +323,17 @@ impl App {
     }
 
     /// Handle directory cluster preview actions.
-    pub(in crate::ui) fn handle_directory_cluster_preview_action(
+    pub(super) fn handle_directory_cluster_preview_action(
         &mut self,
         action: super::super::directory_cluster_modal::DirectoryClusterPreviewAction,
+        witness: Option<&witness::DecisionWitness>,
     ) {
         use super::super::directory_cluster_modal::DirectoryClusterPreviewAction;
 
         match action {
             DirectoryClusterPreviewAction::None => {}
             DirectoryClusterPreviewAction::ConfirmCurrent => {
+                let Some(w) = witness else { return };
                 // Stage mutations for current cluster's selected option and advance
                 let (cluster_index, mutations) = match &self.view {
                     ActiveView::DirectoryClusterResolution(ref preview) => {
@@ -339,7 +350,7 @@ impl App {
                     _ => (0, Vec::new()),
                 };
                 if !mutations.is_empty() {
-                    self.stage_directory_cluster_mutations(cluster_index, mutations, "Resolve directory overlap");
+                    self.stage_directory_cluster_mutations(cluster_index, mutations, "Resolve directory overlap", w);
                 }
                 // Navigate to next cluster
                 let at_last = if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
@@ -373,7 +384,7 @@ impl App {
     }
 
     /// Stage directory cluster mutations for transaction review.
-    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::meta::mutations::Mutation>, label: &str) {
+    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, _witness: &witness::DecisionWitness) {
         let Some(ref mut witch) = self.witch else {
             return;
         };

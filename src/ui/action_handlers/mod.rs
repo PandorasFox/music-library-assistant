@@ -16,23 +16,81 @@ mod tag_canonicity;
 mod oob_resolution;
 mod deploy;
 mod simple_resolutions;
+mod witness;
 
 use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
-use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, SuspendedView};
+use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, SuspendedView, ViewAction};
 use crate::ui::eye::Eye;
 use super::App;
 
 impl App {
     // =========================================================================
+    // Action Dispatch
+    // =========================================================================
+
+    /// Dispatch a view action to the appropriate handler.
+    ///
+    /// `is_confirmation` is true when the triggering event was a confirmation
+    /// gesture (Enter, Space, y/Y). The witness is minted internally from this
+    /// flag - callers never touch the DecisionWitness type.
+    pub(in crate::ui) fn dispatch_action(&mut self, action: ViewAction, is_confirmation: bool) {
+        let witness = if is_confirmation {
+            Some(witness::DecisionWitness::new())
+        } else {
+            None
+        };
+
+        match action {
+            ViewAction::None => {}
+            ViewAction::Insights(a) => self.handle_insights_action(a),
+            ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
+            ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
+            ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
+            ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
+            ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
+            ViewAction::DeploymentPreview(a) => self.handle_deployment_preview_action(a, witness.as_ref()),
+            ViewAction::MissingFileResolution(a) => self.handle_missing_file_preview_action(a, witness.as_ref()),
+            ViewAction::MissingDirectoryResolution(a) => self.handle_missing_directory_preview_action(a, witness.as_ref()),
+            ViewAction::CorruptFileResolution(a) => self.handle_corrupt_file_preview_action(a, witness.as_ref()),
+            ViewAction::ShitFormatResolution(a) => self.handle_shit_format_preview_action(a, witness.as_ref()),
+            ViewAction::SubparDuplicateResolution(a) => self.handle_subpar_duplicate_preview_action(a, witness.as_ref()),
+            ViewAction::DirectoryClusterResolution(a) => self.handle_directory_cluster_preview_action(a, witness.as_ref()),
+            ViewAction::MovedFileAcknowledge(a) => self.handle_moved_file_action(a, witness.as_ref()),
+            ViewAction::OobSyncResolution(a) => self.handle_oob_sync_action(a, witness.as_ref()),
+            ViewAction::OobConflictInspection(a) => self.handle_oob_conflict_action(a, witness.as_ref()),
+            ViewAction::TagCanonicityResolution(a) => self.handle_tag_canonicity_action(a, witness.as_ref()),
+            ViewAction::CompoundTagSplit(a) => self.handle_compound_split_action(a, witness.as_ref()),
+            ViewAction::TransactionReview(a) => self.handle_transaction_review_action(a, witness.as_ref()),
+        }
+    }
+
+    // =========================================================================
     // Shared Helpers
     // =========================================================================
+
+    /// Stage a tag editor decision to the Witch's transaction and update editor state.
+    fn stage_tag_editor_decision(&mut self, index: usize, mutations: Vec<crate::meta::mutations::Mutation>, _witness: &witness::DecisionWitness) {
+        if let Some(the_witch) = self.witch.as_mut() {
+            let label = if let ActiveView::UnifiedTagEditor(ref editor) = self.view {
+                editor.current_item_label()
+            } else {
+                "Tag edit".to_string()
+            };
+            let _ = super::operator_decisions::stage_decision(the_witch, index, &label, mutations.clone());
+        }
+        if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
+            editor.set_staged_mutations(mutations);
+            editor.staged_decision_count += 1;
+        }
+        self.status_message = Some(format!("Decision staged (item {})", index + 1));
+    }
 
     /// Stage mutations into a new transaction for review.
     ///
     /// Starts a transaction with the given label, stages the mutations as a
     /// single decision. Used by simple resolution modals that have a straightforward
     /// "collect mutations → review → commit" pattern.
-    pub(in crate::ui) fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str) {
+    fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, _witness: &witness::DecisionWitness) {
         let Some(ref mut witch) = self.witch else { return };
         let _ = witch.start_transaction(label);
         let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
@@ -242,7 +300,7 @@ impl App {
     }
 
     /// Handle intake confirmation dialog actions.
-    pub(super) fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction) {
+    fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction, _witness: Option<&witness::DecisionWitness>) {
         use super::operator_decisions;
 
         match action {
@@ -331,39 +389,41 @@ impl App {
         }
     }
 
-    pub(super) fn handle_unified_tag_editor_action(&mut self, action: tag_editor::UnifiedTagEditorAction) {
+    fn handle_unified_tag_editor_action(&mut self, action: tag_editor::UnifiedTagEditorAction, witness: Option<&witness::DecisionWitness>) {
         use tag_editor::UnifiedTagEditorAction;
 
         match action {
             UnifiedTagEditorAction::None => {}
             UnifiedTagEditorAction::CloseModal => {}
 
-            UnifiedTagEditorAction::StageDecisionAndNext { index, mutations } => {
-                // Stage the decision AND navigate to next item
-                self.stage_decision(index, mutations);
+            UnifiedTagEditorAction::StageDecisionAndNavigate { index, mutations, direction } => {
+                let Some(w) = witness else { return };
+                // Stage the decision AND navigate (from confirmation modal Enter)
+                use crate::ui::tag_editor::types::NavigationDirection;
+                self.stage_tag_editor_decision(index, mutations, w);
                 if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                    if editor.current_item_idx < editor.total_items.saturating_sub(1) {
-                        editor.current_item_idx += 1;
-                        editor.reset_field_state();
-                    }
-                }
-            }
-
-            UnifiedTagEditorAction::StageDecisionAndPrev { index, mutations } => {
-                // Stage the decision AND navigate to previous item
-                self.stage_decision(index, mutations);
-                if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                    if editor.current_item_idx > 0 {
-                        editor.current_item_idx -= 1;
-                        editor.reset_field_state();
+                    match direction {
+                        NavigationDirection::Next => {
+                            if editor.current_item_idx < editor.total_items.saturating_sub(1) {
+                                editor.current_item_idx += 1;
+                                editor.reset_field_state();
+                            }
+                        }
+                        NavigationDirection::Prev => {
+                            if editor.current_item_idx > 0 {
+                                editor.current_item_idx -= 1;
+                                editor.reset_field_state();
+                            }
+                        }
                     }
                 }
             }
 
             UnifiedTagEditorAction::StageDecisionAndReview { index, mutations } => {
+                let Some(w) = witness else { return };
                 // Stage the decision AND immediately show transaction review
                 // Used for aggregated mode or single-item contexts
-                self.stage_decision(index, mutations);
+                self.stage_tag_editor_decision(index, mutations, w);
 
                 // Transition to standardized review modal
                 // Note: unified_tag_editor state is preserved inside SuspendedView for Cancel return
@@ -447,7 +507,7 @@ impl App {
     /// - Cancel: return to source view (state preserved in SuspendedView)
     /// - Discard: discard transaction, drop suspended view, return to Insights
     /// - Confirm: commit transaction, drop suspended view, go to Progress
-    pub(super) fn handle_transaction_review_action(&mut self, action: transaction_review::TransactionReviewAction) {
+    fn handle_transaction_review_action(&mut self, action: transaction_review::TransactionReviewAction, _witness: Option<&witness::DecisionWitness>) {
         use transaction_review::TransactionReviewAction;
 
         match action {
@@ -591,8 +651,10 @@ impl App {
     ///
     /// This dispatches to the current view's click handler to check for
     /// button hits. Mouse clicks on decision buttons are equivalent to
-    /// Enter key presses for decision witnessing.
+    /// Enter key presses for decision witnessing - clicks always have authority.
     pub(super) fn handle_click(&mut self, x: u16, y: u16) {
+        let click_witness = witness::DecisionWitness::new();
+
         match &self.view {
             ActiveView::OobSyncResolution(state) => {
                 if let Some(button_name) = state.button_rects.hit_test(x, y) {
@@ -603,7 +665,7 @@ impl App {
                         "cancel" => oob_sync_modal::OobSyncAction::Cancel,
                         _ => oob_sync_modal::OobSyncAction::None,
                     };
-                    self.handle_oob_sync_action(action);
+                    self.handle_oob_sync_action(action, Some(&click_witness));
                 }
             }
             ActiveView::OobConflictInspection(state) => {
@@ -626,7 +688,7 @@ impl App {
                             state.selected_button = oob_conflict_modal::types::ResolutionButton::AssimilateDisk;
                         }
                     }
-                    self.handle_oob_conflict_action(action);
+                    self.handle_oob_conflict_action(action, Some(&click_witness));
                 }
             }
             ActiveView::Insights(_) => {

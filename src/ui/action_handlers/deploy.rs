@@ -6,6 +6,7 @@
 use crate::corpus::paths;
 use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, MoveToStashMutation};
 use crate::ui::{deploy_modal, transaction_review, ActiveView};
+use super::witness;
 use super::super::App;
 
 impl App {
@@ -24,10 +25,11 @@ impl App {
     }
 
     /// Handle deployment preview actions.
-    pub(in crate::ui) fn handle_deployment_preview_action(&mut self, action: deploy_modal::DeploymentPreviewAction) {
+    pub(super) fn handle_deployment_preview_action(&mut self, action: deploy_modal::DeploymentPreviewAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             deploy_modal::DeploymentPreviewAction::None => {}
             deploy_modal::DeploymentPreviewAction::Confirm => {
+                let Some(w) = witness else { return };
                 // Generate deploy mutations and stage for review
                 // Clone the cached data to avoid borrow issues
                 let cached_data = match &self.view {
@@ -35,7 +37,7 @@ impl App {
                     _ => None,
                 };
                 if let Some(data) = cached_data {
-                    let mutation_count = self.stage_deploy_mutations(&data);
+                    let mutation_count = self.stage_deploy_mutations(&data, w);
                     if mutation_count > 0 {
                         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                         self.start_transaction_review(transaction_review::TransactionReviewSource::DeployPreview);
@@ -64,7 +66,7 @@ impl App {
     /// - deploy_path/library_path/expected_path: relative to libraries_root
     ///
     /// These must be resolved to absolute for filesystem mutations.
-    fn stage_deploy_mutations(&mut self, data: &deploy_modal::DeployModalData) -> usize {
+    fn stage_deploy_mutations(&mut self, data: &deploy_modal::DeployModalData, _witness: &witness::DecisionWitness) -> usize {
         use crate::meta::mutations::Mutation;
 
         let Some(ref mut witch) = self.witch else {

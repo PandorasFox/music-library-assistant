@@ -4,6 +4,7 @@
 
 use crate::corpus::paths;
 use crate::ui::{filter_popup, moved_file_modal, oob_sync_modal, oob_conflict_modal, transaction_review, ActiveView, FilterOverlay, FilterPopupContext};
+use super::witness;
 use super::super::App;
 
 impl App {
@@ -37,16 +38,18 @@ impl App {
     }
 
     /// Handle OOB sync resolution actions.
-    pub(in crate::ui) fn handle_oob_sync_action(&mut self, action: oob_sync_modal::OobSyncAction) {
+    pub(super) fn handle_oob_sync_action(&mut self, action: oob_sync_modal::OobSyncAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             oob_sync_modal::OobSyncAction::None => {}
             oob_sync_modal::OobSyncAction::AcceptDisk => {
-                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::DiskToIndex);
+                let Some(w) = witness else { return };
+                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::DiskToIndex, w);
                 // Transition to review
                 self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
             }
             oob_sync_modal::OobSyncAction::AcceptDb => {
-                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::IndexToDisk);
+                let Some(w) = witness else { return };
+                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::IndexToDisk, w);
                 // Transition to review
                 self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
             }
@@ -71,7 +74,7 @@ impl App {
     /// Uses the dedicated batch mutations which properly handle multi-value tags:
     /// - IndexToDisk: ApplyDbTagsToDisk (writes DB tags to disk files)
     /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
-    fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection) {
+    fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection, _witness: &witness::DecisionWitness) {
         use crate::corpus::db::types::OobSyncDirection;
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
@@ -187,7 +190,7 @@ impl App {
     }
 
     /// Handle OOB conflict inspection actions.
-    pub(in crate::ui) fn handle_oob_conflict_action(&mut self, action: oob_conflict_modal::OobConflictAction) {
+    pub(super) fn handle_oob_conflict_action(&mut self, action: oob_conflict_modal::OobConflictAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             oob_conflict_modal::OobConflictAction::None => {}
             oob_conflict_modal::OobConflictAction::Navigate => {
@@ -198,10 +201,12 @@ impl App {
                 }
             }
             oob_conflict_modal::OobConflictAction::Resolve => {
-                self.stage_oob_bucket_resolution();
+                let Some(w) = witness else { return };
+                self.stage_oob_bucket_resolution(w);
             }
             oob_conflict_modal::OobConflictAction::Acknowledge => {
-                self.stage_oob_mtime_acknowledgement();
+                let Some(w) = witness else { return };
+                self.stage_oob_mtime_acknowledgement(w);
             }
             oob_conflict_modal::OobConflictAction::Cancel => {
                 self.cancel_and_return_to_insights("OOB conflict inspection closed");
@@ -246,7 +251,7 @@ impl App {
     /// Uses the dedicated batch mutations which properly handle multi-value tags:
     /// - ApplyDbTagsToDisk: writes DB tags to disk files
     /// - AssimilateDiskTagsToDb: reads disk tags into DB index
-    fn stage_oob_bucket_resolution(&mut self) {
+    fn stage_oob_bucket_resolution(&mut self, _witness: &witness::DecisionWitness) {
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
         use crate::ui::oob_conflict_modal::types::ResolutionButton;
@@ -317,7 +322,7 @@ impl App {
     ///
     /// If selection is active, only selected files are included.
     /// Otherwise, all files in the bucket are included.
-    fn stage_oob_mtime_acknowledgement(&mut self) {
+    fn stage_oob_mtime_acknowledgement(&mut self, _witness: &witness::DecisionWitness) {
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::AcknowledgeMtimeOnlyMutation;
 
@@ -409,11 +414,12 @@ impl App {
     }
 
     /// Handle moved file acknowledgement actions.
-    pub(in crate::ui) fn handle_moved_file_action(&mut self, action: moved_file_modal::MovedFileAction) {
+    pub(super) fn handle_moved_file_action(&mut self, action: moved_file_modal::MovedFileAction, witness: Option<&witness::DecisionWitness>) {
         match action {
             moved_file_modal::MovedFileAction::None => {}
             moved_file_modal::MovedFileAction::Acknowledge => {
-                self.stage_moved_file_acknowledge();
+                let Some(w) = witness else { return };
+                self.stage_moved_file_acknowledge(w);
                 // Transition to review
                 self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
             }
@@ -424,7 +430,7 @@ impl App {
     }
 
     /// Stage mutations for moved file acknowledgement.
-    fn stage_moved_file_acknowledge(&mut self) {
+    fn stage_moved_file_acknowledge(&mut self, _witness: &witness::DecisionWitness) {
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::UpdateFilePathMutation;
         use std::path::PathBuf;

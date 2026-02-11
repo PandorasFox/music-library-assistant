@@ -7,6 +7,7 @@ use crate::ui::{
     insights_view, tag_canonicity_v2, transaction_review, ActiveView,
     CanonicitySignalKind, TagCanonicityClusters,
 };
+use super::witness;
 use super::super::App;
 
 impl App {
@@ -110,12 +111,13 @@ impl App {
     }
 
     /// Handle tag canonicity modal actions (three-pane layout).
-    pub(in crate::ui) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity_v2::TagCanonicalityActionV2) {
+    pub(super) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity_v2::TagCanonicalityActionV2, witness: Option<&witness::DecisionWitness>) {
         match action {
             tag_canonicity_v2::TagCanonicalityActionV2::None => {}
             tag_canonicity_v2::TagCanonicalityActionV2::Confirmed => {
+                let Some(w) = witness else { return };
                 // Stage decision and advance to next cluster
-                self.stage_canonicity_decision();
+                self.stage_canonicity_decision(w);
                 self.advance_to_next_cluster();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Cancelled => {
@@ -131,8 +133,7 @@ impl App {
                 self.navigate_cluster(forward);
             }
             tag_canonicity_v2::TagCanonicalityActionV2::ShowReview => {
-                // Ctrl+R - stage current decision and show review
-                self.stage_canonicity_decision();
+                // Ctrl+R - show review with whatever has already been staged
                 self.show_transaction_review_for_canonicity();
             }
         }
@@ -213,7 +214,7 @@ impl App {
     ///
     /// This adds the decision to the transaction but does NOT confirm it.
     /// The transaction is confirmed when the user completes the review screen.
-    fn stage_canonicity_decision(&mut self) {
+    fn stage_canonicity_decision(&mut self, _witness: &witness::DecisionWitness) {
         let (mutations, cluster_idx, tag_name) = match &self.view {
             ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
                 let mutations = state.mutations();

@@ -4,6 +4,7 @@
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
 use crate::ui::{compound_split_v2, progressive_worker, transaction_review, ActiveView, SuspendedView};
+use super::witness;
 use super::super::App;
 
 impl App {
@@ -76,17 +77,19 @@ impl App {
     }
 
     /// Handle compound tag split modal actions (v2).
-    pub(in crate::ui) fn handle_compound_split_action(&mut self, action: compound_split_v2::CompoundSplitActionV2) {
+    pub(super) fn handle_compound_split_action(&mut self, action: compound_split_v2::CompoundSplitActionV2, witness: Option<&witness::DecisionWitness>) {
         match action {
             compound_split_v2::CompoundSplitActionV2::None => {}
             compound_split_v2::CompoundSplitActionV2::Confirmed => {
+                let Some(w) = witness else { return };
                 // Stage decision and advance to next signal
-                self.stage_compound_split_decision();
+                self.stage_compound_split_decision(w);
                 self.advance_to_next_compound_split();
             }
             compound_split_v2::CompoundSplitActionV2::Canonicalize => {
+                let Some(w) = witness else { return };
                 // Mark as canonical (don't split) and advance
-                self.stage_compound_canonicalize_decision();
+                self.stage_compound_canonicalize_decision(w);
                 self.advance_to_next_compound_split();
             }
             compound_split_v2::CompoundSplitActionV2::Cancelled => {
@@ -98,8 +101,7 @@ impl App {
                 self.navigate_compound_split(forward);
             }
             compound_split_v2::CompoundSplitActionV2::ShowReview => {
-                // Ctrl+R - stage current decision and show review
-                self.stage_compound_split_decision();
+                // Ctrl+R - show review with whatever has already been staged
                 self.show_transaction_review_for_compound_split();
             }
             compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
@@ -181,7 +183,7 @@ impl App {
     }
 
     /// Stage the current compound split decision (v2).
-    fn stage_compound_split_decision(&mut self) {
+    fn stage_compound_split_decision(&mut self, _witness: &witness::DecisionWitness) {
         let (mutations, cluster_idx, description) = match &self.view {
             ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
                 let mutations = state.mutations();
@@ -206,7 +208,7 @@ impl App {
     }
 
     /// Stage a canonicalize decision (mark compound value as canonical, don't split).
-    fn stage_compound_canonicalize_decision(&mut self) {
+    fn stage_compound_canonicalize_decision(&mut self, _witness: &witness::DecisionWitness) {
         let (mutations, cluster_idx, description) = match &self.view {
             ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
                 let mutation = state.data.create_canonical_signal();

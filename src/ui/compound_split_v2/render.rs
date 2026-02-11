@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::ui::helpers::{render_pane, truncate_right};
+use crate::ui::widgets::{ConfirmationButton, ConfirmationModal};
 
 use super::types::{CompoundSplitStateV2, FocusPaneV2};
 
@@ -49,6 +50,11 @@ pub fn render(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         render_controls(f, chunks[3], state);
     } else {
         render_controls(f, chunks[2], state);
+    }
+
+    // Confirmation overlay for canonicalize
+    if state.confirming_canonicalize {
+        render_canonicalize_confirm(f, area, state);
     }
 }
 
@@ -373,4 +379,32 @@ fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 
     let para = Paragraph::new(Line::from(hints)).alignment(Alignment::Center);
     f.render_widget(para, area);
+}
+
+/// Render the canonicalize confirmation overlay.
+fn render_canonicalize_confirm(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
+    let value = &state.data.compound.compound_value;
+    let tag_name = &state.data.compound.tag_name;
+
+    ConfirmationModal::new(" Confirm Canonical Value ")
+        .border_color(Color::Cyan)
+        .fixed_size(60, 9)
+        .message(vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("Confirm \""),
+                Span::styled(value.as_str(), Style::default().fg(Color::Yellow)),
+                Span::raw(format!("\" as a standalone {} value?", tag_name)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "This will whitelist it — compound detection will skip this value.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .buttons(vec![
+            ConfirmationButton::new("[Enter] Confirm", Color::Green).selected(true),
+            ConfirmationButton::new("[Esc] Cancel", Color::White),
+        ])
+        .render(f, area);
 }

@@ -48,6 +48,21 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 impl CompoundSplitStateV2 {
     /// Handle keyboard input for the modal.
     pub fn handle_key(&mut self, key: KeyEvent) -> CompoundSplitActionV2 {
+        // If confirming canonicalize, intercept all input
+        if self.confirming_canonicalize {
+            return match key.code {
+                KeyCode::Enter => {
+                    self.confirming_canonicalize = false;
+                    CompoundSplitActionV2::Canonicalize
+                }
+                KeyCode::Esc => {
+                    self.confirming_canonicalize = false;
+                    CompoundSplitActionV2::None
+                }
+                _ => CompoundSplitActionV2::None,
+            };
+        }
+
         // If editing, handle edit-specific keys first
         if self.is_editing() {
             return self.handle_editing_key(key);
@@ -57,7 +72,10 @@ impl CompoundSplitStateV2 {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('r' | 'R') => return CompoundSplitActionV2::ShowReview,
-                KeyCode::Char('q' | 'Q') => return CompoundSplitActionV2::Canonicalize,
+                KeyCode::Char('q' | 'Q') => {
+                    self.confirming_canonicalize = true;
+                    return CompoundSplitActionV2::None;
+                }
                 // Ctrl+A only available in safe mode (bulk confirm all)
                 KeyCode::Char('a' | 'A') if self.is_safe_mode => {
                     return CompoundSplitActionV2::StageAllAndReview;

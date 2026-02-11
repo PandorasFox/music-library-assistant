@@ -193,6 +193,9 @@ pub struct CompoundSplitStateV2 {
     /// Progress tracking
     pub group_index: usize,
     pub total_groups: usize,
+
+    /// Whether the canonicalize confirmation popup is showing
+    pub confirming_canonicalize: bool,
 }
 
 impl CompoundSplitStateV2 {
@@ -225,6 +228,7 @@ impl CompoundSplitStateV2 {
             file_scroll: 0,
             group_index,
             total_groups,
+            confirming_canonicalize: false,
         }
     }
 

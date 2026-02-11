@@ -117,7 +117,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale |
-| DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy. Computes stale status inline from library files table (no dependency on LibraryStale signals). Clears both signal types before writing to avoid INSERT OR IGNORE staleness. DeployedHealthy metadata includes `library_path`. |
+| DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy. Computes stale status inline from library files table (no dependency on LibraryStale signals). Clears both signal types before writing to avoid INSERT OR IGNORE staleness. DeployedHealthy metadata includes `library_path`. Skips conflict losers: files whose computed deploy path is claimed by 2+ corpus files are excluded from DeployReady (they would fail to deploy anyway). |
 
 ### Fingerprinting Limitations
 

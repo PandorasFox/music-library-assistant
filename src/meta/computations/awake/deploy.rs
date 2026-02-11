@@ -2,7 +2,7 @@
 //!
 //! Deploy conflict detection, deploy health signals, and corpus deploy status.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -342,40 +342,68 @@ pub fn execute_derive_corpus_deploy_status(
         }
     };
 
-    let mut deploy_ready_count = 0usize;
-    let mut deployed_healthy_count = 0usize;
+    // Phase 1: Pre-compute deploy paths for all configured healthy files.
+    // We need to see ALL deploy paths before emitting signals, because files
+    // whose deploy path is shared by 2+ corpus files are conflict losers and
+    // should NOT be marked DeployReady.
+    struct PrecomputedFile {
+        inode: i64,
+        corpus_path: String,
+        deploy_path: String,
+    }
+
+    let mut precomputed: Vec<PrecomputedFile> = Vec::new();
+    let mut deploy_path_counts: HashMap<String, usize> = HashMap::new();
     let mut skipped_not_configured = 0usize;
 
     for signal in &healthy_signals {
-        let inode = signal.inode;
-        let corpus_path = &signal.path;
+        let corpus_path_buf = Path::new(&signal.path);
 
-        let corpus_path_buf = Path::new(corpus_path);
-
-        // Skip files not in a configured source directory
         if !config.is_path_in_source(corpus_path_buf) {
             skipped_not_configured += 1;
             continue;
         }
 
-        // Compute expected deploy path from tags
-        let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+        let tags = read_only_db.get_corpus_tags(signal.inode).unwrap_or_default();
         let tag_map: HashMap<String, String> = tags
             .into_iter()
             .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
             .collect();
-        let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
+        let expected_relative = compute_deployment_path_with_tags(&signal.path, &tag_map);
+        let deploy_path = expected_relative.to_string_lossy().to_string();
 
+        *deploy_path_counts.entry(deploy_path.clone()).or_insert(0) += 1;
+
+        precomputed.push(PrecomputedFile {
+            inode: signal.inode,
+            corpus_path: signal.path.clone(),
+            deploy_path,
+        });
+    }
+
+    // Phase 2: Build conflict set — deploy paths claimed by 2+ corpus files.
+    let conflict_paths: HashSet<&str> = deploy_path_counts
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(path, _)| path.as_str())
+        .collect();
+
+    // Phase 3: Emit signals, skipping conflict losers from DeployReady.
+    let mut deploy_ready_count = 0usize;
+    let mut deployed_healthy_count = 0usize;
+    let mut conflict_skipped_count = 0usize;
+
+    for file in &precomputed {
         // Check if this inode is deployed in any library
-        if let Some(library_paths) = library_inode_to_paths.get(&inode) {
+        if let Some(library_paths) = library_inode_to_paths.get(&file.inode) {
             // File is deployed — check if any library path matches expected
             let matching_path = library_paths.iter().find(|lp| {
                 // Library paths are "{library_name}/{relative_path}"
-                // Strip library name prefix for comparison with expected_relative
+                // Strip library name prefix for comparison with expected deploy path
                 let components: Vec<_> = lp.components().collect();
                 if components.len() > 1 {
                     let suffix: PathBuf = components[1..].iter().collect();
-                    suffix == expected_relative
+                    suffix == Path::new(&file.deploy_path)
                 } else {
                     false
                 }
@@ -386,32 +414,38 @@ pub fn execute_derive_corpus_deploy_status(
                 deployed_healthy_count += 1;
                 sender.write_typed_signal(
                     TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
-                        inode,
-                        path: corpus_path.to_string(),
+                        inode: file.inode,
+                        path: file.corpus_path.clone(),
                         library_path: lib_path.to_string_lossy().to_string(),
                     }),
                     witness,
                 );
+            } else if conflict_paths.contains(file.deploy_path.as_str()) {
+                // Deployed at wrong path, but target path is conflicted — skip
+                conflict_skipped_count += 1;
             } else {
                 // Deployed but at wrong path (stale) — mark as deploy-ready
                 deploy_ready_count += 1;
                 sender.write_typed_signal(
                     TypedSignalWrite::DeployReady(DeployReadySignal {
-                        inode,
-                        path: corpus_path.to_string(),
-                        deploy_path: expected_relative.to_string_lossy().to_string(),
+                        inode: file.inode,
+                        path: file.corpus_path.clone(),
+                        deploy_path: file.deploy_path.clone(),
                     }),
                     witness,
                 );
             }
+        } else if conflict_paths.contains(file.deploy_path.as_str()) {
+            // Not deployed, and target path is conflicted — skip
+            conflict_skipped_count += 1;
         } else {
             // Not deployed at all — deploy-ready
             deploy_ready_count += 1;
             sender.write_typed_signal(
                 TypedSignalWrite::DeployReady(DeployReadySignal {
-                    inode,
-                    path: corpus_path.to_string(),
-                    deploy_path: expected_relative.to_string_lossy().to_string(),
+                    inode: file.inode,
+                    path: file.corpus_path.clone(),
+                    deploy_path: file.deploy_path.clone(),
                 }),
                 witness,
             );
@@ -419,10 +453,11 @@ pub fn execute_derive_corpus_deploy_status(
     }
 
     log_general(format!(
-        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} not configured",
+        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} conflict-skipped, {} not configured",
         healthy_signals.len(),
         deploy_ready_count,
         deployed_healthy_count,
+        conflict_skipped_count,
         skipped_not_configured,
     ));
 

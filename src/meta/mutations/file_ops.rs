@@ -120,6 +120,21 @@ impl MutationExecutor for MoveToStashMutation {
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
 
+    fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
+        use crate::corpus::paths;
+        let resolver = paths::get_resolver();
+        if let Some(rel) = resolver.to_relative(&self.path) {
+            if let Ok(lib_rel) = rel.strip_prefix("libraries") {
+                let library_path = lib_rel.to_string_lossy();
+                if let Some(library_name) = library_path.split('/').next() {
+                    let key = LibraryLeftoverSignal::make_key(library_name, &library_path);
+                    return vec![SignalToClear::exact::<LibraryLeftoverSignal>(key)];
+                }
+            }
+        }
+        Vec::new()
+    }
+
     // MoveToStash: no signal updates needed (file is gone)
 }
 
@@ -190,7 +205,18 @@ impl MutationExecutor for LibraryMoveMutation {
     }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
-        vec![SignalToClear::new::<LibraryStaleSignal>(self.source.to_string_lossy().to_string())]
+        use crate::corpus::paths;
+        let resolver = paths::get_resolver();
+        if let Some(rel) = resolver.to_relative(&self.source) {
+            if let Ok(lib_rel) = rel.strip_prefix("libraries") {
+                let library_path = lib_rel.to_string_lossy();
+                if let Some(library_name) = library_path.split('/').next() {
+                    let key = LibraryStaleSignal::make_key(library_name, &library_path);
+                    return vec![SignalToClear::exact::<LibraryStaleSignal>(key)];
+                }
+            }
+        }
+        Vec::new()
     }
 }
 

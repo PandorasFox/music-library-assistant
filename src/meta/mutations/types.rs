@@ -124,25 +124,23 @@ pub enum SignalClearScope {
     None,
 }
 
-/// Specific aggregate signal to clear by key pattern.
+/// Specific aggregate signal to clear by exact key.
 ///
 /// Used for targeted signal clearing like LibraryStale after library moves,
 /// where the signal key doesn't match the mutation's affected inodes.
-/// Function pointers are resolved at construction time via `SignalToClear::new::<S>()`.
+/// Function pointers are resolved at construction time via `SignalToClear::exact::<S>()`.
 #[derive(Clone)]
 pub struct SignalToClear {
-    pub query_keys_fn: fn(&rusqlite::Connection) -> rusqlite::Result<Vec<String>>,
     pub clear_by_key_fn: fn(&rusqlite::Connection, &str) -> rusqlite::Result<()>,
-    pub key_pattern: String,
+    pub key: String,
     pub label: &'static str,
 }
 
 impl SignalToClear {
-    pub fn new<S: crate::meta::signals::store::AggregateSignalStore>(key_pattern: String) -> Self {
+    pub fn exact<S: crate::meta::signals::store::AggregateSignalStore>(key: String) -> Self {
         Self {
-            query_keys_fn: S::query_keys,
             clear_by_key_fn: S::clear_by_key,
-            key_pattern,
+            key,
             label: S::TABLE_NAME,
         }
     }
@@ -152,7 +150,7 @@ impl std::fmt::Debug for SignalToClear {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SignalToClear")
             .field("label", &self.label)
-            .field("key_pattern", &self.key_pattern)
+            .field("key", &self.key)
             .finish()
     }
 }

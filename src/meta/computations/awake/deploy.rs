@@ -7,10 +7,6 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::logging::log_general;
-use crate::meta::computations::helpers::{
-    drop_stale_aggregate_signal,
-    ensure_library_leftover_if_missing,
-};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     TypedSignalWrite, DeployConflictSignal, DeployReadySignal, DeployedHealthySignal,
@@ -133,6 +129,13 @@ pub fn execute_derive_deploy_health_signals(
         library_name, library_root, corpus_path_prefixes,
     ));
 
+    // Bulk clear all existing leftover/stale signals for this library before recomputing.
+    // This prevents stale signals from persisting when files are removed between runs.
+    let leftover_prefix = LibraryLeftoverSignal::key_prefix_for_library(library_name);
+    let stale_prefix = LibraryStaleSignal::key_prefix_for_library(library_name);
+    sender.clear_aggregate_by_key_prefix::<LibraryLeftoverSignal>(&leftover_prefix, witness);
+    sender.clear_aggregate_by_key_prefix::<LibraryStaleSignal>(&stale_prefix, witness);
+
     // Query library file data from Awakening phase
     let library_scan_entries = match read_only_db.get_library_files(library_name) {
         Ok(entries) => entries,
@@ -187,21 +190,11 @@ pub fn execute_derive_deploy_health_signals(
             ));
             debug_logged += 1;
         }
-        let leftover_key = format!(
-            "library_leftover:{}:{}",
-            library_name,
-            library_path.display()
-        );
-        let stale_key = format!(
-            "library_stale:{}:{}",
-            library_name,
-            library_path.display()
-        );
+
+        let library_path_display = library_path.display().to_string();
 
         if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            drop_stale_aggregate_signal::<LibraryLeftoverSignal>(read_only_db, &sender, &leftover_key, witness);
-
-            // Check if stale and emit typed signal
+            // Has corpus backing — check if stale
             let is_stale = if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
                 let inode = audio_file.inode();
                 let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
@@ -223,20 +216,18 @@ pub fn execute_derive_deploy_health_signals(
 
                 if library_path_suffix != expected_relative {
                     // Stale: store paths with consistent library prefix for display and mutations
-                    // Both paths stored as "{library_name}/path/..." for consistency
                     let expected_with_prefix = std::path::Path::new(library_name).join(&expected_relative);
-                    if !read_only_db.aggregate_signal_exists::<LibraryStaleSignal>(&stale_key) {
-                        sender.write_typed_signal(
-                            TypedSignalWrite::LibraryStale(LibraryStaleSignal {
-                                key: stale_key.clone(),
-                                library_path: library_path.to_string_lossy().to_string(),
-                                expected_path: expected_with_prefix.to_string_lossy().to_string(),
-                                corpus_path: corpus_path.clone(),
-                                inode,
-                            }),
-                            witness,
-                        );
-                    }
+                    let stale_key = LibraryStaleSignal::make_key(library_name, &library_path_display);
+                    sender.write_typed_signal(
+                        TypedSignalWrite::LibraryStale(LibraryStaleSignal {
+                            key: stale_key,
+                            library_path: library_path_display,
+                            expected_path: expected_with_prefix.to_string_lossy().to_string(),
+                            corpus_path: corpus_path.clone(),
+                            inode,
+                        }),
+                        witness,
+                    );
                     true
                 } else {
                     false
@@ -249,12 +240,17 @@ pub fn execute_derive_deploy_health_signals(
                 stale_count += 1;
             } else {
                 healthy_count += 1;
-                drop_stale_aggregate_signal::<LibraryStaleSignal>(read_only_db, &sender, &stale_key, witness);
             }
         } else {
+            // No corpus backing — leftover
             leftover_count += 1;
-            ensure_library_leftover_if_missing(read_only_db, &sender, &leftover_key, witness);
-            drop_stale_aggregate_signal::<LibraryStaleSignal>(read_only_db, &sender, &stale_key, witness);
+            let leftover_key = LibraryLeftoverSignal::make_key(library_name, &library_path_display);
+            sender.write_typed_signal(
+                TypedSignalWrite::LibraryLeftover(LibraryLeftoverSignal {
+                    key: leftover_key,
+                }),
+                witness,
+            );
         }
     }
 

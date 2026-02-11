@@ -666,13 +666,9 @@ impl Database {
 
         let results = stmt.query_map(params![], |row| {
             let key: String = row.get(0)?;
-            // Strip "library_leftover:" prefix, then split on first ":" to get
-            // library_name and library_path (which is "{library_name}/relative/path")
-            let after_prefix = key.strip_prefix("library_leftover:").unwrap_or(&key);
-            let (library_name, library_path) = match after_prefix.find(':') {
-                Some(idx) => (after_prefix[..idx].to_string(), after_prefix[idx + 1..].to_string()),
-                None => (String::new(), after_prefix.to_string()),
-            };
+            let (library_name, library_path) = crate::meta::signals::data::LibraryLeftoverSignal::parse_key(&key)
+                .map(|(n, p)| (n.to_string(), p.to_string()))
+                .unwrap_or_else(|| (String::new(), key.clone()));
             Ok(LeftoverSignalFile { library_name, library_path })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

@@ -91,6 +91,23 @@ pub trait AggregateSignalStore: Sized {
         let rows = stmt.query_map([], |row| row.get(0))?;
         rows.collect()
     }
+
+    /// Delete all signals whose key starts with the given prefix.
+    fn clear_by_key_prefix(conn: &Connection, prefix: &str) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM {} WHERE key LIKE ? ESCAPE '\\'",
+            Self::TABLE_NAME
+        );
+        let pattern = format!(
+            "{}%",
+            prefix
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        conn.execute(&sql, [pattern])?;
+        Ok(())
+    }
 }
 
 // ============================================================================

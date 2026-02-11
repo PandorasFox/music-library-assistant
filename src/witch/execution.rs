@@ -27,8 +27,8 @@ use std::time::Instant;
 use crate::config;
 use crate::meta::computations::{Computation, awakening, with_read_only_db};
 use crate::meta::signals::data::TypedSignalWrite;
-use crate::corpus::db::{Database, ReadOnlyDb};
-use crate::meta::mutations::{Mutation, PendingSignal, SignalToClear};
+use crate::corpus::db::Database;
+use crate::meta::mutations::{Mutation, PendingSignal};
 use crate::corpus::paths;
 use crate::db_thread;
 
@@ -383,44 +383,18 @@ fn apply_post_execution(
     // e.g., HardLink spawns UpdateDeploySignals
     spawned.extend(mutation.additional_computations());
 
-    // Phase 5: Specific signal clearing (by type+key pattern)
+    // Phase 5: Specific signal clearing (exact key)
     // e.g., LibraryMove clears LibraryStale for the old path
     let signals_to_clear = mutation.specific_signals_to_clear();
     if !signals_to_clear.is_empty() {
-        let _ = with_read_only_db(|read_db| {
-            if let Some(sender) = db_thread::signal_sender() {
-                for spec in &signals_to_clear {
-                    clear_signals_by_pattern(read_db, sender, spec, witness);
-                }
-            }
-        });
-    }
-
-    spawned
-}
-
-/// Clear signals matching a type+key pattern.
-///
-/// Used for targeted clearing like LibraryStale signals, where the key format
-/// is compound (e.g., "{name}:{path}") and doesn't match simple path-based clearing.
-fn clear_signals_by_pattern(
-    db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
-    spec: &SignalToClear,
-    witness: &MutationExecutionWitness,
-) {
-    // Query existing aggregate signal keys and clear those matching the pattern
-    if let Ok(keys) = db.run_aggregate_keys_query(spec.query_keys_fn) {
-        for key in keys {
-            // Match if key ends with the pattern (compound key format)
-            // or if key equals the pattern exactly
-            if key.ends_with(&format!(":{}", spec.key_pattern))
-               || key == spec.key_pattern
-            {
-                sender.clear_aggregate_signal_fn(spec.clear_by_key_fn, &key, spec.label, witness);
+        if let Some(sender) = db_thread::signal_sender() {
+            for spec in &signals_to_clear {
+                sender.clear_aggregate_signal_fn(spec.clear_by_key_fn, &spec.key, spec.label, witness);
             }
         }
     }
+
+    spawned
 }
 
 /// Emit pending signals carried from mutation execution.

@@ -197,37 +197,6 @@ pub(crate) fn drop_stale_corpus_signal<S: CorpusSignalStore>(
 // Signal Emission Helpers (Aggregate - Semantic Keys)
 // ============================================================================
 
-/// Ensure a LibraryLeftover aggregate signal exists.
-///
-/// Uses the read-only DB to check freshness before queueing a typed write.
-pub(crate) fn ensure_library_leftover_if_missing(
-    read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
-    key: &str,
-    witness: &impl SignalWitness,
-) {
-    use crate::meta::signals::data::LibraryLeftoverSignal;
-    if !read_only_db.aggregate_signal_exists::<LibraryLeftoverSignal>(key) {
-        let typed = TypedSignalWrite::LibraryLeftover(
-            LibraryLeftoverSignal { key: key.to_string() }
-        );
-        sender.write_typed_signal(typed, witness);
-    }
-}
-
-/// Drop a stale aggregate signal by key.
-///
-/// Use when a computation definitively determines "signal X should NOT exist for this key".
-pub(crate) fn drop_stale_aggregate_signal<S: AggregateSignalStore>(
-    read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
-    key: &str,
-    witness: &impl SignalWitness,
-) {
-    if read_only_db.aggregate_signal_exists::<S>(key) {
-        sender.clear_aggregate_signal::<S>(key, witness);
-    }
-}
 
 // ============================================================================
 // Aggregate Signal Set Logic

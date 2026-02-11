@@ -458,7 +458,7 @@ pub fn execute_update_corpus_file_signals(
 /// Only valid for paths within library directories.
 /// Handles LibraryLeftover signals when files are added/removed from libraries.
 pub fn execute_update_library_file_signals(
-    read_only_db: &ReadOnlyDb<'_>,
+    _read_only_db: &ReadOnlyDb<'_>,
     path: &Path,
     witness: &ComputationWitness,
     start: Instant,
@@ -489,8 +489,7 @@ pub fn execute_update_library_file_signals(
     // The full library health is recomputed during the Awake phase
     if path.exists() && is_audio_file(path) {
         // File exists - clear any LibraryLeftover/LibraryStale for this path
-        // These use compound keys, so we search and clear matching ones
-        clear_library_signals_for_path(read_only_db, &sender, &path_str, witness);
+        clear_library_signals_for_path(&sender, &path_str, witness);
     }
     // If file doesn't exist, LibraryLeftover signals will be created during
     // the next full library scan in the Awake phase
@@ -726,9 +725,8 @@ pub fn execute_update_deploy_signals(
     let library_path_str = relative_library_path.to_string_lossy().to_string();
     let corpus_path_str = relative_corpus_path.to_string_lossy().to_string();
 
-    // Clear library-side signals for this path (any library name)
-    // These use keys like "library_leftover:{name}:{path}" so we need to find and clear them
-    clear_library_signals_for_path(read_only_db, &sender, &library_path_str, witness);
+    // Clear library-side signals for this path
+    clear_library_signals_for_path(&sender, &library_path_str, witness);
 
     // Get the corpus file inode for signal keying
     let corpus_inode = match read_only_db.get_file_entry_by_path(&corpus_path_str, "corpus") {
@@ -774,31 +772,21 @@ pub fn execute_update_deploy_signals(
 
 /// Clear library-side signals (LibraryLeftover, LibraryStale) for a library path.
 ///
-/// These signals use compound keys like "{name}:{path}",
-/// so we query existing signals and clear matching ones.
+/// Constructs exact keys from the library path (O(1) instead of scanning all keys).
+/// `library_path` is "{library_name}/relative/path" (e.g., "libraries/music/Artist/track.opus"
+/// or "music/Artist/track.opus" depending on caller).
 fn clear_library_signals_for_path(
-    read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     library_path: &str,
     witness: &ComputationWitness,
 ) {
-    // Check for LibraryLeftover signals matching this path
-    if let Ok(keys) = read_only_db.aggregate_signal_keys::<LibraryLeftoverSignal>() {
-        for key in keys {
-            // Key format: "{name}:{path}"
-            if key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_aggregate_signal::<LibraryLeftoverSignal>(&key, witness);
-            }
-        }
-    }
-
-    // Check for LibraryStale signals matching this path
-    if let Ok(keys) = read_only_db.aggregate_signal_keys::<LibraryStaleSignal>() {
-        for key in keys {
-            // Key format: "{name}:{path}"
-            if key.ends_with(&format!(":{}", library_path)) {
-                sender.clear_aggregate_signal::<LibraryStaleSignal>(&key, witness);
-            }
-        }
+    // Extract library_name from first path component
+    // library_path may be "libraries/music/..." or "music/..." depending on caller
+    let effective_path = library_path.strip_prefix("libraries/").unwrap_or(library_path);
+    if let Some(library_name) = effective_path.split('/').next() {
+        let leftover_key = LibraryLeftoverSignal::make_key(library_name, effective_path);
+        sender.clear_aggregate_signal::<LibraryLeftoverSignal>(&leftover_key, witness);
+        let stale_key = LibraryStaleSignal::make_key(library_name, effective_path);
+        sender.clear_aggregate_signal::<LibraryStaleSignal>(&stale_key, witness);
     }
 }

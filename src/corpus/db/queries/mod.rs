@@ -472,11 +472,6 @@ impl<'a> ReadOnlyDb<'a> {
         S::exists(self.db.conn(), inode).unwrap_or(false)
     }
 
-    /// Check if an aggregate signal exists by key (generic, type-safe).
-    pub fn aggregate_signal_exists<S: crate::meta::signals::store::AggregateSignalStore>(&self, key: &str) -> bool {
-        S::exists(self.db.conn(), key).unwrap_or(false)
-    }
-
     /// Query all keys for an aggregate signal type (generic, type-safe).
     pub fn aggregate_signal_keys<S: crate::meta::signals::store::AggregateSignalStore>(&self) -> Result<Vec<String>> {
         S::query_keys(self.db.conn())
@@ -486,18 +481,6 @@ impl<'a> ReadOnlyDb<'a> {
     /// Check if a TypedSignalWrite already exists in its typed table.
     pub fn signal_exists(&self, signal: &crate::meta::signals::data::TypedSignalWrite) -> bool {
         signal.exists(self.db.conn())
-    }
-
-    /// Execute an aggregate key query via a pre-resolved function pointer.
-    ///
-    /// Used by `SignalToClear` where the signal type is determined at construction
-    /// time and carried as a function pointer.
-    pub fn run_aggregate_keys_query(
-        &self,
-        query_fn: fn(&rusqlite::Connection) -> rusqlite::Result<Vec<String>>,
-    ) -> Result<Vec<String>> {
-        query_fn(self.db.conn())
-            .map_err(|e| anyhow::anyhow!("Failed to query aggregate signal keys: {}", e))
     }
 
     /// Get compound tag signal keys filtered by safety classification and optional tag name.

@@ -192,6 +192,29 @@ pub struct LibraryLeftoverSignal {
     pub key: String,
 }
 
+impl LibraryLeftoverSignal {
+    const KEY_PREFIX: &'static str = "library_leftover";
+
+    /// Construct the canonical key for a library file.
+    /// `library_name`: e.g. "music"
+    /// `library_path`: e.g. "music/Artist/Album/track.opus" (library-name-prefixed)
+    pub fn make_key(library_name: &str, library_path: &str) -> String {
+        format!("{}:{}:{}", Self::KEY_PREFIX, library_name, library_path)
+    }
+
+    /// Key prefix for bulk-clearing all signals for a specific library.
+    pub fn key_prefix_for_library(library_name: &str) -> String {
+        format!("{}:{}:", Self::KEY_PREFIX, library_name)
+    }
+
+    /// Parse a key into (library_name, library_path). Returns None if malformed.
+    pub fn parse_key(key: &str) -> Option<(&str, &str)> {
+        let after = key.strip_prefix("library_leftover:")?;
+        let idx = after.find(':')?;
+        Some((&after[..idx], &after[idx + 1..]))
+    }
+}
+
 // --- Aggregate signals with extra flat columns ---
 
 /// Library file at wrong path (tags changed since deploy).
@@ -202,6 +225,22 @@ pub struct LibraryStaleSignal {
     pub expected_path: String,
     pub corpus_path: String,
     pub inode: i64,
+}
+
+impl LibraryStaleSignal {
+    const KEY_PREFIX: &'static str = "library_stale";
+
+    /// Construct the canonical key for a stale library file.
+    /// `library_name`: e.g. "music"
+    /// `library_path`: e.g. "music/Artist/Album/track.opus" (library-name-prefixed)
+    pub fn make_key(library_name: &str, library_path: &str) -> String {
+        format!("{}:{}:{}", Self::KEY_PREFIX, library_name, library_path)
+    }
+
+    /// Key prefix for bulk-clearing all signals for a specific library.
+    pub fn key_prefix_for_library(library_name: &str) -> String {
+        format!("{}:{}:", Self::KEY_PREFIX, library_name)
+    }
 }
 
 // --- Aggregate signals with bincode BLOB data ---

@@ -174,6 +174,12 @@ enum SignalWriteOp {
         key: String,
         label: &'static str,
     },
+    /// Clear all aggregate signals whose key starts with the given prefix.
+    ClearAggregateByKeyPrefix {
+        clear_fn: fn(&rusqlite::Connection, &str) -> rusqlite::Result<()>,
+        prefix: String,
+        label: &'static str,
+    },
 
     // =========================================================================
     // Library File Operations (Awakening phase)
@@ -547,6 +553,22 @@ impl SignalWriteSender {
             clear_fn,
             key: key.to_string(),
             label,
+        });
+    }
+
+    /// Clear all aggregate signals whose key starts with the given prefix.
+    ///
+    /// Used for bulk clearing like all LibraryLeftover signals for one library.
+    pub fn clear_aggregate_by_key_prefix<S: crate::meta::signals::store::AggregateSignalStore>(
+        &self,
+        prefix: &str,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::ClearAggregateByKeyPrefix {
+            clear_fn: S::clear_by_key_prefix,
+            prefix: prefix.to_string(),
+            label: S::TABLE_NAME,
         });
     }
 
@@ -1124,6 +1146,13 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             if let Err(e) = clear_fn(db.conn(), key) {
                 crate::logging::log_error(format!(
                     "[DB_THREAD] clear {} by key '{}' failed: {}", label, key, e
+                ));
+            }
+        }
+        SignalWriteOp::ClearAggregateByKeyPrefix { clear_fn, prefix, label } => {
+            if let Err(e) = clear_fn(db.conn(), prefix) {
+                crate::logging::log_error(format!(
+                    "[DB_THREAD] clear {} by prefix '{}' failed: {}", label, prefix, e
                 ));
             }
         }

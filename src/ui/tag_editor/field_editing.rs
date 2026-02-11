@@ -59,16 +59,30 @@ impl UnifiedTagEditorState {
         } else {
             // Individual mode - update tag_fields
             if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
-                if let Some(field) = fields.get_mut(self.current_field_idx) {
-                    match self.field_edit_state {
-                        FieldEditState::EditingName => {
-                            field.name = self.name_buffer.clone();
+                match self.field_edit_state {
+                    FieldEditState::EditingName => {
+                        // Get old normalized name before renaming
+                        let old_normalized = fields
+                            .get(self.current_field_idx)
+                            .map(|f| f.name.to_lowercase());
+
+                        if let Some(old_norm) = old_normalized {
+                            let new_name = self.name_buffer.clone();
+                            // Rename all fields with the same normalized name
+                            // (handles multi-value tags: renaming "genre" renames all genre entries)
+                            for f in fields.iter_mut() {
+                                if f.name.to_lowercase() == old_norm {
+                                    f.name = new_name.clone();
+                                }
+                            }
                         }
-                        FieldEditState::EditingValue => {
+                    }
+                    FieldEditState::EditingValue => {
+                        if let Some(field) = fields.get_mut(self.current_field_idx) {
                             field.value = self.value_buffer.clone();
                         }
-                        FieldEditState::NonEditable => {}
                     }
+                    FieldEditState::NonEditable => {}
                 }
             }
         }
@@ -94,8 +108,12 @@ impl UnifiedTagEditorState {
         };
 
         if self.field_edit_state == FieldEditState::NonEditable {
-            // Check if this is a Various value that needs confirmation
-            if matches!(field.value, AggregatedValue::Various) {
+            if !self.focus_on_value {
+                // Name column focused - enter name editing
+                self.field_edit_state = FieldEditState::EditingName;
+                self.load_field_buffer();
+            } else if matches!(field.value, AggregatedValue::Various) {
+                // Check if this is a Various value that needs confirmation
                 // First Enter - mark as confirming
                 if let Some(ref mut agg_fields) = self.aggregated_fields {
                     if let Some(f) = agg_fields.get_mut(self.current_field_idx) {
@@ -131,17 +149,16 @@ impl UnifiedTagEditorState {
         if field.name == "New Tag" {
             self.create_new_tag();
         } else if self.field_edit_state == FieldEditState::NonEditable {
-            // Check if this field has multiple values (multi-value tag)
-            if self.is_multi_value_field().is_some() {
-                // Open multi-value editor modal
+            if !self.focus_on_value {
+                // Name column focused - enter name editing (rename = drop old + add new)
+                self.field_edit_state = FieldEditState::EditingName;
+                self.load_field_buffer();
+            } else if self.is_multi_value_field().is_some() {
+                // Value column, multi-value tag - open multi-value editor modal
                 self.open_multi_value_editor();
             } else {
-                // Single value - enter normal edit mode
-                self.field_edit_state = if self.focus_on_value {
-                    FieldEditState::EditingValue
-                } else {
-                    FieldEditState::EditingName
-                };
+                // Value column, single value - enter value editing
+                self.field_edit_state = FieldEditState::EditingValue;
                 self.load_field_buffer();
             }
         } else {

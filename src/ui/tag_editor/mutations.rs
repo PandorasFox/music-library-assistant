@@ -130,10 +130,13 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
                 }
             }
 
-            // Skip further comparison if all values are deleted
+            // Skip further comparison only if all current entries are explicitly deleted
+            // (those deletion changes were already added above).
+            // When curr is completely empty (tag name was renamed away), fall through
+            // so the "removed values" logic below generates drop changes.
             let curr_active: Vec<_> = curr.iter().filter(|f| !f.deleted).collect();
-            if curr_active.is_empty() && !orig.is_empty() {
-                continue; // Deletion changes already added above
+            if curr_active.is_empty() && !orig.is_empty() && !curr.is_empty() {
+                continue; // Explicit deletions already handled above
             }
 
             // Compare active (non-deleted) values

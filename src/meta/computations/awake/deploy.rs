@@ -416,6 +416,7 @@ pub fn execute_derive_corpus_deploy_status(
     // Phase 3: Emit signals, skipping conflict losers from DeployReady.
     let mut deploy_ready_count = 0usize;
     let mut deployed_healthy_count = 0usize;
+    let mut deployed_stale_count = 0usize;
     let mut conflict_skipped_count = 0usize;
 
     for file in &precomputed {
@@ -445,20 +446,10 @@ pub fn execute_derive_corpus_deploy_status(
                     }),
                     witness,
                 );
-            } else if conflict_paths.contains(file.deploy_path.as_str()) {
-                // Deployed at wrong path, but target path is conflicted — skip
-                conflict_skipped_count += 1;
             } else {
-                // Deployed but at wrong path (stale) — mark as deploy-ready
-                deploy_ready_count += 1;
-                sender.write_typed_signal(
-                    TypedSignalWrite::DeployReady(DeployReadySignal {
-                        inode: file.inode,
-                        path: file.corpus_path.clone(),
-                        deploy_path: file.deploy_path.clone(),
-                    }),
-                    witness,
-                );
+                // Deployed but at wrong path — stale. DeriveDeployHealthSignals
+                // already emits LibraryStale for these; don't also emit DeployReady.
+                deployed_stale_count += 1;
             }
         } else if conflict_paths.contains(file.deploy_path.as_str()) {
             // Not deployed, and target path is conflicted — skip
@@ -478,10 +469,11 @@ pub fn execute_derive_corpus_deploy_status(
     }
 
     log_general(format!(
-        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} conflict-skipped, {} not configured",
+        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} not configured",
         healthy_signals.len(),
         deploy_ready_count,
         deployed_healthy_count,
+        deployed_stale_count,
         conflict_skipped_count,
         skipped_not_configured,
     ));

@@ -175,9 +175,20 @@ pub fn execute_derive_deploy_health_signals(
         library_name, corpus_inodes.len(),
     ));
 
+    // Build path→inode index for conflict detection.
+    // When a stale file's expected path is already occupied by a different inode,
+    // it's a stale-conflict (tag edit moved the expected path onto an occupied slot).
+    // These are masked like deploy conflicts — emitting a stale signal would just
+    // produce a LibraryMove that fails every cycle.
+    let library_path_to_inode: HashMap<PathBuf, i64> = library_files
+        .iter()
+        .map(|(path, inode)| (path.clone(), *inode))
+        .collect();
+
     let mut healthy_count: usize = 0;
     let mut stale_count: usize = 0;
     let mut leftover_count: usize = 0;
+    let mut stale_conflict_count: usize = 0;
     let mut debug_logged = 0usize;
 
     for (library_path, library_inode) in &library_files {
@@ -215,20 +226,33 @@ pub fn execute_derive_deploy_health_signals(
                     .unwrap_or_else(|_| library_path.clone());
 
                 if library_path_suffix != expected_relative {
-                    // Stale: store paths with consistent library prefix for display and mutations
                     let expected_with_prefix = std::path::Path::new(library_name).join(&expected_relative);
-                    let stale_key = LibraryStaleSignal::make_key(library_name, &library_path_display);
-                    sender.write_typed_signal(
-                        TypedSignalWrite::LibraryStale(LibraryStaleSignal {
-                            key: stale_key,
-                            library_path: library_path_display,
-                            expected_path: expected_with_prefix.to_string_lossy().to_string(),
-                            corpus_path: corpus_path.clone(),
-                            inode,
-                        }),
-                        witness,
-                    );
-                    true
+
+                    // Check if expected path is already occupied by a different inode.
+                    // If so, this is a stale-conflict: the move would always fail.
+                    if let Some(&occupant_inode) = library_path_to_inode.get(&expected_with_prefix) {
+                        if occupant_inode != *library_inode {
+                            stale_conflict_count += 1;
+                            false  // Mask: don't emit stale signal
+                        } else {
+                            // Same inode at expected path — shouldn't happen but treat as healthy
+                            false
+                        }
+                    } else {
+                        // Expected path is free — genuine stale
+                        let stale_key = LibraryStaleSignal::make_key(library_name, &library_path_display);
+                        sender.write_typed_signal(
+                            TypedSignalWrite::LibraryStale(LibraryStaleSignal {
+                                key: stale_key,
+                                library_path: library_path_display,
+                                expected_path: expected_with_prefix.to_string_lossy().to_string(),
+                                corpus_path: corpus_path.clone(),
+                                inode,
+                            }),
+                            witness,
+                        );
+                        true
+                    }
                 } else {
                     false
                 }
@@ -255,12 +279,13 @@ pub fn execute_derive_deploy_health_signals(
     }
 
     log_general(format!(
-        "[COMPUTE] DeriveDeployHealthSignals '{}': {} files, {} healthy, {} stale, {} leftover",
+        "[COMPUTE] DeriveDeployHealthSignals '{}': {} files, {} healthy, {} stale, {} leftover, {} stale-conflict",
         library_name,
         library_files.len(),
         healthy_count,
         stale_count,
         leftover_count,
+        stale_conflict_count,
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

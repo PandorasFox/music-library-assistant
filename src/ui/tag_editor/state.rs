@@ -106,8 +106,21 @@ pub struct UnifiedTagEditorState {
     pub has_oob_signal: bool,
 
     // ========================================================================
+    // Context List Scrolling (BulkEdit file list)
+    // ========================================================================
+
+    /// Scroll offset for the file list in BulkEdit mode
+    pub context_list_scroll_offset: usize,
+
+    /// Visible height for the file list (set during render)
+    pub context_list_visible_height: usize,
+
+    // ========================================================================
     // Staged Mutations Tracking (for skipping redundant confirmations)
     // ========================================================================
+
+    /// Number of decisions staged in the current transaction
+    pub staged_decision_count: usize,
 
     /// Staged mutations for current item (set after StageDecision, cleared on item change)
     /// Used to skip confirmation dialog when changes match what's already staged.
@@ -185,9 +198,12 @@ impl UnifiedTagEditorState {
             original_tag_fields,
             aggregated_fields,
             focus: UnifiedTagEditorFocus::TagFields,
-            selected_button: TagEditorButton::Confirm,
+            selected_button: TagEditorButton::ReviewAll,
             modal: None,
             has_oob_signal: false,
+            context_list_scroll_offset: 0,
+            context_list_visible_height: 0,
+            staged_decision_count: 0,
             staged_mutations_for_current: None,
         }
     }
@@ -267,6 +283,14 @@ impl UnifiedTagEditorState {
             compute_changes(&self.original_tag_fields, &self.tag_fields)
                 .iter()
                 .any(|c| c.track_idx == self.current_item_idx)
+        }
+    }
+
+    /// Check if a specific item (by index) has unsaved changes
+    pub fn item_has_changes(&self, idx: usize) -> bool {
+        match (self.tag_fields.get(idx), self.original_tag_fields.get(idx)) {
+            (Some(current), Some(original)) => current != original,
+            _ => false,
         }
     }
 
@@ -405,7 +429,7 @@ impl UnifiedTagEditorState {
 
     /// Get available action buttons based on context and signals
     pub fn available_buttons(&self) -> Vec<TagEditorButton> {
-        let mut buttons = vec![TagEditorButton::Confirm, TagEditorButton::DropChanges];
+        let mut buttons = vec![TagEditorButton::ReviewAll, TagEditorButton::RevertThisFile];
 
         // Add Fill from Disk / Fill from DB only when OOB signal present
         if self.has_oob_signal {

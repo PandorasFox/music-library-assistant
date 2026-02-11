@@ -306,21 +306,28 @@ impl UnifiedTagEditorState {
             }
             KeyCode::Enter => {
                 match self.selected_button {
-                    TagEditorButton::Confirm => {
-                        // Stage decision and go to review
-                        if self.has_changes_for_current_item() {
+                    TagEditorButton::ReviewAll => {
+                        let current_unstaged = self.has_changes_for_current_item()
+                            && !self.changes_match_staged();
+                        let has_anything = current_unstaged || self.staged_decision_count > 0;
+
+                        if current_unstaged {
+                            // Stage current file's changes, then open review
                             let mutations = self.generate_mutations_for_current_item();
                             UnifiedTagEditorAction::StageDecisionAndReview {
                                 index: self.current_item_idx,
                                 mutations,
                             }
+                        } else if has_anything {
+                            // Already-staged decisions exist, go straight to review
+                            UnifiedTagEditorAction::RequestTransactionReview
                         } else {
-                            UnifiedTagEditorAction::StatusMessage("No changes to save".to_string())
+                            UnifiedTagEditorAction::StatusMessage("No changes to review".to_string())
                         }
                     }
-                    TagEditorButton::DropChanges => {
+                    TagEditorButton::RevertThisFile => {
                         self.drop_changes_for_current_item();
-                        UnifiedTagEditorAction::StatusMessage("Changes dropped".to_string())
+                        UnifiedTagEditorAction::StatusMessage("Changes reverted".to_string())
                     }
                     TagEditorButton::FillFromDisk => {
                         self.fill_from_disk();

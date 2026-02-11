@@ -136,7 +136,7 @@ impl UnifiedTagEditorState {
         self.render_action_panel(f, layout.right.area);
     }
 
-    fn render_context_list(&self, f: &mut Frame, area: Rect) {
+    fn render_context_list(&mut self, f: &mut Frame, area: Rect) {
         // ContextList is display-only (not focusable), so border is never highlighted
 
         let (items, title): (Vec<Line>, &str) = if self.is_aggregated_mode() {
@@ -176,19 +176,44 @@ impl UnifiedTagEditorState {
                 }
                 TagEditContext::BulkEdit { audio_files, .. } => {
                     // Bulk mode with Individual editing - show all files by filename
+                    // Compute visible height and scroll offset for centered selection
+                    let visible_height = area.height.saturating_sub(2) as usize;
+                    self.context_list_visible_height = visible_height;
+                    let total = audio_files.len();
+
+                    let ideal = self.current_item_idx.saturating_sub(visible_height / 2);
+                    let max_offset = total.saturating_sub(visible_height);
+                    self.context_list_scroll_offset = ideal.min(max_offset);
+
                     audio_files
                         .iter()
                         .enumerate()
+                        .skip(self.context_list_scroll_offset)
+                        .take(visible_height)
                         .map(|(idx, audio_file)| {
-                            let prefix = if idx == self.current_item_idx { ">> " } else { "   " };
+                            let has_changes = self.item_has_changes(idx);
+                            let is_current = idx == self.current_item_idx;
+
+                            let prefix = if is_current {
+                                ">> "
+                            } else if has_changes {
+                                "✎ "
+                            } else {
+                                "   "
+                            };
+
                             let filename = std::path::Path::new(audio_file.path())
                                 .file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("Unknown");
                             let line = format!("{}{}", prefix, filename);
 
-                            let style = if idx == self.current_item_idx {
+                            let style = if is_current && has_changes {
+                                Style::default().bg(Color::DarkGray).fg(Color::Blue)
+                            } else if is_current {
                                 Style::default().bg(Color::DarkGray)
+                            } else if has_changes {
+                                Style::default().fg(Color::Blue)
                             } else {
                                 Style::default()
                             };
@@ -504,27 +529,57 @@ impl UnifiedTagEditorState {
     fn render_action_panel(&self, f: &mut Frame, area: Rect) {
         let is_focused = matches!(self.focus, UnifiedTagEditorFocus::Actions);
         let buttons = self.available_buttons();
+        let has_current_changes = self.has_changes_for_current_item();
+        let has_anything = self.staged_decision_count > 0 || has_current_changes;
 
         let mut lines = vec![Line::from("")];
 
         for button in &buttons {
             let is_selected = *button == self.selected_button;
             let label = match button {
-                TagEditorButton::Confirm => "Confirm",
-                TagEditorButton::DropChanges => "Drop Changes",
+                TagEditorButton::ReviewAll => "Review All",
+                TagEditorButton::RevertThisFile => "Revert This File",
                 TagEditorButton::FillFromDisk => "Fill from Disk",
                 TagEditorButton::FillFromDb => "Fill from DB",
             };
 
-            let style = if is_focused && is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
-            } else if is_selected {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
+            let style = match button {
+                TagEditorButton::ReviewAll => {
+                    if is_focused && is_selected {
+                        if has_anything {
+                            Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::Black).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                        }
+                    } else if is_selected {
+                        if has_anything { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) }
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                }
+                TagEditorButton::RevertThisFile => {
+                    if is_focused && is_selected {
+                        if has_current_changes {
+                            Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::Black).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                        }
+                    } else if is_selected {
+                        if has_current_changes { Style::default().fg(Color::Red) } else { Style::default().fg(Color::DarkGray) }
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                }
+                _ => {
+                    // FillFromDisk, FillFromDb: keep existing uniform style
+                    if is_focused && is_selected {
+                        Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if is_selected {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                }
             };
 
             let text = if is_selected {

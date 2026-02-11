@@ -70,11 +70,11 @@ pub enum UnifiedTagEditorFocus {
 /// Action buttons in the unified tag editor
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TagEditorButton {
-    /// Confirm changes and stage to transaction
+    /// Review all staged decisions (opens transaction review)
     #[default]
-    Confirm,
-    /// Drop changes for current item (revert to original)
-    DropChanges,
+    ReviewAll,
+    /// Revert changes for current file (revert to original)
+    RevertThisFile,
     /// Fill from disk (when OOB signal present)
     FillFromDisk,
     /// Fill from database (when OOB signal present)
@@ -160,7 +160,7 @@ pub enum FieldEditState {
 }
 
 /// A single tag field with its metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TagField {
     pub name: String,
     pub value: String,

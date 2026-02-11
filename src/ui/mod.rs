@@ -282,6 +282,7 @@ impl App {
         }
         if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
             editor.set_staged_mutations(mutations);
+            editor.staged_decision_count += 1;
         }
         self.status_message = Some(format!("Decision staged (item {})", index + 1));
     }

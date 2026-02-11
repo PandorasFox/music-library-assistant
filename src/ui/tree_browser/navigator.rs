@@ -62,6 +62,9 @@ pub struct TreeNavigator {
     /// Active path filter - when Some, only paths in this set are shown.
     /// Includes both files that match and their ancestor directories.
     active_path_filter: Option<HashSet<PathBuf>>,
+    /// Absolute paths of configured deployment source directories.
+    /// Directories equal to or under these paths are flagged as configured for deploy.
+    deploy_source_paths: Vec<PathBuf>,
 }
 
 impl TreeNavigator {
@@ -69,7 +72,8 @@ impl TreeNavigator {
     ///
     /// - `show_root`: If true, root directory is shown as first entry (corpus browser style).
     ///   If false, only root's children are shown (directory selector style).
-    pub fn new(root_path: PathBuf, filter: EntryFilter, show_root: bool) -> Self {
+    /// - `deploy_source_paths`: Absolute paths of configured deployment source directories.
+    pub fn new(root_path: PathBuf, filter: EntryFilter, show_root: bool, deploy_source_paths: Vec<PathBuf>) -> Self {
         let mut nav = Self {
             entries: Vec::new(),
             cursor_idx: 0,
@@ -79,6 +83,7 @@ impl TreeNavigator {
             filter,
             show_root,
             active_path_filter: None,
+            deploy_source_paths,
         };
         nav.load_initial();
         nav
@@ -126,6 +131,7 @@ impl TreeNavigator {
             let has_children = self.path_has_children(&self.root_path);
             let item_count = self.count_audio_files(&self.root_path);
 
+            let root_configured = self.is_configured_for_deploy(&self.root_path);
             let mut root_entry = TreeEntry::directory(
                 self.root_path.clone(),
                 root_name,
@@ -133,6 +139,7 @@ impl TreeNavigator {
                 has_children,
                 item_count,
             );
+            root_entry.configured_for_deploy = root_configured;
             root_entry.is_expanded = true;
             self.entries.push(root_entry);
 
@@ -319,7 +326,9 @@ impl TreeNavigator {
                 if path.is_dir() {
                     let has_children = self.path_has_children(&path);
                     let item_count = self.count_audio_files(&path);
-                    dirs.push(TreeEntry::directory(path, name, depth, has_children, item_count));
+                    let mut entry = TreeEntry::directory(path.clone(), name, depth, has_children, item_count);
+                    entry.configured_for_deploy = self.is_configured_for_deploy(&path);
+                    dirs.push(entry);
                 } else if self.filter.include_files && self.is_audio_file(&path) {
                     files.push(TreeEntry::file(path, name, depth));
                 }
@@ -440,6 +449,11 @@ impl TreeNavigator {
     /// Get root path.
     pub fn root_path(&self) -> &PathBuf {
         &self.root_path
+    }
+
+    /// Check if a directory path is under a configured deployment source.
+    fn is_configured_for_deploy(&self, path: &Path) -> bool {
+        self.deploy_source_paths.iter().any(|src| path.starts_with(src))
     }
 
 }

@@ -24,6 +24,8 @@ pub struct TreeEntry {
     pub has_children: bool,
     /// Count of audio files in this directory (non-recursive, directories only)
     pub item_count: usize,
+    /// Whether this directory is under a configured deployment source
+    pub configured_for_deploy: bool,
 }
 
 impl TreeEntry {
@@ -43,6 +45,7 @@ impl TreeEntry {
             is_expanded: false,
             has_children,
             item_count,
+            configured_for_deploy: false,
         }
     }
 
@@ -56,6 +59,7 @@ impl TreeEntry {
             is_expanded: false,
             has_children: false,
             item_count: 0,
+            configured_for_deploy: false,
         }
     }
 }

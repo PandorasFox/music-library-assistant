@@ -51,14 +51,14 @@ impl TreeBrowserState {
     /// - Type-to-jump search for directories
     /// - Enter launches tag editor (directory = bulk edit, file = single edit)
     /// - Part of lateral view ring (Tab/Shift-Tab cycling)
-    pub fn corpus_browser(root: PathBuf, variant_config: CorpusBrowserConfig) -> Self {
+    pub fn corpus_browser(root: PathBuf, variant_config: CorpusBrowserConfig, deploy_source_paths: Vec<PathBuf>) -> Self {
         let filter = if variant_config.show_files {
             EntryFilter::with_files()
         } else {
             EntryFilter::directories_only()
         };
 
-        let navigator = TreeNavigator::new(root.clone(), filter, true);
+        let navigator = TreeNavigator::new(root.clone(), filter, true, deploy_source_paths);
         let variant = BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(variant_config));
 
         Self { navigator, variant }

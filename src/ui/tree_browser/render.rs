@@ -133,6 +133,12 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
         String::new()
     };
 
+    let deploy_suffix = if entry.is_directory && entry.configured_for_deploy {
+        "  [configured for deployment]"
+    } else {
+        ""
+    };
+
     let base_style = if is_cursor {
         CURSOR_STYLE
     } else if entry.is_directory {
@@ -143,11 +149,13 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
 
     let expand_style = Style::default().fg(Color::Yellow);
     let count_style = Style::default().fg(Color::DarkGray);
+    let deploy_style = Style::default().fg(Color::Magenta);
 
     Line::from(vec![
         Span::raw(indent),
         Span::styled(expand_indicator, expand_style),
         Span::styled(format!("{}{}", icon, entry.name), base_style),
         Span::styled(count_suffix, count_style),
+        Span::styled(deploy_suffix, deploy_style),
     ])
 }

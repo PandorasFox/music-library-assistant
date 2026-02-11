@@ -319,10 +319,16 @@ impl App {
     }
 
     pub(super) fn start_corpus_browser(&mut self) {
-        let config = tree_browser::CorpusBrowserConfig::default();
+        let variant_config = tree_browser::CorpusBrowserConfig::default();
+        let corpus_dir = self.config.corpus_dir();
+        let deploy_source_paths: Vec<std::path::PathBuf> = self.config.source_dirs
+            .iter()
+            .map(|sd| corpus_dir.join(&sd.path))
+            .collect();
         self.view = ActiveView::CorpusBrowser(tree_browser::TreeBrowserState::corpus_browser(
-            self.config.corpus_dir(),
-            config,
+            corpus_dir,
+            variant_config,
+            deploy_source_paths,
         ));
     }
 

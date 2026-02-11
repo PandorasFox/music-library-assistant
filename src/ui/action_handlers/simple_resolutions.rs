@@ -4,7 +4,7 @@
 //! subpar duplicate, and directory overlap resolution modals.
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
-use crate::ui::{corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, transaction_review, ActiveView};
+use crate::ui::{corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, ActiveView};
 use super::witness;
 use super::super::App;
 
@@ -47,7 +47,7 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Restore missing files", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No files to restore".to_string());
                 }
@@ -62,7 +62,7 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Drop non-restorable files", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::MissingFileResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No files to drop".to_string());
                 }
@@ -111,7 +111,7 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Drop missing directories", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::MissingDirectoryResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No directories to drop".to_string());
                 }
@@ -160,7 +160,7 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Stash corrupt files", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::CorruptFileResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
                 }
@@ -208,7 +208,7 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Remux to FLAC", w);
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No lossless files to remux".to_string());
                 }
@@ -222,7 +222,7 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Transcode to Opus", w);
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No lossy files to transcode".to_string());
                 }
@@ -236,7 +236,7 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Convert all formats", w);
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::ShitFormatResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No files to convert".to_string());
                 }
@@ -285,7 +285,7 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::SubparDuplicateResolution);
+                    self.start_transaction_review();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
                 }
@@ -360,7 +360,7 @@ impl App {
                 };
                 if at_last {
                     // Last cluster - go to review
-                    self.start_transaction_review(transaction_review::TransactionReviewSource::DirectoryClusterResolution);
+                    self.start_transaction_review();
                 }
             }
             DirectoryClusterPreviewAction::NavigateNext => {
@@ -375,7 +375,7 @@ impl App {
             }
             DirectoryClusterPreviewAction::ShowReview => {
                 // Jump directly to transaction review
-                self.start_transaction_review(transaction_review::TransactionReviewSource::DirectoryClusterResolution);
+                self.start_transaction_review();
             }
             DirectoryClusterPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Directory overlap cluster resolution cancelled");

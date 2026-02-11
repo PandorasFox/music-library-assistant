@@ -318,9 +318,7 @@ impl App {
                 }
 
                 self.view = ActiveView::TransactionReview {
-                    review: transaction_review::TransactionReviewState::new(
-                        transaction_review::TransactionReviewSource::CompoundTagSplit,
-                    ),
+                    review: transaction_review::TransactionReviewState::new(),
                     suspended: return_context,
                 };
             }

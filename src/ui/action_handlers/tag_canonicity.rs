@@ -4,7 +4,7 @@
 //! clusters, staging canonicalization decisions.
 
 use crate::ui::{
-    insights_view, tag_canonicity_v2, transaction_review, ActiveView,
+    insights_view, tag_canonicity_v2, ActiveView,
     CanonicitySignalKind, TagCanonicityClusters,
 };
 use super::witness;
@@ -207,7 +207,7 @@ impl App {
 
     /// Show the transaction review screen for tag canonicity.
     fn show_transaction_review_for_canonicity(&mut self) {
-        self.start_transaction_review(transaction_review::TransactionReviewSource::TagCanonicityResolution);
+        self.start_transaction_review();
     }
 
     /// Stage a decision for the current canonicity cluster (V2).

@@ -3,7 +3,7 @@
 //! Handles the compound tag split modal: loading signals, navigating between
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
-use crate::ui::{compound_split_v2, progressive_worker, transaction_review, ActiveView, SuspendedView};
+use crate::ui::{compound_split_v2, progressive_worker, ActiveView, SuspendedView};
 use super::witness;
 use super::super::App;
 
@@ -179,7 +179,7 @@ impl App {
 
     /// Show the transaction review screen for compound tag splits.
     pub(in crate::ui) fn show_transaction_review_for_compound_split(&mut self) {
-        self.start_transaction_review(transaction_review::TransactionReviewSource::CompoundTagSplit);
+        self.start_transaction_review();
     }
 
     /// Stage the current compound split decision (v2).

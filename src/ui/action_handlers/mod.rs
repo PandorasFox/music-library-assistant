@@ -338,7 +338,6 @@ impl App {
                     // Note: IntakeConfirmation state is preserved inside the suspended view for Cancel return
                     // Transition to review modal with ContentAnalysis phase for post-commit
                     self.start_transaction_review_with_phase(
-                        transaction_review::TransactionReviewSource::IntakeConfirmation,
                         transaction_review::PostCommitPhase::ContentAnalysis,
                     );
                 }
@@ -427,7 +426,7 @@ impl App {
 
                 // Transition to standardized review modal
                 // Note: unified_tag_editor state is preserved inside SuspendedView for Cancel return
-                self.start_transaction_review(transaction_review::TransactionReviewSource::TagEditor);
+                self.start_transaction_review();
             }
 
             UnifiedTagEditorAction::DiscardTransaction => {
@@ -492,7 +491,7 @@ impl App {
             UnifiedTagEditorAction::RequestTransactionReview => {
                 // Transition to standardized review modal
                 // Note: unified_tag_editor state is preserved inside SuspendedView for Cancel return
-                self.start_transaction_review(transaction_review::TransactionReviewSource::TagEditor);
+                self.start_transaction_review();
             }
         }
     }
@@ -593,23 +592,11 @@ impl App {
     ///
     /// Called after staging decisions to show the review before commit.
     /// Takes ownership of the current view and wraps it as a SuspendedView.
-    pub(in crate::ui) fn start_transaction_review(&mut self, source: transaction_review::TransactionReviewSource) {
-        use transaction_review::TransactionReviewSource;
-
-        // Take current view, wrap as suspended
-        let old_view = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
-        let suspended = match (source, old_view) {
-            (TransactionReviewSource::TagCanonicityResolution, ActiveView::TagCanonicityResolution { clusters, .. }) => {
-                SuspendedView::TagCanonicityReload { clusters }
-            }
-            (TransactionReviewSource::CompoundTagSplit, ActiveView::CompoundTagSplit { clusters, safe_mode, .. }) => {
-                SuspendedView::CompoundTagSplitReload { clusters, safe_mode }
-            }
-            (_, view) => SuspendedView::Direct(view),
-        };
-
+    /// Cancel navigation restores the suspended view automatically.
+    pub(in crate::ui) fn start_transaction_review(&mut self) {
+        let suspended = self.suspend_current_view();
         self.view = ActiveView::TransactionReview {
-            review: transaction_review::TransactionReviewState::new(source),
+            review: transaction_review::TransactionReviewState::new(),
             suspended: Box::new(suspended),
         };
     }
@@ -619,28 +606,31 @@ impl App {
     /// Used for intake indexing which needs ContentAnalysis instead of SignalRefresh.
     pub(super) fn start_transaction_review_with_phase(
         &mut self,
-        source: transaction_review::TransactionReviewSource,
         phase: transaction_review::PostCommitPhase,
     ) {
-        use transaction_review::TransactionReviewSource;
-
-        // Take current view, wrap as suspended
-        let old_view = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
-        let suspended = match (source, old_view) {
-            (TransactionReviewSource::TagCanonicityResolution, ActiveView::TagCanonicityResolution { clusters, .. }) => {
-                SuspendedView::TagCanonicityReload { clusters }
-            }
-            (TransactionReviewSource::CompoundTagSplit, ActiveView::CompoundTagSplit { clusters, safe_mode, .. }) => {
-                SuspendedView::CompoundTagSplitReload { clusters, safe_mode }
-            }
-            (_, view) => SuspendedView::Direct(view),
-        };
-
+        let suspended = self.suspend_current_view();
         self.view = ActiveView::TransactionReview {
-            review: transaction_review::TransactionReviewState::new(source)
+            review: transaction_review::TransactionReviewState::new()
                 .with_post_commit_phase(phase),
             suspended: Box::new(suspended),
         };
+    }
+
+    /// Take the current view and wrap it as a SuspendedView for later restoration.
+    ///
+    /// TagCanonicityResolution and CompoundTagSplit need DB reload on restore,
+    /// so they get special SuspendedView variants. Everything else restores directly.
+    fn suspend_current_view(&mut self) -> SuspendedView {
+        let old_view = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
+        match old_view {
+            ActiveView::TagCanonicityResolution { clusters, .. } => {
+                SuspendedView::TagCanonicityReload { clusters }
+            }
+            ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
+                SuspendedView::CompoundTagSplitReload { clusters, safe_mode }
+            }
+            view => SuspendedView::Direct(view),
+        }
     }
 
     // =========================================================================

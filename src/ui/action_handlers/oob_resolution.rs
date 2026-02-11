@@ -3,7 +3,7 @@
 //! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement modals.
 
 use crate::corpus::paths;
-use crate::ui::{filter_popup, moved_file_modal, oob_sync_modal, oob_conflict_modal, transaction_review, ActiveView, FilterOverlay, FilterPopupContext};
+use crate::ui::{filter_popup, moved_file_modal, oob_sync_modal, oob_conflict_modal, ActiveView, FilterOverlay, FilterPopupContext};
 use super::witness;
 use super::super::App;
 
@@ -45,13 +45,13 @@ impl App {
                 let Some(w) = witness else { return };
                 self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::DiskToIndex, w);
                 // Transition to review
-                self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
+                self.start_transaction_review();
             }
             oob_sync_modal::OobSyncAction::AcceptDb => {
                 let Some(w) = witness else { return };
                 self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::IndexToDisk, w);
                 // Transition to review
-                self.start_transaction_review(transaction_review::TransactionReviewSource::OobSyncResolution);
+                self.start_transaction_review();
             }
             oob_sync_modal::OobSyncAction::Cancel => {
                 self.cancel_and_return_to_insights("OOB sync resolution cancelled");
@@ -315,7 +315,7 @@ impl App {
         }
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-        self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
+        self.start_transaction_review();
     }
 
     /// Stage acknowledgement mutation for mtime-only files in MtimeOnly bucket.
@@ -370,7 +370,7 @@ impl App {
         }
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-        self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
+        self.start_transaction_review();
     }
 
     // ========================================================================
@@ -421,7 +421,7 @@ impl App {
                 let Some(w) = witness else { return };
                 self.stage_moved_file_acknowledge(w);
                 // Transition to review
-                self.start_transaction_review(transaction_review::TransactionReviewSource::OobConflictResolution);
+                self.start_transaction_review();
             }
             moved_file_modal::MovedFileAction::Cancel => {
                 self.cancel_and_return_to_insights("Moved file acknowledgement cancelled");

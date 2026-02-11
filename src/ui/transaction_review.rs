@@ -25,24 +25,6 @@ use crate::witch::Witch;
 // Types
 // ============================================================================
 
-/// Source modal that spawned the review - determines Cancel navigation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransactionReviewSource {
-    TagEditor,
-    TagCanonicityResolution,
-    CompoundTagSplit,
-    DeployPreview,
-    MissingFileResolution,
-    MissingDirectoryResolution,
-    IntakeConfirmation,
-    OobSyncResolution,
-    OobConflictResolution,
-    CorruptFileResolution,
-    ShitFormatResolution,
-    SubparDuplicateResolution,
-    DirectoryClusterResolution,
-}
-
 /// Summary of a single decision for display.
 #[derive(Debug, Clone)]
 pub struct DecisionSummary {
@@ -93,9 +75,10 @@ pub enum PostCommitPhase {
 ///
 /// Decision data is fetched from the Witch's active transaction at render time,
 /// NOT stored in this state. The Witch is the source of truth.
+///
+/// Cancel navigation is handled by the `SuspendedView` stored alongside this
+/// state in `ActiveView::TransactionReview` — no source tracking needed here.
 pub struct TransactionReviewState {
-    // TODO: use source for returning to prior view when cancelling
-    pub source: TransactionReviewSource,
     pub cursor: usize,
     pub scroll: usize,
     pub button_focus: ReviewButtonFocus,
@@ -103,9 +86,8 @@ pub struct TransactionReviewState {
 }
 
 impl TransactionReviewState {
-    pub fn new(source: TransactionReviewSource) -> Self {
+    pub fn new() -> Self {
         Self {
-            source,
             cursor: 0,
             scroll: 0,
             button_focus: ReviewButtonFocus::Cancel, // Safe default

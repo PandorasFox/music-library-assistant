@@ -5,7 +5,7 @@
 
 use crate::corpus::paths;
 use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, MoveToStashMutation};
-use crate::ui::{deploy_modal, transaction_review, ActiveView};
+use crate::ui::{deploy_modal, ActiveView};
 use super::witness;
 use super::super::App;
 
@@ -40,7 +40,7 @@ impl App {
                     let mutation_count = self.stage_deploy_mutations(&data, w);
                     if mutation_count > 0 {
                         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                        self.start_transaction_review(transaction_review::TransactionReviewSource::DeployPreview);
+                        self.start_transaction_review();
                     } else {
                         // No mutations (edge case) - go directly to Insights
                         self.start_insights_view();

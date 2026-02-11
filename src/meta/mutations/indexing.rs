@@ -88,6 +88,11 @@ pub struct ApplyDbTagsToDiskMutation {
 pub struct AssimilateDiskTagsToDbMutation {
     pub inode: i64,
     pub path: PathBuf,
+    /// File source, carried in-band when chain-spawned from Transcode to avoid
+    /// a race where the old inode has already been deleted by db_thread before
+    /// this mutation's read-only connection snapshots.
+    /// None for standalone OOB resolution (no race — inode is stable).
+    pub source: Option<String>,
 }
 
 /// Flush carried tags to disk file (no DB read needed).
@@ -313,7 +318,7 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_assimilate_disk_tags_to_db(ctx.read_db, self.inode, &self.path, ctx.session_id, ctx.witness);
+        let result = execute_assimilate_disk_tags_to_db(ctx.read_db, self.inode, &self.path, self.source.as_deref(), ctx.session_id, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -928,6 +933,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     db: &ReadOnlyDb<'_>,
     inode: i64,
     abs_path: &std::path::Path,
+    in_band_source: Option<&str>,
     session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
@@ -953,12 +959,16 @@ pub fn execute_assimilate_disk_tags_to_db(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Get audio file source (needed for files table key).
-    // Source doesn't change during transcode, so this read is safe.
-    // Tag updates only operate on corpus files.
-    let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
-        .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
-    let source = audio_file.entry.source.as_str();
+    // Use in-band source when available (chain-spawned from Transcode), otherwise
+    // fall back to DB read (standalone OOB resolution where inode is stable).
+    let source: &str = match in_band_source {
+        Some(s) => s,
+        None => {
+            let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
+                .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
+            audio_file.entry.source.as_str()
+        }
+    };
 
     // Read disk tags using TagSet
     let disk_tagset = TagSet::from_file(abs_path)

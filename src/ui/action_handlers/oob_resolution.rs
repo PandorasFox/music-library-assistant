@@ -124,7 +124,7 @@ impl App {
             OobSyncDirection::DiskToIndex => (
                 "Sync disk tags \u{2192} index",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path }))
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, source: None }))
                     .collect(),
             ),
         };
@@ -305,7 +305,7 @@ impl App {
             ResolutionButton::AssimilateDisk => (
                 "Assimilate file tags \u{2192} DB",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path }))
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, source: None }))
                     .collect(),
             ),
         };

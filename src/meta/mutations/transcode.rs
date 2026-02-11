@@ -56,7 +56,7 @@ impl MutationExecutor for TranscodeMutation {
         );
 
         let (success, error, spawn_mutations) = match result {
-            Ok(()) => {
+            Ok(source) => {
                 // On success, spawn AssimilateDiskTagsToDb to read tags from the new file
                 // and update the index. This picks up any encoder tags added by ffmpeg
                 // while preserving the original metadata that ffmpeg copies.
@@ -64,6 +64,7 @@ impl MutationExecutor for TranscodeMutation {
                 let spawn = vec![ctx.witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
                     inode: self.inode,
                     path: new_path,
+                    source: Some(source),
                 }))];
                 (true, None, spawn)
             }
@@ -99,6 +100,7 @@ impl MutationExecutor for TranscodeMutation {
 ///
 /// Transcodes the source file to the target format, stashes the original,
 /// and updates the audio file record in the database.
+/// Returns the file source on success (for in-band plumbing to spawned mutations).
 fn execute_transcode_impl(
     db: &ReadOnlyDb<'_>,
     inode: i64,
@@ -107,7 +109,7 @@ fn execute_transcode_impl(
     stash_name: &str,
     stash_root: Option<&Path>,
     witness: &MutationExecutionWitness,
-) -> Result<()> {
+) -> Result<String> {
     // Validate stash is configured
     let stash_root = stash_root.ok_or_else(|| {
         anyhow::anyhow!("Stash directory not configured. Cannot transcode without stash for originals.")
@@ -238,7 +240,7 @@ fn execute_transcode_impl(
         sender.drop_file_index_by_inode(source_str, old_inode, witness);
     }
 
-    Ok(())
+    Ok(source_str.to_string())
 }
 
 // ============================================================================

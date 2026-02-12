@@ -85,7 +85,18 @@ pub fn transcode(source: &Path, dest: &Path, target: TranscodeTarget) -> Result<
         }
     }
 
-    // Copy tags from source to destination via lofty
+    // Copy pictures (album art) from source into destination before text tags.
+    // For FLAC destinations, these become PICTURE metadata blocks that survive
+    // the subsequent text tag write (lofty reads them into FlacFile.pictures on
+    // parse and chains them back into output on save).
+    copy_pictures(source, dest)
+        .with_context(|| format!(
+            "Transcode succeeded but picture copy failed: {} -> {}",
+            source.display(),
+            dest.display(),
+        ))?;
+
+    // Copy text tags from source to destination via lofty
     copy_tags(source, dest)
         .with_context(|| format!(
             "Transcode succeeded but tag copy failed: {} -> {}",
@@ -521,6 +532,73 @@ fn convert_audio_buffer_to_i16(decoded: AudioBufferRef, channels: usize) -> Resu
         }
         _ => Err(anyhow::anyhow!("Unsupported audio buffer format")),
     }
+}
+
+/// Copy embedded pictures (album art) from source to destination.
+///
+/// Reads pictures from any supported source format (MP3/ID3v2, M4A, etc.)
+/// and writes them into FLAC/Opus destination files. For FLAC destinations,
+/// pictures are stored as PICTURE metadata blocks via lofty's FlacFile API,
+/// which ensures they survive the subsequent text tag write step.
+///
+/// Silently succeeds if the source has no pictures.
+fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
+    use lofty::file::TaggedFileExt;
+    use lofty::picture::Picture;
+    use lofty::probe::Probe;
+
+    // Read pictures from the source file
+    let tagged_file = Probe::open(source)
+        .with_context(|| format!("Failed to open source for picture reading: {}", source.display()))?
+        .read()
+        .with_context(|| format!("Failed to read source for pictures: {}", source.display()))?;
+
+    let pictures: Vec<&Picture> = tagged_file
+        .tags()
+        .iter()
+        .flat_map(|tag| tag.pictures())
+        .collect();
+
+    if pictures.is_empty() {
+        return Ok(());
+    }
+
+    let dest_ext = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    match dest_ext.as_str() {
+        "flac" => {
+            use lofty::config::{ParseOptions, WriteOptions};
+            use lofty::file::AudioFile;
+            use lofty::ogg::OggPictureStorage;
+
+            let file = File::open(dest)
+                .with_context(|| format!("Failed to open dest FLAC for pictures: {}", dest.display()))?;
+            let mut reader = std::io::BufReader::new(file);
+            let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+                .with_context(|| format!("Failed to read dest FLAC: {}", dest.display()))?;
+
+            for pic in &pictures {
+                // info=None lets lofty infer PictureInformation from the picture data
+                flac.insert_picture((*pic).clone(), None)
+                    .with_context(|| "Failed to insert picture into FLAC")?;
+            }
+
+            let write_opts = WriteOptions::new().preferred_padding(0);
+            flac.save_to_path(dest, write_opts)
+                .with_context(|| format!("Failed to save pictures to FLAC: {}", dest.display()))?;
+        }
+        // Opus pictures are written inside VorbisComments by copy_tags; lofty's
+        // generic Tag → OggOpusFile write path handles this. For now, pictures
+        // for Opus targets are not copied here (they'd need to be base64-encoded
+        // into METADATA_BLOCK_PICTURE vorbis comment fields).
+        _ => {}
+    }
+
+    Ok(())
 }
 
 /// Copy tags from source file to destination file.

@@ -166,31 +166,55 @@ impl Default for PerformanceOpinions {
     }
 }
 
+/// A single rule in the compound tag splitting priority chain.
+///
+/// Rules are tried in order; the first match wins. This allows precise
+/// control over split priority (e.g., `";"` before `" & "` for artists).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SplitRule {
+    /// Split on a literal separator string.
+    Separator(String),
+    /// Detect collaboration keywords (feat, ft, vs, etc.) with optional trailing dot.
+    CollaborationKeywords(Vec<String>),
+}
+
 /// Opinions for detecting and splitting compound tag values.
 ///
-/// Maps tag names to their separator characters. When a tag value contains
-/// any of its configured separators, it's flagged for potential splitting.
+/// Maps tag names to a priority-ordered chain of split rules. The first
+/// matching rule wins for each tag value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagSplittingOpinions {
-    /// Map of tag_name -> separators to detect.
-    /// Default: { "genre": [";", ",", "/"] }
-    pub tag_separators: std::collections::HashMap<String, Vec<String>>,
+    /// Map of tag_name -> ordered split rules.
+    pub tag_split_rules: std::collections::HashMap<String, Vec<SplitRule>>,
 }
 
 impl Default for TagSplittingOpinions {
     fn default() -> Self {
-        let mut tag_separators = std::collections::HashMap::new();
-        tag_separators.insert(
-            "genre".to_string(),
-            vec![";".to_string(), ",".to_string(), "/".to_string()],
-        );
-        // Artist splitting uses " & " (with spaces) to avoid false positives
-        // like "AC/DC" or "Simon & Garfunkel" (band names, not collaborations)
-        tag_separators.insert(
+        let mut tag_split_rules = std::collections::HashMap::new();
+        tag_split_rules.insert(
             "artist".to_string(),
-            vec![" & ".to_string(), ", ".to_string(), "; ".to_string()],
+            vec![
+                SplitRule::Separator(";".to_string()),
+                SplitRule::CollaborationKeywords(vec![
+                    "feat".to_string(),
+                    "featuring".to_string(),
+                    "ft".to_string(),
+                    "with".to_string(),
+                    "vs".to_string(),
+                ]),
+                SplitRule::Separator(",".to_string()),
+                SplitRule::Separator(" & ".to_string()),
+            ],
         );
-        Self { tag_separators }
+        tag_split_rules.insert(
+            "genre".to_string(),
+            vec![
+                SplitRule::Separator(";".to_string()),
+                SplitRule::Separator(",".to_string()),
+                SplitRule::Separator("/".to_string()),
+            ],
+        );
+        Self { tag_split_rules }
     }
 }
 
@@ -704,23 +728,52 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
 /// Expected format:
 /// ```kdl
 /// tag-splitting {
-///     "genre" ";" "," "/"
-///     "artist" "&" "," ";"
+///     artist {
+///         sep ";"
+///         collab "feat" "featuring" "ft" "with" "vs"
+///         sep ","
+///         sep " & "
+///     }
+///     genre {
+///         sep ";"
+///         sep ","
+///         sep "/"
+///     }
 /// }
 /// ```
-/// Each child node is a tag name, with separator strings as entries.
+/// Each child node is a tag name containing ordered `sep` and `collab` rules.
 fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplittingOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
             let tag_name = child.name().value().to_string();
-            // Collect all string entries as separators
-            let separators: Vec<String> = child
-                .entries()
-                .iter()
-                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
-                .collect();
-            if !separators.is_empty() {
-                opinions.tag_separators.insert(tag_name, separators);
+
+            if let Some(rule_nodes) = child.children() {
+                let mut rules: Vec<SplitRule> = Vec::new();
+                for rule_node in rule_nodes.nodes() {
+                    match rule_node.name().value() {
+                        "sep" => {
+                            if let Some(entry) = rule_node.entries().first() {
+                                if let Some(s) = entry.value().as_string() {
+                                    rules.push(SplitRule::Separator(s.to_string()));
+                                }
+                            }
+                        }
+                        "collab" => {
+                            let keywords: Vec<String> = rule_node
+                                .entries()
+                                .iter()
+                                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                                .collect();
+                            if !keywords.is_empty() {
+                                rules.push(SplitRule::CollaborationKeywords(keywords));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if !rules.is_empty() {
+                    opinions.tag_split_rules.insert(tag_name, rules);
+                }
             }
         }
     }

@@ -281,6 +281,28 @@ pub fn execute_detect_compound_tag_values(
     Result::success(computation, start.elapsed().as_millis() as u64, spawn)
 }
 
+/// Determine the display label for a collaboration keyword match.
+///
+/// Scans the value for the first matching keyword (case-insensitive) and returns
+/// its canonical form with trailing dot (e.g., "feat.", "ft.", "vs.").
+fn determine_collab_separator_label(value: &str, keywords: &[String]) -> String {
+    let lower = value.to_lowercase();
+    for kw in keywords {
+        let kw_lower = kw.to_lowercase();
+        // Check for " keyword." or " keyword " (with preceding space)
+        if lower.contains(&format!(" {}.", kw_lower)) || lower.contains(&format!(" {} ", kw_lower)) {
+            // Return canonical form: keyword + dot (unless it's a full word like "featuring"/"with")
+            return if kw_lower == "featuring" || kw_lower == "with" {
+                kw_lower
+            } else {
+                format!("{}.", kw_lower)
+            };
+        }
+    }
+    // Fallback — shouldn't happen if detect_featuring_pattern matched
+    "feat.".to_string()
+}
+
 /// Execute DetectCompoundTagsForInode - detect compound tags for a single inode.
 ///
 /// Checks all tags for separator patterns and featuring patterns, emitting
@@ -341,7 +363,7 @@ pub fn execute_detect_compound_tags_for_inode(
             return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
         }
     };
-    let tag_separators = &config.opinions.tag_splitting.tag_separators;
+    let tag_split_rules = &config.opinions.tag_splitting.tag_split_rules;
 
     let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
 
@@ -353,56 +375,46 @@ pub fn execute_detect_compound_tags_for_inode(
             continue;
         }
 
-        // 1. Check separator patterns if configured for this tag
-        if let Some(separators) = tag_separators.get(&tag_name_lower) {
-            for separator in separators {
-                if CompoundTagValue::is_compound(&tag.tag_value, separator) {
-                    let split_parts = CompoundTagValue::split_value(&tag.tag_value, separator);
-                    compounds.push(TypedCompoundEntry {
-                        tag_name: tag.tag_name.clone(),
-                        compound_value: tag.tag_value.clone(),
-                        split_parts,
-                        separator: separator.clone(),
-                        matching_parts: Vec::new(), // populated below
-                    });
-                    break; // Only report first matching separator per tag
-                }
-            }
-        }
-
-        // 2. Check featuring patterns for artist tags
-        if tag_name_lower == "artist" {
-            if let Some((main_artist, featured_artists)) = detect_featuring_pattern(&tag.tag_value) {
-                // Don't duplicate if already caught by separator detection
-                let already_found = compounds.iter().any(|c| {
-                    c.compound_value == tag.tag_value
-                });
-                if !already_found {
-                    let mut split_parts = vec![main_artist];
-                    split_parts.extend(featured_artists);
-
-                    // Determine separator pattern for display
-                    let separator = if tag.tag_value.to_lowercase().contains(" feat") {
-                        "feat."
-                    } else if tag.tag_value.to_lowercase().contains(" ft") {
-                        "ft."
-                    } else if tag.tag_value.to_lowercase().contains(" featuring") {
-                        "featuring"
-                    } else if tag.tag_value.to_lowercase().contains(" vs") {
-                        "vs."
-                    } else if tag.tag_value.to_lowercase().contains(" with ") {
-                        "with"
-                    } else {
-                        "feat."
-                    };
-
-                    compounds.push(TypedCompoundEntry {
-                        tag_name: tag.tag_name.clone(),
-                        compound_value: tag.tag_value.clone(),
-                        split_parts,
-                        separator: separator.to_string(),
-                        matching_parts: Vec::new(), // populated below
-                    });
+        // Walk the priority chain of split rules for this tag
+        if let Some(rules) = tag_split_rules.get(&tag_name_lower) {
+            for rule in rules {
+                let matched = match rule {
+                    crate::config::SplitRule::Separator(sep) => {
+                        if CompoundTagValue::is_compound(&tag.tag_value, sep) {
+                            let split_parts = CompoundTagValue::split_value(&tag.tag_value, sep);
+                            Some(TypedCompoundEntry {
+                                tag_name: tag.tag_name.clone(),
+                                compound_value: tag.tag_value.clone(),
+                                split_parts,
+                                separator: sep.clone(),
+                                matching_parts: Vec::new(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    crate::config::SplitRule::CollaborationKeywords(keywords) => {
+                        if let Some((main_part, secondary_parts)) =
+                            detect_featuring_pattern(&tag.tag_value, keywords)
+                        {
+                            let mut split_parts = vec![main_part];
+                            split_parts.extend(secondary_parts);
+                            let separator = determine_collab_separator_label(&tag.tag_value, keywords);
+                            Some(TypedCompoundEntry {
+                                tag_name: tag.tag_name.clone(),
+                                compound_value: tag.tag_value.clone(),
+                                split_parts,
+                                separator,
+                                matching_parts: Vec::new(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if let Some(entry) = matched {
+                    compounds.push(entry);
+                    break; // First matching rule wins
                 }
             }
         }

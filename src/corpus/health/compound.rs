@@ -41,43 +41,36 @@ impl CompoundTagValue {
 // Featuring Pattern Detection
 // ============================================================================
 
-/// Detect "feat.", "ft.", "featuring", "with", "vs." patterns in artist values.
+/// Detect collaboration keyword patterns in tag values.
 ///
-/// Returns Some((main_artist, featured_artists)) if a featuring pattern is found.
-/// Returns None if no featuring pattern is detected.
+/// Returns Some((main_part, secondary_parts)) if a collaboration keyword is found.
+/// Returns None if no pattern is detected.
+///
+/// The `keywords` slice controls which keywords to match (e.g., `["feat", "ft", "vs"]`).
+/// Each keyword matches with an optional trailing dot, case-insensitively.
 ///
 /// Patterns handled:
 /// - "Artist A feat. Artist B"
-/// - "Artist A ft. Artist B"
+/// - "Artist A ft Artist B"
 /// - "Artist A featuring Artist B"
-/// - "Artist A with Artist B" (when followed by artist name)
-/// - "Artist A vs. Artist B"
-/// - "Artist A vs Artist B"
 /// - Parenthetical: "Artist A (feat. Artist B)"
 ///
-/// # Examples
-/// ```ignore
-/// detect_featuring_pattern("Galantis feat. Dolly Parton")
-///     => Some(("Galantis", vec!["Dolly Parton"]))
-///
-/// detect_featuring_pattern("Skrillex & Diplo with Justin Bieber")
-///     => Some(("Skrillex & Diplo", vec!["Justin Bieber"]))
-///
-/// detect_featuring_pattern("Rinse & Repeat")
-///     => None  // No featuring pattern, this is a band name
-/// ```
-pub fn detect_featuring_pattern(value: &str) -> Option<(String, Vec<String>)> {
-    // Pattern matches: feat., ft., featuring, vs., vs, with
-    // Case-insensitive, handles parenthetical forms
-    //
-    // The regex captures:
-    // - Group 1: main artist (everything before the pattern)
-    // - Group 2: the pattern itself (for debugging, not used in output)
-    // - Group 3: featured artists (everything after)
-    // Require preceding whitespace to avoid Scunthorpe problem
-    // (e.g., "Craft Integrated" should NOT match on the "ft" in "Craft")
+/// Requires preceding whitespace to avoid the Scunthorpe problem
+/// (e.g., "Craft Integrated" won't match on the "ft" in "Craft").
+pub fn detect_featuring_pattern(value: &str, keywords: &[String]) -> Option<(String, Vec<String>)> {
+    if keywords.is_empty() {
+        return None;
+    }
+
+    // Build alternation from keywords, each with optional trailing dot
+    let alternation: Vec<String> = keywords
+        .iter()
+        .map(|kw| format!(r"{}\.?", regex::escape(kw)))
+        .collect();
+    let keyword_pattern = alternation.join("|");
+
     let pattern = Regex::new(
-        r"(?i)^(.+?)\s+(?:\(?\s*(feat\.?|ft\.?|featuring|vs\.?|with)\s+(.+?)\)?)\s*$"
+        &format!(r"(?i)^(.+?)\s+(?:\(?\s*({})\s+(.+?)\)?)\s*$", keyword_pattern)
     ).ok()?;
 
     let caps = pattern.captures(value)?;
@@ -85,17 +78,12 @@ pub fn detect_featuring_pattern(value: &str) -> Option<(String, Vec<String>)> {
     let main_artist = caps.get(1)?.as_str().trim().to_string();
     let featured_str = caps.get(3)?.as_str().trim();
 
-    // Validate: main artist shouldn't be empty after trimming
     if main_artist.is_empty() {
         return None;
     }
 
-    // Featured artists may themselves contain " & " or ", "
-    // Split them but keep it simple for now - just return as single string
-    // The caller can further split if needed
     let featured = vec![featured_str.to_string()];
 
-    // Validate: featured shouldn't be empty
     if featured.iter().all(|s| s.is_empty()) {
         return None;
     }
@@ -170,9 +158,20 @@ mod tests {
     // Featuring Pattern Detection Tests
     // ========================================================================
 
+    fn default_keywords() -> Vec<String> {
+        vec![
+            "feat".to_string(),
+            "featuring".to_string(),
+            "ft".to_string(),
+            "with".to_string(),
+            "vs".to_string(),
+        ]
+    }
+
     #[test]
     fn test_detect_featuring_feat() {
-        let result = detect_featuring_pattern("Galantis feat. Dolly Parton");
+        let kw = default_keywords();
+        let result = detect_featuring_pattern("Galantis feat. Dolly Parton", &kw);
         assert!(result.is_some());
         let (main, featured) = result.unwrap();
         assert_eq!(main, "Galantis");
@@ -181,7 +180,8 @@ mod tests {
 
     #[test]
     fn test_detect_featuring_ft() {
-        let result = detect_featuring_pattern("Drake ft. Rihanna");
+        let kw = default_keywords();
+        let result = detect_featuring_pattern("Drake ft. Rihanna", &kw);
         assert!(result.is_some());
         let (main, featured) = result.unwrap();
         assert_eq!(main, "Drake");
@@ -190,7 +190,8 @@ mod tests {
 
     #[test]
     fn test_detect_featuring_full_word() {
-        let result = detect_featuring_pattern("Kanye West featuring Jay-Z");
+        let kw = default_keywords();
+        let result = detect_featuring_pattern("Kanye West featuring Jay-Z", &kw);
         assert!(result.is_some());
         let (main, featured) = result.unwrap();
         assert_eq!(main, "Kanye West");
@@ -199,7 +200,8 @@ mod tests {
 
     #[test]
     fn test_detect_featuring_vs() {
-        let result = detect_featuring_pattern("Ken vs. Ryu");
+        let kw = default_keywords();
+        let result = detect_featuring_pattern("Ken vs. Ryu", &kw);
         assert!(result.is_some());
         let (main, featured) = result.unwrap();
         assert_eq!(main, "Ken");
@@ -208,7 +210,8 @@ mod tests {
 
     #[test]
     fn test_detect_featuring_with() {
-        let result = detect_featuring_pattern("Skrillex & Diplo with Justin Bieber");
+        let kw = default_keywords();
+        let result = detect_featuring_pattern("Skrillex & Diplo with Justin Bieber", &kw);
         assert!(result.is_some());
         let (main, featured) = result.unwrap();
         assert_eq!(main, "Skrillex & Diplo");
@@ -217,7 +220,8 @@ mod tests {
 
     #[test]
     fn test_detect_featuring_parenthetical() {
-        let result = detect_featuring_pattern("Major Lazer (feat. DJ Snake)");
+        let kw = default_keywords();
+        let result = detect_featuring_pattern("Major Lazer (feat. DJ Snake)", &kw);
         assert!(result.is_some());
         let (main, featured) = result.unwrap();
         assert_eq!(main, "Major Lazer");
@@ -226,31 +230,47 @@ mod tests {
 
     #[test]
     fn test_detect_featuring_no_pattern() {
-        // Band names with " & " should NOT be detected as featuring
-        assert!(detect_featuring_pattern("Rinse & Repeat").is_none());
-        assert!(detect_featuring_pattern("Simon & Garfunkel").is_none());
-        assert!(detect_featuring_pattern("Crosby, Stills & Nash").is_none());
-        assert!(detect_featuring_pattern("Priority & TwoThirds").is_none());
+        let kw = default_keywords();
+        assert!(detect_featuring_pattern("Rinse & Repeat", &kw).is_none());
+        assert!(detect_featuring_pattern("Simon & Garfunkel", &kw).is_none());
+        assert!(detect_featuring_pattern("Crosby, Stills & Nash", &kw).is_none());
+        assert!(detect_featuring_pattern("Priority & TwoThirds", &kw).is_none());
     }
 
     #[test]
     fn test_detect_featuring_scunthorpe_problem() {
-        // Keywords embedded in words should NOT match (require preceding space)
-        assert!(detect_featuring_pattern("Craft Integrated").is_none()); // "ft" in "Craft"
-        assert!(detect_featuring_pattern("Software Solutions").is_none()); // "ft" in "Software"
-        assert!(detect_featuring_pattern("Daft Punk").is_none()); // "ft" in "Daft"
-        assert!(detect_featuring_pattern("Leftfield").is_none()); // "ft" in "Leftfield"
-        assert!(detect_featuring_pattern("The Gift").is_none()); // "ft" in "Gift"
+        let kw = default_keywords();
+        assert!(detect_featuring_pattern("Craft Integrated", &kw).is_none());
+        assert!(detect_featuring_pattern("Software Solutions", &kw).is_none());
+        assert!(detect_featuring_pattern("Daft Punk", &kw).is_none());
+        assert!(detect_featuring_pattern("Leftfield", &kw).is_none());
+        assert!(detect_featuring_pattern("The Gift", &kw).is_none());
     }
 
     #[test]
     fn test_detect_featuring_case_insensitive() {
-        let result = detect_featuring_pattern("Artist A FEAT. Artist B");
+        let kw = default_keywords();
+        let result = detect_featuring_pattern("Artist A FEAT. Artist B", &kw);
         assert!(result.is_some());
         let (main, _) = result.unwrap();
         assert_eq!(main, "Artist A");
 
-        let result = detect_featuring_pattern("Artist A Featuring Artist B");
+        let result = detect_featuring_pattern("Artist A Featuring Artist B", &kw);
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_detect_featuring_empty_keywords() {
+        assert!(detect_featuring_pattern("Artist A feat. Artist B", &[]).is_none());
+    }
+
+    #[test]
+    fn test_detect_featuring_custom_keywords() {
+        let kw = vec!["prod".to_string()];
+        let result = detect_featuring_pattern("Track prod. Someone", &kw);
+        assert!(result.is_some());
+        let (main, featured) = result.unwrap();
+        assert_eq!(main, "Track");
+        assert_eq!(featured, vec!["Someone"]);
     }
 }

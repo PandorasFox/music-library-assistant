@@ -63,8 +63,8 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectMetadataDuplicates | Find tracks with identical tag sets |
 | DetectTagCanonicalizations | Find tag canonicalization opportunities |
 | DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums |
-| DetectCompoundTagValues | Orchestrator: spawns DetectCompoundTagsForInode for each corpus inode. Parallelizes expensive regex work across worker threads. |
-| DetectCompoundTagsForInode | Per-inode: detects compound tags (separator-based AND featuring patterns). Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
+| DetectCompoundTagValues | Orchestrator: spawns DetectCompoundTagsForInode for each dirty corpus inode. Parallelizes detection across worker threads. |
+| DetectCompoundTagsForInode | Per-inode: walks the priority-ordered `SplitRule` chain from `TagSplittingOpinions` (separator and collaboration keyword rules). First matching rule wins per tag value. Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |

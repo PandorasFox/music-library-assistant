@@ -83,7 +83,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags |
 | MetadataDuplicate | DetectMetadataDuplicates | DetectMetadataDuplicates | Tracks with identical tag sets |
 | TagCanonicity | DetectTagCanonicalizations | DetectTagCanonicalizations | Similar tags needing unification |
-| CompoundTag | DetectCompoundTagsForInode | DetectCompoundTagValues (clears all before spawning) | Per-file signal for tags with separators or featuring patterns. Metadata: `{ inode, compounds: [{ tag_name, compound_value, split_parts, separator }] }` |
+| CompoundTag | DetectCompoundTagsForInode | DetectCompoundTagValues (clears all before spawning) | Per-file signal for tags matching a `SplitRule` in the priority chain. `separator` field contains either the literal separator string (e.g., `";"`) or a collaboration keyword label (e.g., `"feat."`, `"vs."`). Metadata: `{ inode, compounds: [{ tag_name, compound_value, split_parts, separator }] }` |
 | CanonicalTag | EmitCanonicalTag | - | Operator-confirmed canonical tag value (whitelist). Key: `{tag_name}:{tag_value}`. Prevents compound detection from flagging this value |
 | InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist |
 | RedundantDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps | Group of files with identical fingerprints AND identical quality scores. Requires operator choice — neither file is subpar. Key: fingerprint text |

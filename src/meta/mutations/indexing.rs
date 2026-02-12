@@ -345,7 +345,7 @@ impl MutationExecutor for EmitCanonicalTagMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_emit_canonical_tag(&self.tag_name, &self.canonical_value, ctx.witness);
+        let result = execute_emit_canonical_tag(&self.tag_name, &self.canonical_value, ctx.read_db, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -1031,9 +1031,13 @@ pub fn execute_assimilate_disk_tags_to_db(
 /// Creates a CanonicalTag aggregate signal that marks a compound-looking value as
 /// a single canonical entity (e.g., "Rinse & Repeat" is a band name, not a collaboration).
 /// Future compound detection runs check CanonicalTag and skip whitelisted values.
+///
+/// Also clears existing CompoundTag signals for all inodes that contain the
+/// now-canonical value, so they don't persist as stale insights.
 pub fn execute_emit_canonical_tag(
     tag_name: &str,
     canonical_value: &str,
+    read_db: &crate::corpus::db::ReadOnlyDb<'_>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db_thread;
@@ -1055,9 +1059,16 @@ pub fn execute_emit_canonical_tag(
         witness,
     );
 
+    // Clear stale CompoundTag signals for all inodes with this compound value
+    let affected_inodes = read_db.get_inodes_with_compound_value(tag_name, canonical_value)
+        .unwrap_or_default();
+    for inode in &affected_inodes {
+        sender.clear_corpus_signal::<CompoundTagSignal>(*inode, witness);
+    }
+
     crate::logging::log_general(format!(
-        "[MUTATION] EmitCanonicalTag: {} = {:?}",
-        tag_name, canonical_value
+        "[MUTATION] EmitCanonicalTag: {} = {:?} (cleared {} stale compound signals)",
+        tag_name, canonical_value, affected_inodes.len()
     ));
 
     Ok(())

@@ -43,16 +43,36 @@ MM requires a config file at `$XDG_CONFIG_HOME/mm/config.kdl` (or `~/.config/mm/
 There will, eventually, be a built-in config editor + first-time setup wizard. For now, though: woe, config file be upon ye.
 
 ```kdl
-// Root directory of your music archive
-corpus-root "/path/to/your/music/archive"
+// Archive root - corpus/, libraries/, and stash/ are derived subdirectories
+root "/path/to/your/archive"
 
-// Define your deployed libraries
-library "main" {
-    path "/path/to/your/library"
+// Optional: Enable legacy library mode
+// legacy-library true
+
+// Define source directories and their library deployment targets
+// Paths are relative to <root>/corpus/
+dir "web/releases/bandcamp" {
+    library "music"
 }
 
-// Optional: Path to a legacy library that needs organization
-legacy-library "/path/to/legacy/music"
+dir "physical/vinyls" {
+    library "music"
+}
+
+// Configure behavior (all have sensible defaults)
+opinions {
+    // Capture lossy formats (MP3, M4A, etc.) to FLAC instead of transcoding to Opus
+    // lossy-shit-formats-to-flac true
+
+    startup {
+        // freshen-last-stage true
+        // force-check-all-files false
+    }
+
+    fingerprint-matching {
+        // duration-tolerance-percent 10.0
+    }
+}
 ```
 
 See `config.kdl.example` for a complete example with additional options.

@@ -1,39 +1,26 @@
 // Music Magic (MM) Configuration
 // Save this as $XDG_CONFIG_HOME/mm/config.kdl (or ~/.config/mm/config.kdl if XDG_CONFIG_HOME is not set)
 
-// archive-root "/path/to/archive"
+// Archive root - corpus/, libraries/, and stash/ are derived subdirectories
+root "/Volumes/cerberus/archive"
 
-// Root directory of your music corpus
-corpus-root "/archive/corpus"
-stash-dir "/archive/working/stash"
-// Optional: Path to your legacy library that needs organization
-// useful if you are working at dissecting an existing tag-organized library into a better organization strategy :)
-legacy-library "/archive/working/legacy"
+// Optional: Enable legacy library mode for dissecting existing tag-organized libraries
+// legacy-library true
 
-// Define your libraries to deploy organized hard links under
-library "music" {
-    path "/archive/libraries/music"
-}
-
-library "soundtracks" {
-    path "/archive/libraries/soundtracks"
-}
-
-// Deploy mappings - Define which corpus directories deploy to which libraries
-// This is required for the Deploy feature to work
-// Format: deploy "<relative-path-in-corpus>" { library "library-name" ... }
-
-// Example 1: Deploy general music to the main library
-deploy "web/releases/bandcamp" {
+// Define source directories within the corpus and their library deployment targets.
+// Paths are relative to <root>/corpus/.
+// A single source can deploy to multiple libraries.
+dir "web/releases/bandcamp" {
     library "music"
 }
 
-deploy "web/releases/steam" {
-	library "soundtracks"
+dir "web/releases/steam" {
+    library "soundtracks"
 }
 
-deploy "physical/vinyls" {
-	library "music"
+dir "physical/vinyls" {
+    library "music"
+    // can-stash-dupes false
 }
 
 // ============================================================================
@@ -43,25 +30,21 @@ deploy "physical/vinyls" {
 
 opinions {
     // -------------------------------------------------------------------------
+    // Lossy Format Handling
+    // -------------------------------------------------------------------------
+    // When true, lossy formats (MP3, M4A, etc.) are captured to FLAC instead of
+    // transcoded to Opus. The decoded PCM waveform is losslessly stored in a
+    // FLAC container with extension e.g. `.mp3.LOSSY.flac`. (default: false)
+    // lossy-shit-formats-to-flac false
+
+    // -------------------------------------------------------------------------
     // Startup Behavior
     // -------------------------------------------------------------------------
     startup {
-        // Run health check on startup (default: true)
-        // heartbeat-on-startup true
-
-        // Verify in-file tags match database at startup (default: true)
-        // This is "paranoid" mode - catches out-of-band tag edits by external tools
-        // Disable if startup is too slow with large libraries
-        // paranoid-tag-verification true
-
-        // Show DB thread performance stats on splash screen (default: false)
-        // Useful for debugging performance issues during startup
-        // show-db-stats-on-splash false
-
-        // Force content analysis once at startup, even without mutations (default: false)
-        // Useful after fixing broken computations to re-derive signals.
+        // Force content analysis once at startup, even without mutations (default: true)
+        // Ensures all detection signals (ShitFormat, duplicates, etc.) are fresh.
         // One-shot latch: triggers once, then auto-clears.
-        // freshen-last-stage false
+        // freshen-last-stage true
 
         // Force verification of all indexed files at startup (default: false)
         // Bypasses mtime optimization - verifies all files regardless of modification time.
@@ -114,5 +97,59 @@ opinions {
         // Fuzzy matching threshold 0.0-1.0 (default: 0.85)
         // Higher = stricter matching, lower = more lenient
         // fuzzy-threshold 0.85
+    }
+
+    // -------------------------------------------------------------------------
+    // Health Detection - Required tags and health signals
+    // -------------------------------------------------------------------------
+    health-detection {
+        // Tags that must be present on every track
+        // (default: "title" "album" "artist" "album_artist")
+        // required-tags "title" "album" "artist" "album_artist"
+    }
+
+    // -------------------------------------------------------------------------
+    // Tag Splitting - Detect compound tag values
+    // -------------------------------------------------------------------------
+    // Each child node is a tag name, with separator strings as entries.
+    // (defaults: genre splits on ";", ",", "/"; artist splits on " & ", ", ", "; ")
+    // tag-splitting {
+    //     genre ";" "," "/"
+    //     artist " & " ", " "; "
+    // }
+
+    // -------------------------------------------------------------------------
+    // Duplicate Analysis - Fingerprint-based duplicate detection
+    // -------------------------------------------------------------------------
+    duplicate-analysis {
+        // Fingerprint similarity threshold 0-100 (default: 85.0)
+        // Pairs below this are not considered duplicates
+        // fingerprint-similarity-threshold 85.0
+
+        // Duration tolerance in ms (default: 2000)
+        // Tracks with duration difference above this are clustered separately
+        // duration-tolerance-ms 2000
+
+        // Max diverging directory keys for cross-source overlap signals (default: 2)
+        // cross-directory-max-keys 2
+
+        // Min diverging directory keys to skip (likely legitimate variants) (default: 3)
+        // within-directory-min-keys 3
+    }
+
+    // -------------------------------------------------------------------------
+    // Performance - Thread counts, caches, instrumentation
+    // -------------------------------------------------------------------------
+    performance {
+        // Number of worker threads (default: 2x logical cores)
+        // worker-threads 16
+
+        // SQLite page cache size per connection (default: 256mb)
+        // Accepts: plain number (MB), or suffixed "256mb", "1gb", "512kb"
+        // db-cache "256mb"
+
+        // Enable timing instrumentation and stats display (default: false)
+        // When false, skips all atomic counter updates for better performance
+        // timing-instrumentation false
     }
 }

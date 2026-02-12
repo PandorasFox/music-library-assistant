@@ -26,7 +26,7 @@ crossterm = "0.28"
 symphonia = { version = "0.5", features = ["all"] }
 symphonia-core = "0.5"  # For custom codec registry
 symphonia-adapter-libopus = "0.2"  # Opus decoder via libopus
-lofty = "0.21"  # For reading/writing all tags
+lofty = "0.23"  # For reading/writing all tags
 
 # Audio encoding
 flacenc = "0.5"        # Pure Rust FLAC encoder (zero C deps)

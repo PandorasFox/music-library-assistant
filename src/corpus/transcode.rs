@@ -574,81 +574,14 @@ fn convert_audio_buffer_to_i16(decoded: AudioBufferRef, channels: usize) -> Resu
     }
 }
 
-/// Copy tags from source file to destination file via lofty.
+/// Copy tags from source file to destination file.
 ///
-/// Reads all text tags from the source and writes them to the destination.
-/// This replaces ffmpeg's implicit tag mapping for the native transcode pipeline.
+/// Reads all text tags from the source via TagSet and writes them to the
+/// destination using format-specific concrete types (no lofty generic Tag).
 fn copy_tags(source: &Path, dest: &Path) -> Result<()> {
-    use lofty::config::WriteOptions;
-    use lofty::file::{AudioFile, TaggedFileExt};
-    use lofty::probe::Probe;
-    use lofty::tag::{Accessor, ItemValue, Tag, TagItem, TagType};
-
-    // Read tags from source
-    let source_file = Probe::open(source)
-        .with_context(|| format!("Failed to open source for tag reading: {}", source.display()))?
-        .read()
-        .with_context(|| format!("Failed to read source tags: {}", source.display()))?;
-
-    let source_tag = match source_file.primary_tag() {
-        Some(t) => t,
-        None => return Ok(()), // No tags to copy
-    };
-
-    // Open destination and get/create its primary tag
-    let mut dest_file = Probe::open(dest)
-        .with_context(|| format!("Failed to open dest for tag writing: {}", dest.display()))?
-        .read()
-        .with_context(|| format!("Failed to read dest tags: {}", dest.display()))?;
-
-    let dest_tag_type = dest_file.primary_tag_type();
-    if dest_file.primary_tag().is_none() {
-        dest_file.insert_tag(Tag::new(dest_tag_type));
+    let source_tags = crate::corpus::tags::TagSet::from_file(source)?;
+    if source_tags.iter().count() == 0 {
+        return Ok(());
     }
-    let dest_tag = dest_file.primary_tag_mut().unwrap();
-
-    // Copy standard accessor fields
-    if let Some(v) = source_tag.artist() {
-        dest_tag.set_artist(v.to_string());
-    }
-    if let Some(v) = source_tag.title() {
-        dest_tag.set_title(v.to_string());
-    }
-    if let Some(v) = source_tag.album() {
-        dest_tag.set_album(v.to_string());
-    }
-    if let Some(v) = source_tag.genre() {
-        dest_tag.set_genre(v.to_string());
-    }
-    if let Some(v) = source_tag.track() {
-        dest_tag.set_track(v);
-    }
-    if let Some(v) = source_tag.year() {
-        dest_tag.set_year(v);
-    }
-
-    // Copy all items (extended tags, multi-value)
-    // Skip binary items (album art, etc.) — we only want text metadata
-    for item in source_tag.items() {
-        match item.value() {
-            ItemValue::Text(s) => {
-                let new_item = TagItem::new(item.key().clone(), ItemValue::Text(s.clone()));
-                dest_tag.push(new_item);
-            }
-            ItemValue::Locator(s) => {
-                let new_item = TagItem::new(item.key().clone(), ItemValue::Locator(s.clone()));
-                dest_tag.push(new_item);
-            }
-            ItemValue::Binary(_) => continue,
-        }
-    }
-
-    // Remove legacy ID3v1 if present
-    dest_file.remove(TagType::Id3v1);
-
-    dest_file
-        .save_to_path(dest, WriteOptions::default())
-        .with_context(|| format!("Failed to save tags to: {}", dest.display()))?;
-
-    Ok(())
+    crate::corpus::tags::write_tags_to_file(dest, &source_tags)
 }

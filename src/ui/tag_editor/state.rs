@@ -262,10 +262,11 @@ impl UnifiedTagEditorState {
                     .unwrap_or_else(|| "Unknown".to_string())
             }
             TagEditContext::BulkEdit { audio_files, .. } => {
-                if let Some(audio_file) = audio_files.get(self.current_item_idx) {
+                if let Some(audio_file) = audio_files.first() {
                     Path::new(audio_file.path())
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .map(|d| d.to_string_lossy().to_string())
                         .unwrap_or_else(|| "Unknown".to_string())
                 } else {
                     "Unknown".to_string()

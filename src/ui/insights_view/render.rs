@@ -630,10 +630,6 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 "Press Enter to bulk split.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Green }),
             )));
-            lines.push(Line::from(Span::styled(
-                "Press Ctrl+A to confirm all and review.",
-                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
-            )));
         }
 
         InsightType::CompoundTagValueReview { ref tag_name } => {

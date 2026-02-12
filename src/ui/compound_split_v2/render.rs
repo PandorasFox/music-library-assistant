@@ -52,9 +52,12 @@ pub fn render(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         render_controls(f, chunks[2], state);
     }
 
-    // Confirmation overlay for canonicalize
+    // Confirmation overlays
     if state.confirming_canonicalize {
         render_canonicalize_confirm(f, area, state);
+    }
+    if state.confirming_bulk_stage {
+        render_bulk_stage_confirm(f, area, state);
     }
 }
 
@@ -404,6 +407,33 @@ fn render_canonicalize_confirm(f: &mut Frame, area: Rect, state: &CompoundSplitS
         ])
         .buttons(vec![
             ConfirmationButton::new("[Enter] Confirm", Color::Green).selected(true),
+            ConfirmationButton::new("[Esc] Cancel", Color::White),
+        ])
+        .render(f, area);
+}
+
+/// Render the bulk stage-all confirmation overlay.
+fn render_bulk_stage_confirm(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
+    let count = state.total_groups;
+
+    ConfirmationModal::new(" Confirm Bulk Stage ")
+        .border_color(Color::Green)
+        .fixed_size(60, 9)
+        .message(vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("Stage all "),
+                Span::styled(format!("{}", count), Style::default().fg(Color::Yellow)),
+                Span::raw(" safe compound splits?"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "All splits will be staged for review before commit.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .buttons(vec![
+            ConfirmationButton::new("[Enter] Stage All", Color::Green).selected(true),
             ConfirmationButton::new("[Esc] Cancel", Color::White),
         ])
         .render(f, area);

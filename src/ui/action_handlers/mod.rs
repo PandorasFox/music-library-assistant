@@ -233,19 +233,6 @@ impl App {
                     }
                 }
             }
-            insights_view::InsightsAction::ConfirmAllSafeCompoundSplits => {
-                // Ctrl+A from insights: extract tag name and stage all for that tag
-                let tag_name = if let ActiveView::Insights(ref v) = self.view {
-                    v.selected_insight_type()
-                        .and_then(|t| match t {
-                            insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
-                            _ => None,
-                        })
-                } else {
-                    None
-                };
-                self.confirm_all_safe_compound_splits_from_insights(tag_name.as_deref());
-            }
         }
     }
 

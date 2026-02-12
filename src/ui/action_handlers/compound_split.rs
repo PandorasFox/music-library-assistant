@@ -105,6 +105,7 @@ impl App {
                 self.show_transaction_review_for_compound_split();
             }
             compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
+                let Some(_w) = witness else { return };
                 // Ctrl+A - stage ALL splits progressively with progress bar
                 self.start_progressive_compound_split_staging();
             }
@@ -145,36 +146,73 @@ impl App {
         }
     }
 
-    /// Advance to next compound split signal after confirming current (via Enter).
+    /// Advance to next compound split signal after confirming current (via Enter/Ctrl+Q).
+    ///
+    /// After a canonicalize decision, automatically skips over subsequent signals
+    /// whose compound value matches any staged canonical value (since the single
+    /// EmitCanonicalTag mutation covers all inodes with that value globally).
     fn advance_to_next_compound_split(&mut self) {
-        let is_last = matches!(&self.view, ActiveView::CompoundTagSplit { clusters, .. } if clusters.is_last());
-
         if !matches!(&self.view, ActiveView::CompoundTagSplit { .. }) {
             self.show_transaction_review_for_compound_split();
             return;
         }
 
-        if is_last {
-            // At last signal - show review
-            self.show_transaction_review_for_compound_split();
-        } else {
+        // Collect staged canonical values for auto-skip
+        let staged_canonicals = self.staged_canonical_values();
+
+        loop {
+            let is_last = matches!(&self.view, ActiveView::CompoundTagSplit { clusters, .. } if clusters.is_last());
+
+            if is_last {
+                self.show_transaction_review_for_compound_split();
+                return;
+            }
+
             let advanced = if let ActiveView::CompoundTagSplit { ref mut clusters, .. } = self.view {
                 clusters.next()
             } else {
                 false
             };
 
-            if advanced {
-                // Load next signal
-                if !self.load_current_compound_split_signal() {
-                    // Signal load failed - show review with what we have
-                    self.show_transaction_review_for_compound_split();
-                }
-            } else {
-                // No more signals - show review
+            if !advanced {
                 self.show_transaction_review_for_compound_split();
+                return;
             }
+
+            if !self.load_current_compound_split_signal() {
+                self.show_transaction_review_for_compound_split();
+                return;
+            }
+
+            // Check if this signal's compound value is already covered by a staged canonical
+            let should_skip = if let ActiveView::CompoundTagSplit { ref state, .. } = self.view {
+                staged_canonicals.iter().any(|(tn, cv)| {
+                    tn == &state.data.compound.tag_name && cv == &state.data.compound.compound_value
+                })
+            } else {
+                false
+            };
+
+            if !should_skip {
+                return; // Found a signal that needs operator attention
+            }
+            // Otherwise loop to skip past this one
         }
+    }
+
+    /// Collect (tag_name, canonical_value) pairs from staged EmitCanonicalTag decisions.
+    fn staged_canonical_values(&self) -> Vec<(String, String)> {
+        let Some(ref witch) = self.witch else { return Vec::new() };
+        witch.decision_indices().iter().filter_map(|&idx| {
+            let decision = witch.get_decision(idx)?;
+            decision.mutations.iter().find_map(|m| {
+                if let crate::meta::mutations::Mutation::EmitCanonicalTag(ref ct) = m {
+                    Some((ct.tag_name.clone(), ct.canonical_value.clone()))
+                } else {
+                    None
+                }
+            })
+        }).collect()
     }
 
     /// Show the transaction review screen for compound tag splits.
@@ -257,48 +295,6 @@ impl App {
         let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
             clusters,
             safe_mode,
-        });
-        self.view = ActiveView::ProgressiveWork { worker, return_context };
-    }
-
-    /// Confirm all safe compound splits directly from insights (Ctrl+A shortcut).
-    ///
-    /// This is a one-shot operation: loads safe compound signals, starts the progressive
-    /// worker to stage all splits, then shows the transaction review screen.
-    /// If `tag_filter` is Some, only processes signals for that specific tag.
-    pub(in crate::ui) fn confirm_all_safe_compound_splits_from_insights(&mut self, tag_filter: Option<&str>) {
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => {
-                self.status_message = Some("Database not available".to_string());
-                return;
-            }
-        };
-
-        // Load safe compound signal keys only, filtered by tag if specified
-        let signal_keys = read_db.get_compound_signal_keys_by_safety(true, tag_filter).unwrap_or_default();
-
-        if signal_keys.is_empty() {
-            self.status_message = Some("No safe compound splits available".to_string());
-            return;
-        }
-
-        // Store signal keys for cluster tracking
-        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_keys.clone());
-
-        // Start transaction
-        if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction("Compound tag split (safe bulk)");
-        }
-
-        // Start progressive worker to stage all splits
-        let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
-            signal_keys,
-            true, // safe mode
-        );
-        let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
-            clusters,
-            safe_mode: true,
         });
         self.view = ActiveView::ProgressiveWork { worker, return_context };
     }

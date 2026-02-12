@@ -48,8 +48,6 @@ pub enum InsightsAction {
     CyclePrev,
     /// Launch modal for selected insight
     Launch,
-    /// Confirm all safe compound splits and jump to review (Ctrl+A)
-    ConfirmAllSafeCompoundSplits,
 }
 
 /// State for the insights view modal/status
@@ -137,6 +135,7 @@ pub enum InsightType {
     // Tag resolution bucket entries (duplicates at top for easy resolution)
     CrossSourceOverlaps,
     SubparDuplicates,
+    RedundantDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
     CompoundTagValueSafe { tag_name: String },   // All split parts exist in corpus
@@ -258,6 +257,18 @@ impl BucketEntry {
             color: if count > 0 { Color::Cyan } else { Color::Green },
             rank: 0,
             action: InsightAction::LaunchSubparDuplicateResolution,
+        }
+    }
+
+    /// Create redundant duplicates entry
+    fn redundant_duplicates(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::RedundantDuplicates,
+            label: "Redundant duplicates".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::Green },
+            rank: 0,
+            action: InsightAction::NotImplemented,
         }
     }
 
@@ -493,6 +504,11 @@ impl CachedBucketEntries {
         // Subpar duplicates - identified low-quality copies ready to stash
         if bucket.subpar_duplicate_count > 0 {
             entries.push(BucketEntry::subpar_duplicates(bucket.subpar_duplicate_count));
+        }
+
+        // Redundant duplicates - equal-quality copies needing operator choice
+        if bucket.redundant_duplicate_count > 0 {
+            entries.push(BucketEntry::redundant_duplicates(bucket.redundant_duplicate_count));
         }
 
         // Add inconsistent album_artist if present
@@ -787,19 +803,6 @@ impl InsightsViewState {
 
     /// Handle key input
     pub fn handle_key(&mut self, key: KeyEvent) -> InsightsAction {
-        // Handle Ctrl+A for safe compound splits
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let KeyCode::Char('a' | 'A') = key.code {
-                // Only trigger for safe compound split insights
-                if let Some(InsightType::CompoundTagValueSafe { .. }) = self.selected_insight_type() {
-                    if !self.is_witch_busy() {
-                        return InsightsAction::ConfirmAllSafeCompoundSplits;
-                    }
-                }
-                return InsightsAction::None;
-            }
-        }
-
         match key.code {
             KeyCode::Esc => InsightsAction::RequestQuit,
 
@@ -872,6 +875,7 @@ mod tests {
             bucket_placeholder: TagSquashBucket {
                 directory_overlap_cluster_count: 0,
                 subpar_duplicate_count: 0,
+                redundant_duplicate_count: 0,
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
                 compound_tags: vec![],

@@ -63,6 +63,21 @@ impl CompoundSplitStateV2 {
             };
         }
 
+        // If confirming bulk stage all, intercept all input
+        if self.confirming_bulk_stage {
+            return match key.code {
+                KeyCode::Enter => {
+                    self.confirming_bulk_stage = false;
+                    CompoundSplitActionV2::StageAllAndReview
+                }
+                KeyCode::Esc => {
+                    self.confirming_bulk_stage = false;
+                    CompoundSplitActionV2::None
+                }
+                _ => CompoundSplitActionV2::None,
+            };
+        }
+
         // If editing, handle edit-specific keys first
         if self.is_editing() {
             return self.handle_editing_key(key);
@@ -78,7 +93,8 @@ impl CompoundSplitStateV2 {
                 }
                 // Ctrl+A only available in safe mode (bulk confirm all)
                 KeyCode::Char('a' | 'A') if self.is_safe_mode => {
-                    return CompoundSplitActionV2::StageAllAndReview;
+                    self.confirming_bulk_stage = true;
+                    return CompoundSplitActionV2::None;
                 }
                 _ => {}
             }

@@ -80,22 +80,6 @@ pub fn commit_transaction(witch: &mut Witch) -> Result<CommitSummary, Transactio
     })
 }
 
-/// Stage a decision without requiring the action_handlers DecisionWitness.
-///
-/// ONLY for progressive worker ticks where the operator already consented
-/// to bulk staging via a prior Ctrl+A action. Individual items processed
-/// in the tick loop inherit that consent transitively.
-pub fn stage_decision_unwitnessed(
-    witch: &mut Witch,
-    index: usize,
-    label: &str,
-    mutations: Vec<Mutation>,
-) -> Result<(), TransactionError> {
-    witch.with_operator_decision(|scope| {
-        scope.add_decision(index, label, mutations)
-    })
-}
-
 /// Discard the active transaction - drop all staged decisions.
 ///
 /// Called from Escape/cancel keypress on transaction modal.

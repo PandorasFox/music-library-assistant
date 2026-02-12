@@ -71,7 +71,7 @@ impl CompoundSplitDataV2 {
     /// Construct from a typed `CompoundTagSignal`.
     ///
     /// Reads compound data directly from struct fields (no JSON parsing).
-    /// Takes the first compound entry (we process one at a time per signal).
+    /// Takes the first non-canonical compound entry (we process one at a time per signal).
     /// Loads file info for the inode from disk tags.
     pub fn from_compound_tag_signal(signal: &CompoundTagSignal, read_db: &ReadOnlyDb) -> Option<Self> {
         if signal.compounds.is_empty() {
@@ -80,8 +80,9 @@ impl CompoundSplitDataV2 {
 
         let inode = signal.inode;
 
-        // Take the first compound (we process one at a time per signal)
-        let c = &signal.compounds[0];
+        // Take the first non-canonical compound (skip operator-confirmed values)
+        let c = signal.compounds.iter()
+            .find(|c| !read_db.is_canonical_tag(&c.tag_name, &c.compound_value).unwrap_or(false))?;
         let compound = CompoundEntry {
             tag_name: c.tag_name.clone(),
             compound_value: c.compound_value.clone(),
@@ -196,6 +197,9 @@ pub struct CompoundSplitStateV2 {
 
     /// Whether the canonicalize confirmation popup is showing
     pub confirming_canonicalize: bool,
+
+    /// Whether the bulk-stage-all confirmation popup is showing
+    pub confirming_bulk_stage: bool,
 }
 
 impl CompoundSplitStateV2 {
@@ -229,6 +233,7 @@ impl CompoundSplitStateV2 {
             group_index,
             total_groups,
             confirming_canonicalize: false,
+            confirming_bulk_stage: false,
         }
     }
 

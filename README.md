@@ -8,20 +8,14 @@ If you still want a flat albumartist/album/track library-presentation of your mu
 
 **Repository**: https://git.hecate.pink/hecate/mla
 
-## Screenshots (beta edition)
-<img width="300" height="" alt="Screenshot 2026-02-07 at 00 38 12" src="https://github.com/user-attachments/assets/15efffd4-13ca-4b99-b037-2be6c7291dc6" />
-<img width="300" height="" alt="Screenshot 2026-02-07 at 16 37 21" src="https://github.com/user-attachments/assets/f4c76bf0-8600-4147-b88f-8f1ec5231009" />
-<img width="300" height="" alt="Screenshot 2026-02-07 at 16 37 48" src="https://github.com/user-attachments/assets/b444d872-819d-4799-85e1-adf77f9643c4" />
-<img width="300" height="" alt="Screenshot 2026-02-07 at 16 37 56" src="https://github.com/user-attachments/assets/199a4492-3042-4111-8517-6335edaf30ce" />
-<img width="300" height="" alt="Screenshot 2026-02-07 at 16 38 03" src="https://github.com/user-attachments/assets/b65d35c4-182c-45ed-98e9-082c5e387ac6" />
-<img width="300" height="" alt="Screenshot 2026-02-04 at 20 15 01" src="https://github.com/user-attachments/assets/ee8c1764-e298-4457-8dcc-f2a1651e831e" />
+## Screenshots
 
-Please note that the UI (positioning, text-wrapping, etc) is very unpolished because this is still somewhere vaguely in beta territory. The focus of development has been around safety guarantees of performing tag edits and ensuring index/file consistency.
+recording soon(tm)
 
 ## Installation
 
 ```bash
-cargo install --git 'https://git.hecate.pink/hecate/mla'
+cargo install --git 'https://git.hecate.pink/hecate/mm'
 ```
 
 This installs the `mm` binary to your Cargo bin directory (typically `~/.cargo/bin/`). Ensure this is in your PATH.
@@ -29,8 +23,8 @@ This installs the `mm` binary to your Cargo bin directory (typically `~/.cargo/b
 ### Building from source
 
 ```bash
-git clone 'https://git.hecate.pink/hecate/mla'
-cd mla
+git clone 'https://git.hecate.pink/hecate/mm'
+cd mm
 cargo build --release
 ```
 
@@ -45,9 +39,6 @@ There will, eventually, be a built-in config editor + first-time setup wizard. F
 ```kdl
 // Archive root - corpus/, libraries/, and stash/ are derived subdirectories
 root "/path/to/your/archive"
-
-// Optional: Enable legacy library mode
-// legacy-library true
 
 // Define source directories and their library deployment targets
 // Paths are relative to <root>/corpus/
@@ -95,13 +86,39 @@ All corpus-mutating operations are tracked as composable, reversible algebraic c
 
 All corpus-mutation operations *must* be confirmed via a user's Enter keypress. This is enforced at compile-time thanks to some clever Rust sealed trait usage.
 
-## Disclaimer
+## Disclaimer & Architecture
 
-This project is approximately 99% codegenned (with Claude). I review and test all changes, broadly. My attitude is that my threshold for bugs is "minor UI jank", and underlying Systems must be ironclad and well-reviewed and tested for me to ship them. UI State itself is still very critical, as it's authoritative to what gets sent to the underlying Mutation-applying systems, but I am an infrastructure engineer that deeply does not want to handle all the TUI modal/state/input handling, nor hand-write all of the hundreds of small SQL queries needed for the sqlite operations necessary.
+I leverage claude for this project because I have mild dyslexia and struggle with the writing-side - I can and have written thousands of lines of Rust before, but it melts my brain. Doing rigorous design work followed by code review, testing, and integration/cleanup verification is necessary in all of this, but I've still found it to ultimately be more effective than hand-writing everything. Writing broken code and throwing it out is something I can both do by hand, and with a tool, with the main difference being where in the process I spend my time.
 
-That being said: I still designed this software at the systems layer with this all in mind, and the software itself is designed to not do anything more dangerous than editing tags. I do not let the codebase have the concept of 'removing a file', and it can only move files at most. All mutations (to the Corpus or Corpus Index) must first be staged to the underlying Transaction, and then the Transaction itself must be reviewed and confirmed before any changes will be made. This _is_ enforced via sealed-trait "callsite witnesses" at compile-time, which enforces strong barriers between the underlying Mutation engine and its code, and the UI code.
+After all, the problem spaces of "reason about metadata tags, calculate levenshtein distances, apply bulk compute" are both largely solved, and things I can do in my sleep after 5 years of youtube cdn ops work.
 
-This is still 'unreleased' software, in that I haven't felt it appropriate to cut a release yet while I'm still fleshing out features (and I haven't dedicated any thought to what license to slap on this yet). I had a couple incidents during development around not using DB transactions and mis-using tag-editing interfaces and _did_ drop some tags (including album art) from some source files, and I've since regenerated all of my (working copy of my) corpus from source archives. I've since ironed out _all_ of the edge cases in tag-editing and general inode-touching.
+This software has been designed at the systems level alongside rust's type system with this in mind:
+
+- sealed trait 'witnesses' to User enter keypresses, ensuring all mutating operations have routed through an enter keypress dispatch
+  - This is a really fun compile-time guarantee that all operation-driving logic is contained in the UI, and that _only_ operation decisions can drive change.
+- all changes are modelled as Composable Mutations
+  - e.g. a tag edit is roughly `edit(inode, tag_name, old_value, new_value)` - we can accumulate, and *MUST* review, these before committing them to db and/or disk.
+  - changes get aggregated by inode when scheduling bulk computation :)
+  - avoids many problems with trying to apply edits in real-time
+- a batch Mutation and Computation engine (or insights pipelines, whatever you want to call it) for parallelizing file tag edits and tag cloud analysis
+  - worker threads have their own read-only DB connection for reads
+  - _only_ worker threads have Send endpoints for the DB write thread's queue
+  - mutations & computations can chain-emit follow-on operations (e.g. EditTagDb can emit FlushTagsToDisk), with in-band signalling to prevent DB thread write queue race conditions
+- meta-level types for inter-system logic like Mutations, Computations, and Signals so that they can own their own DB schema for consistency across UI and infra
+- multi-threaded application logic using an orchestrator thread that owns the work scheduling interface
+  - UI thread for input polling/queueing work into transactions -> confirming transactions only with enter keypresses (or mouse clicks!)
+  - rayon worker thread pool (configurable size)
+  - DB write thread to avoid write lock contention
+- files are 'stashed' to an out-dir when being removed. Destroying data is an operator action.
+
+With all the systems in place, development basically boils down to:
+- design a Signal (fingerprint duplicates, missing tags, inconsistent album_artist in compilation albums,....)
+  - what heuristics do we use to emit this signal?
+- design a computation that emits that signal
+- design a mutation to resolve that signal (if necessary; tag editing covers most cases)
+- glue together the collection of Signals with some basic actions that the user can review and apply easily
+
+This software is provided 'as-is', and is still unlicensed as an 'initial release' has still yet to be cut.
 
 ## Other Notes
 

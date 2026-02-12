@@ -178,7 +178,7 @@ impl App {
     /// Start shit format resolution modal from Insights view.
     pub(in crate::ui) fn start_shit_format_resolution(&mut self) {
         // Load shit format file data
-        let data = self.witch.as_mut()
+        let mut data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
                 shit_format_modal::ShitFormatModalData::load(&read_db).ok()
@@ -189,6 +189,9 @@ impl App {
             self.status_message = Some("No shit format files to resolve".to_string());
             return;
         }
+
+        // Thread opinion: lossy files -> FLAC capture instead of Opus transcode
+        data.lossy_to_flac = self.config.opinions.lossy_shit_formats_to_flac;
 
         // Create preview state with cached data
         let preview = shit_format_modal::ShitFormatPreviewState::new(data);

@@ -62,12 +62,14 @@ impl ShitFormatEntry {
 pub struct ShitFormatModalData {
     /// Lossless files (WAV, AIFF, APE, WV) - remux to FLAC
     pub lossless_files: Vec<ShitFormatEntry>,
-    /// Lossy files (MP3, M4A, AAC, WMA) - transcode to Opus
+    /// Lossy files (MP3, M4A, AAC, WMA) - transcode to Opus or capture to FLAC
     pub lossy_files: Vec<ShitFormatEntry>,
     /// File counts by type (for display breakdown)
     pub file_counts: HashMap<String, i64>,
     /// Opus bitrate in kbps (user-adjustable, for lossy only)
     pub opus_bitrate_kbps: u32,
+    /// When true, lossy files are captured to FLAC instead of transcoded to Opus
+    pub lossy_to_flac: bool,
 }
 
 impl Default for ShitFormatModalData {
@@ -77,6 +79,7 @@ impl Default for ShitFormatModalData {
             lossy_files: Vec::new(),
             file_counts: HashMap::new(),
             opus_bitrate_kbps: DEFAULT_OPUS_BITRATE,
+            lossy_to_flac: false,
         }
     }
 }
@@ -127,6 +130,7 @@ impl ShitFormatModalData {
             lossy_files,
             file_counts,
             opus_bitrate_kbps: DEFAULT_OPUS_BITRATE,
+            lossy_to_flac: false,
         })
     }
 
@@ -204,9 +208,20 @@ impl ShitFormatModalData {
             .collect()
     }
 
-    /// Generate Transcode mutations for lossy files only (transcode to Opus).
+    /// Generate Transcode mutations for lossy files only.
+    ///
+    /// When `lossy_to_flac` is true, captures to FLAC (lossless waveform capture).
+    /// Otherwise transcodes to Opus at the configured bitrate.
     pub fn lossy_mutations(&self) -> Vec<Mutation> {
         let resolver = paths::get_resolver();
+
+        let target = if self.lossy_to_flac {
+            TranscodeTarget::FlacLossyCapture
+        } else {
+            TranscodeTarget::Opus {
+                bitrate_kbps: self.opus_bitrate_kbps,
+            }
+        };
 
         self.lossy_files
             .iter()
@@ -216,9 +231,7 @@ impl ShitFormatModalData {
                 Mutation::Transcode(TranscodeMutation {
                     inode: file.inode,
                     source_path: abs_path,
-                    target_format: TranscodeTarget::Opus {
-                        bitrate_kbps: self.opus_bitrate_kbps,
-                    },
+                    target_format: target,
                     stash_name: "originals".to_string(),
                 })
             })

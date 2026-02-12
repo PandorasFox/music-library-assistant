@@ -26,6 +26,10 @@ pub struct Config {
 #[derive(Default)]
 pub struct Opinions {
     pub auto_next_save_all: bool,
+    /// When true, lossy shit formats (MP3, M4A, etc.) are captured to FLAC
+    /// instead of transcoded to Opus. The decoded PCM waveform is losslessly
+    /// stored in a FLAC container with extension `.mp3.LOSSY.flac`.
+    pub lossy_shit_formats_to_flac: bool,
     pub fingerprint_matching: FingerprintMatchingOpinions,
     pub quality_resolution: QualityResolutionOpinions,
     pub canonicalization: CanonicalizationOpinions,
@@ -836,6 +840,13 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             "auto_next_save_all" => {
                                 config.opinions.auto_next_save_all = true;
                             }
+                            "lossy-shit-formats-to-flac" => {
+                                if let Some(entry) = child.entries().first() {
+                                    if let Some(val) = entry.value().as_bool() {
+                                        config.opinions.lossy_shit_formats_to_flac = val;
+                                    }
+                                }
+                            }
                             "fingerprint-matching" => {
                                 parse_fingerprint_matching_opinions(child, &mut config.opinions.fingerprint_matching);
                             }
@@ -987,6 +998,7 @@ root "/archive"
         let config = parse_kdl_config(kdl).unwrap();
 
         assert!(!config.opinions.auto_next_save_all);
+        assert!(!config.opinions.lossy_shit_formats_to_flac);
         assert_eq!(config.opinions.fingerprint_matching.duration_tolerance_percent, 10.0);
         assert!(config.opinions.fingerprint_matching.require_matching_track_number);
         assert!(!config.opinions.fingerprint_matching.require_matching_album);
@@ -995,6 +1007,31 @@ root "/archive"
         assert!(config.opinions.canonicalization.case_insensitive);
         assert!(!config.opinions.canonicalization.strip_parentheticals);
         assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.85);
+    }
+
+    #[test]
+    fn test_lossy_shit_formats_to_flac_opinion() {
+        let kdl = r#"
+root "/archive"
+
+opinions {
+    lossy-shit-formats-to-flac true
+}
+"#;
+
+        let config = parse_kdl_config(kdl).unwrap();
+        assert!(config.opinions.lossy_shit_formats_to_flac);
+
+        // Explicit false
+        let kdl_false = r#"
+root "/archive"
+
+opinions {
+    lossy-shit-formats-to-flac false
+}
+"#;
+        let config_false = parse_kdl_config(kdl_false).unwrap();
+        assert!(!config_false.opinions.lossy_shit_formats_to_flac);
     }
 
     #[test]

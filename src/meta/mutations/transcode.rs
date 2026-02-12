@@ -5,7 +5,7 @@
 //!
 //! Process:
 //! 1. Validate source file and target format
-//! 2. Transcode via ffmpeg subprocess
+//! 2. Transcode via native decode/encode pipeline
 //! 3. Stash original file under stash_name
 //! 4. Update track record (path, inode, file_size, file_type)
 //! 5. Update files table entry
@@ -58,9 +58,9 @@ impl MutationExecutor for TranscodeMutation {
         let (success, error, spawn_mutations) = match result {
             Ok(source) => {
                 // On success, spawn AssimilateDiskTagsToDb to read tags from the new file
-                // and update the index. This picks up any encoder tags added by ffmpeg
-                // while preserving the original metadata that ffmpeg copies.
-                let new_path = self.source_path.with_extension(self.target_format.extension());
+                // and update the index. This picks up the tags copied by the
+                // native transcode pipeline's tag-copy step.
+                let new_path = self.target_format.dest_path(&self.source_path);
                 let spawn = vec![ctx.witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
                     inode: self.inode,
                     path: new_path,
@@ -88,7 +88,7 @@ impl MutationExecutor for TranscodeMutation {
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         // Transcode: only spawn for NEW path (source is stashed, would race)
-        vec![self.source_path.with_extension(self.target_format.extension())]
+        vec![self.target_format.dest_path(&self.source_path)]
     }
 }
 
@@ -138,8 +138,8 @@ fn execute_transcode_impl(
         ));
     }
 
-    // Compute destination path: same directory, same stem, new extension
-    let dest_path = source_path.with_extension(target_format.extension());
+    // Compute destination path
+    let dest_path = target_format.dest_path(source_path);
 
     // If target already exists (e.g., from a previous incomplete transcode),
     // stash it first so we can create a fresh transcode
@@ -155,7 +155,7 @@ fn execute_transcode_impl(
             ))?;
     }
 
-    // Transcode via ffmpeg
+    // Transcode via native pipeline
     transcode::transcode(source_path, &dest_path, target_format)
         .with_context(|| format!(
             "Transcode failed: {} -> {}",

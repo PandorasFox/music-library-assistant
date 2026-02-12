@@ -107,11 +107,11 @@ impl ShitFormatPreviewState {
                 ShitFormatPreviewAction::None
             }
 
-            // Bitrate adjustment (only when on lossy buttons)
+            // Bitrate adjustment (only when on lossy buttons, and not in FLAC capture mode)
             KeyCode::Left | KeyCode::Char('h') => {
-                if self.selected_button == SelectedButton::TranscodeLossy
-                    || self.selected_button == SelectedButton::ConvertAll
-                {
+                let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
+                    || self.selected_button == SelectedButton::ConvertAll;
+                if on_lossy_button && !self.cached_data.lossy_to_flac {
                     self.cached_data.decrease_bitrate();
                 } else {
                     self.selected_button.prev(has_lossless, has_lossy);
@@ -119,9 +119,9 @@ impl ShitFormatPreviewState {
                 ShitFormatPreviewAction::None
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if self.selected_button == SelectedButton::TranscodeLossy
-                    || self.selected_button == SelectedButton::ConvertAll
-                {
+                let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
+                    || self.selected_button == SelectedButton::ConvertAll;
+                if on_lossy_button && !self.cached_data.lossy_to_flac {
                     self.cached_data.increase_bitrate();
                 } else {
                     self.selected_button.next(has_lossless, has_lossy);
@@ -275,11 +275,18 @@ impl ShitFormatPreviewState {
     }
 
     fn render_lossy_section(&self, f: &mut Frame, area: Rect, has_files: bool) {
+        let lossy_to_flac = self.cached_data.lossy_to_flac;
         let border_color = if has_files { Color::Cyan } else { Color::DarkGray };
         let title_color = if has_files { Color::Cyan } else { Color::DarkGray };
 
+        let title = if lossy_to_flac {
+            " Lossy \u{2192} FLAC (lossy capture) "
+        } else {
+            " Lossy \u{2192} Opus "
+        };
+
         let block = Block::default()
-            .title(" Lossy → Opus ")
+            .title(title)
             .title_style(Style::default().fg(title_color))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
@@ -293,35 +300,55 @@ impl ShitFormatPreviewState {
             return;
         }
 
-        // Layout: bitrate slider + breakdown
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(2)])
-            .split(inner);
+        if lossy_to_flac {
+            // FLAC lossy capture mode: description + breakdown (no bitrate gauge)
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(2), Constraint::Min(2)])
+                .split(inner);
 
-        // Bitrate gauge
-        let bitrate = self.cached_data.opus_bitrate_kbps;
-        let ratio = (bitrate as f64 - 32.0) / (512.0 - 32.0);
-        let bitrate_label = format!("{} kbps", bitrate);
-        let gauge = Gauge::default()
-            .block(Block::default().title("Opus Bitrate").borders(Borders::NONE))
-            .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
-            .ratio(ratio)
-            .label(bitrate_label);
-        f.render_widget(gauge, chunks[0]);
+            let desc = Paragraph::new("Capture decoded waveform to FLAC")
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(desc, chunks[0]);
 
-        // Type breakdown
-        let breakdown = self.cached_data.lossy_breakdown();
-        let items: Vec<ListItem> = breakdown
-            .iter()
-            .map(|(ftype, count)| {
-                ListItem::new(format!("  {}: {}", ftype, count))
-                    .style(Style::default().fg(Color::White))
-            })
-            .collect();
+            let breakdown = self.cached_data.lossy_breakdown();
+            let items: Vec<ListItem> = breakdown
+                .iter()
+                .map(|(ftype, count)| {
+                    ListItem::new(format!("  {}: {}", ftype, count))
+                        .style(Style::default().fg(Color::White))
+                })
+                .collect();
+            f.render_widget(List::new(items), chunks[1]);
+        } else {
+            // Opus mode: bitrate slider + breakdown
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(3), Constraint::Min(2)])
+                .split(inner);
 
-        let breakdown_list = List::new(items);
-        f.render_widget(breakdown_list, chunks[1]);
+            // Bitrate gauge
+            let bitrate = self.cached_data.opus_bitrate_kbps;
+            let ratio = (bitrate as f64 - 32.0) / (512.0 - 32.0);
+            let bitrate_label = format!("{} kbps", bitrate);
+            let gauge = Gauge::default()
+                .block(Block::default().title("Opus Bitrate").borders(Borders::NONE))
+                .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
+                .ratio(ratio)
+                .label(bitrate_label);
+            f.render_widget(gauge, chunks[0]);
+
+            // Type breakdown
+            let breakdown = self.cached_data.lossy_breakdown();
+            let items: Vec<ListItem> = breakdown
+                .iter()
+                .map(|(ftype, count)| {
+                    ListItem::new(format!("  {}: {}", ftype, count))
+                        .style(Style::default().fg(Color::White))
+                })
+                .collect();
+            f.render_widget(List::new(items), chunks[1]);
+        }
     }
 
     fn render_file_list(&self, f: &mut Frame, area: Rect) {
@@ -385,13 +412,20 @@ impl ShitFormatPreviewState {
             buttons.push(Span::raw(" "));
         }
 
-        // Transcode Lossy button
+        // Transcode/Capture Lossy button
         if has_lossy {
-            let label = format!(
-                " Transcode {} to Opus ({} kbps) ",
-                self.cached_data.lossy_files.len(),
-                self.cached_data.opus_bitrate_kbps
-            );
+            let label = if self.cached_data.lossy_to_flac {
+                format!(
+                    " Capture {} to FLAC ",
+                    self.cached_data.lossy_files.len(),
+                )
+            } else {
+                format!(
+                    " Transcode {} to Opus ({} kbps) ",
+                    self.cached_data.lossy_files.len(),
+                    self.cached_data.opus_bitrate_kbps
+                )
+            };
             let style = if self.selected_button == SelectedButton::TranscodeLossy {
                 Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
@@ -423,8 +457,10 @@ impl ShitFormatPreviewState {
 
         // Hints
         let mut hints = Vec::new();
-        let show_bitrate_hint = (self.selected_button == SelectedButton::TranscodeLossy
-            || self.selected_button == SelectedButton::ConvertAll) && has_lossy;
+        let show_bitrate_hint = !self.cached_data.lossy_to_flac
+            && (self.selected_button == SelectedButton::TranscodeLossy
+                || self.selected_button == SelectedButton::ConvertAll)
+            && has_lossy;
         if show_bitrate_hint {
             hints.push(Span::styled(
                 " [←/→] adjust bitrate",

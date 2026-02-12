@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────┐┌──────────────┐
-//! │ Corpus Browser | Insights | Deploy  ││  mm beta 2  │
+//! │ Corpus Browser | Insights | Deploy  ││  mm beta 3  │
 //! └─────────────────────────────────────┘└──────────────┘
 //! ```
 
@@ -75,7 +75,7 @@ impl LateralView {
 ///
 /// Two bordered panes side by side:
 /// - Left: Tab switcher showing all views with current highlighted
-/// - Right: App title "mm beta 2" (16 chars wide)
+/// - Right: App title "mm beta 3" (16 chars wide)
 pub struct UnifiedTitleBar {
     current_view: LateralView,
 }
@@ -140,7 +140,7 @@ impl UnifiedTitleBar {
     }
 
     fn render_title(&self, f: &mut Frame, area: Rect) {
-        let paragraph = Paragraph::new("mm beta 2")
+        let paragraph = Paragraph::new("mm beta 3")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));

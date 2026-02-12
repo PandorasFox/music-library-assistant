@@ -666,7 +666,8 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Query album data with artist context for collision detection.
-    pub fn get_album_data_for_collision_detection(&self) -> Result<Vec<(String, String, String, String)>> {
+    #[allow(clippy::type_complexity)]
+    pub fn get_album_data_for_collision_detection(&self) -> Result<Vec<(String, String, String, String, String, String)>> {
         self.db.get_album_data_for_collision_detection()
     }
 

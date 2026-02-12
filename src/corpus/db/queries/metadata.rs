@@ -47,13 +47,15 @@ impl Database {
     /// - BARCODE
     pub fn get_album_data_for_collision_detection(
         &self,
-    ) -> Result<Vec<(String, String, String, String)>> {
+    ) -> Result<Vec<(String, String, String, String, String, String)>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT
                    album.tag_value as album,
                    COALESCE(album_artist.tag_value, artist.tag_value, '') as artist_context,
                    COALESCE(isrc.tag_value, '') as isrc,
-                   COALESCE(catalog.tag_value, '') as catalog_number
+                   COALESCE(catalog.tag_value, '') as catalog_number,
+                   COALESCE(year.tag_value, '') as year,
+                   COALESCE(date.tag_value, '') as date
                FROM corpus_tags album
                INNER JOIN files f ON album.inode = f.inode AND f.source = 'corpus'
                LEFT JOIN corpus_tags album_artist
@@ -68,6 +70,12 @@ impl Database {
                LEFT JOIN corpus_tags catalog
                    ON album.inode = catalog.inode
                    AND LOWER(catalog.tag_name) = 'catalog_number'
+               LEFT JOIN corpus_tags year
+                   ON album.inode = year.inode
+                   AND LOWER(year.tag_name) = 'year'
+               LEFT JOIN corpus_tags date
+                   ON album.inode = date.inode
+                   AND LOWER(date.tag_name) = 'date'
                WHERE LOWER(album.tag_name) = 'album'
                    AND album.tag_value IS NOT NULL
                    AND album.tag_value != ''"#,
@@ -79,6 +87,8 @@ impl Database {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })?;
 

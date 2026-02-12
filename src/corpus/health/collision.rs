@@ -120,7 +120,7 @@ pub fn get_album_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
     // For each group, track: variant -> (count, isrcs, catalog_numbers)
     let mut buckets: HashMap<(String, String), HashMap<String, VariantData>> = HashMap::new();
 
-    for (album, artist_context, isrc, catalog_number) in rows {
+    for (album, artist_context, isrc, catalog_number, year, date) in rows {
         let normalized_artist = normalize_artist(&artist_context);
         let normalized_album = normalize_album(&album);
         let key = (normalized_artist, normalized_album);
@@ -137,6 +137,11 @@ pub fn get_album_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
         }
         if !catalog_number.is_empty() {
             variant_data.catalog_numbers.insert(catalog_number);
+        }
+        // Extract release year from either `year` tag or leading 4 digits of `date` tag
+        let release_year = extract_release_year(&year, &date);
+        if let Some(y) = release_year {
+            variant_data.years.insert(y);
         }
     }
 
@@ -169,6 +174,32 @@ struct VariantData {
     count: usize,
     isrcs: HashSet<String>,
     catalog_numbers: HashSet<String>,
+    /// Release years extracted from `year` and/or `date` tags.
+    years: HashSet<u16>,
+}
+
+/// Extract a 4-digit release year from `year` and/or `date` tag values.
+///
+/// Prefers `year` if it looks like a valid 4-digit year, otherwise tries
+/// the leading 4 characters of `date` (e.g. "2012-10-23" → 2012).
+fn extract_release_year(year_tag: &str, date_tag: &str) -> Option<u16> {
+    // Try `year` tag first
+    if year_tag.len() >= 4 {
+        if let Ok(y) = year_tag[..4].parse::<u16>() {
+            if (1900..2200).contains(&y) {
+                return Some(y);
+            }
+        }
+    }
+    // Fall back to leading 4 chars of `date` tag
+    if date_tag.len() >= 4 {
+        if let Ok(y) = date_tag[..4].parse::<u16>() {
+            if (1900..2200).contains(&y) {
+                return Some(y);
+            }
+        }
+    }
+    None
 }
 
 /// Check if album variants have disjoint release identifiers.
@@ -207,6 +238,19 @@ fn variants_have_disjoint_release_ids(variants: &HashMap<String, VariantData>) -
         for (i, v1) in variant_list.iter().enumerate() {
             for v2 in variant_list.iter().skip(i + 1) {
                 if !v1.catalog_numbers.is_disjoint(&v2.catalog_numbers) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Check release year disjointness - ALL variants must have years and be pairwise disjoint
+    let all_have_years = variant_list.iter().all(|v| !v.years.is_empty());
+    if all_have_years {
+        for (i, v1) in variant_list.iter().enumerate() {
+            for v2 in variant_list.iter().skip(i + 1) {
+                if !v1.years.is_disjoint(&v2.years) {
                     return false;
                 }
             }
@@ -284,7 +328,7 @@ mod tests {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
         variants.insert(
@@ -295,7 +339,7 @@ mod tests {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
 
@@ -314,7 +358,7 @@ mod tests {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
         variants.insert(
@@ -325,7 +369,7 @@ mod tests {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
 
@@ -340,16 +384,14 @@ mod tests {
             "Album EP".to_string(),
             VariantData {
                 count: 3,
-                isrcs: HashSet::new(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
         variants.insert(
             "Album".to_string(),
             VariantData {
                 count: 6,
-                isrcs: HashSet::new(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
 
@@ -364,16 +406,16 @@ mod tests {
             "Album EP".to_string(),
             VariantData {
                 count: 3,
-                isrcs: HashSet::new(),
                 catalog_numbers: ["CAT001"].iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
             },
         );
         variants.insert(
             "Album".to_string(),
             VariantData {
                 count: 6,
-                isrcs: HashSet::new(),
                 catalog_numbers: ["CAT002"].iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
             },
         );
 
@@ -393,19 +435,109 @@ mod tests {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
         variants.insert(
             "Album".to_string(),
             VariantData {
                 count: 6,
-                isrcs: HashSet::new(),
-                catalog_numbers: HashSet::new(),
+                ..Default::default()
             },
         );
 
         // Since not all variants have ISRCs, we can't distinguish - treat as collision
         assert!(!variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_disjoint_years_are_distinct_releases() {
+        // "Hotline Miami" (2012) vs "Hotline Miami EP" (2013) - different releases
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Hotline Miami".to_string(),
+            VariantData {
+                count: 10,
+                years: [2012].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        variants.insert(
+            "Hotline Miami EP".to_string(),
+            VariantData {
+                count: 4,
+                years: [2013].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+
+        assert!(variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_same_year_is_collision() {
+        // Same year, no other identifiers - still a collision
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 3,
+                years: [2020].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 6,
+                years: [2020].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+
+        assert!(!variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_one_variant_missing_year_is_collision() {
+        // Only one variant has year - can't distinguish
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 3,
+                years: [2020].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 6,
+                ..Default::default()
+            },
+        );
+
+        assert!(!variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_extract_release_year_from_year_tag() {
+        assert_eq!(extract_release_year("2012", ""), Some(2012));
+        assert_eq!(extract_release_year("1985", ""), Some(1985));
+        assert_eq!(extract_release_year("", ""), None);
+        assert_eq!(extract_release_year("bad", ""), None);
+    }
+
+    #[test]
+    fn test_extract_release_year_from_date_tag() {
+        assert_eq!(extract_release_year("", "2013-06-15"), Some(2013));
+        assert_eq!(extract_release_year("", "20130615"), Some(2013));
+    }
+
+    #[test]
+    fn test_extract_release_year_prefers_year_tag() {
+        // year tag wins when both present
+        assert_eq!(extract_release_year("2012", "2013-06-15"), Some(2012));
     }
 }

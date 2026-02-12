@@ -82,7 +82,7 @@ impl App {
             editor.set_staged_mutations(mutations);
             editor.staged_decision_count += 1;
         }
-        self.status_message = Some(format!("Decision staged (item {})", index + 1));
+        // Transaction summary in status_line_2 already reflects the staged state.
     }
 
     /// Stage mutations into a new transaction for review.
@@ -560,14 +560,11 @@ impl App {
                 };
 
                 match commit_result {
-                    Ok(summary) => {
-                        self.status_message = Some(format!(
-                            "Committed {} decision{} ({} mutation{})",
-                            summary.decision_count,
-                            if summary.decision_count == 1 { "" } else { "s" },
-                            summary.mutation_count,
-                            if summary.mutation_count == 1 { "" } else { "s" },
-                        ));
+                    Ok(_summary) => {
+                        // Don't set status_message here — it would suppress the
+                        // selected-path display in status_line_1, and the commit
+                        // outcome is already evident from the progress screen.
+
                         // Use appropriate progress phase based on source
                         let phase = match post_commit_phase {
                             transaction_review::PostCommitPhase::SignalRefresh => {

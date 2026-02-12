@@ -9,10 +9,6 @@ use std::path::{Path, PathBuf};
 
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::audio::Signal;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 /// Target format for transcoding operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -118,8 +114,9 @@ fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
     use flacenc::error::Verify;
     use flacenc::source::MemSource;
 
-    let (mut format, mut decoder, sample_rate, channels, bits_per_sample) =
-        open_source(source)?;
+    let crate::corpus::codecs::AudioSource {
+        mut format, mut decoder, sample_rate, channels, bits_per_sample, ..
+    } = crate::corpus::codecs::open_audio_source(source)?;
 
     // flacenc is batch-only: collect all decoded samples first
     let mut all_samples: Vec<i32> = Vec::new();
@@ -175,7 +172,9 @@ fn encode_opus(source: &Path, dest: &Path, bitrate_kbps: u32) -> Result<()> {
 
     const FRAME_SIZE: usize = 960; // 20ms at 48kHz
 
-    let (mut format, mut decoder, sample_rate, channels, _bps) = open_source(source)?;
+    let crate::corpus::codecs::AudioSource {
+        mut format, mut decoder, sample_rate, channels, ..
+    } = crate::corpus::codecs::open_audio_source(source)?;
 
     if channels > 2 {
         return Err(anyhow::anyhow!(
@@ -379,56 +378,6 @@ fn resample_to_48k(samples: &[i16], source_rate: u32, channels: usize) -> Result
 // ============================================================================
 // Shared helpers
 // ============================================================================
-
-/// Open a source file with symphonia, returning the format reader, decoder,
-/// and audio parameters (sample_rate, channels, bits_per_sample).
-fn open_source(
-    source: &Path,
-) -> Result<(
-    Box<dyn symphonia::core::formats::FormatReader>,
-    Box<dyn symphonia::core::codecs::Decoder>,
-    u32,
-    usize,
-    u32,
-)> {
-    let file = File::open(source)
-        .with_context(|| format!("Failed to open source: {}", source.display()))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = source.extension() {
-        if let Some(ext_str) = ext.to_str() {
-            hint.with_extension(ext_str);
-        }
-    }
-
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-        .with_context(|| format!("Failed to probe audio: {}", source.display()))?;
-
-    let format = probed.format;
-    let track = format
-        .default_track()
-        .context("No default audio track found")?;
-
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .context("No sample rate in source")?;
-    let channels = track
-        .codec_params
-        .channels
-        .context("No channel info in source")?
-        .count();
-    // Default to 16 bits if not specified (common for lossy decoders)
-    let bits_per_sample = track.codec_params.bits_per_sample.unwrap_or(16);
-
-    let decoder =
-        crate::corpus::codecs::make_decoder(&track.codec_params, &Default::default())
-            .context("Failed to create decoder")?;
-
-    Ok((format, decoder, sample_rate, channels, bits_per_sample))
-}
 
 /// Convert a symphonia AudioBufferRef to interleaved i32 samples for FLAC encoding.
 ///

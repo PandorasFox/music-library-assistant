@@ -200,43 +200,9 @@ fn extract_audio_metadata(path: &Path) -> Result<AudioMetadata> {
 pub fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
     use rusty_chromaprint::{Configuration, Fingerprinter};
 
-    // Open audio file with symphonia
-    let file = File::open(path)?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension() {
-        if let Some(ext_str) = ext.to_str() {
-            hint.with_extension(ext_str);
-        }
-    }
-
-    let format_opts = FormatOptions::default();
-    let metadata_opts = MetadataOptions::default();
-
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &format_opts, &metadata_opts)
-        .context("Failed to probe audio format for fingerprinting")?;
-
-    let mut format = probed.format;
-    let track = format
-        .default_track()
-        .context("No default audio track found")?;
-
-    // TODO: Revert to symphonia::default::get_codecs() when symphonia adds native opus
-    let mut decoder = crate::corpus::codecs::make_decoder(&track.codec_params, &Default::default())
-        .context("Failed to create decoder")?;
-
-    // Get audio parameters
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .context("No sample rate found")?;
-    let channels = track
-        .codec_params
-        .channels
-        .context("No channels found")?
-        .count();
+    let crate::corpus::codecs::AudioSource {
+        mut format, mut decoder, sample_rate, channels, ..
+    } = crate::corpus::codecs::open_audio_source(path)?;
 
     // Initialize chromaprint fingerprinter
     let config = Configuration::preset_test2();

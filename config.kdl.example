@@ -41,11 +41,6 @@ opinions {
     // Startup Behavior
     // -------------------------------------------------------------------------
     startup {
-        // Force content analysis once at startup, even without mutations (default: true)
-        // Ensures all detection signals (ShitFormat, duplicates, etc.) are fresh.
-        // One-shot latch: triggers once, then auto-clears.
-        // freshen-last-stage true
-
         // Force verification of all indexed files at startup (default: false)
         // Bypasses mtime optimization - verifies all files regardless of modification time.
         // Catches out-of-band tag changes (external tools modified tags) and corrupt files.

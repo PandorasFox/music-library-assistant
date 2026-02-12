@@ -123,10 +123,6 @@ pub struct Witch {
     /// Used to auto-trigger content analysis after mutations + awakening drain.
     mutations_ran_this_session: bool,
 
-    /// One-shot latch: force content analysis once at startup, then auto-clear.
-    /// Loaded from config at startup. Useful after fixing broken computations.
-    freshen_last_stage_at_startup: bool,
-
     /// Force verification of all indexed files at startup, bypassing mtime optimization.
     /// Catches out-of-band tag changes and corrupt files.
     force_check_all_files_at_startup: bool,
@@ -226,7 +222,6 @@ impl Witch {
             read_only_mode: false,
             safety_latch_reason: None,
             mutations_ran_this_session: false,
-            freshen_last_stage_at_startup: false, // Set via with_opinions()
             force_check_all_files_at_startup: false, // Set via with_opinions()
             session_start: None,
             session_queued: 0,
@@ -259,16 +254,10 @@ impl Witch {
     }
 
     /// Create a new Witch with opinions applied.
-    pub fn with_opinions(cfg: &Config, read_only_mode: bool, freshen_last_stage_at_startup: bool, force_check_all_files_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
+    pub fn with_opinions(cfg: &Config, read_only_mode: bool, force_check_all_files_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
         let mut she = Self::new(cfg, log_rx);
         she.read_only_mode = read_only_mode;
-        she.freshen_last_stage_at_startup = freshen_last_stage_at_startup;
         she.force_check_all_files_at_startup = force_check_all_files_at_startup;
-        if freshen_last_stage_at_startup {
-            crate::logging::log_general(
-                "[WITCH] freshen_last_stage_at_startup=true: will run content analysis once after awakening"
-            );
-        }
         if force_check_all_files_at_startup {
             crate::logging::log_general(
                 "[WITCH] force_check_all_files_at_startup=true: will verify all indexed files at startup"
@@ -604,13 +593,6 @@ impl Witch {
                 // Always queue content analysis after awakening (both initial and re-awakening)
                 queue_content_analysis_after_reset = true;
 
-                // Clear the one-shot latch if it was set (consumed by this awakening)
-                if self.freshen_last_stage_at_startup {
-                    self.freshen_last_stage_at_startup = false;
-                    crate::logging::log_general(
-                        "[DAEMON] freshen_last_stage_at_startup latch cleared (consumed by awakening)"
-                    );
-                }
             }
 
             // Normal operation: work completed while Awake

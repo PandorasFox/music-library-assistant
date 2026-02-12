@@ -104,11 +104,6 @@ impl Default for CanonicalizationOpinions {
 /// Opinions for startup behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupOpinions {
-    /// Run last-stage content analysis once at startup (default: true).
-    /// Ensures all detection signals (ShitFormat, duplicates, etc.) are fresh.
-    /// This is a one-shot latch: triggers once at startup, then auto-clears.
-    /// Set to false to skip content analysis on startup (faster, but signals may be stale).
-    pub freshen_last_stage_at_startup: bool,
     /// Force verification of all indexed files at startup, bypassing mtime optimization (default: false).
     /// Catches out-of-band tag changes (external tools modified tags) and corrupt files.
     /// Slower startup but ensures database matches reality.
@@ -118,7 +113,6 @@ pub struct StartupOpinions {
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
-            freshen_last_stage_at_startup: true,
             force_check_all_files_at_startup: false,
         }
     }
@@ -623,13 +617,6 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "freshen-last-stage" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.freshen_last_stage_at_startup = val;
-                        }
-                    }
-                }
                 "force-check-all-files" => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {

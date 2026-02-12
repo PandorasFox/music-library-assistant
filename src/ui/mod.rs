@@ -309,10 +309,9 @@ impl App {
     /// Get or create the Witch.
     pub(super) fn witch(&mut self) -> &mut crate::witch::Witch {
         if self.witch.is_none() {
-            let force_freshen = self.config.opinions.startup.freshen_last_stage_at_startup;
             let force_check = self.config.opinions.startup.force_check_all_files_at_startup;
             let log_rx = self.log_rx.take();
-            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_freshen, force_check, log_rx));
+            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_check, log_rx));
         }
         self.witch.as_mut().unwrap()
     }
@@ -375,9 +374,8 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
         startup::handle_first_time_setup(&mut terminal, &db_path)?;
     }
 
-    let force_freshen = config.opinions.startup.freshen_last_stage_at_startup;
     let force_check = config.opinions.startup.force_check_all_files_at_startup;
-    let mut witch = crate::witch::Witch::with_opinions(&config, false, force_freshen, force_check, Some(log_rx));
+    let mut witch = crate::witch::Witch::with_opinions(&config, false, force_check, Some(log_rx));
 
     if witch.needs_migrations() {
         startup::run_migrations(&mut terminal, &mut witch)?;

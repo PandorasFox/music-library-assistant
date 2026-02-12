@@ -65,7 +65,6 @@ opinions {
     // lossy-shit-formats-to-flac true
 
     startup {
-        // freshen-last-stage true
         // force-check-all-files false
     }
 

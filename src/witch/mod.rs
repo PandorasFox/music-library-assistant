@@ -837,7 +837,7 @@ impl Witch {
     // This ensures proper decision witness semantics where each user action is
     // explicitly witnessed, and batch review/commit is possible.
 
-    pub(crate) fn queue_mutations_internal(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>) {
+    pub(super) fn queue_mutations_internal(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>) {
         self.transition_to_working();
         self.mutations_ran_this_session = true;
 
@@ -911,7 +911,7 @@ impl Witch {
     ///     })
     /// }
     /// ```
-    pub fn with_operator_decision<F, R>(&mut self, f: F) -> R
+    pub(crate) fn with_operator_decision<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut types::DecisionScope<'_>) -> R,
     {
@@ -947,7 +947,7 @@ impl Witch {
     ///
     /// Migrations require a [`DecisionWitness`] (user approval) but bypass the
     /// `accepting_mutations` gate. They can run before observing completes.
-    pub(crate) fn queue_migration(&mut self, migration: Migration, _witness: &DecisionWitness) {
+    pub(super) fn queue_migration(&mut self, migration: Migration, _witness: &DecisionWitness) {
         self.transition_to_working();
 
         let task = Task::Migration(migration);

@@ -46,11 +46,20 @@ fn sanitize_path_component(s: &str) -> String {
 /// Tags should be provided as a HashMap with lowercase keys.
 /// Recognized tags: `album_artist`, `artist`, `album`, `title`, `track_number`, `disc_number`
 pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String, String>) -> PathBuf {
-    // Get extension from original path
-    let ext = Path::new(file_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("unknown");
+    // Get extension from original path, preserving compound .LOSSY.flac extension
+    let ext = if file_path.ends_with(".LOSSY.flac") {
+        let without_lossy = &file_path[..file_path.len() - ".LOSSY.flac".len()];
+        match Path::new(without_lossy).extension().and_then(|e| e.to_str()) {
+            Some(orig_ext) => format!("{}.LOSSY.flac", orig_ext),
+            None => "LOSSY.flac".to_string(),
+        }
+    } else {
+        Path::new(file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    };
 
     // Determine album artist (prefer album_artist, fallback to artist)
     let album_artist = tags
@@ -235,6 +244,39 @@ mod tests {
             path10,
             PathBuf::from("Hiro/OutRun Box/10-01. Radiation.opus")
         );
+    }
+
+    #[test]
+    fn test_compute_deployment_path_lossy_flac_preserves_compound_ext() {
+        let tags: HashMap<String, String> = [
+            ("album_artist".to_string(), "Artist".to_string()),
+            ("album".to_string(), "Album".to_string()),
+            ("title".to_string(), "Track".to_string()),
+            ("track_number".to_string(), "1".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let path =
+            compute_deployment_path_with_tags("/corpus/Artist/Album/track.mp3.LOSSY.flac", &tags);
+        assert_eq!(
+            path,
+            PathBuf::from("Artist/Album/01. Track.mp3.LOSSY.flac")
+        );
+    }
+
+    #[test]
+    fn test_compute_deployment_path_lossy_flac_single() {
+        let tags: HashMap<String, String> = [
+            ("artist".to_string(), "Artist".to_string()),
+            ("title".to_string(), "Single".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let path =
+            compute_deployment_path_with_tags("/corpus/Artist/single.m4a.LOSSY.flac", &tags);
+        assert_eq!(path, PathBuf::from("Artist/Single.m4a.LOSSY.flac"));
     }
 
     #[test]

@@ -1071,21 +1071,6 @@ impl AggregateSignalStore for RedundantDuplicateSignal {
     }
 }
 
-impl RedundantDuplicateSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_redundant_duplicate ORDER BY key"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(1)?;
-            let data: RedundantDuplicateData = bincode::deserialize(&blob)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            Ok(Self { key: row.get(0)?, data })
-        })?;
-        rows.collect()
-    }
-}
-
 impl CrossSourceOverlapSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(

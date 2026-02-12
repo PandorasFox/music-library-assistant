@@ -561,11 +561,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_subpar_duplicate_files()
     }
 
-    /// Get redundant duplicate groups with metadata.
-    pub fn get_redundant_duplicate_groups(&self) -> Result<Vec<crate::corpus::db::types::RedundantDuplicateGroup>> {
-        self.db.get_redundant_duplicate_groups()
-    }
-
     // =========================================================================
     // Library File Queries
     // =========================================================================
@@ -689,6 +684,11 @@ impl<'a> ReadOnlyDb<'a> {
     /// Check if a CanonicalTag signal exists for this tag_name:tag_value.
     pub fn is_canonical_tag(&self, tag_name: &str, tag_value: &str) -> Result<bool> {
         self.db.is_canonical_tag(tag_name, tag_value)
+    }
+
+    /// Get all inodes that have a CompoundTag signal containing a specific compound value.
+    pub fn get_inodes_with_compound_value(&self, tag_name: &str, compound_value: &str) -> Result<Vec<i64>> {
+        self.db.get_inodes_with_compound_value(tag_name, compound_value)
     }
 
     // =========================================================================

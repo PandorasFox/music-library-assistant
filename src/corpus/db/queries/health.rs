@@ -101,6 +101,8 @@ impl Database {
     /// all split parts existing in corpus (matching_parts.len() == split_parts.len()).
     /// If false, returns only signals that need review (some/all parts are new).
     /// If `tag_filter` is Some, only returns signals containing compounds for that tag name.
+    ///
+    /// Signals where all compound values have been marked canonical are excluded.
     pub fn get_compound_signal_keys_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<String>> {
         use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
 
@@ -124,6 +126,14 @@ impl Database {
             };
 
             if compounds.is_empty() {
+                continue;
+            }
+
+            // Skip signals where all compounds are canonical (operator-confirmed)
+            let all_canonical = compounds.iter().all(|c| {
+                self.is_canonical_tag(&c.tag_name, &c.compound_value).unwrap_or(false)
+            });
+            if all_canonical {
                 continue;
             }
 
@@ -841,45 +851,6 @@ impl Database {
     }
 
     // ========================================================================
-    // Redundant Duplicate Resolution Queries
-    // ========================================================================
-
-    /// Get all redundant duplicate groups with metadata.
-    ///
-    /// Returns groups of files with identical fingerprints and identical quality scores.
-    /// Used by future resolution UI.
-    pub fn get_redundant_duplicate_groups(&self) -> Result<Vec<crate::corpus::db::types::RedundantDuplicateGroup>> {
-        use crate::corpus::db::types::RedundantDuplicateGroup;
-        use crate::meta::signals::data::RedundantDuplicateData;
-
-        let mut stmt = self.conn.prepare(
-            "SELECT key, data FROM signal_redundant_duplicate ORDER BY key"
-        )?;
-
-        let results = stmt
-            .query_map(params![], |row| {
-                let key: String = row.get(0)?;
-                let blob: Vec<u8> = row.get(1)?;
-                let data: RedundantDuplicateData = bincode::deserialize(&blob)
-                    .unwrap_or_else(|_| RedundantDuplicateData {
-                        quality_score: 0,
-                        file_type: String::new(),
-                        inodes: Vec::new(),
-                        paths: Vec::new(),
-                    });
-                Ok(RedundantDuplicateGroup {
-                    fingerprint_key: key,
-                    quality_score: data.quality_score as i64,
-                    file_type: data.file_type,
-                    paths: data.paths,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<RedundantDuplicateGroup>>>()?;
-
-        Ok(results)
-    }
-
-    // ========================================================================
     // CanonicalTag Whitelist Queries
     // ========================================================================
 
@@ -893,6 +864,38 @@ impl Database {
         use crate::meta::signals::store::AggregateSignalStore;
         let key = format!("{}:{}", tag_name, tag_value);
         Ok(CanonicalTagSignal::exists(&self.conn, &key).unwrap_or(false))
+    }
+
+    /// Get all inodes that have a CompoundTag signal containing a specific compound value.
+    ///
+    /// Used by EmitCanonicalTag mutation to find and clear stale CompoundTag signals
+    /// after a value has been marked as canonical.
+    pub fn get_inodes_with_compound_value(&self, tag_name: &str, compound_value: &str) -> Result<Vec<i64>> {
+        use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, data FROM signal_compound_tag"
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((inode, blob))
+        })?;
+
+        let mut inodes = Vec::new();
+        for row in rows {
+            let (inode, blob) = row?;
+            let compounds: Vec<TypedEntry> = match bincode::deserialize(&blob) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if compounds.iter().any(|c| c.tag_name == tag_name && c.compound_value == compound_value) {
+                inodes.push(inode);
+            }
+        }
+
+        Ok(inodes)
     }
 }
 

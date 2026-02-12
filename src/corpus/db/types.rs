@@ -301,20 +301,6 @@ pub struct SubparDuplicateEntry {
 }
 
 // ============================================================================
-// Redundant Duplicate Resolution Types
-// ============================================================================
-
-/// A group of files with identical fingerprints and identical quality scores.
-/// Requires operator choice — neither file is subpar.
-#[derive(Debug, Clone)]
-pub struct RedundantDuplicateGroup {
-    pub fingerprint_key: String,
-    pub quality_score: i64,
-    pub file_type: String,
-    pub paths: Vec<String>,
-}
-
-// ============================================================================
 // OOB Tag Resolution Types
 // ============================================================================
 

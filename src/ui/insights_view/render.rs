@@ -569,6 +569,26 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
+        InsightType::RedundantDuplicates => {
+            lines.push(Line::from(Span::styled(
+                "Redundant Duplicates",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Same fingerprint, identical quality.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "Neither file is subpar — requires",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "operator choice.",
+                Style::default().fg(text_color),
+            )));
+        }
+
         InsightType::InconsistentAlbumArtist => {
             lines.push(Line::from(Span::styled(
                 "Inconsistent Album Artist",

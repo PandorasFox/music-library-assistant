@@ -478,15 +478,18 @@ impl Database {
     #[allow(clippy::type_complexity)]
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String)>> {
         // Only detect inconsistent album artist within corpus files
+        // GROUP BY f.inode to collapse multi-value tags (e.g. a file with two
+        // artist tags) into one row per inode, preventing cross-product blowup
+        // that would make a single file appear as multiple "tracks".
         let sql = r#"
             SELECT
                 f.inode,
-                COALESCE(album.tag_value, '') as album,
-                COALESCE(artist.tag_value, '') as artist,
-                COALESCE(album_artist.tag_value, '') as album_artist,
-                COALESCE(catalog.tag_value, '') as catalog_number,
-                COALESCE(isrc.tag_value, '') as isrc,
-                COALESCE(year.tag_value, '') as year
+                COALESCE(MIN(album.tag_value), '') as album,
+                COALESCE(MIN(artist.tag_value), '') as artist,
+                COALESCE(MIN(album_artist.tag_value), '') as album_artist,
+                COALESCE(MIN(catalog.tag_value), '') as catalog_number,
+                COALESCE(MIN(isrc.tag_value), '') as isrc,
+                COALESCE(MIN(year.tag_value), '') as year
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags album
@@ -502,6 +505,7 @@ impl Database {
             LEFT JOIN corpus_tags year
                 ON f.inode = year.inode AND LOWER(year.tag_name) = 'year'
             WHERE f.is_dir = 0 AND f.source = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
+            GROUP BY f.inode
         "#;
 
         let mut stmt = self.conn.prepare(sql)?;

@@ -472,6 +472,11 @@ impl<'a> ReadOnlyDb<'a> {
         S::exists(self.db.conn(), inode).unwrap_or(false)
     }
 
+    /// Query all inodes that have signals in a corpus signal table (generic, type-safe).
+    pub fn corpus_signal_all_inodes<S: crate::meta::signals::store::CorpusSignalStore>(&self) -> Result<Vec<i64>> {
+        Ok(S::all_inodes(self.db.conn())?)
+    }
+
     /// Query all keys for an aggregate signal type (generic, type-safe).
     pub fn aggregate_signal_keys<S: crate::meta::signals::store::AggregateSignalStore>(&self) -> Result<Vec<String>> {
         S::query_keys(self.db.conn())

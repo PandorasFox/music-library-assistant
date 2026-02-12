@@ -93,7 +93,15 @@ impl MutationExecutor for MoveToStashMutation {
     fn label(&self) -> &'static str { "File move" }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        use std::os::unix::fs::MetadataExt;
+
         let start = std::time::Instant::now();
+
+        // Discover inode before the move (file still exists at original path)
+        let discovered = std::fs::metadata(&self.path)
+            .map(|m| vec![m.ino() as i64])
+            .unwrap_or_default();
+
         let result = match ctx.stash_root {
             Some(root) => execute_move_to_stash(&self.path, &self.stash_name, root),
             None => Err(anyhow::anyhow!(
@@ -112,7 +120,7 @@ impl MutationExecutor for MoveToStashMutation {
             _duration_ms: start.elapsed().as_millis() as u64,
             spawn_mutations: Vec::new(),
             pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
+            discovered_inodes: discovered,
         }
     }
 

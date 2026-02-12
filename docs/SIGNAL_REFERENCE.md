@@ -128,6 +128,12 @@ From `CLAUDE.md`:
 3. **Signals are facts, not actions** - They describe state, not what to do
 4. **Mutual exclusion where appropriate** - OOB signals (Sync/Conflict/MtimeOnly) are mutually exclusive
 
+### GC Backstop
+
+`DeriveCorpusSignals` includes a GC pass that clears orphaned corpus signals. After computing the known inode universe (disk inodes ∪ indexed inodes), it scans each corpus signal table for inodes outside that universe and deletes them. This catches signals that persist due to mutations that previously failed to return their affected inodes, or any future bugs in the post-mutation signal clearing pipeline.
+
+Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, MissingDirectory. FileInCorpus is excluded (it IS the disk observation).
+
 ### Good Signals
 - `UnindexedFile` for path X (one file)
 - `FingerprintOverlap` for fingerprint Z (one group of tracks)

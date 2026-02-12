@@ -177,7 +177,7 @@ impl MutationExecutor for UpdateFilePathMutation {
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
 }
 
 impl MutationExecutor for DropFromIndexMutation {
@@ -202,7 +202,7 @@ impl MutationExecutor for DropFromIndexMutation {
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn affected_inodes(&self) -> Vec<i64> { self.inode.into_iter().collect() }
 }
 
 impl MutationExecutor for DropDirectoryFromIndexMutation {
@@ -252,7 +252,7 @@ impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn affected_inodes(&self) -> Vec<i64> { self.tracks.iter().map(|(inode, _)| *inode).collect() }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         self.tracks.iter().map(|(_, path)| path.clone()).collect()
@@ -512,15 +512,21 @@ pub fn execute_update_file_path(
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Convert absolute path to relative for storage
-    let relative_path = resolver
-        .to_relative(new_path)
-        .with_context(|| {
-            format!(
-                "Path {} does not match root. Check config.kdl roots.",
-                new_path.display(),
-            )
-        })?;
+    // Convert to relative for storage. The new_path may already be relative
+    // (e.g., from signal_moved_file table which stores relative paths like
+    // "corpus/web/misc/..."), so skip to_relative() if it's not absolute.
+    let relative_path = if new_path.is_absolute() {
+        resolver
+            .to_relative(new_path)
+            .with_context(|| {
+                format!(
+                    "Path {} does not match root. Check config.kdl roots.",
+                    new_path.display(),
+                )
+            })?
+    } else {
+        new_path.to_path_buf()
+    };
 
     // Route write through signal_sender
     sender.update_file_path(source, inode, &relative_path.to_string_lossy(), witness);

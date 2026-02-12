@@ -14,6 +14,7 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::*;
+use crate::meta::signals::store::CorpusSignalStore;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -283,6 +284,21 @@ pub fn execute_derive_corpus_signals(
         }
     }
 
+    // ========================================================================
+    // GC Backstop: Clear orphaned corpus signals for inodes no longer known
+    // ========================================================================
+    // Any inode that is neither on disk nor in the index has no reason to have
+    // corpus signals. This catches signals that persisted due to mutations
+    // returning empty affected_inodes() (now fixed) or any future bugs.
+    let known_inodes: HashSet<i64> = disk_set.union(&indexed_set).copied().collect();
+    let gc_total = gc_orphaned_corpus_signals(read_only_db, &sender, &known_inodes, witness);
+    if gc_total > 0 {
+        log_general(format!(
+            "[COMPUTE] DeriveCorpusSignals: GC cleared {} orphaned signal(s)",
+            gc_total
+        ));
+    }
+
     log_general("[COMPUTE] DeriveCorpusSignals: complete");
 
     Result::success(
@@ -290,6 +306,61 @@ pub fn execute_derive_corpus_signals(
         start.elapsed().as_millis() as u64,
         Vec::new(),
     )
+}
+
+/// GC orphaned corpus signals whose inodes are not in the known universe.
+///
+/// Returns the total number of orphaned signals cleared.
+fn gc_orphaned_corpus_signals(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &db_thread::SignalWriteSender,
+    known_inodes: &HashSet<i64>,
+    witness: &ComputationWitness,
+) -> usize {
+    let mut total = 0;
+    total += gc_signal_table::<UnindexedFileSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<MissingFileSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<MovedFileSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<HealthyFileSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<CorruptFileSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<ShitFormatSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<MtimeOnlyMismatchSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<OutOfBandTagSyncSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<OutOfBandTagConflictSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<SubparDuplicateSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<CompoundTagSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<DeployReadySignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<DeployedHealthySignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<MissingDirectorySignal>(read_only_db, sender, known_inodes, witness);
+    // FileInCorpus excluded: it IS the disk observation, always part of known_inodes
+    total
+}
+
+/// Clear signals from a single corpus signal table for inodes not in `known_inodes`.
+fn gc_signal_table<S: CorpusSignalStore>(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &db_thread::SignalWriteSender,
+    known_inodes: &HashSet<i64>,
+    witness: &ComputationWitness,
+) -> usize {
+    let signal_inodes = match read_only_db.corpus_signal_all_inodes::<S>() {
+        Ok(inodes) => inodes,
+        Err(_) => return 0,
+    };
+    let mut cleared = 0;
+    for inode in signal_inodes {
+        if !known_inodes.contains(&inode) {
+            sender.clear_corpus_signal::<S>(inode, witness);
+            cleared += 1;
+        }
+    }
+    if cleared > 0 {
+        log_general(format!(
+            "[COMPUTE] GC: cleared {} orphan(s) from {}",
+            cleared, S::TABLE_NAME
+        ));
+    }
+    cleared
 }
 
 /// Update corpus signals for a single file after a mutation.

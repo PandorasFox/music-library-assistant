@@ -49,6 +49,14 @@ pub trait CorpusSignalStore: Sized {
         conn.execute(&sql, [])?;
         Ok(())
     }
+
+    /// Query all inodes that have signals in this table.
+    fn all_inodes(conn: &Connection) -> Result<Vec<i64>> {
+        let sql = format!("SELECT inode FROM {}", Self::TABLE_NAME);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
 }
 
 /// Semantic-keyed aggregate signal storage.

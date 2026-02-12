@@ -91,8 +91,8 @@ MM uses three-phase computations with compile-time enforced boundaries:
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
-| ScheduleSecondLevelDerivations | DeriveDirectorySignals × N, WalkLibrary × N | MissingDirectory | MissingDirectory (if dir exists again) |
-| DeriveDirectorySignals | — | UnindexedFile, MissingFile, HealthyFile | UnindexedFile, MissingFile, HealthyFile (stale); skips HealthyFile for OOB-flagged files |
+| ScheduleSecondLevelDerivations | DeriveCorpusSignals, WalkLibrary × N | MissingDirectory | MissingDirectory (if dir exists again) |
+| DeriveCorpusSignals | — | UnindexedFile, MissingFile, HealthyFile | UnindexedFile, MissingFile, HealthyFile (stale); skips HealthyFile for OOB-flagged files. **GC backstop**: clears orphaned signals for inodes not in disk ∪ index |
 | UpdateCorpusFileSignals | — | FileInCorpus, UnindexedFile, MissingFile, HealthyFile | FileInCorpus, UnindexedFile, MissingFile, HealthyFile |
 | UpdateLibraryFileSignals | — | — | LibraryLeftover, LibraryStale |
 | UpdateDeploySignals | — | DeployedHealthy | DeployReady, LibraryLeftover, LibraryStale |

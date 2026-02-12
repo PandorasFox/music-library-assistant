@@ -76,7 +76,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 |----------|---------------------|-----------------|-----------------|-------|
 | IndexTrack | UpdateCorpusFileSignals | CorruptFile (if no fingerprint), ShitFormat | (per-file signals wiped) | Add track to index |
 | IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), ShitFormat | (per-file signals wiped) | Index by path |
-| DropFromIndex | UpdateCorpusFileSignals | — | (per-file signals wiped) | Remove from index |
+| DropFromIndex | UpdateCorpusFileSignals | — | All scope signals for inode (when inode known) | Remove from index |
 | DropDirectoryFromIndex | — | — | MissingFile × N, MissingDirectory | Drop directory and all contained files from index |
 
 ### File Entry Operations
@@ -84,7 +84,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
 | UpdateFileEntry | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update file entry in files table |
-| UpdateFilePath | — | — | — | Update path in files table |
+| UpdateFilePath | — | — | MutableOnly scope signals for inode | Update path in files table; handles both absolute and relative new_path |
 | CleanupStaleFiles | — | — | — | Remove orphaned file entries |
 
 ### File Operations
@@ -93,7 +93,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 |----------|---------------------|-----------------|-----------------|-------|
 | Move | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Move file within corpus |
 | Copy | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Copy file within corpus |
-| MoveToStash | UpdateCorpusFileSignals | — | (per-file signals wiped) | Move to stash directory |
+| MoveToStash | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Move to stash directory; discovers inode before move |
 | UpdateTrackPath | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Update path in index |
 | Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode to new format |
 
@@ -108,7 +108,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| AcknowledgeMtimeOnly | UpdateCorpusFileSignals | — | MtimeOnlyMismatch | Update file mtime, acknowledge touch |
+| AcknowledgeMtimeOnly | UpdateCorpusFileSignals | — | MtimeOnlyMismatch, MutableOnly scope signals for all track inodes | Update file mtime, acknowledge touch |
 | AcknowledgeInodeChanged | UpdateCorpusFileSignals | — | InodeChanged | Update tracks.inode and files table for replaced files |
 
 Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutations documented in Tag Operations above. They clear OutOfBandTagSync, OutOfBandTagConflict, and tag_mismatch signals.

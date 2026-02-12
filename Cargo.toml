@@ -29,7 +29,7 @@ symphonia-adapter-libopus = "0.2"  # Opus decoder via libopus
 lofty = "0.23"  # For reading/writing all tags
 
 # Audio encoding
-flacenc = "0.5"        # Pure Rust FLAC encoder (zero C deps)
+flac-codec = "1.3"     # Pure Rust FLAC encoder (zero C deps)
 audiopus = "0.2"       # Opus encoding via libopus (pkg-config on Linux, cmake bundle on macOS)
 ogg = "0.9"            # OGG container writing (pure Rust)
 rubato = "0.14"        # Sample rate conversion for Opus (pure Rust)

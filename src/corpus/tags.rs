@@ -563,25 +563,17 @@ mod tests {
 
     /// Generate a minimal valid FLAC file with silence at the given path.
     fn generate_flac_fixture(path: &Path) {
-        use flacenc::bitsink::ByteSink;
-        use flacenc::component::BitRepr;
-        use flacenc::error::Verify;
-        use flacenc::source::MemSource;
-
         // 4410 samples of silence = 0.1s at 44100 Hz, mono, 16-bit
         let samples = vec![0i32; 4410];
-        let source = MemSource::from_samples(&samples, 1, 16, 44100);
 
-        let config = flacenc::config::Encoder::default()
-            .into_verified()
-            .expect("FLAC config");
+        let mut encoder = flac_codec::encode::FlacSampleWriter::create(
+            path,
+            flac_codec::encode::Options::default().no_padding().no_seektable(),
+            44100, 16, 1, Some(4410),
+        ).expect("FLAC encoder");
 
-        let stream = flacenc::encode_with_fixed_block_size(&config, source, 4096)
-            .expect("FLAC encode");
-
-        let mut sink = ByteSink::new();
-        stream.write(&mut sink).expect("FLAC write");
-        std::fs::write(path, sink.as_slice()).expect("write FLAC file");
+        encoder.write(&samples).expect("FLAC write");
+        encoder.finalize().expect("FLAC finalize");
     }
 
     /// Generate a minimal valid Opus file with silence at the given path.

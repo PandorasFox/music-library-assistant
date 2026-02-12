@@ -1,6 +1,6 @@
 //! Native audio transcoding.
 //!
-//! Decodes audio via symphonia and re-encodes to FLAC (via flacenc, pure Rust) or
+//! Decodes audio via symphonia and re-encodes to FLAC (via flac-codec, pure Rust) or
 //! Opus (via audiopus + ogg + rubato). No external subprocess required.
 
 use anyhow::{Context, Result};
@@ -116,20 +116,15 @@ pub fn transcode(source: &Path, dest: &Path, target: TranscodeTarget) -> Result<
 }
 
 // ============================================================================
-// FLAC encoding (via flacenc — pure Rust, batch encoder)
+// FLAC encoding (via flac-codec — pure Rust, streaming encoder)
 // ============================================================================
 
 fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
-    use flacenc::bitsink::ByteSink;
-    use flacenc::component::BitRepr;
-    use flacenc::error::Verify;
-    use flacenc::source::MemSource;
-
     let crate::corpus::codecs::AudioSource {
         mut format, mut decoder, sample_rate, channels, bits_per_sample, ..
     } = crate::corpus::codecs::open_audio_source(source)?;
 
-    // flacenc is batch-only: collect all decoded samples first
+    // Collect all decoded samples first (encoder needs total_samples for STREAMINFO)
     let mut all_samples: Vec<i32> = Vec::new();
     while let Ok(packet) = format.next_packet() {
         match decoder.decode(&packet) {
@@ -146,27 +141,22 @@ fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
         return Err(anyhow::anyhow!("No audio frames decoded from source"));
     }
 
-    let source = MemSource::from_samples(
-        &all_samples,
-        channels,
-        bits_per_sample as usize,
-        sample_rate as usize,
-    );
+    let total_samples = (all_samples.len() / channels) as u64;
 
-    let config = flacenc::config::Encoder::default()
-        .into_verified()
-        .map_err(|(_enc, e)| anyhow::anyhow!("FLAC config verification failed: {:?}", e))?;
+    let mut encoder = flac_codec::encode::FlacSampleWriter::create(
+        dest,
+        flac_codec::encode::Options::default(),
+        sample_rate,
+        bits_per_sample,
+        channels as u8,
+        Some(total_samples),
+    ).map_err(|e| anyhow::anyhow!("FLAC encoder creation failed: {}", e))?;
 
-    let stream = flacenc::encode_with_fixed_block_size(&config, source, 4096)
-        .map_err(|e| anyhow::anyhow!("FLAC encoding failed: {:?}", e))?;
+    encoder.write(&all_samples)
+        .map_err(|e| anyhow::anyhow!("FLAC encoding failed: {}", e))?;
 
-    let mut sink = ByteSink::new();
-    stream
-        .write(&mut sink)
-        .map_err(|e| anyhow::anyhow!("FLAC stream write failed: {:?}", e))?;
-
-    std::fs::write(dest, sink.as_slice())
-        .with_context(|| format!("Failed to write FLAC output: {}", dest.display()))?;
+    encoder.finalize()
+        .map_err(|e| anyhow::anyhow!("FLAC finalization failed: {}", e))?;
 
     Ok(())
 }

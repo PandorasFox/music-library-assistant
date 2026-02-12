@@ -1,4 +1,4 @@
-# MLA - Claude Development Notes
+# Music Magic - Claude Development Notes
 
 Check the docs/ folder for the Architecture overview and UI guidelines/UX consistency notes.
 
@@ -6,17 +6,17 @@ The Rust type system is our friend. Always try to encode information via types w
 
 Do not spawn threads, ever. Only the Witch should spawn new threads for background work. That is *Her* purpose: She enforces orderliness in her domain, providing a consistent and clean way for doing background work, with controlled gates for their side effects. All data that flows properly through Her is guaranteed.
 
-Do not try to "refresh" signals. MLA is designed around precisely recomputing relevant signals in real-time. You keep adding unused (!) refresh hooks that then only get misused, because they're not things we need or want architecturally. They are expensive.
+Do not try to "refresh" signals. MM is designed around precisely recomputing relevant signals in real-time. You keep adding unused (!) refresh hooks that then only get misused, because they're not things we need or want architecturally. They are expensive.
 
 We use 0-byte Witness objects as guarantees for some compile-time guarantees about correctness and operational intents. Do not ever instantiate a Witness object - do a todo!() instead so that a panic happens and *I* can decide if a Witness is appropriately instantiable there, or not.
 
-fs::remove_file (and similar logic that can potentially unlink inodes or free up block device storage) shall not be introduced to MLA's codebase. Unlinking corpus files is solely operator privilege and is not to be conceptually introduced to MLA, ever. [obsolete and empty source code files themselves can be deleted]
+fs::remove_file (and similar logic that can potentially unlink inodes or free up block device storage) shall not be introduced to MM's codebase. Unlinking corpus files is solely operator privilege and is not to be conceptually introduced to MM, ever. [obsolete and empty source code files themselves can be deleted]
 
 This is still alpha~beta software; breaking changes are encouraged - stop focusing on backwards-compatibility and 'legacy' compatibility.
 
 ### Database Access Patterns
 
-MLA enforces strict separation between read-only UI queries and write mutations:
+MM enforces strict separation between read-only UI queries and write mutations:
 
 **Read-Only Access (UI Code):**
 - can use the Witch's exposed read-only DB connection, or the UiCache for expensive queries

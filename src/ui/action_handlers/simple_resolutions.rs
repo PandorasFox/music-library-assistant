@@ -218,13 +218,15 @@ impl App {
             }
             shit_format_modal::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
                 let Some(w) = witness else { return };
-                // Generate Opus transcode mutations for lossy files only
-                let mutations = match &self.view {
-                    ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossy_mutations(),
-                    _ => Vec::new(),
+                let (mutations, lossy_to_flac) = match &self.view {
+                    ActiveView::ShitFormatResolution(ref preview) => {
+                        (preview.cached_data.lossy_mutations(), preview.cached_data.lossy_to_flac)
+                    }
+                    _ => (Vec::new(), false),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Transcode to Opus", w);
+                    let label = if lossy_to_flac { "Capture lossy to FLAC" } else { "Transcode to Opus" };
+                    self.stage_mutations_with_transaction(mutations, label, w);
                     self.start_transaction_review();
                 } else {
                     self.status_message = Some("No lossy files to transcode".to_string());
@@ -232,13 +234,15 @@ impl App {
             }
             shit_format_modal::ShitFormatPreviewAction::ConfirmConvertAll => {
                 let Some(w) = witness else { return };
-                // Generate mutations for all files (lossless -> FLAC, lossy -> Opus)
-                let mutations = match &self.view {
-                    ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.all_mutations(),
-                    _ => Vec::new(),
+                let (mutations, lossy_to_flac) = match &self.view {
+                    ActiveView::ShitFormatResolution(ref preview) => {
+                        (preview.cached_data.all_mutations(), preview.cached_data.lossy_to_flac)
+                    }
+                    _ => (Vec::new(), false),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Convert all formats", w);
+                    let label = if lossy_to_flac { "Remux and capture all to FLAC" } else { "Convert all formats" };
+                    self.stage_mutations_with_transaction(mutations, label, w);
                     self.start_transaction_review();
                 } else {
                     self.status_message = Some("No files to convert".to_string());

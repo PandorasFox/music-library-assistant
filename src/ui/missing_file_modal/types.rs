@@ -22,6 +22,8 @@ pub struct RestorableMissingFile {
     pub corpus_path: String,
     /// Library path where the same inode exists (restore source)
     pub library_path: String,
+    /// Inode for the file (needed if operator chooses drop instead of restore)
+    pub inode: i64,
 }
 
 /// A missing corpus file that cannot be restored.
@@ -91,6 +93,7 @@ impl MissingFileModalData {
                     restorable.push(RestorableMissingFile {
                         corpus_path,
                         library_path: library_path.clone(),
+                        inode,
                     });
                 } else {
                     non_restorable.push(NonRestorableMissingFile {
@@ -153,16 +156,26 @@ impl MissingFileModalData {
             .collect()
     }
 
-    /// Generate DropFromIndex mutations for non-restorable files.
-    pub fn drop_mutations(&self) -> Vec<crate::meta::mutations::Mutation> {
-        self.non_restorable
-            .iter()
-            .map(|f| crate::meta::mutations::Mutation::DropFromIndex(DropFromIndexMutation {
+    /// Generate DropFromIndex mutations for ALL missing files (restorable + non-restorable).
+    ///
+    /// Used when the operator prefers to drop everything (e.g. damaged files being
+    /// re-generated) rather than restoring from library.
+    pub fn drop_all_missing(&self) -> Vec<crate::meta::mutations::Mutation> {
+        let from_restorable = self.restorable.iter().map(|f| {
+            crate::meta::mutations::Mutation::DropFromIndex(DropFromIndexMutation {
+                path: PathBuf::from(&f.corpus_path),
+                inode: Some(f.inode),
+                source: Some("corpus".to_string()),
+            })
+        });
+        let from_non_restorable = self.non_restorable.iter().map(|f| {
+            crate::meta::mutations::Mutation::DropFromIndex(DropFromIndexMutation {
                 path: PathBuf::from(&f.corpus_path),
                 inode: f.inode,
                 source: Some("corpus".to_string()),
-            }))
-            .collect()
+            })
+        });
+        from_restorable.chain(from_non_restorable).collect()
     }
 }
 
@@ -177,17 +190,9 @@ pub enum SelectedButton {
 
 impl SelectedButton {
     /// Move selection left.
-    pub fn left(&mut self, has_restorable: bool, has_non_restorable: bool) {
+    pub fn left(&mut self, has_restorable: bool) {
         *self = match *self {
-            Self::Cancel => {
-                if has_non_restorable {
-                    Self::DropLost
-                } else if has_restorable {
-                    Self::RestoreAll
-                } else {
-                    Self::Cancel
-                }
-            }
+            Self::Cancel => Self::DropLost,
             Self::DropLost => {
                 if has_restorable {
                     Self::RestoreAll
@@ -200,24 +205,15 @@ impl SelectedButton {
     }
 
     /// Move selection right.
-    pub fn right(&mut self, has_restorable: bool, has_non_restorable: bool) {
+    pub fn right(&mut self, has_restorable: bool) {
         *self = match *self {
-            Self::RestoreAll => {
-                if has_non_restorable {
-                    Self::DropLost
-                } else {
-                    Self::Cancel
-                }
-            }
+            Self::RestoreAll => Self::DropLost,
             Self::DropLost => Self::Cancel,
             Self::Cancel => Self::Cancel,
         };
         // Ensure we don't land on disabled buttons
         if *self == Self::RestoreAll && !has_restorable {
-            self.right(has_restorable, has_non_restorable);
-        }
-        if *self == Self::DropLost && !has_non_restorable {
-            self.right(has_restorable, has_non_restorable);
+            self.right(has_restorable);
         }
     }
 }

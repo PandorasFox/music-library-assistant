@@ -116,11 +116,11 @@ impl MissingFilePreviewState {
 
             // Button navigation
             KeyCode::Left => {
-                self.selected_button.left(has_restorable, has_non_restorable);
+                self.selected_button.left(has_restorable);
                 MissingFilePreviewAction::None
             }
             KeyCode::Right => {
-                self.selected_button.right(has_restorable, has_non_restorable);
+                self.selected_button.right(has_restorable);
                 MissingFilePreviewAction::None
             }
 
@@ -129,9 +129,7 @@ impl MissingFilePreviewState {
                 SelectedButton::RestoreAll if has_restorable => {
                     MissingFilePreviewAction::ConfirmRestore
                 }
-                SelectedButton::DropLost if has_non_restorable => {
-                    MissingFilePreviewAction::ConfirmDrop
-                }
+                SelectedButton::DropLost => MissingFilePreviewAction::ConfirmDrop,
                 SelectedButton::Cancel => MissingFilePreviewAction::Cancel,
                 _ => MissingFilePreviewAction::None,
             },
@@ -279,7 +277,6 @@ impl MissingFilePreviewState {
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {
         let has_restorable = self.cached_data.has_restorable();
-        let has_non_restorable = self.cached_data.has_non_restorable();
 
         // Build button line
         let mut buttons = Vec::new();
@@ -295,15 +292,13 @@ impl MissingFilePreviewState {
         buttons.push(Span::styled(" Restore All ", restore_style));
         buttons.push(Span::raw("  "));
 
-        // Drop Lost button
-        let drop_style = if !has_non_restorable {
-            Style::default().fg(Color::DarkGray)
-        } else if self.selected_button == SelectedButton::DropLost {
+        // Drop Missing button (always available - operator may prefer drop over restore)
+        let drop_style = if self.selected_button == SelectedButton::DropLost {
             Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Red)
         };
-        buttons.push(Span::styled(" Drop Lost ", drop_style));
+        buttons.push(Span::styled(" Drop Missing ", drop_style));
         buttons.push(Span::raw("  "));
 
         // Cancel button

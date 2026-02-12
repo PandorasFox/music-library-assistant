@@ -54,13 +54,13 @@ impl App {
             }
             missing_file_modal::MissingFilePreviewAction::ConfirmDrop => {
                 let Some(w) = witness else { return };
-                // Generate drop mutations (DropFromIndex) and stage for review
+                // Generate drop mutations for ALL missing files (restorable + non-restorable)
                 let mutations = match &self.view {
-                    ActiveView::MissingFileResolution(ref preview) => preview.cached_data.drop_mutations(),
+                    ActiveView::MissingFileResolution(ref preview) => preview.cached_data.drop_all_missing(),
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Drop non-restorable files", w);
+                    self.stage_mutations_with_transaction(mutations, "Drop missing files", w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.start_transaction_review();
                 } else {

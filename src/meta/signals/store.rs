@@ -1039,6 +1039,53 @@ impl AggregateSignalStore for CrossSourceOverlapSignal {
     }
 }
 
+impl AggregateSignalStore for RedundantDuplicateSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_redundant_duplicate (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_redundant_duplicate";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_redundant_duplicate (key, data) VALUES (?1, ?2)",
+            rusqlite::params![self.key, data],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_redundant_duplicate WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_redundant_duplicate WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl RedundantDuplicateSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM signal_redundant_duplicate ORDER BY key"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            let data: RedundantDuplicateData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Self { key: row.get(0)?, data })
+        })?;
+        rows.collect()
+    }
+}
+
 impl CrossSourceOverlapSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
@@ -1089,6 +1136,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(TagCanonicitySignal::TABLE_SQL)?;
     conn.execute_batch(InconsistentAlbumArtistSignal::TABLE_SQL)?;
     conn.execute_batch(CrossSourceOverlapSignal::TABLE_SQL)?;
+    conn.execute_batch(RedundantDuplicateSignal::TABLE_SQL)?;
 
     Ok(())
 }

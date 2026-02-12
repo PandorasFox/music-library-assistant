@@ -561,6 +561,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_subpar_duplicate_files()
     }
 
+    /// Get redundant duplicate groups with metadata.
+    pub fn get_redundant_duplicate_groups(&self) -> Result<Vec<crate::corpus::db::types::RedundantDuplicateGroup>> {
+        self.db.get_redundant_duplicate_groups()
+    }
+
     // =========================================================================
     // Library File Queries
     // =========================================================================

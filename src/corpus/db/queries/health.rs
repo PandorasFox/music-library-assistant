@@ -49,6 +49,7 @@ impl Database {
         total += TagCanonicitySignal::count(&self.conn).unwrap_or(0);
         total += InconsistentAlbumArtistSignal::count(&self.conn).unwrap_or(0);
         total += CrossSourceOverlapSignal::count(&self.conn).unwrap_or(0);
+        total += RedundantDuplicateSignal::count(&self.conn).unwrap_or(0);
         total += CanonicalTagSignal::count(&self.conn).unwrap_or(0);
         total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0);
         total += LibraryStaleSignal::count(&self.conn).unwrap_or(0);
@@ -294,8 +295,10 @@ impl Database {
         let directory_overlap_cluster_count = self.count_signal_type("cross_source_overlap")?;
 
         // Subpar duplicates (lower quality versions identified by fingerprint analysis)
-        // Note: stored as "subpar_duplicate" in database for backwards compatibility
         let subpar_duplicate_count = self.count_signal_type("subpar_duplicate")?;
+
+        // Redundant duplicates (equal quality, requires operator choice)
+        let redundant_duplicate_count = self.count_signal_type("redundant_duplicate")?;
 
         // Count inconsistent_album_artist signals
         let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
@@ -338,6 +341,7 @@ impl Database {
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
             subpar_duplicate_count,
+            redundant_duplicate_count,
             tag_canonicity,
             inconsistent_album_artist_count,
             compound_tags,
@@ -467,6 +471,7 @@ impl Database {
             "tag_canonicity" => TagCanonicitySignal::count(&self.conn)?,
             "inconsistent_album_artist" => InconsistentAlbumArtistSignal::count(&self.conn)?,
             "cross_source_overlap" => CrossSourceOverlapSignal::count(&self.conn)?,
+            "redundant_duplicate" => RedundantDuplicateSignal::count(&self.conn)?,
             "canonical_tag" => CanonicalTagSignal::count(&self.conn)?,
             "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,
             "library_stale" => LibraryStaleSignal::count(&self.conn)?,
@@ -831,6 +836,45 @@ impl Database {
                 })
             })?
             .collect::<rusqlite::Result<Vec<SubparDuplicateEntry>>>()?;
+
+        Ok(results)
+    }
+
+    // ========================================================================
+    // Redundant Duplicate Resolution Queries
+    // ========================================================================
+
+    /// Get all redundant duplicate groups with metadata.
+    ///
+    /// Returns groups of files with identical fingerprints and identical quality scores.
+    /// Used by future resolution UI.
+    pub fn get_redundant_duplicate_groups(&self) -> Result<Vec<crate::corpus::db::types::RedundantDuplicateGroup>> {
+        use crate::corpus::db::types::RedundantDuplicateGroup;
+        use crate::meta::signals::data::RedundantDuplicateData;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT key, data FROM signal_redundant_duplicate ORDER BY key"
+        )?;
+
+        let results = stmt
+            .query_map(params![], |row| {
+                let key: String = row.get(0)?;
+                let blob: Vec<u8> = row.get(1)?;
+                let data: RedundantDuplicateData = bincode::deserialize(&blob)
+                    .unwrap_or_else(|_| RedundantDuplicateData {
+                        quality_score: 0,
+                        file_type: String::new(),
+                        inodes: Vec::new(),
+                        paths: Vec::new(),
+                    });
+                Ok(RedundantDuplicateGroup {
+                    fingerprint_key: key,
+                    quality_score: data.quality_score as i64,
+                    file_type: data.file_type,
+                    paths: data.paths,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<RedundantDuplicateGroup>>>()?;
 
         Ok(results)
     }

@@ -32,7 +32,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | HealthyFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In corpus, indexed, mtime matches, no OOB signals |
 | CorruptFile | VerifyTags, VerifyAudio, IndexFileFromPath, Transcode | VerifyAudio (if valid), MoveToStash, DropFromIndex | Tag read or audio decode failed |
 | ShitFormat | IndexFileFromPath, DetectShitFormats | Transcode (to Opus/FLAC), DetectShitFormats | Non-Vorbis container (MP3, M4A, WAV, etc.) |
-| SubparDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps, MoveToStash | Track is subpar quality duplicate |
+| SubparDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps, MoveToStash | Track is strictly lower quality than another duplicate (never emitted for equal-quality ties) |
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
@@ -86,6 +86,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | CompoundTag | DetectCompoundTagsForInode | DetectCompoundTagValues (clears all before spawning) | Per-file signal for tags with separators or featuring patterns. Metadata: `{ inode, compounds: [{ tag_name, compound_value, split_parts, separator }] }` |
 | CanonicalTag | EmitCanonicalTag | - | Operator-confirmed canonical tag value (whitelist). Key: `{tag_name}:{tag_value}`. Prevents compound detection from flagging this value |
 | InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist |
+| RedundantDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps | Group of files with identical fingerprints AND identical quality scores. Requires operator choice — neither file is subpar. Key: fingerprint text |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
 
 ---

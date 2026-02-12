@@ -160,6 +160,8 @@ pub struct TagSquashBucket {
     pub directory_overlap_cluster_count: usize,
     /// Subpar duplicates (lower quality versions, easy stash candidates)
     pub subpar_duplicate_count: usize,
+    /// Redundant duplicates (equal quality, requires operator choice)
+    pub redundant_duplicate_count: usize,
     /// Tag canonicity issues grouped by tag name (e.g., "artist": 50 clusters)
     pub tag_canonicity: Vec<TagSquashEntry>,
     /// Inconsistent album_artist issues count
@@ -296,6 +298,20 @@ pub struct SubparDuplicateEntry {
     pub _quality_score: i64,
     /// Quality score of the superior file
     pub _superior_quality_score: i64,
+}
+
+// ============================================================================
+// Redundant Duplicate Resolution Types
+// ============================================================================
+
+/// A group of files with identical fingerprints and identical quality scores.
+/// Requires operator choice — neither file is subpar.
+#[derive(Debug, Clone)]
+pub struct RedundantDuplicateGroup {
+    pub fingerprint_key: String,
+    pub quality_score: i64,
+    pub file_type: String,
+    pub paths: Vec<String>,
 }
 
 // ============================================================================

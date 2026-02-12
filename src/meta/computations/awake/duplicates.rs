@@ -19,6 +19,7 @@ use crate::corpus::db::types::FileSource;
 use crate::meta::signals::data::{
     TypedSignalWrite, FingerprintOverlapSignal, MetadataDuplicateSignal, MetadataDuplicateData,
     DuplicateInodeSignal, SubparDuplicateSignal, SubparDuplicateData,
+    RedundantDuplicateSignal, RedundantDuplicateData,
     CrossSourceOverlapSignal, CrossSourceOverlapData, CrossSourceTrackPair,
 };
 use crate::corpus::db::ReadOnlyDb;
@@ -556,8 +557,9 @@ pub fn execute_analyze_fingerprint_overlaps(
     let similarity_threshold = config.opinions.duplicate_analysis.fingerprint_similarity_threshold;
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
 
-    // Clear all existing SubparDuplicate signals
+    // Clear all existing SubparDuplicate and RedundantDuplicate signals
     sender.clear_all_of_corpus_type::<SubparDuplicateSignal>(witness);
+    sender.clear_all_of_aggregate_type::<RedundantDuplicateSignal>(witness);
 
     // Get all FingerprintOverlap signals
     let fp_dup_signals = read_only_db
@@ -571,6 +573,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 
     let mut total_groups = 0;
     let mut subpar_count = 0;
+    let mut redundant_count = 0;
     let mut variant_skipped = 0;
 
     for signal in &fp_dup_signals {
@@ -667,7 +670,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                 }
             }
 
-            // For each true duplicate group, rank by quality and emit SubparDuplicate signals
+            // For each true duplicate group, rank by quality and emit signals
             for group in true_duplicate_groups {
                 // Compute quality scores
                 let mut scored: Vec<(usize, u32)> = group
@@ -686,44 +689,95 @@ pub fn execute_analyze_fingerprint_overlaps(
                 // Sort by score descending (best first)
                 scored.sort_by(|a, b| b.1.cmp(&a.1));
 
-                // Best audio file is the first one
-                let (best_idx, best_score) = scored[0];
-                let best_audio_file = &cluster[best_idx];
-                let best_identity = &identities[best_idx];
+                let best_score = scored[0].1;
+                let best_count = scored.iter().filter(|&&(_, s)| s == best_score).count();
 
-                // Emit SubparDuplicate for all others
-                for &(idx, score) in scored.iter().skip(1) {
-                    let audio_file = &cluster[idx];
+                if best_count > 1 {
+                    // Multiple files tied at best quality — emit RedundantDuplicate
+                    let tied: Vec<&(usize, u32)> = scored.iter().filter(|&&(_, s)| s == best_score).collect();
+                    let tied_inodes: Vec<i64> = tied.iter().map(|&&(idx, _)| cluster[idx].inode()).collect();
+                    let tied_paths: Vec<String> = tied.iter().map(|&&(idx, _)| cluster[idx].path().to_string()).collect();
+                    let file_type = cluster[tied[0].0].audio.file_type.clone();
 
-                    // Determine reason: format difference or bitrate/quality difference
-                    let reason = if classify_format(&audio_file.audio.file_type) < classify_format(&best_audio_file.audio.file_type) {
-                        SubparReason::SubparFormat
-                    } else {
-                        SubparReason::SubparBitrate
-                    };
-
-                    sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
-                        inode: audio_file.inode(),
-                        path: audio_file.path().to_string(),
-                        data: SubparDuplicateData {
-                            reason: reason.as_str().to_string(),
-                            superior_inode: best_identity.inode,
-                            superior_path: best_identity.path.clone(),
-                            dupe_group_fingerprint: signal.key.clone(),
-                            quality_score: score as i32,
-                            superior_quality_score: best_score as i32,
+                    sender.write_typed_signal(TypedSignalWrite::RedundantDuplicate(RedundantDuplicateSignal {
+                        key: signal.key.clone(),
+                        data: RedundantDuplicateData {
+                            quality_score: best_score as i32,
+                            file_type,
+                            inodes: tied_inodes,
+                            paths: tied_paths,
                         },
                     }), witness);
+                    redundant_count += 1;
 
-                    subpar_count += 1;
+                    // Emit SubparDuplicate for files strictly below best score
+                    // Use first tied file as nominal superior
+                    let (nominal_best_idx, _) = *tied[0];
+                    let nominal_best_identity = &identities[nominal_best_idx];
+
+                    for &(idx, score) in scored.iter().filter(|&&(_, s)| s < best_score) {
+                        let audio_file = &cluster[idx];
+                        let best_audio_file = &cluster[nominal_best_idx];
+
+                        let reason = if classify_format(&audio_file.audio.file_type) < classify_format(&best_audio_file.audio.file_type) {
+                            SubparReason::SubparFormat
+                        } else {
+                            SubparReason::SubparBitrate
+                        };
+
+                        sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
+                            inode: audio_file.inode(),
+                            path: audio_file.path().to_string(),
+                            data: SubparDuplicateData {
+                                reason: reason.as_str().to_string(),
+                                superior_inode: nominal_best_identity.inode,
+                                superior_path: nominal_best_identity.path.clone(),
+                                dupe_group_fingerprint: signal.key.clone(),
+                                quality_score: score as i32,
+                                superior_quality_score: best_score as i32,
+                            },
+                        }), witness);
+
+                        subpar_count += 1;
+                    }
+                } else {
+                    // Single best — current behavior unchanged
+                    let (best_idx, _) = scored[0];
+                    let best_audio_file = &cluster[best_idx];
+                    let best_identity = &identities[best_idx];
+
+                    for &(idx, score) in scored.iter().skip(1) {
+                        let audio_file = &cluster[idx];
+
+                        let reason = if classify_format(&audio_file.audio.file_type) < classify_format(&best_audio_file.audio.file_type) {
+                            SubparReason::SubparFormat
+                        } else {
+                            SubparReason::SubparBitrate
+                        };
+
+                        sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
+                            inode: audio_file.inode(),
+                            path: audio_file.path().to_string(),
+                            data: SubparDuplicateData {
+                                reason: reason.as_str().to_string(),
+                                superior_inode: best_identity.inode,
+                                superior_path: best_identity.path.clone(),
+                                dupe_group_fingerprint: signal.key.clone(),
+                                quality_score: score as i32,
+                                superior_quality_score: best_score as i32,
+                            },
+                        }), witness);
+
+                        subpar_count += 1;
+                    }
                 }
             }
         }
     }
 
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, emitted {} SubparDuplicate signals, skipped {} variants",
-        total_groups, subpar_count, variant_skipped
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, emitted {} SubparDuplicate + {} RedundantDuplicate signals, skipped {} variants",
+        total_groups, subpar_count, redundant_count, variant_skipped
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

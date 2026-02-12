@@ -371,6 +371,22 @@ pub struct CrossSourceOverlapData {
     pub track_pairs: Vec<CrossSourceTrackPair>,
 }
 
+/// Group of files with identical fingerprints AND identical quality scores.
+/// Neither file is subpar — requires operator choice.
+#[derive(Debug, Clone)]
+pub struct RedundantDuplicateSignal {
+    pub key: String, // fingerprint text (same key space as FingerprintOverlapSignal)
+    pub data: RedundantDuplicateData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedundantDuplicateData {
+    pub quality_score: i32,
+    pub file_type: String, // shared format (e.g. "flac")
+    pub inodes: Vec<i64>,
+    pub paths: Vec<String>, // parallel to inodes
+}
+
 /// A pair of tracks from different sources that share a fingerprint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossSourceTrackPair {
@@ -419,6 +435,7 @@ pub enum TypedSignalWrite {
     TagCanonicity(TagCanonicitySignal),
     InconsistentAlbumArtist(InconsistentAlbumArtistSignal),
     CrossSourceOverlap(CrossSourceOverlapSignal),
+    RedundantDuplicate(RedundantDuplicateSignal),
 }
 
 impl TypedSignalWrite {
@@ -452,6 +469,7 @@ impl TypedSignalWrite {
             Self::TagCanonicity(s) => s.insert(conn),
             Self::InconsistentAlbumArtist(s) => s.insert(conn),
             Self::CrossSourceOverlap(s) => s.insert(conn),
+            Self::RedundantDuplicate(s) => s.insert(conn),
         }
     }
 
@@ -485,6 +503,7 @@ impl TypedSignalWrite {
             Self::TagCanonicity(s) => TagCanonicitySignal::exists(conn, &s.key),
             Self::InconsistentAlbumArtist(s) => InconsistentAlbumArtistSignal::exists(conn, &s.key),
             Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
+            Self::RedundantDuplicate(s) => RedundantDuplicateSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }

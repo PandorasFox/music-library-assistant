@@ -113,7 +113,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagsForInode | — | CompoundTag (per-file) | — |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
-| AnalyzeFingerprintOverlaps | — | SubparDuplicate | SubparDuplicate (all, then recreate) |
+| AnalyzeFingerprintOverlaps | — | SubparDuplicate, RedundantDuplicate | SubparDuplicate (all, then recreate), RedundantDuplicate (all, then recreate). Equal-quality ties emit RedundantDuplicate (aggregate); strictly-lower quality emit SubparDuplicate (per-file). |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale. Masks stale-conflicts: if a stale file's expected path is already occupied by a different inode, no stale signal is emitted (the LibraryMove would always fail). |

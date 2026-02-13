@@ -236,6 +236,78 @@ impl MigrationRegistry {
             },
         });
 
+        // v7→v8: Uppercase all tag names to match TagSet's new UPPERCASE normalization
+        //
+        // TagSet now normalizes keys to UPPERCASE (matching VorbisComments convention
+        // on disk). All tag_name columns in the DB need to be uppercased to match.
+        // Signal tables that embed tag names in keys or bincode blobs are cleared
+        // and will be rebuilt by the next computation cycle.
+        registry.register(Migration {
+            from_version: 7,
+            to_version: 8,
+            description: "Uppercase all tag names to match TagSet UPPERCASE normalization",
+            apply: |db| {
+                let conn = db.conn();
+
+                // corpus_tags: PK is (inode, tag_name, tag_value).
+                // Insert uppercased versions (IGNORE if already exists), then delete old lowercase rows.
+                // Idempotent: WHERE clause only matches rows not already uppercase.
+                conn.execute(
+                    r#"INSERT OR IGNORE INTO corpus_tags (inode, tag_name, tag_value)
+                       SELECT inode, UPPER(tag_name), tag_value
+                       FROM corpus_tags WHERE tag_name != UPPER(tag_name)"#,
+                    [],
+                )?;
+                conn.execute(
+                    "DELETE FROM corpus_tags WHERE tag_name != UPPER(tag_name)",
+                    [],
+                )?;
+
+                // inbox_tags: same PK structure, same pattern.
+                conn.execute(
+                    r#"INSERT OR IGNORE INTO inbox_tags (inode, tag_name, tag_value)
+                       SELECT inode, UPPER(tag_name), tag_value
+                       FROM inbox_tags WHERE tag_name != UPPER(tag_name)"#,
+                    [],
+                )?;
+                conn.execute(
+                    "DELETE FROM inbox_tags WHERE tag_name != UPPER(tag_name)",
+                    [],
+                )?;
+
+                // tag_edit_history: no unique constraint on field_name, simple UPDATE.
+                conn.execute(
+                    "UPDATE tag_edit_history SET field_name = UPPER(field_name) WHERE field_name != UPPER(field_name)",
+                    [],
+                )?;
+
+                // Signal tables with embedded tag names: clear and let recomputation rebuild.
+                // signal_canonical_tag: key = "{tag_name}:{value}", tag_name column
+                // Created by mark_canonical_tag mutations — these are operator decisions
+                // that will need to be re-established. Updating in-place:
+                conn.execute(
+                    r#"UPDATE signal_canonical_tag
+                       SET tag_name = UPPER(tag_name),
+                           key = UPPER(tag_name) || ':' || canonical_value
+                       WHERE tag_name != UPPER(tag_name)"#,
+                    [],
+                )?;
+
+                // signal_tag_canonicity: cleared and rebuilt each computation cycle anyway.
+                conn.execute("DELETE FROM signal_tag_canonicity", [])?;
+
+                // signal_missing_tag: cleared and rebuilt each computation cycle anyway.
+                conn.execute("DELETE FROM signal_missing_tag", [])?;
+
+                // signal_compound_tag: data BLOBs contain tag_name in bincode.
+                // Clear and re-seed dirty inodes so compound tag detection rebuilds them.
+                conn.execute("DELETE FROM signal_compound_tag", [])?;
+                seed_dirty_inodes_for(db, "compound_tag")?;
+
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -328,9 +400,10 @@ mod tests {
         // v4→v5: drop old signals table
         // v5→v6: re-seed dirty inodes for compound tag detection
         // v6→v7: re-seed after split rule priority reorder
-        assert_eq!(registry.latest_version(), 7);
-        assert_eq!(registry.pending_migrations(1).len(), 6);
-        assert_eq!(registry.pending_migrations(6).len(), 1);
-        assert!(registry.pending_migrations(7).is_empty());
+        // v7→v8: uppercase all tag names
+        assert_eq!(registry.latest_version(), 8);
+        assert_eq!(registry.pending_migrations(1).len(), 7);
+        assert_eq!(registry.pending_migrations(7).len(), 1);
+        assert!(registry.pending_migrations(8).is_empty());
     }
 }

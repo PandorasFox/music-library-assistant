@@ -365,6 +365,11 @@ pub fn execute_detect_compound_tags_for_inode(
     };
     let tag_split_rules = &config.opinions.tag_splitting.tag_split_rules;
 
+    // Cache of known tag values per tag name — used by SeparatorIfKnown during
+    // rule matching and by the matching_parts pass afterward.
+    let mut tag_values_cache: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+
     let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
 
     for tag in &tags {
@@ -389,6 +394,33 @@ pub fn execute_detect_compound_tags_for_inode(
                                 separator: sep.clone(),
                                 matching_parts: Vec::new(),
                             })
+                        } else {
+                            None
+                        }
+                    }
+                    crate::config::SplitRule::SeparatorIfKnown(sep) => {
+                        if CompoundTagValue::is_compound(&tag.tag_value, sep) {
+                            let split_parts = CompoundTagValue::split_value(&tag.tag_value, sep);
+                            // Only match if at least one part is already known
+                            let existing = tag_values_cache.entry(tag_name_lower.clone()).or_insert_with(|| {
+                                read_only_db
+                                    .get_distinct_tag_values(&tag_name_lower)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|(value, _count)| value)
+                                    .collect()
+                            });
+                            if split_parts.iter().any(|part| existing.contains(part)) {
+                                Some(TypedCompoundEntry {
+                                    tag_name: tag.tag_name.clone(),
+                                    compound_value: tag.tag_value.clone(),
+                                    split_parts,
+                                    separator: sep.clone(),
+                                    matching_parts: Vec::new(),
+                                })
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -429,13 +461,10 @@ pub fn execute_detect_compound_tags_for_inode(
 
     // Populate matching_parts for each compound by checking which split parts
     // exist as standalone values in the corpus. This enables "safe split" detection.
-    let mut tag_values_cache: std::collections::HashMap<String, std::collections::HashSet<String>> =
-        std::collections::HashMap::new();
-
     for compound in &mut compounds {
         let tag_name = compound.tag_name.to_lowercase();
 
-        // Get or fetch existing values for this tag type
+        // Get or fetch existing values for this tag type (reuses cache from above)
         let existing_values = tag_values_cache.entry(tag_name.clone()).or_insert_with(|| {
             read_only_db
                 .get_distinct_tag_values(&tag_name)

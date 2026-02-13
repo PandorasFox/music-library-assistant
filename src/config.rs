@@ -168,6 +168,11 @@ impl Default for PerformanceOpinions {
 pub enum SplitRule {
     /// Split on a literal separator string.
     Separator(String),
+    /// Split on a literal separator, but only if at least one resulting part
+    /// is already a known standalone value in the corpus. Prevents false
+    /// positives from duo/group names (e.g., "Above & Beyond" won't split
+    /// unless "Above" or "Beyond" already exists as a standalone artist).
+    SeparatorIfKnown(String),
     /// Detect collaboration keywords (feat, ft, vs, etc.) with optional trailing dot.
     CollaborationKeywords(Vec<String>),
 }
@@ -197,7 +202,7 @@ impl Default for TagSplittingOpinions {
                     "vs".to_string(),
                 ]),
                 SplitRule::Separator(",".to_string()),
-                SplitRule::Separator(" & ".to_string()),
+                SplitRule::SeparatorIfKnown(" & ".to_string()),
             ],
         );
         tag_split_rules.insert(
@@ -719,7 +724,7 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
 ///         sep ";"
 ///         collab "feat" "featuring" "ft" "with" "vs"
 ///         sep ","
-///         sep " & "
+///         sep-if-known " & "
 ///     }
 ///     genre {
 ///         sep ";"
@@ -728,7 +733,7 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
 ///     }
 /// }
 /// ```
-/// Each child node is a tag name containing ordered `sep` and `collab` rules.
+/// Each child node is a tag name containing ordered `sep`, `sep-if-known`, and `collab` rules.
 fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplittingOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
@@ -742,6 +747,13 @@ fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplitting
                             if let Some(entry) = rule_node.entries().first() {
                                 if let Some(s) = entry.value().as_string() {
                                     rules.push(SplitRule::Separator(s.to_string()));
+                                }
+                            }
+                        }
+                        "sep-if-known" => {
+                            if let Some(entry) = rule_node.entries().first() {
+                                if let Some(s) = entry.value().as_string() {
+                                    rules.push(SplitRule::SeparatorIfKnown(s.to_string()));
                                 }
                             }
                         }

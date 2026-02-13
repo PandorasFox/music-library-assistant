@@ -57,8 +57,20 @@ impl TagCanonicalityStateV2 {
             return TagCanonicalityActionV2::ShowReview;
         }
 
+        // When the text input is focused, delegate to it first
+        let text_input_focused =
+            self.focus_pane == FocusPaneV2::Variants && self.variant_cursor == -1;
+
         match key.code {
-            // Pane switching with Left/Right
+            // Left/Right: text input cursor when editing, pane switch otherwise
+            KeyCode::Left if text_input_focused => {
+                self.canonical_input.handle_key(key);
+                TagCanonicalityActionV2::None
+            }
+            KeyCode::Right if text_input_focused => {
+                self.canonical_input.handle_key(key);
+                TagCanonicalityActionV2::None
+            }
             KeyCode::Left => {
                 self.focus_pane = FocusPaneV2::Variants;
                 TagCanonicalityActionV2::None

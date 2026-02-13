@@ -124,36 +124,39 @@ fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
         mut format, mut decoder, sample_rate, channels, bits_per_sample, ..
     } = crate::corpus::codecs::open_audio_source(source)?;
 
-    // Collect all decoded samples first (encoder needs total_samples for STREAMINFO)
-    let mut all_samples: Vec<i32> = Vec::new();
-    while let Ok(packet) = format.next_packet() {
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                let (samples, _frames) = convert_audio_buffer_to_i32(decoded, channels)?;
-                all_samples.extend_from_slice(&samples);
-            }
-            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
-            Err(e) => return Err(anyhow::anyhow!("Decode error: {}", e)),
-        }
-    }
-
-    if all_samples.is_empty() {
-        return Err(anyhow::anyhow!("No audio frames decoded from source"));
-    }
-
-    let total_samples = (all_samples.len() / channels) as u64;
-
+    // Stream decoded packets directly through the encoder instead of collecting
+    // all samples first. The encoder accepts total_samples: None and seeks back
+    // at finalize() to update STREAMINFO with the actual count.
+    //
+    // The old collect-then-write approach doubled memory (~340MB/thread for a
+    // typical file) and couldn't recover if disk writes stalled (the entire
+    // file's samples trapped in the encoder's internal VecDeque).
     let mut encoder = flac_codec::encode::FlacSampleWriter::create(
         dest,
         flac_codec::encode::Options::default(),
         sample_rate,
         bits_per_sample,
         channels as u8,
-        Some(total_samples),
+        None,
     ).map_err(|e| anyhow::anyhow!("FLAC encoder creation failed: {}", e))?;
 
-    encoder.write(&all_samples)
-        .map_err(|e| anyhow::anyhow!("FLAC encoding failed: {}", e))?;
+    let mut wrote_any = false;
+    while let Ok(packet) = format.next_packet() {
+        match decoder.decode(&packet) {
+            Ok(decoded) => {
+                let (samples, _frames) = convert_audio_buffer_to_i32(decoded, channels)?;
+                encoder.write(&samples)
+                    .map_err(|e| anyhow::anyhow!("FLAC encoding failed: {}", e))?;
+                wrote_any = true;
+            }
+            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
+            Err(e) => return Err(anyhow::anyhow!("Decode error: {}", e)),
+        }
+    }
+
+    if !wrote_any {
+        return Err(anyhow::anyhow!("No audio frames decoded from source"));
+    }
 
     encoder.finalize()
         .map_err(|e| anyhow::anyhow!("FLAC finalization failed: {}", e))?;
@@ -451,7 +454,46 @@ fn convert_audio_buffer_to_i32(
             }
             Ok((samples, frames))
         }
-        _ => Err(anyhow::anyhow!("Unsupported audio buffer format")),
+        AudioBufferRef::S24(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push(buf.chan(ch)[frame].inner());
+                }
+            }
+            Ok((samples, frames))
+        }
+        AudioBufferRef::U24(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push(buf.chan(ch)[frame].inner() as i32 - (1 << 23));
+                }
+            }
+            Ok((samples, frames))
+        }
+        AudioBufferRef::U32(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push((buf.chan(ch)[frame] as i64 - (1i64 << 31)) as i32);
+                }
+            }
+            Ok((samples, frames))
+        }
+        AudioBufferRef::S8(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push(buf.chan(ch)[frame] as i32);
+                }
+            }
+            Ok((samples, frames))
+        }
     }
 }
 
@@ -520,7 +562,46 @@ fn convert_audio_buffer_to_i16(decoded: AudioBufferRef, channels: usize) -> Resu
             }
             Ok(samples)
         }
-        _ => Err(anyhow::anyhow!("Unsupported audio buffer format")),
+        AudioBufferRef::S24(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push((buf.chan(ch)[frame].inner() >> 8) as i16);
+                }
+            }
+            Ok(samples)
+        }
+        AudioBufferRef::U24(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push(((buf.chan(ch)[frame].inner() as i32 - (1 << 23)) >> 8) as i16);
+                }
+            }
+            Ok(samples)
+        }
+        AudioBufferRef::U32(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push(((buf.chan(ch)[frame] as i64 - (1i64 << 31)) >> 16) as i16);
+                }
+            }
+            Ok(samples)
+        }
+        AudioBufferRef::S8(buf) => {
+            let frames = buf.frames();
+            let mut samples = Vec::with_capacity(frames * channels);
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    samples.push((buf.chan(ch)[frame] as i16) << 8);
+                }
+            }
+            Ok(samples)
+        }
     }
 }
 

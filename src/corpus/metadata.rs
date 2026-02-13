@@ -302,6 +302,34 @@ fn convert_audio_buffer_to_i16(decoded: AudioBufferRef) -> Result<Vec<i16>> {
             }
             Ok(samples)
         }
+        AudioBufferRef::S24(buf) => {
+            // Convert s24 to i16 (drop lower 8 bits)
+            let num_frames = buf.frames();
+            let num_channels = buf.spec().channels.count();
+            let mut samples = Vec::with_capacity(num_frames * num_channels);
+
+            for frame in 0..num_frames {
+                for ch in 0..num_channels {
+                    let sample = (buf.chan(ch)[frame].inner() >> 8) as i16;
+                    samples.push(sample);
+                }
+            }
+            Ok(samples)
+        }
+        AudioBufferRef::U24(buf) => {
+            // Convert u24 to i16
+            let num_frames = buf.frames();
+            let num_channels = buf.spec().channels.count();
+            let mut samples = Vec::with_capacity(num_frames * num_channels);
+
+            for frame in 0..num_frames {
+                for ch in 0..num_channels {
+                    let sample = ((buf.chan(ch)[frame].inner() as i32 - (1 << 23)) >> 8) as i16;
+                    samples.push(sample);
+                }
+            }
+            Ok(samples)
+        }
         AudioBufferRef::S32(buf) => {
             // Convert s32 to i16
             let num_frames = buf.frames();
@@ -331,9 +359,31 @@ fn convert_audio_buffer_to_i16(decoded: AudioBufferRef) -> Result<Vec<i16>> {
             }
             Ok(samples)
         }
-        _ => Err(anyhow::anyhow!(
-            "Unsupported audio buffer format for fingerprinting"
-        )),
+        AudioBufferRef::U32(buf) => {
+            let num_frames = buf.frames();
+            let num_channels = buf.spec().channels.count();
+            let mut samples = Vec::with_capacity(num_frames * num_channels);
+
+            for frame in 0..num_frames {
+                for ch in 0..num_channels {
+                    let sample = (buf.chan(ch)[frame] as i64 - (1i64 << 31)) as i32;
+                    samples.push((sample >> 16) as i16);
+                }
+            }
+            Ok(samples)
+        }
+        AudioBufferRef::S8(buf) => {
+            let num_frames = buf.frames();
+            let num_channels = buf.spec().channels.count();
+            let mut samples = Vec::with_capacity(num_frames * num_channels);
+
+            for frame in 0..num_frames {
+                for ch in 0..num_channels {
+                    samples.push((buf.chan(ch)[frame] as i16) << 8);
+                }
+            }
+            Ok(samples)
+        }
     }
 }
 

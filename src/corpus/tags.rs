@@ -42,25 +42,24 @@ use crate::witch::MutationExecutionWitness;
 /// Semantically a Set<(key, value)> - the same key can appear multiple times
 /// with different values (e.g., multiple genre tags).
 ///
-/// Keys are normalized to lowercase for comparison but original case is preserved
-/// for display and round-trip fidelity where possible.
+/// Keys are normalized to UPPERCASE, matching VorbisComments convention on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TagSet {
     /// Sorted, deduplicated (key, value) pairs.
-    /// Sorting is by (lowercase_key, value) for stable comparison.
+    /// Sorting is by (UPPERCASE_key, value) for stable comparison.
     tags: Vec<(String, String)>,
 }
 
 impl TagSet {
     /// Create from raw (key, value) pairs.
     ///
-    /// Normalizes keys to lowercase, deduplicates exact (key, value) pairs,
+    /// Normalizes keys to UPPERCASE, deduplicates exact (key, value) pairs,
     /// and sorts for stable comparison.
     pub fn new(raw: impl IntoIterator<Item = (String, String)>) -> Self {
         let mut tags: Vec<(String, String)> = raw
             .into_iter()
             .filter(|(_, v)| !v.is_empty()) // Skip empty values
-            .map(|(k, v)| (k.to_lowercase(), v))
+            .map(|(k, v)| (k.to_uppercase(), v))
             .collect();
 
         // Sort by (key, value) for stable comparison
@@ -193,16 +192,16 @@ impl TagSet {
     ///
     /// Key comparison is case-insensitive.
     pub fn contains(&self, key: &str, value: &str) -> bool {
-        let key_lower = key.to_lowercase();
-        self.tags.iter().any(|(k, v)| k == &key_lower && v == value)
+        let key_upper = key.to_uppercase();
+        self.tags.iter().any(|(k, v)| k == &key_upper && v == value)
     }
 
     /// Get all values for a key (case-insensitive).
     pub fn values_for(&self, key: &str) -> impl Iterator<Item = &str> {
-        let key_lower = key.to_lowercase();
+        let key_upper = key.to_uppercase();
         self.tags
             .iter()
-            .filter(move |(k, _)| k == &key_lower)
+            .filter(move |(k, _)| k == &key_upper)
             .map(|(_, v)| v.as_str())
     }
 
@@ -465,6 +464,10 @@ fn write_vorbis_tags_flac(path: &Path, tags: &TagSet) -> Result<()> {
     let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
         .with_context(|| format!("Failed to read FLAC: {}", path.display()))?;
 
+    // Strip any non-standard ID3v2 tag: lofty can only remove (not write) ID3v2 in FLAC,
+    // and save_to_path will error if a non-empty ID3v2 tag is present.
+    flac.remove_id3v2();
+
     let vc = match flac.vorbis_comments_mut() {
         Some(vc) => vc,
         None => {
@@ -678,7 +681,7 @@ mod tests {
             ("album".to_string(), "Bar".to_string()),
         ]);
         let keys: Vec<&str> = tags.iter().map(|(k, _)| k).collect();
-        assert_eq!(keys, vec!["album", "artist", "genre"]);
+        assert_eq!(keys, vec!["ALBUM", "ARTIST", "GENRE"]);
     }
 
     #[test]
@@ -1083,7 +1086,7 @@ mod tests {
 
     #[test]
     fn test_key_casing_normalized_on_read() {
-        // VorbisComments keys are case-insensitive; TagSet normalizes to lowercase
+        // VorbisComments keys are case-insensitive; TagSet normalizes to UPPERCASE
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.flac");
         generate_flac_fixture(&path);
@@ -1096,7 +1099,7 @@ mod tests {
         write_tags_to_file(&path, &tags).unwrap();
 
         let readback = TagSet::from_file(&path).unwrap();
-        // Keys should be lowercased
+        // Keys should be uppercased
         assert!(readback.contains("artist", "Foo"));
         assert!(readback.contains("album", "Bar"));
     }

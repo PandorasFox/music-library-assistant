@@ -277,9 +277,7 @@ impl Database {
 
         // OOB signals (highest priority)
         let oob_tag_sync = self.count_signal_type("oob_tag_sync")?;
-        // Include legacy "oob_tag" in conflict count for transition
-        let oob_tag_conflict = self.count_signal_type("oob_tag_conflict")?
-            + self.count_signal_type("oob_tag").unwrap_or(0);
+        let oob_tag_conflict = self.count_signal_type("oob_tag_conflict")?;
         let mtime_only_mismatch = self.count_signal_type("mtime_only_mismatch")?;
 
         // Standard corpus file signals
@@ -509,7 +507,7 @@ impl Database {
             "missing_directory" => MissingDirectorySignal::count(&self.conn)?,
             "moved_file" => MovedFileSignal::count(&self.conn)?,
             "oob_tag_sync" => OutOfBandTagSyncSignal::count(&self.conn)?,
-            "oob_tag_conflict" | "oob_tag" => OutOfBandTagConflictSignal::count(&self.conn)?,
+            "oob_tag_conflict" => OutOfBandTagConflictSignal::count(&self.conn)?,
             "mtime_only_mismatch" => MtimeOnlyMismatchSignal::count(&self.conn)?,
             "corrupt_file" => CorruptFileSignal::count(&self.conn)?,
             "shit_format" => ShitFormatSignal::count(&self.conn)?,

@@ -204,23 +204,23 @@ impl App {
     /// Process a single work item.
     fn process_work_item(&mut self, item: &WorkItem, worker: &mut ProgressiveWorkerState) {
         match item {
-            WorkItem::StageCompoundSplit { signal_key, idx } => {
-                self.process_compound_split_item(signal_key, *idx, worker);
+            WorkItem::StageCompoundSplit { group, idx } => {
+                self.process_compound_split_item(group, *idx, worker);
             }
         }
     }
 
-    /// Process a single compound split work item.
+    /// Process a single compound split work item (group-based).
     fn process_compound_split_item(
         &mut self,
-        signal_key: &str,
+        group: &crate::meta::signals::data::CompoundGroup,
         idx: usize,
         worker: &mut ProgressiveWorkerState,
     ) {
         let is_safe_mode = worker.is_safe_mode;
         let total = worker.total;
 
-        // Parse key as inode and query typed signal (scoped borrow)
+        // Load compound split data from the group (scoped borrow)
         let data = {
             let read_db = match self.witch.as_mut() {
                 Some(w) => w.read_db(),
@@ -230,23 +230,7 @@ impl App {
                 }
             };
 
-            let inode: i64 = match signal_key.parse() {
-                Ok(i) => i,
-                Err(_) => {
-                    worker.nops_elided += 1;
-                    return;
-                }
-            };
-
-            let typed_signal = match read_db.get_compound_tag_signal(inode) {
-                Ok(Some(s)) => s,
-                _ => {
-                    worker.nops_elided += 1;
-                    return;
-                }
-            };
-
-            match compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db) {
+            match compound_split_v2::CompoundSplitDataV2::from_compound_group(group, &read_db) {
                 Some(d) => d,
                 None => {
                     worker.nops_elided += 1;
@@ -278,7 +262,7 @@ impl App {
 
         // Stage via operator_decisions
         let description = format!(
-            "Split \"{}\" in {} → [{}]",
+            "Split \"{}\" in {} \u{2192} [{}]",
             data.compound.compound_value,
             data.compound.tag_name,
             data.compound.split_parts.join(", ")

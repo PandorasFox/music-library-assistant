@@ -95,16 +95,23 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Failed to query fingerprint overlap signals: {}", e))
     }
 
-    /// Get compound tag signal keys (inode strings) filtered by safety classification.
+    /// Get compound tag signal groups aggregated by (tag_name, compound_value).
     ///
-    /// If `safe_only` is true, returns only signals where ALL compounds have
-    /// all split parts existing in corpus (matching_parts.len() == split_parts.len()).
-    /// If false, returns only signals that need review (some/all parts are new).
-    /// If `tag_filter` is Some, only returns signals containing compounds for that tag name.
+    /// Instead of returning one key per inode, groups all inodes sharing the same
+    /// compound value so the operator decides once per unique value.
     ///
-    /// Signals where all compound values have been marked canonical are excluded.
-    pub fn get_compound_signal_keys_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<String>> {
-        use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
+    /// If `safe_only` is true, returns only groups where the compound entry is safe.
+    /// If false, returns only groups that need review.
+    /// If `tag_filter` is Some, only returns groups for that specific tag name.
+    ///
+    /// Groups where the compound value has been marked canonical are excluded.
+    pub fn get_compound_signal_groups_by_safety(
+        &self,
+        safe_only: bool,
+        tag_filter: Option<&str>,
+    ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
+        use std::collections::HashMap;
+        use crate::meta::signals::data::{CompoundTagEntry as TypedEntry, CompoundGroup};
 
         let mut stmt = self.conn.prepare(
             "SELECT inode, data FROM signal_compound_tag ORDER BY discovered_at DESC"
@@ -116,7 +123,11 @@ impl Database {
             Ok((inode, blob))
         })?;
 
-        let mut results = Vec::new();
+        // Group by (tag_name, compound_value) -> Vec<inode>
+        // Use a Vec to preserve insertion order (discovered_at DESC)
+        let mut group_order: Vec<(String, String)> = Vec::new();
+        let mut group_map: HashMap<(String, String), Vec<i64>> = HashMap::new();
+
         for row in rows {
             let (inode, blob) = row?;
 
@@ -129,28 +140,53 @@ impl Database {
                 continue;
             }
 
-            // Skip signals where all compounds are canonical (operator-confirmed)
-            let all_canonical = compounds.iter().all(|c| {
-                self.is_canonical_tag(&c.tag_name, &c.compound_value).unwrap_or(false)
-            });
-            if all_canonical {
-                continue;
-            }
-
-            let is_safe = compounds.iter().all(|c| c.is_safe());
-
-            if is_safe != safe_only {
-                continue;
-            }
-
-            if let Some(filter) = tag_filter {
-                if compounds[0].tag_name != filter {
+            for compound in &compounds {
+                // Skip canonical values
+                if self.is_canonical_tag(&compound.tag_name, &compound.compound_value).unwrap_or(false) {
                     continue;
                 }
-            }
 
-            results.push(inode.to_string());
+                // Filter by safety
+                if compound.is_safe() != safe_only {
+                    continue;
+                }
+
+                // Filter by tag name
+                if let Some(filter) = tag_filter {
+                    if compound.tag_name != filter {
+                        continue;
+                    }
+                }
+
+                let key = (compound.tag_name.clone(), compound.compound_value.clone());
+                let entry = group_map.entry(key.clone());
+                use std::collections::hash_map::Entry;
+                match entry {
+                    Entry::Vacant(v) => {
+                        v.insert(vec![inode]);
+                        group_order.push(key);
+                    }
+                    Entry::Occupied(mut o) => {
+                        let inodes = o.get_mut();
+                        if !inodes.contains(&inode) {
+                            inodes.push(inode);
+                        }
+                    }
+                }
+            }
         }
+
+        let results = group_order
+            .into_iter()
+            .filter_map(|key| {
+                let inodes = group_map.remove(&key)?;
+                Some(CompoundGroup {
+                    tag_name: key.0,
+                    compound_value: key.1,
+                    inodes,
+                })
+            })
+            .collect();
 
         Ok(results)
     }
@@ -358,13 +394,13 @@ impl Database {
         })
     }
 
-    /// Count compound tag signals by safety classification, grouped by tag name.
+    /// Count unique compound tag values by safety classification, grouped by tag name.
     ///
-    /// A compound signal is "safe" if ALL its compounds have all split parts
-    /// existing in the corpus (matching_parts.len() == split_parts.len()).
+    /// Counts unique (tag_name, compound_value) pairs rather than individual signals,
+    /// so the insights view shows how many distinct compound values need resolution.
     /// Returns entries grouped by tag name, sorted by total count descending.
     fn count_compound_signals_by_tag(&self) -> Result<Vec<crate::corpus::db::types::CompoundTagEntry>> {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         use crate::corpus::db::types::CompoundTagEntry;
         use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
 
@@ -372,8 +408,9 @@ impl Database {
             "SELECT data FROM signal_compound_tag"
         )?;
 
-        // Map: tag_name -> (safe_count, review_count)
-        let mut by_tag: HashMap<String, (usize, usize)> = HashMap::new();
+        // Track unique (tag_name, compound_value) per safety bucket
+        let mut safe_seen: HashSet<(String, String)> = HashSet::new();
+        let mut review_seen: HashSet<(String, String)> = HashSet::new();
 
         let rows = stmt.query_map(params![], |row| {
             let blob: Vec<u8> = row.get(0)?;
@@ -392,15 +429,22 @@ impl Database {
             };
 
             for compound in &compounds {
-                let is_safe = compound.is_safe();
-
-                let entry = by_tag.entry(compound.tag_name.clone()).or_insert((0, 0));
-                if is_safe {
-                    entry.0 += 1;
+                let key = (compound.tag_name.clone(), compound.compound_value.clone());
+                if compound.is_safe() {
+                    safe_seen.insert(key);
                 } else {
-                    entry.1 += 1;
+                    review_seen.insert(key);
                 }
             }
+        }
+
+        // Aggregate counts per tag_name
+        let mut by_tag: HashMap<String, (usize, usize)> = HashMap::new();
+        for (tag_name, _) in &safe_seen {
+            by_tag.entry(tag_name.clone()).or_insert((0, 0)).0 += 1;
+        }
+        for (tag_name, _) in &review_seen {
+            by_tag.entry(tag_name.clone()).or_insert((0, 0)).1 += 1;
         }
 
         let mut entries: Vec<CompoundTagEntry> = by_tag

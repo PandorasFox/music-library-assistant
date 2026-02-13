@@ -22,11 +22,11 @@ impl App {
             }
         };
 
-        // Load compound signal keys filtered by safety classification and tag
-        let signal_keys = read_db.get_compound_signal_keys_by_safety(safe_only, tag_filter)
+        // Load compound signal groups filtered by safety classification and tag
+        let groups = read_db.get_compound_signal_groups_by_safety(safe_only, tag_filter)
             .unwrap_or_default();
 
-        if signal_keys.is_empty() {
+        if groups.is_empty() {
             let msg = if safe_only {
                 "No safe compound splits available"
             } else {
@@ -36,8 +36,8 @@ impl App {
             return;
         }
 
-        // Store signal keys for cluster navigation
-        let clusters = compound_split_v2::CompoundSplitClustersV2::new(signal_keys);
+        // Store groups for cluster navigation
+        let clusters = compound_split_v2::CompoundSplitClustersV2::new(groups);
 
         // Start transaction ONCE for entire modal
         if let Some(ref mut witch) = self.witch {
@@ -45,16 +45,11 @@ impl App {
             let _ = witch.start_transaction(&format!("Compound tag split ({})", mode_str));
         }
 
-        // Load the first signal into modal data (need witch for file info)
-        let first_key = &clusters.all_signal_keys()[0];
+        // Load the first group into modal data
+        let first_group = clusters.all_groups()[0].clone();
         let data = {
             let read_db = self.witch.as_mut().unwrap().read_db();
-            first_key.parse::<i64>().ok()
-                .and_then(|inode| read_db.get_compound_tag_signal(inode).ok())
-                .flatten()
-                .and_then(|typed_signal| {
-                    compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db)
-                })
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, &read_db)
         };
 
         let data = match data {
@@ -271,15 +266,15 @@ impl App {
     /// Called when user presses Ctrl+A in the compound split modal.
     /// Uses the progressive worker to process items in timed chunks with progress bar.
     fn start_progressive_compound_split_staging(&mut self) {
-        // Extract clusters and safe_mode from current view, replacing with a temporary
-        let (signal_keys, is_safe_mode, clusters, safe_mode) = match &self.view {
+        // Extract clusters and safe_mode from current view
+        let (groups, is_safe_mode, clusters, safe_mode) = match &self.view {
             ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
-                let keys = clusters.all_signal_keys().to_vec();
-                if keys.is_empty() {
+                let groups = clusters.all_groups().to_vec();
+                if groups.is_empty() {
                     self.status_message = Some("No compound splits to stage".to_string());
                     return;
                 }
-                (keys, *safe_mode, clusters.clone(), *safe_mode)
+                (groups, *safe_mode, clusters.clone(), *safe_mode)
             }
             _ => {
                 self.status_message = Some("No compound splits to stage".to_string());
@@ -289,7 +284,7 @@ impl App {
 
         // Start progressive worker with return context to restore compound split view
         let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
-            signal_keys,
+            groups,
             is_safe_mode,
         );
         let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
@@ -299,27 +294,18 @@ impl App {
         self.view = ActiveView::ProgressiveWork { worker, return_context };
     }
 
-    /// Load the compound split signal at the current cluster index into modal state.
+    /// Load the compound split group at the current cluster index into modal state.
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_compound_split_signal(&mut self) -> bool {
         // Extract cluster info from current view
-        let (signal_key, group_index, total, safe_mode) = match &self.view {
+        let (group, group_index, total, safe_mode) = match &self.view {
             ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
-                match clusters.current_signal_key() {
-                    Some(key) => (key.to_string(), clusters.current_index(), clusters.total(), *safe_mode),
+                match clusters.current_group() {
+                    Some(g) => (g.clone(), clusters.current_index(), clusters.total(), *safe_mode),
                     None => return false,
                 }
             }
             _ => return false,
-        };
-
-        // Parse key as inode and query typed signal
-        let inode: i64 = match signal_key.parse() {
-            Ok(i) => i,
-            Err(_) => {
-                self.status_message = Some("Invalid signal key (not an inode)".to_string());
-                return false;
-            }
         };
 
         let data = {
@@ -328,19 +314,7 @@ impl App {
                 None => return false,
             };
 
-            let typed_signal = match read_db.get_compound_tag_signal(inode) {
-                Ok(Some(s)) => s,
-                Ok(None) => {
-                    self.status_message = Some("Signal not found".to_string());
-                    return false;
-                }
-                Err(_) => {
-                    self.status_message = Some("Signal not found".to_string());
-                    return false;
-                }
-            };
-
-            compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &read_db)
         };
 
         let Some(data) = data else {
@@ -370,30 +344,21 @@ impl App {
         true
     }
 
-    /// Load compound split signal using provided clusters (for restoring from SuspendedView).
+    /// Load compound split group using provided clusters (for restoring from SuspendedView).
     ///
     /// Sets the view to CompoundTagSplit with the provided clusters,
-    /// loading the current signal's state from the database.
+    /// loading the current group's state from the database.
     pub(in crate::ui) fn load_current_compound_split_signal_with_clusters(
         &mut self,
         clusters: compound_split_v2::CompoundSplitClustersV2,
         safe_mode: bool,
     ) -> bool {
-        let signal_key = match clusters.current_signal_key() {
-            Some(key) => key.to_string(),
+        let group = match clusters.current_group() {
+            Some(g) => g.clone(),
             None => return false,
         };
 
         let (group_index, total) = (clusters.current_index(), clusters.total());
-
-        // Parse key as inode and query typed signal
-        let inode: i64 = match signal_key.parse() {
-            Ok(i) => i,
-            Err(_) => {
-                self.status_message = Some("Invalid signal key (not an inode)".to_string());
-                return false;
-            }
-        };
 
         let data = {
             let read_db = match self.witch.as_mut() {
@@ -401,19 +366,7 @@ impl App {
                 None => return false,
             };
 
-            let typed_signal = match read_db.get_compound_tag_signal(inode) {
-                Ok(Some(s)) => s,
-                Ok(None) => {
-                    self.status_message = Some("Signal not found".to_string());
-                    return false;
-                }
-                Err(_) => {
-                    self.status_message = Some("Signal not found".to_string());
-                    return false;
-                }
-            };
-
-            compound_split_v2::CompoundSplitDataV2::from_compound_tag_signal(&typed_signal, &read_db)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &read_db)
         };
 
         let Some(data) = data else {

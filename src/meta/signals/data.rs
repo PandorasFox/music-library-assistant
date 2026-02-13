@@ -171,6 +171,15 @@ pub struct CompoundTagEntry {
     pub matching_parts: Vec<String>,
 }
 
+/// A group of inodes sharing the same compound tag value.
+/// Used to aggregate compound split resolution by value rather than per-file.
+#[derive(Debug, Clone)]
+pub struct CompoundGroup {
+    pub tag_name: String,
+    pub compound_value: String,
+    pub inodes: Vec<i64>,
+}
+
 impl CompoundTagEntry {
     /// Whether this compound split is "safe" (can be auto-applied without review).
     ///

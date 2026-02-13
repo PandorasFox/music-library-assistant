@@ -4,16 +4,18 @@
 
 use std::collections::VecDeque;
 
+use crate::meta::signals::data::CompoundGroup;
+
 /// Unit of work to be processed incrementally.
 ///
 /// Each variant represents a specific type of bulk operation that can be
 /// processed in time-sliced chunks on the UI thread.
 #[derive(Debug, Clone)]
 pub enum WorkItem {
-    /// Stage mutations for a compound split signal.
+    /// Stage mutations for a compound split group (aggregated by value).
     StageCompoundSplit {
-        /// The signal key to process
-        signal_key: String,
+        /// The group of inodes sharing a compound value
+        group: CompoundGroup,
         /// Index in the overall work queue (for decision numbering)
         idx: usize,
     },
@@ -74,11 +76,11 @@ impl ProgressiveWorkerState {
     }
 
     /// Create a new progressive worker for compound splits.
-    pub fn for_compound_splits(signal_keys: Vec<String>, is_safe_mode: bool) -> Self {
-        let items: Vec<WorkItem> = signal_keys
+    pub fn for_compound_splits(groups: Vec<CompoundGroup>, is_safe_mode: bool) -> Self {
+        let items: Vec<WorkItem> = groups
             .into_iter()
             .enumerate()
-            .map(|(idx, signal_key)| WorkItem::StageCompoundSplit { signal_key, idx })
+            .map(|(idx, group)| WorkItem::StageCompoundSplit { group, idx })
             .collect();
 
         let mut state = Self::new(

@@ -488,9 +488,13 @@ impl<'a> ReadOnlyDb<'a> {
         signal.exists(self.db.conn())
     }
 
-    /// Get compound tag signal keys filtered by safety classification and optional tag name.
-    pub fn get_compound_signal_keys_by_safety(&self, safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<String>> {
-        self.db.get_compound_signal_keys_by_safety(safe_only, tag_filter)
+    /// Get compound tag signal groups aggregated by (tag_name, compound_value).
+    pub fn get_compound_signal_groups_by_safety(
+        &self,
+        safe_only: bool,
+        tag_filter: Option<&str>,
+    ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
+        self.db.get_compound_signal_groups_by_safety(safe_only, tag_filter)
     }
 
     // =========================================================================

@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::meta::signals::data::CompoundTagSignal;
+use crate::meta::signals::data::CompoundGroup;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
@@ -68,21 +68,20 @@ pub struct CompoundSplitDataV2 {
 }
 
 impl CompoundSplitDataV2 {
-    /// Construct from a typed `CompoundTagSignal`.
+    /// Construct from a `CompoundGroup` (aggregated by compound value).
     ///
-    /// Reads compound data directly from struct fields (no JSON parsing).
-    /// Takes the first non-canonical compound entry (we process one at a time per signal).
-    /// Loads file info for the inode from disk tags.
-    pub fn from_compound_tag_signal(signal: &CompoundTagSignal, read_db: &ReadOnlyDb) -> Option<Self> {
-        if signal.compounds.is_empty() {
+    /// Loads the compound entry from the first inode's signal data, then
+    /// loads file info for ALL inodes in the group. This lets the operator
+    /// decide once per unique compound value, seeing all affected files.
+    pub fn from_compound_group(group: &CompoundGroup, read_db: &ReadOnlyDb) -> Option<Self> {
+        if group.inodes.is_empty() {
             return None;
         }
 
-        let inode = signal.inode;
-
-        // Take the first non-canonical compound (skip operator-confirmed values)
-        let c = signal.compounds.iter()
-            .find(|c| !read_db.is_canonical_tag(&c.tag_name, &c.compound_value).unwrap_or(false))?;
+        // Load compound entry from the first inode's signal
+        let first_signal = read_db.get_compound_tag_signal(group.inodes[0]).ok()??;
+        let c = first_signal.compounds.iter()
+            .find(|c| c.tag_name == group.tag_name && c.compound_value == group.compound_value)?;
         let compound = CompoundEntry {
             tag_name: c.tag_name.clone(),
             compound_value: c.compound_value.clone(),
@@ -90,34 +89,36 @@ impl CompoundSplitDataV2 {
             matching_parts: c.matching_parts.clone(),
         };
 
-        // Load file info
+        // Load file info for all inodes in the group
         let resolver = paths::get_resolver();
         let mut files = Vec::new();
 
-        if let Ok(Some(audio_file)) =
-            read_db.get_audio_file_by_inode(inode, crate::corpus::db::types::FileSource::Corpus)
-        {
-            let path = audio_file.path();
-            let filename = Path::new(path)
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.to_string());
+        for &inode in &group.inodes {
+            if let Ok(Some(audio_file)) =
+                read_db.get_audio_file_by_inode(inode, crate::corpus::db::types::FileSource::Corpus)
+            {
+                let path = audio_file.path();
+                let filename = Path::new(path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string());
 
-            // Load tags from disk
-            let abs_path = resolver.resolve(Path::new(path));
-            let tagset = TagSet::from_file(&abs_path).unwrap_or_else(|_| TagSet::empty());
+                // Load tags from disk
+                let abs_path = resolver.resolve(Path::new(path));
+                let tagset = TagSet::from_file(&abs_path).unwrap_or_else(|_| TagSet::empty());
 
-            let tag_values: Vec<(String, String)> = tagset
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+                let tag_values: Vec<(String, String)> = tagset
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
 
-            files.push(FileTagInfo {
-                inode,
-                filename,
-                path: path.to_string(),
-                tag_values,
-            });
+                files.push(FileTagInfo {
+                    inode,
+                    filename,
+                    path: path.to_string(),
+                    tag_values,
+                });
+            }
         }
 
         // Sort files alphabetically by filename for consistent display
@@ -463,25 +464,25 @@ pub enum CompoundSplitActionV2 {
 // Cluster Navigation
 // ============================================================================
 
-/// Tracks navigation through compound tag split signals.
+/// Tracks navigation through compound tag split groups (aggregated by value).
 #[derive(Debug, Clone)]
 pub struct CompoundSplitClustersV2 {
-    /// Signal keys in display order
-    signal_keys: Vec<String>,
+    /// Groups in display order (one per unique compound value)
+    groups: Vec<CompoundGroup>,
     /// Current index
     current: usize,
 }
 
 impl CompoundSplitClustersV2 {
-    pub fn new(signal_keys: Vec<String>) -> Self {
+    pub fn new(groups: Vec<CompoundGroup>) -> Self {
         Self {
-            signal_keys,
+            groups,
             current: 0,
         }
     }
 
-    pub fn current_signal_key(&self) -> Option<&str> {
-        self.signal_keys.get(self.current).map(|s| s.as_str())
+    pub fn current_group(&self) -> Option<&CompoundGroup> {
+        self.groups.get(self.current)
     }
 
     pub fn current_index(&self) -> usize {
@@ -489,15 +490,15 @@ impl CompoundSplitClustersV2 {
     }
 
     pub fn total(&self) -> usize {
-        self.signal_keys.len()
+        self.groups.len()
     }
 
-    pub fn all_signal_keys(&self) -> &[String] {
-        &self.signal_keys
+    pub fn all_groups(&self) -> &[CompoundGroup] {
+        &self.groups
     }
 
     pub fn is_last(&self) -> bool {
-        self.current >= self.signal_keys.len().saturating_sub(1)
+        self.current >= self.groups.len().saturating_sub(1)
     }
 
     pub fn is_first(&self) -> bool {
@@ -505,7 +506,7 @@ impl CompoundSplitClustersV2 {
     }
 
     pub fn next(&mut self) -> bool {
-        if self.current < self.signal_keys.len().saturating_sub(1) {
+        if self.current < self.groups.len().saturating_sub(1) {
             self.current += 1;
             true
         } else {

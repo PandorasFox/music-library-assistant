@@ -141,12 +141,13 @@ impl TagSet {
 
     /// Fallback tag reading for non-Vorbis formats (mp3, m4a, etc.).
     ///
-    /// Uses lofty's generic Probe/Tag with Accessor + items().
+    /// Uses lofty's generic Probe/Tag items(), mapping keys to canonical Vorbis names
+    /// via `ItemKey::map_key(TagType::VorbisComments)`.
     /// These formats are read-only (pre-transcode initial indexing) and never written to.
     fn from_generic_tag(path: &Path) -> Result<Self> {
         use lofty::file::TaggedFileExt;
         use lofty::probe::Probe;
-        use lofty::tag::Accessor;
+        use lofty::tag::TagType;
 
         let tagged_file = Probe::open(path)
             .with_context(|| format!("Failed to open file for tag reading: {}", path.display()))?
@@ -156,33 +157,23 @@ impl TagSet {
         let mut all_tags = Vec::new();
 
         if let Some(tag) = tagged_file.primary_tag() {
-            // Standard tags via Accessor trait
-            if let Some(artist) = tag.artist() {
-                all_tags.push(("artist".to_string(), artist.as_ref().to_string()));
-            }
-            if let Some(album) = tag.album() {
-                all_tags.push(("album".to_string(), album.as_ref().to_string()));
-            }
-            if let Some(title) = tag.title() {
-                all_tags.push(("title".to_string(), title.as_ref().to_string()));
-            }
-            if let Some(track) = tag.track() {
-                all_tags.push(("track_number".to_string(), track.to_string()));
-            }
-            if let Some(genre) = tag.genre() {
-                all_tags.push(("genre".to_string(), genre.as_ref().to_string()));
-            }
+            let tag_type = tag.tag_type();
 
-            // Additional fields from items (extended tags, including multi-value)
             for item in tag.items() {
-                let key = format!("{:?}", item.key()).to_lowercase();
+                // Canonical Vorbis name is primary (ARTIST, TRACKNUMBER, etc.)
+                // Fall back to source format's native name for tags without Vorbis mapping
+                let key = match item.key().clone().map_key(TagType::VorbisComments) {
+                    Some(k) => k.to_string(),
+                    None => match item.key().clone().map_key(tag_type) {
+                        Some(k) => k.to_string(),
+                        None => continue,
+                    },
+                };
 
-                // Skip binary patterns
                 if is_binary_tag_key(&key) {
                     continue;
                 }
 
-                // Extract actual string value from ItemValue
                 let value = match item.value() {
                     lofty::tag::ItemValue::Text(s) => s.clone(),
                     lofty::tag::ItemValue::Locator(s) => s.clone(),

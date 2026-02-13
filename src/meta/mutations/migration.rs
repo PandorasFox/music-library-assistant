@@ -221,6 +221,21 @@ impl MigrationRegistry {
             },
         });
 
+        // v6→v7: Re-seed dirty inodes for compound tag detection after split rule reorder
+        //
+        // ba9b502 changed compound tag splitting to prioritize semicolons over " & "
+        // (e.g., "Aly & Fila; JES" → ["Aly & Fila", "JES"] instead of ["Aly", "Fila; JES"]).
+        // Existing signals were computed under the old rule order and are stale.
+        // Re-seeding forces recomputation under the new priority chain.
+        registry.register(Migration {
+            from_version: 6,
+            to_version: 7,
+            description: "Re-seed compound tag detection after split rule priority reorder",
+            apply: |db| {
+                seed_dirty_inodes_for(db, "compound_tag")
+            },
+        });
+
         registry
     }
 
@@ -312,9 +327,10 @@ mod tests {
         // v3→v4: per-signal typed tables
         // v4→v5: drop old signals table
         // v5→v6: re-seed dirty inodes for compound tag detection
-        assert_eq!(registry.latest_version(), 6);
-        assert_eq!(registry.pending_migrations(1).len(), 5);
-        assert_eq!(registry.pending_migrations(5).len(), 1);
-        assert!(registry.pending_migrations(6).is_empty());
+        // v6→v7: re-seed after split rule priority reorder
+        assert_eq!(registry.latest_version(), 7);
+        assert_eq!(registry.pending_migrations(1).len(), 6);
+        assert_eq!(registry.pending_migrations(6).len(), 1);
+        assert!(registry.pending_migrations(7).is_empty());
     }
 }

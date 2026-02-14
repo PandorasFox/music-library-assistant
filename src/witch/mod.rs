@@ -38,7 +38,7 @@ mod worker_stats;
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
-    CommitSummary, CorpusObservationState, DaemonStatus, DecisionWitness,
+    CorpusObservationState, DaemonStatus, DecisionWitness,
     DiscardSummary, EyeState, Migration, MigrationWitness, MutationExecutionWitness,
     PendingTransaction, SpawnedMutation, Task, TaskExecutionState, TaskExecutionStateSnapshot,
     TaskLabel, TransactionError, WorkerStats,
@@ -887,7 +887,7 @@ impl Witch {
     /// # Example (from operator_decisions.rs only)
     ///
     /// ```rust,ignore
-    /// pub fn commit_transaction(witch: &mut Witch) -> Result<CommitSummary, TransactionError> {
+    /// pub fn commit_transaction(witch: &mut Witch) -> Result<(), TransactionError> {
     ///     witch.with_operator_decision(|scope| {
     ///         scope.confirm_transaction()
     ///     })

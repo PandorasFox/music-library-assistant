@@ -543,7 +543,7 @@ impl App {
                 };
 
                 match commit_result {
-                    Ok(_summary) => {
+                    Ok(()) => {
                         // Don't set status_message here — it would suppress the
                         // selected-path display in status_line_1, and the commit
                         // outcome is already evident from the progress screen.

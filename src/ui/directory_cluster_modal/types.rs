@@ -28,7 +28,6 @@ pub struct DirectoryGroupEntry {
     /// Total file size in MB
     pub total_size_mb: f64,
     /// Whether this source can have duplicates stashed (from config, default: true).
-    /// TODO: replumb full directory config through here for can_stash properties after refactors.
     pub can_stash_dupes: bool,
 }
 
@@ -39,8 +38,6 @@ pub struct DirectoryClusterEntry {
     pub cluster_key: String,
     /// Source directories in this cluster (usually 2)
     pub directories: Vec<DirectoryGroupEntry>,
-    /// Source fingerprint overlap keys
-    pub fingerprint_overlap_keys: Vec<String>,
     /// Number of overlapping track pairs
     pub overlap_count: usize,
 }
@@ -97,7 +94,6 @@ impl DirectoryClusterModalData {
             let source_a_can_stash = data.source_a_can_stash;
             let source_b_can_stash = data.source_b_can_stash;
             let overlap_count = data.overlap_count;
-            let fingerprint_keys = data.fingerprint_keys;
 
             // Collect all inodes for each source from typed track pairs
             let source_a_inodes: Vec<i64> = data.track_pairs.iter().map(|tp| tp.source_a_inode).collect();
@@ -164,7 +160,6 @@ impl DirectoryClusterModalData {
             clusters.push(DirectoryClusterEntry {
                 cluster_key,
                 directories,
-                fingerprint_overlap_keys: fingerprint_keys,
                 overlap_count,
             });
         }
@@ -212,9 +207,10 @@ impl DirectoryClusterModalData {
             }
         };
 
-        // Stash all directories except the one we're keeping
+        // Stash all directories except the one we're keeping.
+        // Respect can_stash_dupes: skip directories that disallow stashing.
         for dir in &cluster.directories {
-            if dir.path_suffix == keep_suffix {
+            if dir.path_suffix == keep_suffix || !dir.can_stash_dupes {
                 continue;
             }
 

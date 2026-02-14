@@ -142,18 +142,30 @@ impl DirectoryClusterPreviewState {
             let worst_format = unique_formats.iter().min_by_key(|f| format_rank(f)).unwrap_or(&"");
 
             if !best_format.is_empty() && best_format != worst_format {
-                options.push(ClusterResolutionOption::AutoQuality {
-                    keep_format: (*best_format).to_string(),
-                    stash_format: (*worst_format).to_string(),
-                });
+                // AutoQuality stashes directories with the worst format — only
+                // offer if those directories allow stashing.
+                let stashable = cluster.directories.iter()
+                    .filter(|d| d.format_summary.starts_with(worst_format))
+                    .all(|d| d.can_stash_dupes);
+                if stashable {
+                    options.push(ClusterResolutionOption::AutoQuality {
+                        keep_format: (*best_format).to_string(),
+                        stash_format: (*worst_format).to_string(),
+                    });
+                }
             }
         }
 
-        // Add per-directory options
-        for dir in &cluster.directories {
-            options.push(ClusterResolutionOption::KeepDirectory {
-                keep_suffix: dir.path_suffix.clone(),
-            });
+        // Add per-directory options: "Keep X" stashes all others, so only
+        // offer it when every *other* directory allows stashing.
+        for (i, dir) in cluster.directories.iter().enumerate() {
+            let others_stashable = cluster.directories.iter().enumerate()
+                .all(|(j, d)| j == i || d.can_stash_dupes);
+            if others_stashable {
+                options.push(ClusterResolutionOption::KeepDirectory {
+                    keep_suffix: dir.path_suffix.clone(),
+                });
+            }
         }
 
         options
@@ -340,8 +352,16 @@ impl DirectoryClusterPreviewState {
     fn render_directories_pane(&self, f: &mut Frame, area: Rect) {
         let cluster = self.current_cluster();
 
+        let title = match cluster {
+            Some(c) => {
+                let plural = if c.overlap_count == 1 { "" } else { "s" };
+                format!(" {} — {} overlap{} ", c.cluster_key, c.overlap_count, plural)
+            }
+            None => " Overlapping Directories ".to_string(),
+        };
+
         let block = Block::default()
-            .title(" Overlapping Directories ")
+            .title(title)
             .title_style(Style::default().fg(Color::Cyan))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));

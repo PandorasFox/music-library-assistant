@@ -38,7 +38,7 @@
 //! and "mutations were queued for execution".
 
 use crate::meta::mutations::Mutation;
-use crate::witch::{CommitSummary, DiscardSummary, TransactionError, Witch};
+use crate::witch::{DiscardSummary, TransactionError, Witch};
 
 // =============================================================================
 // SEALED DECISION HANDLERS
@@ -74,7 +74,7 @@ pub fn stage_decision(
 /// # Call Sites
 /// - Tag editor: when user commits all staged edits
 /// - Tag canonicity review: when user confirms all resolutions
-pub fn commit_transaction(witch: &mut Witch) -> Result<CommitSummary, TransactionError> {
+pub fn commit_transaction(witch: &mut Witch) -> Result<(), TransactionError> {
     witch.with_operator_decision(|scope| {
         scope.confirm_transaction()
     })

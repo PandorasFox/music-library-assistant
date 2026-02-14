@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use super::types::{
-    CommitSummary, DecisionWitness, DiscardSummary, PendingTransaction,
+    DecisionWitness, DiscardSummary, PendingTransaction,
     TransactionError, WitnessedDecision,
 };
 use crate::meta::mutations::{Mutation, TagOp};
@@ -203,7 +203,7 @@ impl super::Witch {
     pub fn confirm_transaction(
         &mut self,
         _witness: &DecisionWitness,
-    ) -> Result<CommitSummary, TransactionError> {
+    ) -> Result<(), TransactionError> {
         // Gate: mutations must be accepted (eye is Awake, not read-only)
         if !self.accepting_mutations() {
             crate::logging::log_mutation(
@@ -246,10 +246,7 @@ impl super::Witch {
             );
         }
 
-        Ok(CommitSummary {
-            decision_count,
-            mutation_count,
-        })
+        Ok(())
     }
 
     /// Discard the transaction - drop all accumulated decisions.

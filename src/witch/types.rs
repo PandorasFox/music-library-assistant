@@ -265,7 +265,7 @@ impl<'a> DecisionScope<'a> {
     /// Confirm the transaction - queue all mutations for execution.
     ///
     /// This commits all accumulated decisions and queues their mutations.
-    pub fn confirm_transaction(&mut self) -> Result<CommitSummary, TransactionError> {
+    pub fn confirm_transaction(&mut self) -> Result<(), TransactionError> {
         self.witch.confirm_transaction(&self.witness)
     }
 
@@ -446,15 +446,6 @@ impl std::fmt::Display for TransactionError {
 }
 
 impl std::error::Error for TransactionError {}
-
-/// Summary returned when a transaction is committed.
-#[derive(Debug, Clone)]
-pub struct CommitSummary {
-    /// Number of decisions that were committed
-    pub decision_count: usize,
-    /// Total mutations that were queued for execution
-    pub mutation_count: usize,
-}
 
 /// Summary returned when a transaction is discarded.
 ///

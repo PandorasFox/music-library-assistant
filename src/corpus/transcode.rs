@@ -660,8 +660,7 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
                     .with_context(|| "Failed to insert picture into FLAC")?;
             }
 
-            let write_opts = WriteOptions::new().preferred_padding(0);
-            flac.save_to_path(dest, write_opts)
+            flac.save_to_path(dest, WriteOptions::default())
                 .with_context(|| format!("Failed to save pictures to FLAC: {}", dest.display()))?;
         }
         // Opus pictures are written inside VorbisComments by copy_tags; lofty's

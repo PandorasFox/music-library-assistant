@@ -527,13 +527,7 @@ fn write_vorbis_tags_flac(path: &Path, tags: &TagSet) -> Result<()> {
 
     populate_vorbis_comments(vc, tags);
 
-    // Use preferred_padding(0) to work around lofty 0.23.1 bug:
-    // when the initial FLAC has only STREAMINFO (as flacenc produces), lofty
-    // writes a PADDING block but fails to clear is_last on VORBIS_COMMENT,
-    // producing two blocks with is_last=true. Strict FLAC decoders then
-    // try to parse the invisible PADDING as audio frames and choke.
-    let write_opts = WriteOptions::new().preferred_padding(0);
-    flac.save_to_path(path, write_opts)
+    flac.save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to FLAC: {}", path.display()))?;
 
     Ok(())

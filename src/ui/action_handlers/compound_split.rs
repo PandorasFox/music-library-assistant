@@ -4,7 +4,7 @@
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
 use crate::corpus::db::types::FileSource;
-use crate::ui::{compound_split_v2, progressive_worker, tag_editor, ActiveView};
+use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
 use crate::ui::suspended_views::SuspendTarget;
 use super::witness;
 use super::super::App;
@@ -391,6 +391,7 @@ impl App {
         if let Some(ref witch) = self.witch {
             if let Some(decision) = witch.get_decision(group_index) {
                 state.restore_from_mutations(&decision.mutations);
+                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }
         }
 
@@ -443,6 +444,7 @@ impl App {
         if let Some(ref witch) = self.witch {
             if let Some(decision) = witch.get_decision(group_index) {
                 state.restore_from_mutations(&decision.mutations);
+                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }
         }
 

@@ -5,7 +5,7 @@
 
 use crate::corpus::db::types::FileSource;
 use crate::ui::{
-    insights_view, tag_canonicity_v2, tag_editor, ActiveView,
+    helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView,
     CanonicitySignalKind, TagCanonicityClusters,
 };
 use super::witness;
@@ -329,6 +329,7 @@ impl App {
         if let Some(ref witch) = self.witch {
             if let Some(decision) = witch.get_decision(current_index) {
                 state.restore_from_mutations(&decision.mutations);
+                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }
         }
 
@@ -372,6 +373,7 @@ impl App {
         if let Some(ref witch) = self.witch {
             if let Some(decision) = witch.get_decision(current_index) {
                 state.restore_from_mutations(&decision.mutations);
+                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }
         }
 

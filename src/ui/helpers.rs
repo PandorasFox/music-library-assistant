@@ -84,6 +84,40 @@ pub fn truncate_right(s: &str, max_chars: usize) -> String {
 }
 
 // ============================================================================
+// Mutation Introspection
+// ============================================================================
+
+/// Extract pending tag edits from a list of mutations.
+///
+/// Returns a map of inode → [(tag_name, old_value, new_value)] for display
+/// in health modal right panes when a tag editor decision has been staged.
+///
+/// - `old_value` is empty for new tags
+/// - `new_value` is empty for deleted tags
+pub fn pending_edits_from_mutations(
+    mutations: &[crate::meta::mutations::Mutation],
+) -> std::collections::HashMap<i64, Vec<(String, String, String)>> {
+    use crate::meta::mutations::Mutation;
+    let mut result: std::collections::HashMap<i64, Vec<(String, String, String)>> =
+        std::collections::HashMap::new();
+
+    for mutation in mutations {
+        if let Mutation::ApplyTagOps(ref ops) = mutation {
+            for op in &ops.ops {
+                let old = op.old_value.clone().unwrap_or_default();
+                let new = op.new_value.clone().unwrap_or_default();
+                result
+                    .entry(op.inode)
+                    .or_default()
+                    .push((op.tag_name.clone(), old, new));
+            }
+        }
+    }
+
+    result
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

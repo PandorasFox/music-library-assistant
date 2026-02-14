@@ -9,7 +9,7 @@
 //! - Editable split parts in review mode
 //! - Ctrl+Q to canonicalize (mark as single entity, don't split)
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::meta::signals::data::CompoundGroup;
@@ -201,6 +201,9 @@ pub struct CompoundSplitStateV2 {
 
     /// Whether the bulk-stage-all confirmation popup is showing
     pub confirming_bulk_stage: bool,
+
+    /// Pending tag edits from an embedded tag editor decision (inode → [(tag, old, new)])
+    pub pending_tag_edits: Option<HashMap<i64, Vec<(String, String, String)>>>,
 }
 
 impl CompoundSplitStateV2 {
@@ -235,6 +238,7 @@ impl CompoundSplitStateV2 {
             total_groups,
             confirming_canonicalize: false,
             confirming_bulk_stage: false,
+            pending_tag_edits: None,
         }
     }
 
@@ -247,7 +251,9 @@ impl CompoundSplitStateV2 {
     /// Note: For canonicalize decisions (EmitCanonicalTag), callers should
     /// use `is_canonicalize_decision()` first and handle separately if needed.
     pub fn restore_from_mutations(&mut self, mutations: &[Mutation]) {
-        // Find ApplyTagOps mutation and extract tag operations
+        // Find ApplyTagOps mutation and extract tag operations for THIS tag only.
+        // Tag editor decisions may contain ops for unrelated tags which must not
+        // pollute the edited parts or file selection.
         let ops: Vec<&TagOp> = mutations
             .iter()
             .filter_map(|m| match m {
@@ -255,6 +261,7 @@ impl CompoundSplitStateV2 {
                 _ => None,
             })
             .flatten()
+            .filter(|op| op.tag_name.eq_ignore_ascii_case(&self.data.compound.tag_name))
             .collect();
 
         if ops.is_empty() {

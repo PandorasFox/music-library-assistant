@@ -238,7 +238,7 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
     let mut sorted_tags: Vec<_> = file.tag_values.iter().collect();
     sorted_tags.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let lines: Vec<Line> = sorted_tags
+    let mut lines: Vec<Line> = sorted_tags
         .iter()
         .take(visible_height)
         .map(|(tag_name, tag_value)| {
@@ -270,6 +270,36 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
             ])
         })
         .collect();
+
+    // Show pending tag editor edits for this file, if any
+    if let Some(ref edits_map) = state.pending_tag_edits {
+        if let Some(edits) = edits_map.get(&file.inode) {
+            if !edits.is_empty() && lines.len() < visible_height {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "\u{2500}\u{2500} Pending edits \u{2500}\u{2500}",
+                    Style::default().fg(Color::Magenta),
+                )));
+                for (tag, old, new) in edits {
+                    if lines.len() >= visible_height {
+                        break;
+                    }
+                    let change = if old.is_empty() {
+                        format!("{}: +\"{}\"", tag, new)
+                    } else if new.is_empty() {
+                        format!("{}: -\"{}\"", tag, old)
+                    } else {
+                        format!("{}: \"{}\" \u{2192} \"{}\"", tag, old, new)
+                    };
+                    let display = truncate_right(&change, max_width);
+                    lines.push(Line::from(Span::styled(
+                        display,
+                        Style::default().fg(Color::Magenta),
+                    )));
+                }
+            }
+        }
+    }
 
     let para = Paragraph::new(lines);
     f.render_widget(para, inner);

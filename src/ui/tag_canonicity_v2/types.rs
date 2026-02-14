@@ -210,6 +210,8 @@ pub struct TagCanonicalityStateV2 {
     pub variant_scroll: usize,
     /// Scroll offset for files list
     pub file_scroll: usize,
+    /// Pending tag edits from an embedded tag editor decision (inode → [(tag, old, new)])
+    pub pending_tag_edits: Option<HashMap<i64, Vec<(String, String, String)>>>,
 }
 
 impl TagCanonicalityStateV2 {
@@ -256,6 +258,7 @@ impl TagCanonicalityStateV2 {
             total_groups,
             variant_scroll: 0,
             file_scroll: 0,
+            pending_tag_edits: None,
         }
     }
 
@@ -265,7 +268,9 @@ impl TagCanonicalityStateV2 {
     /// this method extracts the canonical value and selected variants from
     /// the stored mutations and applies them to the modal state.
     pub fn restore_from_mutations(&mut self, mutations: &[Mutation]) {
-        // Find ApplyTagOps mutation and extract tag operations
+        // Find ApplyTagOps mutation and extract tag operations for THIS tag only.
+        // Tag editor decisions may contain ops for unrelated tags (e.g. FLAGCOMPILATION)
+        // which must not pollute the canonical value or variant selection.
         let ops: Vec<&TagOp> = mutations
             .iter()
             .filter_map(|m| match m {
@@ -273,6 +278,7 @@ impl TagCanonicalityStateV2 {
                 _ => None,
             })
             .flatten()
+            .filter(|op| op.tag_name.eq_ignore_ascii_case(&self.data.tag_name))
             .collect();
 
         if ops.is_empty() {

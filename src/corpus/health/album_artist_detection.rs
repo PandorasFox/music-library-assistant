@@ -76,7 +76,6 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
             if album_name.is_empty() && !track.album.is_empty() {
                 album_name = track.album.clone();
             }
-            // Track non-empty catalog numbers and ISRCs
             if !track.catalog_number.is_empty() {
                 catalog_numbers.insert(&track.catalog_number);
             }
@@ -91,13 +90,13 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
         }
 
         // Skip if tracks have different catalog numbers - indicates different releases
-        // (e.g., "Surge" and "Surge EP" from different artists with different catalog numbers)
         if catalog_numbers.len() > 1 {
             continue;
         }
 
-        // Skip if tracks have different ISRCs - indicates different releases
-        if isrcs.len() > 1 {
+        // Exactly 2 tracks with distinct ISRCs is ambiguous — likely two singles from
+        // different artists that happen to share an album name, not a real compilation.
+        if tracks.len() == 2 && isrcs.len() == 2 {
             continue;
         }
 

@@ -292,10 +292,20 @@ impl TagCanonicalityStateV2 {
             .filter_map(|op| op.old_value.as_ref().cloned())
             .collect();
 
-        // Map old_values back to variant indices
+        // Also check for add_tag ops (old_value=None, new_value=Some) which
+        // correspond to the "" (missing) variant being selected.
+        let has_add_ops = ops.iter().any(|op| op.old_value.is_none() && op.new_value.is_some());
+
+        // Map old_values back to variant indices, plus:
+        // - The canonical-value variant itself (no TagOp is generated for it, since
+        //   it already matches the target — but it was selected in the UI)
+        // - The "" variant if add_tag ops exist (missing tags being filled in)
         let mut selected_variants: HashSet<usize> = HashSet::new();
         for (idx, variant) in self.data.variants.iter().enumerate() {
-            if selected_old_values.contains(&variant.value) {
+            if selected_old_values.contains(&variant.value)
+                || variant.value == canonical_value
+                || (variant.value.is_empty() && has_add_ops)
+            {
                 selected_variants.insert(idx);
             }
         }

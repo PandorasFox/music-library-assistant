@@ -34,6 +34,13 @@ impl SuspendTarget {
 }
 
 impl App {
+    /// Push the current view onto the stack without switching.
+    /// The caller is responsible for setting `self.view` afterwards.
+    pub(crate) fn push_current_view(&mut self) {
+        let suspended = self.suspend_current_view();
+        self.view_stack.push(suspended);
+    }
+
     /// Suspend the current view and switch to the target modal.
     pub(crate) fn push_and_switch(&mut self, target: SuspendTarget) {
         let suspended = self.suspend_current_view();

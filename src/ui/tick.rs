@@ -117,6 +117,7 @@ impl App {
             None
         };
         if let Some(audio_files) = pending {
+            self.push_current_view();
             self.start_unified_tag_editor_for_audio_files(audio_files);
         }
     }

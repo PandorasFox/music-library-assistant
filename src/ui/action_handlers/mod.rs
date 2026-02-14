@@ -285,7 +285,7 @@ impl App {
                 }
             }
             tag_search::TagSearchAction::EditAudioFile(audio_file) => {
-                // Open unified tag editor for single audio file
+                self.push_current_view();
                 self.start_unified_tag_editor_for_audio_file(audio_file);
             }
         }
@@ -357,11 +357,11 @@ impl App {
                 self.start_insights_view();
             }
             tree_browser::TreeBrowserAction::EditDirectory(path) => {
-                // Load tracks from directory and open unified tag editor
+                self.push_current_view();
                 self.open_unified_tag_editor_for_directory(&path);
             }
             tree_browser::TreeBrowserAction::EditFile(path) => {
-                // Load single track for editing
+                self.push_current_view();
                 self.start_tag_editor_for_path(&path, false);
             }
             tree_browser::TreeBrowserAction::CycleNext => {
@@ -426,7 +426,10 @@ impl App {
                 if let Some(the_witch) = self.witch.as_mut() {
                     let _ = super::operator_decisions::discard_transaction(the_witch);
                 }
-                self.start_insights_view();
+                // Return to the view that launched the tag editor (e.g., corpus browser)
+                if !self.pop_and_restore() {
+                    self.start_insights_view();
+                }
                 self.status_message = Some("Edits discarded".to_string());
             }
 

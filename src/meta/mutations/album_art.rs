@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::meta::signals::data::EmbeddableAlbumArtSignal;
+use crate::witch::MutationExecutionWitness;
 
 use super::traits::{MutationContext, MutationExecutor};
 use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
@@ -27,13 +28,34 @@ impl MutationExecutor for EmbedAlbumArtMutation {
         "Embed album art"
     }
 
-    fn execute(&self, _ctx: &MutationContext) -> MutationResult {
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
 
-        let result = embed_picture(&self.audio_path, &self.image_path);
+        let result = embed_picture(&self.audio_path, &self.image_path, ctx.witness);
 
         let (success, error) = match result {
-            Ok(()) => (true, None),
+            Ok(()) => {
+                // Update DB: mark has_pictures = 1 and sync mtime/size.
+                // This covers both actual embeds and no-ops (file already had art
+                // but has_pictures was 0 from migration default).
+                if let Some(sender) = crate::db_thread::signal_sender() {
+                    let meta = std::fs::metadata(&self.audio_path).ok();
+                    let (mtime_secs, mtime_nanos, file_size) = meta
+                        .map(|m| {
+                            use std::os::unix::fs::MetadataExt;
+                            (m.mtime(), m.mtime_nsec(), m.size() as i64)
+                        })
+                        .unwrap_or((0, 0, 0));
+                    sender.set_has_pictures(
+                        self.inode,
+                        mtime_secs,
+                        mtime_nanos,
+                        file_size,
+                        ctx.witness,
+                    );
+                }
+                (true, None)
+            }
             Err(e) => (false, Some(format!("{:#}", e))),
         };
 
@@ -67,7 +89,11 @@ impl MutationExecutor for EmbedAlbumArtMutation {
 
 /// Read an image from disk and embed it into an audio file.
 /// No-ops if the file already has embedded pictures.
-fn embed_picture(audio_path: &std::path::Path, image_path: &std::path::Path) -> anyhow::Result<()> {
+fn embed_picture(
+    audio_path: &std::path::Path,
+    image_path: &std::path::Path,
+    _witness: &MutationExecutionWitness,
+) -> anyhow::Result<()> {
     use anyhow::Context;
     use crate::corpus::tags::TagSet;
 
@@ -116,6 +142,13 @@ fn embed_picture(audio_path: &std::path::Path, image_path: &std::path::Path) -> 
 }
 
 /// Embed picture into a FLAC file via lofty's OggPictureStorage.
+///
+/// Known limitation (lofty 0.23.x): FLAC files with a prepended ID3v2 header
+/// will fail with "File missing fLaC stream marker". lofty's `read_from()`
+/// correctly skips the ID3v2, but `save_to_path()` re-reads the file from disk
+/// and expects "fLaC" at byte 0. `remove_id3v2()` only strips the in-memory
+/// model. These files must be fixed manually (strip the ID3v2 prefix) before
+/// embedding will work. See `repro_lofty_flac_id3v2.rs` for upstream repro.
 fn embed_picture_flac(
     path: &std::path::Path,
     picture: lofty::picture::Picture,
@@ -130,6 +163,10 @@ fn embed_picture_flac(
     let mut reader = std::io::BufReader::new(file);
     let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
         .with_context(|| format!("Failed to read FLAC: {}", path.display()))?;
+    drop(reader);
+
+    // Strip ID3v2 from in-memory model (harmless no-op if absent)
+    flac.remove_id3v2();
 
     // info=None lets lofty infer PictureInformation from the picture data
     flac.insert_picture(picture, None)

@@ -321,6 +321,17 @@ enum SignalWriteOp {
         value: bool,
     },
 
+    /// Mark a file as having embedded pictures and update its mtime/size.
+    /// Sent by EmbedAlbumArt after successful embed (or no-op when art already exists).
+    /// Combines has_pictures update (audio_info) with mtime+size update (files)
+    /// to prevent both signal re-emission and OOB mtime mismatch detection.
+    SetHasPictures {
+        inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
+    },
+
     // TODO: Refactor signal clearing into a unified system with signal categories.
     // File-inherent signals (CorruptFile, ShitFormat) vs tag-based signals (OOB, mtime)
     // should be distinguished at the type level, not via SQL string matching.
@@ -873,6 +884,28 @@ impl SignalWriteSender {
         });
     }
 
+    /// Mark a file as having embedded pictures and update its mtime/size.
+    ///
+    /// Called by EmbedAlbumArt after successful embed (or no-op when art
+    /// already exists). Updates audio_info.has_pictures = 1 and syncs the
+    /// file's mtime+size in the files table to prevent OOB mismatch detection.
+    pub fn set_has_pictures(
+        &self,
+        inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
+        _witness: &MutationExecutionWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::SetHasPictures {
+            inode,
+            mtime_secs,
+            mtime_nanos,
+            file_size,
+        });
+    }
+
     // =========================================================================
     // Dirty Inode Operations (for incremental computations)
     // =========================================================================
@@ -1316,6 +1349,12 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::SetNeedsDiskFlush { path, value } => {
             with_retry("set_needs_disk_flush", path, || {
                 execute_set_needs_disk_flush(db, path, *value)
+            });
+        }
+
+        SignalWriteOp::SetHasPictures { inode, mtime_secs, mtime_nanos, file_size } => {
+            with_retry("set_has_pictures", &inode.to_string(), || {
+                execute_set_has_pictures(db, *inode, *mtime_secs, *mtime_nanos, *file_size)
             });
         }
 
@@ -1947,6 +1986,35 @@ fn execute_set_needs_disk_flush(db: &Database, path: &str, value: bool) -> anyho
             inode
         ));
     }
+
+    Ok(())
+}
+
+/// Execute SetHasPictures: mark audio_info.has_pictures = 1 and update file mtime/size.
+fn execute_set_has_pictures(
+    db: &Database,
+    inode: i64,
+    mtime_secs: i64,
+    mtime_nanos: i64,
+    file_size: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    let rows = db.conn().execute(
+        "UPDATE audio_info SET has_pictures = 1 WHERE inode = ?1",
+        params![inode],
+    )?;
+    if rows == 0 {
+        crate::logging::log_error(format!(
+            "[DB_THREAD] set_has_pictures: no audio_info for inode={}", inode
+        ));
+    }
+
+    db.conn().execute(
+        "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2, file_size = ?3 \
+         WHERE inode = ?4 AND source = 'corpus'",
+        params![mtime_secs, mtime_nanos, file_size, inode],
+    )?;
 
     Ok(())
 }

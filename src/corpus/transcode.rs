@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::witch::MutationExecutionWitness;
+
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::audio::Signal;
 
@@ -54,7 +56,7 @@ impl TranscodeTarget {
 /// Transcode a source audio file to the target format using native decode/encode.
 ///
 /// The destination path must not already exist.
-pub fn transcode(source: &Path, dest: &Path, target: TranscodeTarget) -> Result<()> {
+pub fn transcode(source: &Path, dest: &Path, target: TranscodeTarget, _witness: &MutationExecutionWitness) -> Result<()> {
     if !source.exists() {
         return Err(anyhow::anyhow!(
             "Source file does not exist: {}",

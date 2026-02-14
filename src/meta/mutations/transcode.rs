@@ -156,7 +156,7 @@ fn execute_transcode_impl(
     }
 
     // Transcode via native pipeline
-    transcode::transcode(source_path, &dest_path, target_format)
+    transcode::transcode(source_path, &dest_path, target_format, witness)
         .with_context(|| format!(
             "Transcode failed: {} -> {}",
             source_path.display(),

@@ -73,6 +73,7 @@ impl SubparDuplicateModalData {
             let reason = match entry.reason.as_str() {
                 "SubparBitrate" => "Lower bitrate".to_string(),
                 "SubparFormat" => "Worse format".to_string(),
+                "SubparSampleRate" => "Lower sample rate".to_string(),
                 other => other.to_string(),
             };
 

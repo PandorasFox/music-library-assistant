@@ -292,14 +292,10 @@ pub struct ConflictGroup {
 pub struct SubparDuplicateEntry {
     /// Path in the corpus (this is the subpar file)
     pub corpus_path: String,
-    /// Reason for being subpar (e.g., "SubparBitrate", "SubparFormat")
+    /// Reason for being subpar (e.g., "SubparBitrate", "SubparFormat", "SubparSampleRate")
     pub reason: String,
     /// Path to the superior version
     pub superior_path: String,
-    /// Quality score of this file
-    pub _quality_score: i64,
-    /// Quality score of the superior file
-    pub _superior_quality_score: i64,
 }
 
 // ============================================================================

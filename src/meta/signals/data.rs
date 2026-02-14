@@ -148,8 +148,6 @@ pub struct SubparDuplicateData {
     pub superior_inode: i64,
     pub superior_path: String,
     pub dupe_group_fingerprint: String,
-    pub quality_score: i32,
-    pub superior_quality_score: i32,
 }
 
 /// Per-file compound tag detection results.
@@ -400,7 +398,7 @@ pub struct EmbeddableAlbumArtData {
     pub artless_paths: Vec<String>,
 }
 
-/// Group of files with identical fingerprints AND identical quality scores.
+/// Group of files with identical fingerprints and equivalent quality.
 /// Neither file is subpar — requires operator choice.
 #[derive(Debug, Clone)]
 pub struct RedundantDuplicateSignal {
@@ -410,7 +408,6 @@ pub struct RedundantDuplicateSignal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedundantDuplicateData {
-    pub quality_score: i32,
     pub file_type: String, // shared format (e.g. "flac")
     pub inodes: Vec<i64>,
     pub paths: Vec<String>, // parallel to inodes

@@ -67,7 +67,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagsForInode | Per-inode: walks the priority-ordered `SplitRule` chain from `TagSplittingOpinions` (separator and collaboration keyword rules). First matching rule wins per tag value. Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
 | DetectEmbeddableAlbumArt | Find directories with sidecar album art images alongside audio files lacking embedded pictures |
-| AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality |
+| AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality tier partitioning |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
 | DetectDeployConflicts | Detect path collisions in deployment |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
@@ -114,7 +114,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagsForInode | — | CompoundTag (per-file) | — |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate). Groups with `FLAGCOMPILATION=0` on any track are suppressed (no signal emitted) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
-| AnalyzeFingerprintOverlaps | — | SubparDuplicate, RedundantDuplicate | SubparDuplicate (all, then recreate), RedundantDuplicate (all, then recreate). Equal-quality ties emit RedundantDuplicate (aggregate); strictly-lower quality emit SubparDuplicate (per-file). |
+| AnalyzeFingerprintOverlaps | — | SubparDuplicate, RedundantDuplicate | SubparDuplicate (all, then recreate), RedundantDuplicate (all, then recreate). Uses enum-based equivalence-class partitioning (QualityTier = FormatClass + metric). Best tier with >1 file → RedundantDuplicate; lower tiers → SubparDuplicate with reason (SubparFormat, SubparBitrate, SubparSampleRate). Re-release elision: album checked before ISRC when catalog numbers absent. |
 | DetectEmbeddableAlbumArt | — | EmbeddableAlbumArt | EmbeddableAlbumArt (stale, via set reconciliation) |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate). Uses inode-based signal lookup (signal.inode + metadata path). |

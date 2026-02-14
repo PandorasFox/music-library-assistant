@@ -320,29 +320,43 @@ fn is_lossless(file_type: &str) -> bool {
     )
 }
 
-/// Compute quality score for a track (0-1000 range).
-/// Format class provides the major tier (0-750), audio quality provides the minor score.
-fn compute_quality_score(
-    file_type: &str,
-    bitrate_kbps: Option<i32>,
-    sample_rate: Option<i32>,
-) -> u32 {
+/// Equivalence key for grouping files into quality tiers.
+///
+/// Files with the same key are considered equivalent quality.
+/// For lossy formats the distinguishing metric is bitrate;
+/// for lossless formats it is sample rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct QualityTier {
+    format_class: FormatClass,
+    /// Bitrate for lossy, sample rate for lossless, 0 if unknown.
+    metric: i32,
+}
+
+/// Build a QualityTier for a single audio file.
+fn quality_tier_of(file_type: &str, bitrate_kbps: Option<i32>, sample_rate: Option<i32>) -> QualityTier {
     let format_class = classify_format(file_type);
-    let format_score = (format_class as u32) * 250; // 0, 250, 500, 750
-
-    // For lossless, use sample rate (higher = better)
-    // For lossy, use bitrate (higher = better)
-    let audio_score = if is_lossless(file_type) {
-        // Sample rate: 44100 -> 100, 48000 -> 109, 96000 -> 218, 192000 -> 436
-        // Cap at 250 to not exceed format tier
-        sample_rate.unwrap_or(44100).min(192000) as u32 * 250 / 192000
+    let metric = if is_lossless(file_type) {
+        sample_rate.unwrap_or(0)
     } else {
-        // Bitrate: 128 -> 80, 192 -> 120, 256 -> 160, 320 -> 200, etc.
-        // Cap at 250 to not exceed format tier
-        bitrate_kbps.unwrap_or(128).min(500) as u32 * 250 / 500
+        bitrate_kbps.unwrap_or(0)
     };
+    QualityTier { format_class, metric }
+}
 
-    format_score + audio_score.min(249) // Max 999, never overflow into next tier
+/// Determine the SubparReason when `inferior` is outranked by `superior`.
+fn subpar_reason_between(inferior: &QualityTier, superior: &QualityTier) -> SubparReason {
+    if inferior.format_class < superior.format_class {
+        SubparReason::SubparFormat
+    } else if is_lossless_class(inferior.format_class) && inferior.metric < superior.metric {
+        SubparReason::SubparSampleRate
+    } else {
+        SubparReason::SubparBitrate
+    }
+}
+
+/// Whether a FormatClass represents a lossless format.
+fn is_lossless_class(fc: FormatClass) -> bool {
+    matches!(fc, FormatClass::VorbisLossless | FormatClass::OtherLossless)
 }
 
 /// Compute fingerprint similarity using bit-level Hamming distance.
@@ -460,12 +474,16 @@ struct TrackReleaseIdentity {
 ///
 /// Tracks are "same release" if:
 /// - Same catalog number (compilation albums with same ISRC but different catalog = different releases), OR
-/// - Same ISRC (if no catalog numbers to differentiate), OR
+/// - No catalog numbers + same album + ISRC match, OR
 /// - Same normalized album AND same normalized title AND no exclusive variant keywords
 ///
 /// IMPORTANT: Catalog number is checked BEFORE ISRC because the same recording (same ISRC)
 /// can appear on multiple compilation albums with different catalog numbers. These are
 /// legitimate variants that should be kept, not flagged as duplicates.
+///
+/// IMPORTANT: When no catalog numbers are present, album is checked BEFORE ISRC because
+/// ISRC identifies the recording, not the release — same ISRC on different albums (e.g.
+/// solo release vs compilation) means different releases, not redundant copies.
 fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
     // First: Check catalog numbers - different catalog = different release
     // This catches the compilation album case where the same recording (same ISRC)
@@ -477,22 +495,21 @@ fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
         return true; // Same catalog number = same release
     }
 
-    // Second: ISRC match (only if no catalog numbers to differentiate)
-    // If we get here, at least one track is missing a catalog number,
-    // so ISRC is the best differentiator available.
-    if !a.isrc.is_empty() && !b.isrc.is_empty() && a.isrc.eq_ignore_ascii_case(&b.isrc) {
-        return true;
-    }
-
-    // Fall through: Check album names (normalized)
+    // No catalog numbers to differentiate — check album names first.
+    // Different albums = different releases, even with matching ISRC.
     let album_a = normalize_album_name(&a.album);
     let album_b = normalize_album_name(&b.album);
 
     if album_a != album_b {
-        return false; // Different albums = different releases
+        return false; // Different albums = different releases (re-release / compilation)
     }
 
-    // Check for exclusive variant keywords in titles
+    // Same album — ISRC match confirms same release
+    if !a.isrc.is_empty() && !b.isrc.is_empty() && a.isrc.eq_ignore_ascii_case(&b.isrc) {
+        return true;
+    }
+
+    // Fall through: Check for exclusive variant keywords in titles
     let title_a = a.title.to_lowercase();
     let title_b = b.title.to_lowercase();
 
@@ -512,6 +529,7 @@ fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
 enum SubparReason {
     SubparFormat,
     SubparBitrate,
+    SubparSampleRate,
 }
 
 impl SubparReason {
@@ -519,6 +537,7 @@ impl SubparReason {
         match self {
             Self::SubparFormat => "SubparFormat",
             Self::SubparBitrate => "SubparBitrate",
+            Self::SubparSampleRate => "SubparSampleRate",
         }
     }
 }
@@ -670,101 +689,72 @@ pub fn execute_analyze_fingerprint_overlaps(
                 }
             }
 
-            // For each true duplicate group, rank by quality and emit signals
+            // For each true duplicate group, partition into quality tiers and emit signals
             for group in true_duplicate_groups {
-                // Compute quality scores
-                let mut scored: Vec<(usize, u32)> = group
+                // Build quality tiers for each file in the group
+                let mut tiered: Vec<(usize, QualityTier)> = group
                     .iter()
                     .map(|&idx| {
-                        let audio_file = &cluster[idx];
-                        let score = compute_quality_score(
-                            &audio_file.audio.file_type,
-                            audio_file.audio.bitrate_kbps,
-                            audio_file.audio.sample_rate,
+                        let af = &cluster[idx];
+                        let tier = quality_tier_of(
+                            &af.audio.file_type,
+                            af.audio.bitrate_kbps,
+                            af.audio.sample_rate,
                         );
-                        (idx, score)
+                        (idx, tier)
                     })
                     .collect();
 
-                // Sort by score descending (best first)
-                scored.sort_by(|a, b| b.1.cmp(&a.1));
+                // Sort by tier descending (best first)
+                tiered.sort_by(|a, b| b.1.cmp(&a.1));
 
-                let best_score = scored[0].1;
-                let best_count = scored.iter().filter(|&&(_, s)| s == best_score).count();
+                let best_tier = tiered[0].1;
 
-                if best_count > 1 {
-                    // Multiple files tied at best quality — emit RedundantDuplicate
-                    let tied: Vec<&(usize, u32)> = scored.iter().filter(|&&(_, s)| s == best_score).collect();
-                    let tied_inodes: Vec<i64> = tied.iter().map(|&&(idx, _)| cluster[idx].inode()).collect();
-                    let tied_paths: Vec<String> = tied.iter().map(|&&(idx, _)| cluster[idx].path().to_string()).collect();
-                    let file_type = cluster[tied[0].0].audio.file_type.clone();
+                // Partition: best-tier files vs lower-tier files
+                let best_indices: Vec<usize> = tiered.iter()
+                    .filter(|(_, t)| *t == best_tier)
+                    .map(|(idx, _)| *idx)
+                    .collect();
+
+                let lower: Vec<(usize, QualityTier)> = tiered.iter()
+                    .filter(|(_, t)| *t != best_tier)
+                    .copied()
+                    .collect();
+
+                // Best-tier files with >1 member → RedundantDuplicate
+                if best_indices.len() > 1 {
+                    let inodes: Vec<i64> = best_indices.iter().map(|&idx| cluster[idx].inode()).collect();
+                    let paths: Vec<String> = best_indices.iter().map(|&idx| cluster[idx].path().to_string()).collect();
+                    let file_type = cluster[best_indices[0]].audio.file_type.clone();
 
                     sender.write_typed_signal(TypedSignalWrite::RedundantDuplicate(RedundantDuplicateSignal {
                         key: signal.key.clone(),
                         data: RedundantDuplicateData {
-                            quality_score: best_score as i32,
                             file_type,
-                            inodes: tied_inodes,
-                            paths: tied_paths,
+                            inodes,
+                            paths,
                         },
                     }), witness);
                     redundant_count += 1;
+                }
 
-                    // Emit SubparDuplicate for files strictly below best score
-                    // Use first tied file as nominal superior
-                    let (nominal_best_idx, _) = *tied[0];
-                    let nominal_best_identity = &identities[nominal_best_idx];
+                // Lower-tier files → SubparDuplicate (reference: first best-tier file)
+                if !lower.is_empty() {
+                    let superior_idx = best_indices[0];
+                    let superior_identity = &identities[superior_idx];
 
-                    for &(idx, score) in scored.iter().filter(|&&(_, s)| s < best_score) {
-                        let audio_file = &cluster[idx];
-                        let best_audio_file = &cluster[nominal_best_idx];
-
-                        let reason = if classify_format(&audio_file.audio.file_type) < classify_format(&best_audio_file.audio.file_type) {
-                            SubparReason::SubparFormat
-                        } else {
-                            SubparReason::SubparBitrate
-                        };
+                    for (idx, tier) in &lower {
+                        let audio_file = &cluster[*idx];
+                        let reason = subpar_reason_between(tier, &best_tier);
 
                         sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
                             inode: audio_file.inode(),
                             path: audio_file.path().to_string(),
                             data: SubparDuplicateData {
                                 reason: reason.as_str().to_string(),
-                                superior_inode: nominal_best_identity.inode,
-                                superior_path: nominal_best_identity.path.clone(),
+                                superior_inode: superior_identity.inode,
+                                superior_path: superior_identity.path.clone(),
                                 dupe_group_fingerprint: signal.key.clone(),
-                                quality_score: score as i32,
-                                superior_quality_score: best_score as i32,
-                            },
-                        }), witness);
-
-                        subpar_count += 1;
-                    }
-                } else {
-                    // Single best — current behavior unchanged
-                    let (best_idx, _) = scored[0];
-                    let best_audio_file = &cluster[best_idx];
-                    let best_identity = &identities[best_idx];
-
-                    for &(idx, score) in scored.iter().skip(1) {
-                        let audio_file = &cluster[idx];
-
-                        let reason = if classify_format(&audio_file.audio.file_type) < classify_format(&best_audio_file.audio.file_type) {
-                            SubparReason::SubparFormat
-                        } else {
-                            SubparReason::SubparBitrate
-                        };
-
-                        sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
-                            inode: audio_file.inode(),
-                            path: audio_file.path().to_string(),
-                            data: SubparDuplicateData {
-                                reason: reason.as_str().to_string(),
-                                superior_inode: best_identity.inode,
-                                superior_path: best_identity.path.clone(),
-                                dupe_group_fingerprint: signal.key.clone(),
-                                quality_score: score as i32,
-                                superior_quality_score: best_score as i32,
                             },
                         }), witness);
 

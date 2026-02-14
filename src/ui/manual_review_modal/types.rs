@@ -16,7 +16,7 @@ use crate::meta::mutations::indexing::DropFromIndexMutation;
 /// What kind of manual review this modal is performing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewKind {
-    /// Equal-quality duplicates (same fingerprint + quality score).
+    /// Equivalent-quality duplicates (same fingerprint, same format/metric tier).
     /// Only stashing resolves these — tag edits cannot help.
     RedundantDuplicate,
     /// Multiple corpus files deploy to the same library path.
@@ -122,7 +122,7 @@ impl ManualReviewData {
 
         let mut groups = Vec::new();
         for (_key, data) in signal_groups {
-            let label = format!("{} ({}×, quality {})", data.file_type, data.inodes.len(), data.quality_score);
+            let label = format!("{} ({}×)", data.file_type, data.inodes.len());
 
             let mut files = Vec::new();
             for (idx, &inode) in data.inodes.iter().enumerate() {
@@ -138,7 +138,7 @@ impl ManualReviewData {
                 files.push(ReviewFileEntry {
                     corpus_path: path,
                     inode,
-                    context: format!("Quality score: {}/999", data.quality_score),
+                    context: "Same fingerprint, equivalent quality".to_string(),
                     stashed: false,
                     meta: None,
                 });

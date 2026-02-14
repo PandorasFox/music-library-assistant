@@ -32,7 +32,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | HealthyFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In corpus, indexed, mtime matches, no OOB signals |
 | CorruptFile | VerifyTags, VerifyAudio, IndexFileFromPath, Transcode | VerifyAudio (if valid), MoveToStash, DropFromIndex | Tag read or audio decode failed |
 | ShitFormat | IndexFileFromPath, DetectShitFormats | Transcode (to Opus/FLAC), DetectShitFormats | Non-Vorbis container (MP3, M4A, WAV, etc.) |
-| SubparDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps, MoveToStash | Track is strictly lower quality than another duplicate (never emitted for equal-quality ties) |
+| SubparDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps, MoveToStash | Track is outranked by a better version in its duplicate group (SubparFormat, SubparBitrate, or SubparSampleRate). Never emitted for equivalent-tier ties |
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
@@ -86,7 +86,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | CompoundTag | DetectCompoundTagsForInode | DetectCompoundTagValues (clears all before spawning) | Per-file signal for tags matching a `SplitRule` in the priority chain. `separator` field contains either the literal separator string (e.g., `";"`) or a collaboration keyword label (e.g., `"feat."`, `"vs."`). Metadata: `{ inode, compounds: [{ tag_name, compound_value, split_parts, separator }] }` |
 | CanonicalTag | EmitCanonicalTag | - | Operator-confirmed canonical tag value (whitelist). Key: `{tag_name}:{tag_value}`. Prevents compound detection from flagging this value |
 | InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist. Suppressed when any track in the group has `FLAGCOMPILATION=0` tag |
-| RedundantDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps | Group of files with identical fingerprints AND identical quality scores. Requires operator choice — neither file is subpar. Key: fingerprint text |
+| RedundantDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps | Group of files with identical fingerprints and equivalent quality tier (same format class + metric). Requires operator choice — neither file is subpar. Key: fingerprint text. Data (bincode): `file_type`, `inodes[]`, `paths[]` |
 | EmbeddableAlbumArt | DetectEmbeddableAlbumArt | DetectEmbeddableAlbumArt, EmbedAlbumArt | Directory with sidecar image and audio files lacking embedded art. Key: relative directory path. Metadata (bincode): `image_path`, `image_filename`, `artless_inodes[]`, `artless_paths[]` |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
 

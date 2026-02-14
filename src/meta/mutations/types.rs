@@ -22,6 +22,7 @@ use super::indexing::{
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
+use super::album_art::EmbedAlbumArtMutation;
 
 // ============================================================================
 // TagOp - Incremental Tag Operations
@@ -167,6 +168,8 @@ pub struct ExtractedMetadata {
     pub sample_rate: Option<i32>,
     /// Chromaprint acoustic fingerprint as raw u32 values.
     pub fingerprint: Option<Vec<u32>>,
+    /// Whether the file has embedded pictures (album art).
+    pub has_pictures: bool,
     /// All tags extracted from the file.
     pub tags: TagSet,
 }
@@ -264,6 +267,12 @@ pub enum Mutation {
     // ========================================================================
     /// Emit a CanonicalTag signal to whitelist a tag value.
     EmitCanonicalTag(EmitCanonicalTagMutation),
+
+    // ========================================================================
+    // Album Art Operations (struct-backed — see album_art.rs for trait impl)
+    // ========================================================================
+    /// Embed a sidecar image into an audio file.
+    EmbedAlbumArt(EmbedAlbumArtMutation),
 }
 
 impl Mutation {
@@ -288,6 +297,7 @@ impl Mutation {
             Mutation::FlushTagsToDisk(m) => Some(m),
             Mutation::AssimilateDiskTagsToDb(m) => Some(m),
             Mutation::EmitCanonicalTag(m) => Some(m),
+            Mutation::EmbedAlbumArt(m) => Some(m),
             Mutation::DbMigration { .. } => None,
         }
     }
@@ -332,6 +342,7 @@ impl Mutation {
             Mutation::ApplyDbTagsToDisk(ref m) => Some(m.inode),
             Mutation::FlushTagsToDisk(ref m) => Some(m.inode),
             Mutation::AssimilateDiskTagsToDb(ref m) => Some(m.inode),
+            Mutation::EmbedAlbumArt(ref m) => Some(m.inode),
 
             // These don't have a single inode directly (batch operations or no inode)
             Mutation::ApplyTagOps(_)
@@ -437,6 +448,13 @@ impl Mutation {
 
             // Signal emission: DB-only, no directories affected
             Mutation::EmitCanonicalTag(_) => {}
+
+            // Album art embedding: affects the audio file's directory
+            Mutation::EmbedAlbumArt(m) => {
+                if let Some(parent) = m.audio_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
         }
 
         // Deduplicate directories

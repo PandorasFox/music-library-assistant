@@ -126,6 +126,55 @@ impl TagSet {
         }
     }
 
+    /// Check whether an audio file has any embedded pictures.
+    ///
+    /// Format-aware: uses concrete lofty types for Vorbis containers,
+    /// generic Probe for others. Non-fatal — returns false on read errors.
+    pub fn has_embedded_pictures(path: &Path) -> bool {
+        let ext = path.extension().and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase()).unwrap_or_default();
+
+        match ext.as_str() {
+            "flac" => {
+                use lofty::config::ParseOptions;
+                use lofty::file::AudioFile;
+                use lofty::ogg::OggPictureStorage;
+
+                let Ok(file) = std::fs::File::open(path) else { return false };
+                let mut reader = std::io::BufReader::new(file);
+                let Ok(flac) = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()) else { return false };
+                !flac.pictures().is_empty()
+            }
+            "opus" => {
+                use lofty::config::ParseOptions;
+                use lofty::file::AudioFile;
+                use lofty::ogg::OggPictureStorage;
+
+                let Ok(file) = std::fs::File::open(path) else { return false };
+                let mut reader = std::io::BufReader::new(file);
+                let Ok(opus) = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()) else { return false };
+                !opus.vorbis_comments().pictures().is_empty()
+            }
+            "ogg" => {
+                use lofty::config::ParseOptions;
+                use lofty::file::AudioFile;
+                use lofty::ogg::OggPictureStorage;
+
+                let Ok(file) = std::fs::File::open(path) else { return false };
+                let mut reader = std::io::BufReader::new(file);
+                let Ok(vorbis) = lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()) else { return false };
+                !vorbis.vorbis_comments().pictures().is_empty()
+            }
+            _ => {
+                use lofty::file::TaggedFileExt;
+                use lofty::probe::Probe;
+
+                let Ok(tagged_file) = Probe::open(path).and_then(|p| p.read()) else { return false };
+                tagged_file.tags().iter().any(|tag| tag.picture_count() > 0)
+            }
+        }
+    }
+
     /// Build a TagSet from VorbisComments (shared by FLAC, Opus, OGG Vorbis).
     ///
     /// Reads raw key=value pairs directly — no ItemKey mapping, no bijection problem.

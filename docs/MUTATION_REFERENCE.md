@@ -119,6 +119,12 @@ Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutation
 |----------|---------------------|-----------------|-----------------|-------|
 | DbMigration | — | — | — | Schema migrations only |
 
+### Album Art Operations
+
+| Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
+|----------|---------------------|-----------------|-----------------|-------|
+| EmbedAlbumArt | UpdateCorpusFileSignals | — | EmbeddableAlbumArt (exact key), MutableOnly scope signals for inode | Read sidecar image from disk, embed into audio file via lofty (FLAC: OggPictureStorage, Opus/OGG: VorbisComments) |
+
 ### Signal Emission Operations
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |

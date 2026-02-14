@@ -66,6 +66,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagValues | Orchestrator: spawns DetectCompoundTagsForInode for each dirty corpus inode. Parallelizes detection across worker threads. |
 | DetectCompoundTagsForInode | Per-inode: walks the priority-ordered `SplitRule` chain from `TagSplittingOpinions` (separator and collaboration keyword rules). First matching rule wins per tag value. Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
+| DetectEmbeddableAlbumArt | Find directories with sidecar album art images alongside audio files lacking embedded pictures |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
 | DetectDeployConflicts | Detect path collisions in deployment |
@@ -114,6 +115,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate, RedundantDuplicate | SubparDuplicate (all, then recreate), RedundantDuplicate (all, then recreate). Equal-quality ties emit RedundantDuplicate (aggregate); strictly-lower quality emit SubparDuplicate (per-file). |
+| DetectEmbeddableAlbumArt | — | EmbeddableAlbumArt | EmbeddableAlbumArt (stale, via set reconciliation) |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (all, then recreate) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale. Masks stale-conflicts: if a stale file's expected path is already occupied by a different inode, no stale signal is emitted (the LibraryMove would always fail). |

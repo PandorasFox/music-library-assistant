@@ -214,6 +214,10 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::UpdateFilePath(_)
             | Mutation::DropDirectoryFromIndex(_)
             | Mutation::EmitCanonicalTag(_) => {}
+
+            Mutation::EmbedAlbumArt(ref m) => {
+                inodes.insert(m.inode);
+            }
         }
     }
 

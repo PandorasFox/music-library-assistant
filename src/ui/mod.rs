@@ -27,6 +27,7 @@ pub mod compound_split_v2;
 pub mod corrupt_file_modal;
 pub mod deploy_modal;
 pub mod directory_cluster_modal;
+pub mod embed_album_art_modal;
 pub mod eye;
 pub mod filter_popup;
 pub mod helpers;
@@ -207,6 +208,7 @@ impl App {
             ActiveView::MissingDirectoryResolution(s) => ViewAction::MissingDirectoryResolution(s.handle_key(key)),
             ActiveView::CorruptFileResolution(s) => ViewAction::CorruptFileResolution(s.handle_key(key)),
             ActiveView::ShitFormatResolution(s) => ViewAction::ShitFormatResolution(s.handle_key(key)),
+            ActiveView::EmbedAlbumArtResolution(s) => ViewAction::EmbedAlbumArtResolution(s.handle_key(key)),
             ActiveView::SubparDuplicateResolution(s) => ViewAction::SubparDuplicateResolution(s.handle_key(key)),
             ActiveView::DirectoryClusterResolution(s) => ViewAction::DirectoryClusterResolution(s.handle_key(key)),
             ActiveView::MovedFileAcknowledge(s) => ViewAction::MovedFileAcknowledge(s.handle_key(key)),

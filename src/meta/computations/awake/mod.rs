@@ -34,6 +34,7 @@ mod duplicates;
 mod tags;
 mod deploy;
 mod formats;
+mod album_art;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -43,6 +44,7 @@ pub use duplicates::*;
 pub use tags::*;
 pub use deploy::*;
 pub use formats::*;
+pub use album_art::*;
 
 // ============================================================================
 // Awake Computation Enum
@@ -143,6 +145,12 @@ pub enum Computation {
     /// For each HealthyFile, emits DeployReady (not in any library) or
     /// DeployedHealthy (correctly deployed). Runs after DeriveDeployHealthSignals.
     DeriveCorpusDeployStatus,
+
+    /// Detect directories with sidecar album art embeddable into artless audio files.
+    ///
+    /// Scans directories for image files (cover.jpg, folder.png, etc.) and probes
+    /// audio files for embedded pictures. Emits EmbeddableAlbumArt signals.
+    DetectEmbeddableAlbumArt,
 }
 
 impl Computation {
@@ -164,6 +172,7 @@ impl Computation {
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
+            Computation::DetectEmbeddableAlbumArt => "Detecting embeddable album art",
         }
     }
 
@@ -214,6 +223,9 @@ impl Computation {
             }
             Computation::DeriveCorpusDeployStatus => {
                 execute_derive_corpus_deploy_status(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectEmbeddableAlbumArt => {
+                execute_detect_embeddable_album_art(ctx.read_db, ctx.witness, ctx.start)
             }
         }
     }

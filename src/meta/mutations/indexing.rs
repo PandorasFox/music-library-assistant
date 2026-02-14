@@ -424,6 +424,7 @@ fn index_track_from_metadata(
         bitrate_kbps: metadata.bitrate_kbps,
         sample_rate: metadata.sample_rate,
         fingerprint: metadata.fingerprint.clone(),
+        has_pictures: metadata.has_pictures,
     };
 
     // Route write through signal_sender (fire-and-forget)

@@ -308,6 +308,29 @@ impl MigrationRegistry {
             },
         });
 
+        // v8→v9: Add has_pictures column to audio_info for embedded album art detection
+        registry.register(Migration {
+            from_version: 8,
+            to_version: 9,
+            description: "Add has_pictures column to audio_info for embedded album art detection at index time",
+            apply: |db| {
+                let has_column: bool = db.conn().query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('audio_info') WHERE name = 'has_pictures'",
+                    [],
+                    |row| row.get(0),
+                )?;
+
+                if !has_column {
+                    db.conn().execute(
+                        "ALTER TABLE audio_info ADD COLUMN has_pictures INTEGER NOT NULL DEFAULT 0",
+                        [],
+                    )?;
+                }
+
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -401,9 +424,10 @@ mod tests {
         // v5→v6: re-seed dirty inodes for compound tag detection
         // v6→v7: re-seed after split rule priority reorder
         // v7→v8: uppercase all tag names
-        assert_eq!(registry.latest_version(), 8);
-        assert_eq!(registry.pending_migrations(1).len(), 7);
-        assert_eq!(registry.pending_migrations(7).len(), 1);
-        assert!(registry.pending_migrations(8).is_empty());
+        // v8→v9: has_pictures column in audio_info
+        assert_eq!(registry.latest_version(), 9);
+        assert_eq!(registry.pending_migrations(1).len(), 8);
+        assert_eq!(registry.pending_migrations(8).len(), 1);
+        assert!(registry.pending_migrations(9).is_empty());
     }
 }

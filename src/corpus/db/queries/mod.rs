@@ -206,6 +206,7 @@ impl Database {
                 bitrate_kbps INTEGER,
                 sample_rate INTEGER,
                 fingerprint BLOB,
+                has_pictures INTEGER NOT NULL DEFAULT 0,
                 needs_tag_flush INTEGER NOT NULL DEFAULT 0,
                 tags_version INTEGER NOT NULL DEFAULT 0  -- monotonic counter for tag changes
             );
@@ -568,6 +569,16 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get subpar duplicate files with metadata.
     pub fn get_subpar_duplicate_files(&self) -> Result<Vec<crate::corpus::db::types::SubparDuplicateEntry>> {
         self.db.get_subpar_duplicate_files()
+    }
+
+    /// Get embeddable album art signals with deserialized data.
+    pub fn get_embeddable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::EmbeddableAlbumArtSignal>> {
+        self.db.get_embeddable_album_art_signals()
+    }
+
+    /// Get corpus audio files without embedded pictures.
+    pub fn get_artless_corpus_files(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_artless_corpus_files()
     }
 
     // =========================================================================

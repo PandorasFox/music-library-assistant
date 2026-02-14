@@ -62,6 +62,7 @@ pub struct AudioData {
     pub bitrate_kbps: Option<i32>,
     pub sample_rate: Option<i32>,
     pub fingerprint: Option<Vec<u32>>,
+    pub has_pictures: bool,
 }
 
 /// File entry data for files table operations.
@@ -1566,8 +1567,8 @@ fn execute_index_audio_file(
     tx.execute(
         r#"
         INSERT OR REPLACE INTO audio_info
-        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
+        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures, needs_tag_flush)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
         "#,
         params![
             file_data.inode,
@@ -1576,6 +1577,7 @@ fn execute_index_audio_file(
             audio_data.bitrate_kbps,
             audio_data.sample_rate,
             &fp_blob,
+            audio_data.has_pictures as i32,
         ],
     )?;
 
@@ -1791,21 +1793,21 @@ fn execute_update_track_path_with_metadata(
     }
 
     // Get old audio_info to copy to new inode
-    let (duration_ms, bitrate_kbps, sample_rate, fingerprint): (Option<i64>, Option<i32>, Option<i32>, Option<Vec<u8>>) =
+    let (duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures): (Option<i64>, Option<i32>, Option<i32>, Option<Vec<u8>>, i32) =
         tx.query_row(
-            "SELECT duration_ms, bitrate_kbps, sample_rate, fingerprint FROM audio_info WHERE inode = ?1",
+            "SELECT duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures FROM audio_info WHERE inode = ?1",
             params![old_inode],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get::<_, i32>(4).unwrap_or(0))),
         )?;
 
     // Insert new audio_info with new file_type
     tx.execute(
         r#"
         INSERT OR REPLACE INTO audio_info
-        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, needs_tag_flush)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
+        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures, needs_tag_flush)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
         "#,
-        params![new_inode, new_file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint],
+        params![new_inode, new_file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures],
     )?;
 
     // Copy tags to new inode

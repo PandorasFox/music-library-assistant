@@ -168,6 +168,8 @@ pub struct TagSquashBucket {
     pub inconsistent_album_artist_count: usize,
     /// Compound tag values grouped by tag name (e.g., "artist", "genre")
     pub compound_tags: Vec<CompoundTagEntry>,
+    /// Directories with sidecar album art embeddable into artless audio files
+    pub embeddable_album_art: usize,
 }
 
 /// Entry for tag squash signals (grouped by tag name)

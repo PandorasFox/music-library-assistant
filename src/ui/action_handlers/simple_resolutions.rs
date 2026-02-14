@@ -4,7 +4,7 @@
 //! subpar duplicate, and directory overlap resolution modals.
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
-use crate::ui::{corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, ActiveView};
+use crate::ui::{corrupt_file_modal, embed_album_art_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, ActiveView};
 use super::witness;
 use super::super::App;
 
@@ -386,6 +386,55 @@ impl App {
             }
             DirectoryClusterPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Directory overlap cluster resolution cancelled");
+            }
+        }
+    }
+
+    // =========================================================================
+    // Embed Album Art Resolution
+    // =========================================================================
+
+    /// Start embed album art resolution modal from Insights view.
+    pub(in crate::ui) fn start_embed_album_art_resolution(&mut self) {
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                embed_album_art_modal::EmbedAlbumArtModalData::load(&read_db).ok()
+            })
+            .unwrap_or_default();
+
+        if data.directory_count() == 0 {
+            self.status_message = Some("No embeddable album art found".to_string());
+            return;
+        }
+
+        let preview = embed_album_art_modal::EmbedAlbumArtPreviewState::new(data);
+        self.view = ActiveView::EmbedAlbumArtResolution(preview);
+    }
+
+    /// Handle embed album art preview actions.
+    pub(super) fn handle_embed_album_art_preview_action(
+        &mut self,
+        action: embed_album_art_modal::EmbedAlbumArtPreviewAction,
+        witness: Option<&witness::DecisionWitness>,
+    ) {
+        match action {
+            embed_album_art_modal::EmbedAlbumArtPreviewAction::None => {}
+            embed_album_art_modal::EmbedAlbumArtPreviewAction::ConfirmEmbedAll => {
+                let Some(w) = witness else { return };
+                let mutations = match &self.view {
+                    ActiveView::EmbedAlbumArtResolution(ref preview) => preview.cached_data.embed_mutations(),
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Embed album art", w);
+                    self.start_transaction_review();
+                } else {
+                    self.status_message = Some("No artless files to embed into".to_string());
+                }
+            }
+            embed_album_art_modal::EmbedAlbumArtPreviewAction::Cancel => {
+                self.cancel_and_return_to_insights("Embed album art cancelled");
             }
         }
     }

@@ -53,6 +53,7 @@ impl Database {
         total += CanonicalTagSignal::count(&self.conn).unwrap_or(0);
         total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0);
         total += LibraryStaleSignal::count(&self.conn).unwrap_or(0);
+        total += EmbeddableAlbumArtSignal::count(&self.conn).unwrap_or(0);
         total
     }
 
@@ -382,6 +383,8 @@ impl Database {
             .collect();
         tag_canonicity.sort_by(|a, b| b._total_tracks.cmp(&a._total_tracks));
 
+        let embeddable_album_art = self.count_signal_type("embeddable_album_art")?;
+
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
             subpar_duplicate_count,
@@ -389,6 +392,7 @@ impl Database {
             tag_canonicity,
             inconsistent_album_artist_count,
             compound_tags,
+            embeddable_album_art,
         })
     }
 
@@ -527,6 +531,7 @@ impl Database {
             "canonical_tag" => CanonicalTagSignal::count(&self.conn)?,
             "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,
             "library_stale" => LibraryStaleSignal::count(&self.conn)?,
+            "embeddable_album_art" => EmbeddableAlbumArtSignal::count(&self.conn)?,
             _ => 0,
         };
         Ok(count)
@@ -906,6 +911,35 @@ impl Database {
         use crate::meta::signals::store::AggregateSignalStore;
         let key = format!("{}:{}", tag_name, tag_value);
         Ok(CanonicalTagSignal::exists(&self.conn, &key).unwrap_or(false))
+    }
+
+    // ========================================================================
+    // Embeddable Album Art Resolution Queries
+    // ========================================================================
+
+    /// Get all embeddable album art signals with deserialized data.
+    pub fn get_embeddable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::EmbeddableAlbumArtSignal>> {
+        crate::meta::signals::data::EmbeddableAlbumArtSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query embeddable album art signals: {}", e))
+    }
+
+    /// Get corpus audio files that have no embedded pictures (has_pictures = 0).
+    ///
+    /// Returns (inode, absolute_path) for healthy corpus files without album art.
+    /// Used by DetectEmbeddableAlbumArt to avoid lofty probing at Awake phase.
+    pub fn get_artless_corpus_files(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT a.inode, f.path
+               FROM audio_info a
+               JOIN files f ON a.inode = f.inode
+               JOIN signal_healthy_file h ON a.inode = h.inode
+               WHERE f.source = 'corpus' AND a.has_pictures = 0"#
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| anyhow::anyhow!("Failed to query artless corpus files: {}", e))
     }
 
     /// Get all inodes that have a CompoundTag signal containing a specific compound value.

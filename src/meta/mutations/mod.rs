@@ -33,6 +33,7 @@ pub mod tag_edit;
 pub mod indexing;
 pub mod file_ops;
 pub mod transcode;
+pub mod album_art;
 
 pub use types::*;
 // MutationContext and MutationExecutor accessible via crate::meta::mutations::traits::{...}

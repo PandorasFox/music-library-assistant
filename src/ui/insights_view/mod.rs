@@ -140,6 +140,7 @@ pub enum InsightType {
     TagCanonicity { tag_name: String },
     CompoundTagValueSafe { tag_name: String },   // All split parts exist in corpus
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
+    EmbeddableAlbumArt,
     // Library bucket entries
     LibraryStale,
     LibraryLeftover,
@@ -180,6 +181,8 @@ pub enum InsightAction {
     LaunchDirectoryOverlapResolution,
     /// Launch subpar duplicate stash
     LaunchSubparDuplicateResolution,
+    /// Launch embed album art modal
+    LaunchEmbedAlbumArt,
     /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -317,6 +320,18 @@ impl BucketEntry {
             color: if count > 0 { Color::Yellow } else { Color::DarkGray },
             rank: 0,
             action: InsightAction::LaunchCompoundTagSplitReview,
+        }
+    }
+
+    /// Create embeddable album art entry
+    fn embeddable_album_art(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::EmbeddableAlbumArt,
+            label: "Embeddable album art".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Cyan } else { Color::DarkGray },
+            rank: 0,
+            action: InsightAction::LaunchEmbedAlbumArt,
         }
     }
 
@@ -529,6 +544,11 @@ impl CachedBucketEntries {
             if entry.review_count > 0 {
                 entries.push(BucketEntry::compound_tag_value_review(&entry.tag_name, entry.review_count));
             }
+        }
+
+        // Embeddable album art at bottom
+        if bucket.embeddable_album_art > 0 {
+            entries.push(BucketEntry::embeddable_album_art(bucket.embeddable_album_art));
         }
 
         entries
@@ -879,6 +899,7 @@ mod tests {
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
                 compound_tags: vec![],
+                embeddable_album_art: 0,
             },
             bucket_library: LibraryDeployBucket {
                 library_stale: 1,

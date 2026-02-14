@@ -87,6 +87,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | CanonicalTag | EmitCanonicalTag | - | Operator-confirmed canonical tag value (whitelist). Key: `{tag_name}:{tag_value}`. Prevents compound detection from flagging this value |
 | InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist |
 | RedundantDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps | Group of files with identical fingerprints AND identical quality scores. Requires operator choice — neither file is subpar. Key: fingerprint text |
+| EmbeddableAlbumArt | DetectEmbeddableAlbumArt | DetectEmbeddableAlbumArt, EmbedAlbumArt | Directory with sidecar image and audio files lacking embedded art. Key: relative directory path. Metadata (bincode): `image_path`, `image_filename`, `artless_inodes[]`, `artless_paths[]` |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
 
 ---

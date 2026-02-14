@@ -739,6 +739,35 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
+        InsightType::EmbeddableAlbumArt => {
+            lines.push(Line::from(Span::styled(
+                "Embeddable Album Art",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Directories with sidecar images",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "(cover.jpg, folder.png, etc.)",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "alongside audio files without",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "embedded pictures.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to embed.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
         // Other bucket - dynamic entries
         InsightType::OtherSignal { index } => {
             // Get extended info from cached_data if available

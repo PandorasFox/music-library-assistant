@@ -380,6 +380,26 @@ pub struct CrossSourceOverlapData {
     pub track_pairs: Vec<CrossSourceTrackPair>,
 }
 
+/// Directory contains sidecar album art embeddable into artless audio files.
+#[derive(Debug, Clone)]
+pub struct EmbeddableAlbumArtSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: EmbeddableAlbumArtData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddableAlbumArtData {
+    /// Absolute path to sidecar image file.
+    pub image_path: String,
+    /// Display name (e.g. "cover.jpg").
+    pub image_filename: String,
+    /// Inodes of audio files lacking embedded art.
+    pub artless_inodes: Vec<i64>,
+    /// Corpus-relative paths (parallel to artless_inodes).
+    pub artless_paths: Vec<String>,
+}
+
 /// Group of files with identical fingerprints AND identical quality scores.
 /// Neither file is subpar — requires operator choice.
 #[derive(Debug, Clone)]
@@ -445,6 +465,7 @@ pub enum TypedSignalWrite {
     InconsistentAlbumArtist(InconsistentAlbumArtistSignal),
     CrossSourceOverlap(CrossSourceOverlapSignal),
     RedundantDuplicate(RedundantDuplicateSignal),
+    EmbeddableAlbumArt(EmbeddableAlbumArtSignal),
 }
 
 impl TypedSignalWrite {
@@ -479,6 +500,7 @@ impl TypedSignalWrite {
             Self::InconsistentAlbumArtist(s) => s.insert(conn),
             Self::CrossSourceOverlap(s) => s.insert(conn),
             Self::RedundantDuplicate(s) => s.insert(conn),
+            Self::EmbeddableAlbumArt(s) => s.insert(conn),
         }
     }
 
@@ -513,6 +535,7 @@ impl TypedSignalWrite {
             Self::InconsistentAlbumArtist(s) => InconsistentAlbumArtistSignal::exists(conn, &s.key),
             Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
             Self::RedundantDuplicate(s) => RedundantDuplicateSignal::exists(conn, &s.key),
+            Self::EmbeddableAlbumArt(s) => EmbeddableAlbumArtSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }

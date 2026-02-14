@@ -221,6 +221,10 @@ fn render_content(
             vname = "shit_format_resolution";
             preview.render(f, area);
         }
+        ActiveView::EmbedAlbumArtResolution(ref preview) => {
+            vname = "embed_album_art_resolution";
+            preview.render(f, area);
+        }
         ActiveView::SubparDuplicateResolution(ref preview) => {
             vname = "subpar_duplicate_resolution";
             preview.render(f, area);
@@ -378,6 +382,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::MissingDirectoryResolution(_) => "missing_directory_resolution",
         ActiveView::CorruptFileResolution(_) => "corrupt_file_resolution",
         ActiveView::ShitFormatResolution(_) => "shit_format_resolution",
+        ActiveView::EmbedAlbumArtResolution(_) => "embed_album_art_resolution",
         ActiveView::SubparDuplicateResolution(_) => "subpar_duplicate_resolution",
         ActiveView::DirectoryClusterResolution(_) => "directory_cluster_resolution",
         ActiveView::MovedFileAcknowledge(_) => "moved_file_acknowledge",

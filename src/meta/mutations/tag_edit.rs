@@ -184,13 +184,13 @@ fn execute_apply_tag_ops(
         sender.apply_index_tag_ops(file_path, validated_ops, session_id, witness);
         sender.set_needs_disk_flush(file_path, true, witness);
 
-        // Spawn disk flush with carried tags (no DB read needed — avoids race)
+        // Spawn disk flush — carries expected_tags for post-drain validation
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(file_path));
         spawned.push(witness.spawn_mutation(Mutation::FlushTagsToDisk(FlushTagsToDiskMutation {
             inode,
             path: abs_path,
-            tags: expected_tags,
+            expected_tags,
         })));
     }
 

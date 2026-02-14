@@ -95,12 +95,13 @@ pub struct AssimilateDiskTagsToDbMutation {
     pub source: Option<String>,
 }
 
-/// Flush carried tags to disk file (no DB read needed).
+/// Flush committed DB tags to disk, with validation against expected state.
 ///
-/// Unlike ApplyDbTagsToDisk which reads tags from DB at execution time,
-/// this mutation carries the TagSet directly from ApplyTagOps execution.
-/// This eliminates the race condition where the async DB write hasn't
-/// committed yet when the disk flush runs.
+/// Drains the DB write queue first to ensure all pending writes commit,
+/// then reads committed tags from DB and validates them against the
+/// carried `expected_tags`. If they match, writes to disk and clears
+/// `needs_disk_flush`. If they diverge, returns an error and leaves
+/// the flag raised for OOB resolution.
 ///
 /// ApplyDbTagsToDisk remains for standalone OOB resolution where the DB
 /// write happened in a previous operator session (no race).
@@ -108,7 +109,7 @@ pub struct AssimilateDiskTagsToDbMutation {
 pub struct FlushTagsToDiskMutation {
     pub inode: i64,
     pub path: PathBuf,
-    pub tags: TagSet,
+    pub expected_tags: TagSet,
 }
 
 /// Emit a CanonicalTag signal to whitelist a tag value.
@@ -291,7 +292,7 @@ impl MutationExecutor for FlushTagsToDiskMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_flush_tags_to_disk(self.inode, &self.path, &self.tags, ctx.witness);
+        let result = execute_flush_tags_to_disk(self.inode, &self.path, &self.expected_tags, ctx.read_db, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -886,24 +887,27 @@ pub fn execute_apply_db_tags_to_disk(
     Ok(())
 }
 
-/// Execute FlushTagsToDisk mutation - write carried tags to disk.
+/// Execute FlushTagsToDisk mutation — drain DB queue, validate, then write.
 ///
-/// Unlike execute_apply_db_tags_to_disk, this uses the TagSet carried in the
-/// mutation rather than reading from DB. This eliminates the race condition
-/// where an async DB write from ApplyTagOps hasn't committed yet.
-///
-/// On success: clears needs_disk_flush flag.
-/// On failure (write validation fails): leaves needs_disk_flush raised so
-/// OOB resolution or retry can pick it up.
+/// 1. Blocks until the DB write queue drains (all pending writes commit).
+/// 2. Reads committed tags from DB via `read_db`.
+/// 3. Compares committed tags against `expected_tags`.
+/// 4. On match: writes committed tags to disk and clears `needs_disk_flush`.
+/// 5. On mismatch: returns error, leaves `needs_disk_flush` raised for OOB
+///    resolution.
 pub fn execute_flush_tags_to_disk(
-    _inode: i64,
+    inode: i64,
     abs_path: &std::path::Path,
-    tags: &TagSet,
+    expected_tags: &TagSet,
+    read_db: &crate::corpus::db::queries::ReadOnlyDb<'_>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::corpus::paths;
     use crate::corpus::tags::write_file_tags;
     use crate::db_thread;
+
+    // 1. Drain: block until all pending DB writes have committed
+    db_thread::wait_for_queue_drain();
 
     let sender = db_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
@@ -917,9 +921,25 @@ pub fn execute_flush_tags_to_disk(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Write carried tags to disk (includes read-back validation)
+    // 2. Read committed tags from DB
+    let db_tags = read_db.get_corpus_tags(inode)?;
+    let committed_tags = TagSet::new(
+        db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
+    );
+
+    // 3. Validate: committed DB state must match what we expected to write
+    if committed_tags != *expected_tags {
+        anyhow::bail!(
+            "FlushTagsToDisk validation failed for inode {}: \
+             DB tags diverge from expected tags. \
+             Leaving needs_disk_flush raised for OOB resolution.",
+            inode,
+        );
+    }
+
+    // 4. Write validated committed tags to disk (includes read-back validation)
     let token = super::sealed::MutationToken::new();
-    write_file_tags(abs_path, tags, &token, witness)
+    write_file_tags(abs_path, &committed_tags, &token, witness)
         .with_context(|| format!("Failed to flush tags to {}", abs_path.display()))?;
 
     // Clear needs_disk_flush flag only on success

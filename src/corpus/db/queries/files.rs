@@ -392,7 +392,7 @@ impl Database {
         let sql = format!(
             r#"SELECT DISTINCT ct.inode FROM corpus_tags ct
                INNER JOIN files f ON ct.inode = f.inode AND f.source = 'corpus'
-               WHERE ct.tag_name = ?1 AND ct.tag_value IN ({})"#,
+               WHERE LOWER(ct.tag_name) = LOWER(?1) AND ct.tag_value IN ({})"#,
             placeholders.join(",")
         );
 

@@ -15,6 +15,7 @@
 
 pub(crate) mod active_view;
 mod action_handlers;
+mod suspended_views;
 mod tag_editor_ops;
 mod tick;
 mod types;
@@ -94,6 +95,9 @@ pub(crate) struct App {
 
     // Filter popup overlay (Ctrl+F in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
+
+    // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)
+    pub(super) view_stack: Vec<SuspendedView>,
 }
 
 impl App {
@@ -107,6 +111,7 @@ impl App {
             witch: Some(witch),
             log_rx: None,
             filter_overlay: None,
+            view_stack: Vec::new(),
         }
     }
 
@@ -174,7 +179,7 @@ impl App {
         // Phase 1: borrow view, produce action
         let action = match &mut self.view {
             ActiveView::Progress { .. } => ViewAction::None,
-            ActiveView::ProgressiveWork { .. } => ViewAction::None,
+            ActiveView::ProgressiveWork(_) => ViewAction::None,
             ActiveView::Insights(s) => ViewAction::Insights(s.handle_key(key)),
             ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_key(key)),
             ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_key(key)),
@@ -216,7 +221,7 @@ impl App {
             ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_key(key)),
             ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_key(key)),
             ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_key(key)),
-            ActiveView::TransactionReview { review, .. } => ViewAction::TransactionReview(review.handle_key(key)),
+            ActiveView::TransactionReview(review) => ViewAction::TransactionReview(review.handle_key(key)),
         };
 
         // Phase 2: dispatch with confirmation flag
@@ -247,6 +252,7 @@ impl App {
 
     /// Start the insights view.
     pub(super) fn start_insights_view(&mut self) {
+        self.clear_view_stack();
         self.view = ActiveView::Insights(insights_view::InsightsViewState::new());
     }
 
@@ -330,7 +336,7 @@ impl App {
 
 fn render(f: &mut Frame, app: &mut App) {
     // Fetch decision summaries from Witch if transaction review is active
-    let transaction_review_decisions = if matches!(app.view, ActiveView::TransactionReview { .. }) {
+    let transaction_review_decisions = if matches!(app.view, ActiveView::TransactionReview(_)) {
         app.witch.as_ref()
             .map(transaction_review::fetch_decision_summaries)
             .unwrap_or_default()
@@ -459,7 +465,7 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Tick progressive worker if active
-        if matches!(app.view, ActiveView::ProgressiveWork { .. }) {
+        if matches!(app.view, ActiveView::ProgressiveWork(_)) {
             app.tick_progressive_worker();
         }
 

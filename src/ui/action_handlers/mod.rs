@@ -19,7 +19,8 @@ mod simple_resolutions;
 mod witness;
 
 use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
-use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, SuspendedView, ViewAction};
+use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, ViewAction};
+use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::eye::Eye;
 use super::App;
 
@@ -416,7 +417,7 @@ impl App {
                 self.stage_tag_editor_decision(index, mutations, w);
 
                 // Transition to standardized review modal
-                // Note: unified_tag_editor state is preserved inside SuspendedView for Cancel return
+                // Note: tag editor state is preserved on the view stack for Cancel return
                 self.start_transaction_review();
             }
 
@@ -481,7 +482,7 @@ impl App {
 
             UnifiedTagEditorAction::RequestTransactionReview => {
                 // Transition to standardized review modal
-                // Note: unified_tag_editor state is preserved inside SuspendedView for Cancel return
+                // Note: tag editor state is preserved on the view stack for Cancel return
                 self.start_transaction_review();
             }
         }
@@ -494,9 +495,9 @@ impl App {
     /// Handle actions from the standardized transaction review modal.
     ///
     /// All mutation flows route through this review modal:
-    /// - Cancel: return to source view (state preserved in SuspendedView)
-    /// - Discard: discard transaction, drop suspended view, return to Insights
-    /// - Confirm: commit transaction, drop suspended view, go to Progress
+    /// - Cancel: pop view stack to restore source view
+    /// - Discard: discard transaction, clear view stack, return to Insights
+    /// - Confirm: commit transaction, clear view stack, go to Progress
     fn handle_transaction_review_action(&mut self, action: transaction_review::TransactionReviewAction, _witness: Option<&witness::DecisionWitness>) {
         use transaction_review::TransactionReviewAction;
 
@@ -504,30 +505,15 @@ impl App {
             TransactionReviewAction::None => {}
 
             TransactionReviewAction::Cancel => {
-                // Take the current view, extract suspended, restore it
-                let old = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
-                let ActiveView::TransactionReview { suspended, .. } = old else {
-                    return;
-                };
-                match *suspended {
-                    SuspendedView::Direct(view) => {
-                        self.view = view;
-                    }
-                    SuspendedView::TagCanonicityReload { clusters } => {
-                        if !self.load_current_cluster_signal_with_clusters(clusters) {
-                            self.start_insights_view();
-                        }
-                    }
-                    SuspendedView::CompoundTagSplitReload { clusters, safe_mode } => {
-                        if !self.load_current_compound_split_signal_with_clusters(clusters, safe_mode) {
-                            self.start_insights_view();
-                        }
-                    }
+                // Pop the view stack to restore the parent view
+                if !self.pop_and_restore() {
+                    self.start_insights_view();
                 }
             }
 
             TransactionReviewAction::Discard => {
-                // Discard transaction and drop all suspended state
+                // Discard transaction, clear entire view stack, return to insights
+                self.clear_view_stack();
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::discard_transaction(witch);
                 }
@@ -537,13 +523,16 @@ impl App {
 
             TransactionReviewAction::Confirm => {
                 // Determine progress phase before clearing state
-                let post_commit_phase = if let ActiveView::TransactionReview { ref review, .. } = self.view {
+                let post_commit_phase = if let ActiveView::TransactionReview(ref review) = self.view {
                     review.post_commit_phase
                 } else {
                     transaction_review::PostCommitPhase::default()
                 };
 
-                // Commit transaction - dropping the old view drops all suspended state
+                // Clear entire view stack — commit is a hard navigation
+                self.clear_view_stack();
+
+                // Commit transaction
                 let commit_result = if let Some(ref mut witch) = self.witch {
                     super::operator_decisions::commit_transaction(witch)
                 } else {
@@ -579,14 +568,11 @@ impl App {
     /// Transition to the standardized transaction review modal.
     ///
     /// Called after staging decisions to show the review before commit.
-    /// Takes ownership of the current view and wraps it as a SuspendedView.
-    /// Cancel navigation restores the suspended view automatically.
+    /// Pushes the current view onto the view stack and switches to review.
     pub(in crate::ui) fn start_transaction_review(&mut self) {
-        let suspended = self.suspend_current_view();
-        self.view = ActiveView::TransactionReview {
-            review: transaction_review::TransactionReviewState::new(),
-            suspended: Box::new(suspended),
-        };
+        self.push_and_switch(SuspendTarget::TransactionReview(
+            transaction_review::TransactionReviewState::new(),
+        ));
     }
 
     /// Transition to transaction review modal with custom post-commit phase.
@@ -596,29 +582,10 @@ impl App {
         &mut self,
         phase: transaction_review::PostCommitPhase,
     ) {
-        let suspended = self.suspend_current_view();
-        self.view = ActiveView::TransactionReview {
-            review: transaction_review::TransactionReviewState::new()
+        self.push_and_switch(SuspendTarget::TransactionReview(
+            transaction_review::TransactionReviewState::new()
                 .with_post_commit_phase(phase),
-            suspended: Box::new(suspended),
-        };
-    }
-
-    /// Take the current view and wrap it as a SuspendedView for later restoration.
-    ///
-    /// TagCanonicityResolution and CompoundTagSplit need DB reload on restore,
-    /// so they get special SuspendedView variants. Everything else restores directly.
-    fn suspend_current_view(&mut self) -> SuspendedView {
-        let old_view = std::mem::replace(&mut self.view, ActiveView::Insights(insights_view::InsightsViewState::new()));
-        match old_view {
-            ActiveView::TagCanonicityResolution { clusters, .. } => {
-                SuspendedView::TagCanonicityReload { clusters }
-            }
-            ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
-                SuspendedView::CompoundTagSplitReload { clusters, safe_mode }
-            }
-            view => SuspendedView::Direct(view),
-        }
+        ));
     }
 
     // =========================================================================

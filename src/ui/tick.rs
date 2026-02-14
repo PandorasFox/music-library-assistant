@@ -13,7 +13,6 @@ use crate::ui::{
     startup,
     transaction_review,
     ActiveView,
-    active_view::SuspendedView,
 };
 use super::App;
 use super::eye::Eye;
@@ -167,14 +166,14 @@ impl App {
     /// until the time budget (~50ms) is exhausted, then returns to allow render.
     /// On completion, drains input buffer and invokes the completion handler.
     pub(super) fn tick_progressive_worker(&mut self) {
-        if !matches!(self.view, ActiveView::ProgressiveWork { .. }) { return; }
+        if !matches!(self.view, ActiveView::ProgressiveWork(_)) { return; }
 
         // Take the progressive work view out temporarily
         let old = std::mem::replace(
             &mut self.view,
             ActiveView::Insights(insights_view::InsightsViewState::new()),
         );
-        let ActiveView::ProgressiveWork { mut worker, return_context } = old else { unreachable!() };
+        let ActiveView::ProgressiveWork(mut worker) = old else { unreachable!() };
 
         let start = Instant::now();
         let time_budget = Duration::from_millis(50);
@@ -188,7 +187,7 @@ impl App {
                 let summary = worker.build_summary();
                 let on_complete = worker.on_complete.clone();
 
-                self.handle_progressive_complete(on_complete, summary, return_context);
+                self.handle_progressive_complete(on_complete, summary);
                 return;
             };
 
@@ -198,7 +197,7 @@ impl App {
         }
 
         // Time budget exhausted - put worker back for next frame
-        self.view = ActiveView::ProgressiveWork { worker, return_context };
+        self.view = ActiveView::ProgressiveWork(worker);
     }
 
     /// Process a single work item.
@@ -278,13 +277,12 @@ impl App {
 
     /// Handle completion of progressive work.
     ///
-    /// Directly creates the TransactionReview view with the return_context as the
-    /// suspended view, since the progressive worker has already been consumed.
+    /// The view stack already holds the suspended view from the earlier
+    /// push_and_switch, so we just set the active view to TransactionReview.
     fn handle_progressive_complete(
         &mut self,
         on_complete: OnComplete,
         summary: WorkSummary,
-        return_context: Box<SuspendedView>,
     ) {
         match on_complete {
             OnComplete::CompoundSplitStaging => {
@@ -301,10 +299,12 @@ impl App {
                     ));
                 }
 
-                self.view = ActiveView::TransactionReview {
-                    review: transaction_review::TransactionReviewState::new(),
-                    suspended: return_context,
-                };
+                // Stack already holds compound split from the earlier push_and_switch.
+                // Push this (now-completed) progressive worker position so the
+                // TransactionReview Cancel pops back through it.
+                self.view = ActiveView::TransactionReview(
+                    transaction_review::TransactionReviewState::new(),
+                );
             }
         }
     }

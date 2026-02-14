@@ -149,7 +149,7 @@ fn render_content(
             // Never reached - handled separately in render_app() before this function
             vname = "progress";
         }
-        ActiveView::ProgressiveWork { ref worker, .. } => {
+        ActiveView::ProgressiveWork(ref worker) => {
             vname = "progressive_work";
             progressive_worker::render(f, area, worker);
         }
@@ -209,7 +209,7 @@ fn render_content(
             vname = "moved_file_acknowledge";
             super::moved_file_modal::render(state, f, area);
         }
-        ActiveView::TransactionReview { ref review, .. } => {
+        ActiveView::TransactionReview(ref review) => {
             vname = "transaction_review";
             transaction_review::render(f, area, review, transaction_review_decisions);
         }
@@ -373,7 +373,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::CorpusBrowser(_) => "corpus_browser",
         ActiveView::TagSearch(_) => "tag_search",
         ActiveView::Progress { .. } => "progress",
-        ActiveView::ProgressiveWork { .. } => "progressive_work",
+        ActiveView::ProgressiveWork(_) => "progressive_work",
         ActiveView::ExitConfirm(_) => "exit_confirm",
         ActiveView::IntakeConfirmation(_) => "intake_confirmation",
         ActiveView::UnifiedTagEditor(_) => "unified_tag_editor",
@@ -390,6 +390,6 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::OobConflictInspection(_) => "oob_conflict_inspection",
         ActiveView::TagCanonicityResolution { .. } => "tag_canonicity_resolution",
         ActiveView::CompoundTagSplit { .. } => "compound_tag_split",
-        ActiveView::TransactionReview { .. } => "transaction_review",
+        ActiveView::TransactionReview(_) => "transaction_review",
     }
 }

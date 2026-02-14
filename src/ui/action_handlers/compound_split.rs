@@ -3,7 +3,8 @@
 //! Handles the compound tag split modal: loading signals, navigating between
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
-use crate::ui::{compound_split_v2, progressive_worker, ActiveView, SuspendedView};
+use crate::ui::{compound_split_v2, progressive_worker, ActiveView};
+use crate::ui::suspended_views::SuspendTarget;
 use super::witness;
 use super::super::App;
 
@@ -266,15 +267,15 @@ impl App {
     /// Called when user presses Ctrl+A in the compound split modal.
     /// Uses the progressive worker to process items in timed chunks with progress bar.
     fn start_progressive_compound_split_staging(&mut self) {
-        // Extract clusters and safe_mode from current view
-        let (groups, is_safe_mode, clusters, safe_mode) = match &self.view {
+        // Extract groups and safe_mode from current view
+        let (groups, is_safe_mode) = match &self.view {
             ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
                 let groups = clusters.all_groups().to_vec();
                 if groups.is_empty() {
                     self.status_message = Some("No compound splits to stage".to_string());
                     return;
                 }
-                (groups, *safe_mode, clusters.clone(), *safe_mode)
+                (groups, *safe_mode)
             }
             _ => {
                 self.status_message = Some("No compound splits to stage".to_string());
@@ -282,16 +283,12 @@ impl App {
             }
         };
 
-        // Start progressive worker with return context to restore compound split view
+        // Push current view and switch to progressive worker
         let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
             groups,
             is_safe_mode,
         );
-        let return_context = Box::new(SuspendedView::CompoundTagSplitReload {
-            clusters,
-            safe_mode,
-        });
-        self.view = ActiveView::ProgressiveWork { worker, return_context };
+        self.push_and_switch(SuspendTarget::ProgressiveWork(worker));
     }
 
     /// Load the compound split group at the current cluster index into modal state.

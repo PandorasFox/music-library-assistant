@@ -47,10 +47,7 @@ pub(crate) enum ActiveView {
         screen: progress_screen::ProgressScreen,
         eye: Eye,
     },
-    ProgressiveWork {
-        worker: progressive_worker::ProgressiveWorkerState,
-        return_context: Box<SuspendedView>,
-    },
+    ProgressiveWork(progressive_worker::ProgressiveWorkerState),
 
     // Simple modals
     ExitConfirm(ExitConfirmModalState),
@@ -83,11 +80,8 @@ pub(crate) enum ActiveView {
         safe_mode: bool,
     },
 
-    // Transaction review (suspends source view)
-    TransactionReview {
-        review: transaction_review::TransactionReviewState,
-        suspended: Box<SuspendedView>,
-    },
+    // Transaction review (view stack holds suspended views)
+    TransactionReview(transaction_review::TransactionReviewState),
 }
 
 impl ActiveView {
@@ -98,7 +92,7 @@ impl ActiveView {
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
             Self::Progress { .. } => None,
-            Self::ProgressiveWork { .. } => Some("Processing"),
+            Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),
             Self::IntakeConfirmation(_) => Some("Intake Confirmation"),
             Self::UnifiedTagEditor(_) => Some("Tag Editor"),
@@ -115,7 +109,7 @@ impl ActiveView {
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
-            Self::TransactionReview { .. } => Some("Transaction Review"),
+            Self::TransactionReview(_) => Some("Transaction Review"),
         }
     }
 
@@ -155,11 +149,10 @@ impl ActiveView {
 }
 
 // ============================================================================
-// SuspendedView - for TransactionReview and ProgressiveWork return navigation
+// SuspendedView - for view stack push/pop navigation
 // ============================================================================
 
-/// Captures enough context to restore the previous view when returning from
-/// TransactionReview (Cancel) or ProgressiveWork (completion).
+/// Captures enough context to restore a suspended view from the view stack.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum SuspendedView {
     /// Restore view directly (most modals).

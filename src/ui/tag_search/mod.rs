@@ -504,23 +504,23 @@ impl TagSearchState {
             vec![
                 Line::from(vec![
                     Span::styled("Title: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag("title").unwrap_or("-")),
+                    Span::raw(twt.get_tag_display("title").unwrap_or_else(|| "-".into())),
                 ]),
                 Line::from(vec![
                     Span::styled("Artist: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag("artist").unwrap_or("-")),
+                    Span::raw(twt.get_tag_display("artist").unwrap_or_else(|| "-".into())),
                 ]),
                 Line::from(vec![
                     Span::styled("Album: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag("album").unwrap_or("-")),
+                    Span::raw(twt.get_tag_display("album").unwrap_or_else(|| "-".into())),
                 ]),
                 Line::from(vec![
                     Span::styled("Album Artist: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag("album_artist").unwrap_or("-")),
+                    Span::raw(twt.get_tag_display("album_artist").unwrap_or_else(|| "-".into())),
                 ]),
                 Line::from(vec![
                     Span::styled("Genre: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag("genre").unwrap_or("-")),
+                    Span::raw(twt.get_tag_display("genre").unwrap_or_else(|| "-".into())),
                 ]),
                 Line::raw(""),
                 Line::from(vec![

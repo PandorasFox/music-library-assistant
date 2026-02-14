@@ -163,7 +163,7 @@ impl FilterCondition {
         sample_rate: Option<i32>,
         bitrate_kbps: Option<i32>,
         duration_ms: Option<i64>,
-        tags: &HashMap<String, String>,
+        tags: &HashMap<String, Vec<String>>,
     ) -> bool {
         match self.condition_type {
             FilterConditionType::Path => self.matches_path(path),
@@ -192,34 +192,34 @@ impl FilterCondition {
         path.to_lowercase().contains(&self.path_substring.to_lowercase())
     }
 
-    /// Check if tags match the tag condition.
-    fn matches_tag(&self, tags: &HashMap<String, String>) -> bool {
+    /// Check if tags match the tag condition (checks all values for multi-value tags).
+    fn matches_tag(&self, tags: &HashMap<String, Vec<String>>) -> bool {
         if self.tag_value.is_empty() {
             return true;
         }
 
-        let tag_value = tags.get(&self.tag_name.to_lowercase());
+        let values = tags.get(&self.tag_name.to_lowercase());
         let query = self.tag_value.to_lowercase();
 
         match self.tag_comparison {
             ComparisonOperator::Is => {
-                tag_value
-                    .map(|v| v.to_lowercase() == query)
+                values
+                    .map(|vals| vals.iter().any(|v| v.to_lowercase() == query))
                     .unwrap_or(false)
             }
             ComparisonOperator::Not => {
-                tag_value
-                    .map(|v| v.to_lowercase() != query)
+                values
+                    .map(|vals| vals.iter().all(|v| v.to_lowercase() != query))
                     .unwrap_or(true) // Missing tag != query
             }
             ComparisonOperator::Contains => {
-                tag_value
-                    .map(|v| v.to_lowercase().contains(&query))
+                values
+                    .map(|vals| vals.iter().any(|v| v.to_lowercase().contains(&query)))
                     .unwrap_or(false)
             }
             ComparisonOperator::Like => {
-                tag_value
-                    .map(|v| Self::match_like_pattern(&v.to_lowercase(), &query))
+                values
+                    .map(|vals| vals.iter().any(|v| Self::match_like_pattern(&v.to_lowercase(), &query)))
                     .unwrap_or(false)
             }
         }

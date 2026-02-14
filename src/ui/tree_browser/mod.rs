@@ -100,13 +100,11 @@ impl TreeBrowserState {
         // Get tags for each file and filter
         let mut matching_paths: Vec<PathBuf> = Vec::new();
         for audio_file in audio_files {
-            // Get tags for this file and convert to HashMap
-            let tags: HashMap<String, String> = read_db
-                .get_corpus_tags(audio_file.inode())
-                .unwrap_or_default()
-                .into_iter()
-                .map(|t| (t.tag_name, t.tag_value))
-                .collect();
+            // Get tags for this file and convert to HashMap (multi-value)
+            let mut tags: HashMap<String, Vec<String>> = HashMap::new();
+            for t in read_db.get_corpus_tags(audio_file.inode()).unwrap_or_default() {
+                tags.entry(t.tag_name.to_lowercase()).or_default().push(t.tag_value);
+            }
 
             // Check if file matches filter
             if condition.matches(

@@ -551,15 +551,17 @@ impl Database {
     }
 
     /// Get all audio files with their tags (for search functionality).
-    pub fn get_all_audio_files_with_tags(&self, source: FileSource) -> Result<Vec<(AudioFile, HashMap<String, String>)>> {
+    /// Tags are keyed by lowercase tag name; values are collected into Vec
+    /// since a single tag name can have multiple values (e.g. multiple genres).
+    pub fn get_all_audio_files_with_tags(&self, source: FileSource) -> Result<Vec<(AudioFile, HashMap<String, Vec<String>>)>> {
         let files = self.get_all_audio_files(source)?;
         let mut results = Vec::new();
         for file in files {
             let tags = self.get_corpus_tags(file.inode())?;
-            let tag_map: HashMap<String, String> = tags
-                .into_iter()
-                .map(|t| (t.tag_name, t.tag_value))
-                .collect();
+            let mut tag_map: HashMap<String, Vec<String>> = HashMap::new();
+            for t in tags {
+                tag_map.entry(t.tag_name.to_lowercase()).or_default().push(t.tag_value);
+            }
             results.push((file, tag_map));
         }
         Ok(results)

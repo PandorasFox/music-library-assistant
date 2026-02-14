@@ -13,16 +13,17 @@ use super::types::{ConditionType, LogicalOperator, SearchCondition, TagSearchMod
 use super::QueryFieldFocus;
 
 /// An audio file with its associated tags (for display and filtering).
+/// Tag values are stored as Vec since a tag name can have multiple values.
 #[derive(Debug, Clone)]
 pub struct AudioFileWithTags {
     pub audio_file: AudioFile,
-    pub tags: HashMap<String, String>,
+    pub tags: HashMap<String, Vec<String>>,
 }
 
 impl AudioFileWithTags {
-    /// Get a tag value by name (case-insensitive).
-    pub fn get_tag(&self, name: &str) -> Option<&str> {
-        self.tags.get(name).map(|s| s.as_str())
+    /// Get a display string for a tag (joins multiple values with ", ").
+    pub fn get_tag_display(&self, name: &str) -> Option<String> {
+        self.tags.get(name).map(|vals| vals.join(", "))
     }
 }
 
@@ -400,6 +401,7 @@ impl TagSearchState {
     }
 
     /// Evaluate a tag-based condition.
+    /// Checks against ALL values for a multi-value tag (e.g. multiple genres).
     fn evaluate_tag_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         use super::types::ComparisonOperator;
 
@@ -410,35 +412,33 @@ impl TagSearchState {
         let query = condition.value.to_lowercase();
         let tag_name = condition.tag_name.to_lowercase();
 
-        // Get the tag value from the track's tags
-        let field_value = aft.tags.get(&tag_name).map(|s| s.as_str());
+        let values = aft.tags.get(&tag_name);
 
         match condition.comparison {
             ComparisonOperator::Is => {
-                // Exact match (case-insensitive)
-                field_value
-                    .map(|v| v.to_lowercase() == query)
+                // Exact match: any value matches
+                values
+                    .map(|vals| vals.iter().any(|v| v.to_lowercase() == query))
                     .unwrap_or(false)
             }
             ComparisonOperator::Not => {
-                // Negated exact match (case-insensitive)
-                field_value
-                    .map(|v| v.to_lowercase() != query)
+                // Negated: no value matches
+                values
+                    .map(|vals| vals.iter().all(|v| v.to_lowercase() != query))
                     .unwrap_or(true) // Missing field != query
             }
             ComparisonOperator::Contains => {
-                // Substring match (case-insensitive)
-                field_value
-                    .map(|v| v.to_lowercase().contains(&query))
+                // Substring: any value contains
+                values
+                    .map(|vals| vals.iter().any(|v| v.to_lowercase().contains(&query)))
                     .unwrap_or(false)
             }
             ComparisonOperator::Like => {
-                // SQL LIKE pattern (% = any chars, _ = single char)
-                field_value
-                    .map(|v| {
-                        let v_lower = v.to_lowercase();
-                        Self::match_like_pattern(&v_lower, &query)
-                    })
+                // LIKE pattern: any value matches
+                values
+                    .map(|vals| vals.iter().any(|v| {
+                        Self::match_like_pattern(&v.to_lowercase(), &query)
+                    }))
                     .unwrap_or(false)
             }
         }

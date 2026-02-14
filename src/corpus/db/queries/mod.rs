@@ -420,7 +420,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get all audio files with their tags (for search functionality).
-    pub fn get_all_audio_files_with_tags(&self, source: super::types::FileSource) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, String>)>> {
+    pub fn get_all_audio_files_with_tags(&self, source: super::types::FileSource) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, Vec<String>>)>> {
         self.db.get_all_audio_files_with_tags(source)
     }
 

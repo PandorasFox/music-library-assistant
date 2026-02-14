@@ -458,6 +458,10 @@ pub enum CompoundSplitActionV2 {
     ShowReview,
     /// Stage ALL and show review (Ctrl+A) - for bulk operations
     StageAllAndReview,
+    /// Open tag editor for current group's files (individual mode, T key)
+    OpenTagEditorIndividual,
+    /// Open tag editor for current group's files (aggregated mode, Shift+T key)
+    OpenTagEditorAggregated,
 }
 
 // ============================================================================

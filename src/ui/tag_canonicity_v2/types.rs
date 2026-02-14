@@ -486,4 +486,8 @@ pub enum TagCanonicalityActionV2 {
     },
     /// User requested review screen (Ctrl+R)
     ShowReview,
+    /// Open tag editor for current group's files (individual mode, T key)
+    OpenTagEditorIndividual,
+    /// Open tag editor for current group's files (aggregated mode, Shift+T key)
+    OpenTagEditorAggregated,
 }

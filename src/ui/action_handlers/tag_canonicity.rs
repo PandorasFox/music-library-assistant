@@ -3,8 +3,9 @@
 //! Handles the tag canonicity modal: loading signals, navigating between
 //! clusters, staging canonicalization decisions.
 
+use crate::corpus::db::types::FileSource;
 use crate::ui::{
-    insights_view, tag_canonicity_v2, ActiveView,
+    insights_view, tag_canonicity_v2, tag_editor, ActiveView,
     CanonicitySignalKind, TagCanonicityClusters,
 };
 use super::witness;
@@ -135,6 +136,61 @@ impl App {
             tag_canonicity_v2::TagCanonicalityActionV2::ShowReview => {
                 // Ctrl+R - show review with whatever has already been staged
                 self.show_transaction_review_for_canonicity();
+            }
+            tag_canonicity_v2::TagCanonicalityActionV2::OpenTagEditorIndividual => {
+                self.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Individual);
+            }
+            tag_canonicity_v2::TagCanonicalityActionV2::OpenTagEditorAggregated => {
+                self.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Aggregated);
+            }
+        }
+    }
+
+    /// Launch embedded tag editor from the tag canonicity modal.
+    ///
+    /// Extracts the current group's inodes, queries for AudioFile objects,
+    /// and opens an embedded tag editor. The editor's file cursor is positioned
+    /// to match the health modal's current file selection.
+    fn launch_tag_editor_from_canonicity(&mut self, mode: tag_editor::TagEditorMode) {
+        // Extract data from current view
+        let (inodes, decision_index, decision_label, file_cursor_inode) =
+            if let ActiveView::TagCanonicityResolution { ref state, ref clusters } = self.view {
+                let inodes: Vec<i64> = state.data.inodes.clone();
+                let decision_index = clusters.current_index;
+                let label = format!("Tag edit: {} canonicity", state.data.tag_name);
+                let cursor_inode = state.data.files.get(state.file_cursor)
+                    .map(|f| f.inode);
+                (inodes, decision_index, label, cursor_inode)
+            } else {
+                return;
+            };
+
+        // Query audio files by inodes
+        let audio_files = {
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => return,
+            };
+            read_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus)
+                .unwrap_or_default()
+        };
+
+        if audio_files.is_empty() {
+            self.status_message = Some("No indexed files found for this group".to_string());
+            return;
+        }
+
+        // Open embedded tag editor (suspends current view on stack)
+        self.open_embedded_tag_editor(mode, audio_files, decision_index, decision_label);
+
+        // Position editor cursor on the file matching the health modal's selection
+        if let Some(target_inode) = file_cursor_inode {
+            if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
+                if let tag_editor::types::TagEditContext::BulkEdit { ref audio_files, .. } = editor.context {
+                    if let Some(idx) = audio_files.iter().position(|af| af.inode() == target_inode) {
+                        editor.current_item_idx = idx;
+                    }
+                }
             }
         }
     }

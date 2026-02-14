@@ -351,6 +351,8 @@ fn render_controls(f: &mut Frame, area: Rect) {
         cc::text(" fill  "),
         cc::confirm("[Enter]"),
         cc::text(" confirm  "),
+        cc::edit("[T]"),
+        cc::text(" edit tags  "),
         cc::nav("[Tab]"),
         cc::text(" next  "),
         cc::review("[^R]"),

@@ -141,6 +141,11 @@ impl CompoundSplitStateV2 {
                 CompoundSplitActionV2::None
             }
 
+            // T: open tag editor for current group (individual mode)
+            KeyCode::Char('t') => CompoundSplitActionV2::OpenTagEditorIndividual,
+            // Shift+T: open tag editor for current group (aggregated mode)
+            KeyCode::Char('T') => CompoundSplitActionV2::OpenTagEditorAggregated,
+
             // Enter: confirm split
             KeyCode::Enter => {
                 if self.can_submit() {

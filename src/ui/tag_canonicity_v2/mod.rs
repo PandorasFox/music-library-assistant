@@ -114,6 +114,15 @@ impl TagCanonicalityStateV2 {
                 TagCanonicalityActionV2::None
             }
 
+            // T: open tag editor for current group (individual mode)
+            KeyCode::Char('t') if !text_input_focused => {
+                TagCanonicalityActionV2::OpenTagEditorIndividual
+            }
+            // Shift+T: open tag editor for current group (aggregated mode)
+            KeyCode::Char('T') if !text_input_focused => {
+                TagCanonicalityActionV2::OpenTagEditorAggregated
+            }
+
             // Enter: confirm (check BEFORE text input handling to avoid swallowing Enter)
             KeyCode::Enter => {
                 if self.can_submit() {

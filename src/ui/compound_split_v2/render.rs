@@ -363,6 +363,8 @@ fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
             cc::text(" split  "),
             cc::action("[^Q]"),
             cc::text(" keep  "),
+            cc::edit("[T]"),
+            cc::text(" edit tags  "),
         ]);
 
         if state.is_safe_mode {

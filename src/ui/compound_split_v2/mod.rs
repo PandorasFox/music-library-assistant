@@ -17,7 +17,7 @@
 //! | [ok] TwoThirds  |                  | album: Collabs              |
 //! |                 |                  | genre: Electronic           |
 //! +-----------------+------------------+----------------------------+
-//! | ^/v nav | </> pane | Space toggle | Enter split | ^Q keep        |
+//! | Space toggle | Enter split | ^F keep | T edit tags                |
 //! +------------------------------------------------------------------+
 //! ```
 //!
@@ -28,7 +28,7 @@
 //! - Space: Toggle file selection (files pane only)
 //! - E: Edit part value (review mode only, parts pane)
 //! - Enter: Confirm split, stage decision, advance to next
-//! - Ctrl+Q: Canonicalize (mark as single entity, don't split)
+//! - Ctrl+F: Canonicalize (mark as single entity, don't split)
 //! - Tab/Shift-Tab: Navigate to next/prev signal (non-committal)
 //! - Ctrl+R: Stage current decision and jump to review screen
 //! - Ctrl+A: Stage ALL signals and jump to review (safe mode only)
@@ -87,7 +87,7 @@ impl CompoundSplitStateV2 {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('r' | 'R') => return CompoundSplitActionV2::ShowReview,
-                KeyCode::Char('q' | 'Q') => {
+                KeyCode::Char('f' | 'F') => {
                     self.confirming_canonicalize = true;
                     return CompoundSplitActionV2::None;
                 }

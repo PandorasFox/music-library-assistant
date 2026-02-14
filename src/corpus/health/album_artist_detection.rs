@@ -89,6 +89,11 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
             continue;
         }
 
+        // Operator has flagged tracks as non-compilation — suppress
+        if tracks.iter().any(|t| t.flag_compilation == "0") {
+            continue;
+        }
+
         // Skip if tracks have different catalog numbers - indicates different releases
         if catalog_numbers.len() > 1 {
             continue;
@@ -127,6 +132,7 @@ struct TrackAlbumData {
     album: String,
     catalog_number: String,
     isrc: String,
+    flag_compilation: String,
 }
 
 /// Query album/artist/album_artist data for all tracks.
@@ -141,7 +147,7 @@ fn query_album_artist_data(
 
     let mut album_data: HashMap<(String, String), Vec<TrackAlbumData>> = HashMap::new();
 
-    for (inode, album, artist, album_artist, catalog_number, isrc, year) in rows {
+    for (inode, album, artist, album_artist, catalog_number, isrc, year, flag_compilation) in rows {
         let data = TrackAlbumData {
             inode,
             album: album.clone(),
@@ -149,6 +155,7 @@ fn query_album_artist_data(
             album_artist,
             catalog_number,
             isrc,
+            flag_compilation,
         };
         let normalized = normalize_album(&album);
         // Group by (normalized_album, year) - empty year is treated as distinct

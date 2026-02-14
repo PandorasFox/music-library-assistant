@@ -107,7 +107,8 @@ impl App {
         let pre_fill = clusters.pre_fill();
         let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
 
-        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups);
+        let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
+        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups, is_album_artist);
         self.view = ActiveView::TagCanonicityResolution { state, clusters };
     }
 
@@ -142,6 +143,11 @@ impl App {
             }
             tag_canonicity_v2::TagCanonicalityActionV2::OpenTagEditorAggregated => {
                 self.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Aggregated);
+            }
+            tag_canonicity_v2::TagCanonicalityActionV2::FlagNonCompilation => {
+                let Some(w) = witness else { return };
+                self.stage_flag_non_compilation(w);
+                self.advance_to_next_cluster();
             }
         }
     }
@@ -290,6 +296,40 @@ impl App {
         }
     }
 
+    /// Stage a "flag as non-compilation" decision for the current cluster.
+    ///
+    /// Adds FLAGCOMPILATION=0 to all tracks in the current group, which will
+    /// suppress this group in future inconsistent album artist detection runs.
+    fn stage_flag_non_compilation(&mut self, _witness: &witness::DecisionWitness) {
+        let (mutations, cluster_idx) = match &self.view {
+            ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
+                use crate::meta::mutations::{Mutation, TagOp};
+                use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
+
+                let ops: Vec<TagOp> = state.data.inodes.iter()
+                    .map(|&inode| TagOp::add_tag(inode, "FLAGCOMPILATION", "0"))
+                    .collect();
+
+                if ops.is_empty() {
+                    return;
+                }
+
+                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops })];
+                (mutations, clusters.current_index)
+            }
+            _ => return,
+        };
+
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::super::operator_decisions::stage_decision(
+                witch,
+                cluster_idx,
+                "Flag non-compilation",
+                mutations,
+            );
+        }
+    }
+
     /// Load the signal at the current cluster index into modal state.
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_cluster_signal(&mut self) -> bool {
@@ -323,7 +363,8 @@ impl App {
         };
 
         let pre_fill = kind == CanonicitySignalKind::TagCanonicity;
-        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total);
+        let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
+        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist);
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
@@ -367,7 +408,8 @@ impl App {
         };
 
         let pre_fill = clusters.pre_fill();
-        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total);
+        let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
+        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist);
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {

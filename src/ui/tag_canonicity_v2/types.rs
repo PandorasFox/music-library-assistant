@@ -212,6 +212,10 @@ pub struct TagCanonicalityStateV2 {
     pub file_scroll: usize,
     /// Pending tag edits from an embedded tag editor decision (inode → [(tag, old, new)])
     pub pending_tag_edits: Option<HashMap<i64, Vec<(String, String, String)>>>,
+    /// Whether this modal is operating on album_artist (enables ^F flag action)
+    pub is_album_artist_mode: bool,
+    /// Whether the flag confirmation popup is showing
+    pub flag_confirmation_pending: bool,
 }
 
 impl TagCanonicalityStateV2 {
@@ -231,6 +235,7 @@ impl TagCanonicalityStateV2 {
         pre_fill: bool,
         group_index: usize,
         total_groups: usize,
+        is_album_artist_mode: bool,
     ) -> Self {
         let canonical_value = if pre_fill {
             data.default_canonical()
@@ -259,6 +264,8 @@ impl TagCanonicalityStateV2 {
             variant_scroll: 0,
             file_scroll: 0,
             pending_tag_edits: None,
+            is_album_artist_mode,
+            flag_confirmation_pending: false,
         }
     }
 
@@ -496,4 +503,6 @@ pub enum TagCanonicalityActionV2 {
     OpenTagEditorIndividual,
     /// Open tag editor for current group's files (aggregated mode, Shift+T key)
     OpenTagEditorAggregated,
+    /// Flag all tracks in this group as non-compilation (FLAGCOMPILATION=0)
+    FlagNonCompilation,
 }

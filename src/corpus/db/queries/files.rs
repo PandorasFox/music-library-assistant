@@ -474,9 +474,9 @@ impl Database {
     }
 
     /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection, corpus only).
-    /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc, year)>
+    /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc, year, flag_compilation)>
     #[allow(clippy::type_complexity)]
-    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String)>> {
+    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String, String)>> {
         // Only detect inconsistent album artist within corpus files
         // GROUP BY f.inode to collapse multi-value tags (e.g. a file with two
         // artist tags) into one row per inode, preventing cross-product blowup
@@ -489,7 +489,8 @@ impl Database {
                 COALESCE(MIN(album_artist.tag_value), '') as album_artist,
                 COALESCE(MIN(catalog.tag_value), '') as catalog_number,
                 COALESCE(MIN(isrc.tag_value), '') as isrc,
-                COALESCE(MIN(year.tag_value), '') as year
+                COALESCE(MIN(year.tag_value), '') as year,
+                COALESCE(MIN(flagcomp.tag_value), '') as flag_compilation
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags album
@@ -504,6 +505,8 @@ impl Database {
                 ON f.inode = isrc.inode AND LOWER(isrc.tag_name) = 'isrc'
             LEFT JOIN corpus_tags year
                 ON f.inode = year.inode AND LOWER(year.tag_name) = 'year'
+            LEFT JOIN corpus_tags flagcomp
+                ON f.inode = flagcomp.inode AND LOWER(flagcomp.tag_name) = 'flagcompilation'
             WHERE f.is_dir = 0 AND f.source = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
             GROUP BY f.inode
         "#;
@@ -518,6 +521,7 @@ impl Database {
                 row.get(4)?,
                 row.get(5)?,
                 row.get(6)?,
+                row.get(7)?,
             ))
         })?;
 

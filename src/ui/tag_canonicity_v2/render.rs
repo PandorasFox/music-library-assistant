@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::ui::helpers::{render_pane, truncate_right};
+use crate::ui::widgets::{ConfirmationButton, ConfirmationModal};
 
 use super::types::{FocusPaneV2, TagCanonicalityStateV2};
 
@@ -36,7 +37,12 @@ pub fn render(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
     render_title(f, chunks[0], state);
     render_input(f, chunks[1], state);
     render_three_panes(f, chunks[2], state);
-    render_controls(f, chunks[3]);
+    render_controls(f, chunks[3], state);
+
+    // Flag confirmation popup overlay
+    if state.flag_confirmation_pending {
+        render_flag_confirm(f, area, state);
+    }
 }
 
 /// Render the title bar.
@@ -367,18 +373,26 @@ fn render_input(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
 }
 
 /// Render the controls hint bar.
-fn render_controls(f: &mut Frame, area: Rect) {
+fn render_controls(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
     use crate::ui::widgets::control_colors as cc;
 
-    let hints = Line::from(vec![
-        cc::nav("[^/v]"),
-        cc::text(" nav  "),
-        cc::nav("[</>]"),
-        cc::text(" pane  "),
+    let mut hints = vec![
         cc::toggle("[Space]"),
         cc::text(" toggle  "),
         cc::edit("[F]"),
         cc::text(" fill  "),
+        cc::edit("[E]"),
+        cc::text(" edit  "),
+    ];
+
+    if state.is_album_artist_mode {
+        hints.extend([
+            cc::action("[^F]"),
+            cc::text(" flag  "),
+        ]);
+    }
+
+    hints.extend([
         cc::confirm("[Enter]"),
         cc::text(" confirm  "),
         cc::edit("[T]"),
@@ -391,6 +405,32 @@ fn render_controls(f: &mut Frame, area: Rect) {
         cc::text(" cancel"),
     ]);
 
-    let hint = Paragraph::new(hints).alignment(Alignment::Center);
+    let hint = Paragraph::new(Line::from(hints)).alignment(Alignment::Center);
     f.render_widget(hint, area);
+}
+
+/// Render the flag-as-non-compilation confirmation overlay.
+fn render_flag_confirm(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
+    let track_count = state.data.inodes.len();
+
+    ConfirmationModal::new(" Flag as non-compilation? ")
+        .border_color(Color::Cyan)
+        .fixed_size(60, 9)
+        .message(vec![
+            Line::from(""),
+            Line::from(format!(
+                "Add FLAGCOMPILATION=0 to all {} tracks in this set.",
+                track_count
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Future detection runs will skip this album group.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .buttons(vec![
+            ConfirmationButton::new("[Enter] Confirm", Color::Green).selected(true),
+            ConfirmationButton::new("[Esc] Cancel", Color::White),
+        ])
+        .render(f, area);
 }

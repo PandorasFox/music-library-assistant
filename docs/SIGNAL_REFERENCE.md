@@ -85,7 +85,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | TagCanonicity | DetectTagCanonicalizations | DetectTagCanonicalizations | Similar tags needing unification |
 | CompoundTag | DetectCompoundTagsForInode | DetectCompoundTagValues (clears all before spawning) | Per-file signal for tags matching a `SplitRule` in the priority chain. `separator` field contains either the literal separator string (e.g., `";"`) or a collaboration keyword label (e.g., `"feat."`, `"vs."`). Metadata: `{ inode, compounds: [{ tag_name, compound_value, split_parts, separator }] }` |
 | CanonicalTag | EmitCanonicalTag | - | Operator-confirmed canonical tag value (whitelist). Key: `{tag_name}:{tag_value}`. Prevents compound detection from flagging this value |
-| InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist |
+| InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist. Suppressed when any track in the group has `FLAGCOMPILATION=0` tag |
 | RedundantDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps | Group of files with identical fingerprints AND identical quality scores. Requires operator choice — neither file is subpar. Key: fingerprint text |
 | EmbeddableAlbumArt | DetectEmbeddableAlbumArt | DetectEmbeddableAlbumArt, EmbedAlbumArt | Directory with sidecar image and audio files lacking embedded art. Key: relative directory path. Metadata (bincode): `image_path`, `image_filename`, `artless_inodes[]`, `artless_paths[]` |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |

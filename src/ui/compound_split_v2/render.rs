@@ -371,13 +371,6 @@ fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         ]);
     } else {
         // Normal mode controls
-        hints.extend([
-            cc::nav("[^/v]"),
-            cc::text(" nav  "),
-            cc::nav("[</>]"),
-            cc::text(" pane  "),
-        ]);
-
         if state.focus_pane == FocusPaneV2::Files {
             hints.extend([
                 cc::toggle("[Space]"),
@@ -395,7 +388,7 @@ fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         hints.extend([
             cc::confirm("[Enter]"),
             cc::text(" split  "),
-            cc::action("[^Q]"),
+            cc::action("[^F]"),
             cc::text(" keep  "),
             cc::edit("[T]"),
             cc::text(" edit tags  "),

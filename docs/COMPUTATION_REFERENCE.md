@@ -62,7 +62,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectMissingTags | Find tracks missing required tags |
 | DetectMetadataDuplicates | Find tracks with identical tag sets |
 | DetectTagCanonicalizations | Find tag canonicalization opportunities |
-| DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums |
+| DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums. Skips groups where any track has `FLAGCOMPILATION=0` |
 | DetectCompoundTagValues | Orchestrator: spawns DetectCompoundTagsForInode for each dirty corpus inode. Parallelizes detection across worker threads. |
 | DetectCompoundTagsForInode | Per-inode: walks the priority-ordered `SplitRule` chain from `TagSplittingOpinions` (separator and collaboration keyword rules). First matching rule wins per tag value. Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
@@ -112,7 +112,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (all, then recreate) |
 | DetectCompoundTagValues | DetectCompoundTagsForInode (per inode) | — | CompoundTag (all, before spawning) |
 | DetectCompoundTagsForInode | — | CompoundTag (per-file) | — |
-| DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate) |
+| DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate). Groups with `FLAGCOMPILATION=0` on any track are suppressed (no signal emitted) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate, RedundantDuplicate | SubparDuplicate (all, then recreate), RedundantDuplicate (all, then recreate). Equal-quality ties emit RedundantDuplicate (aggregate); strictly-lower quality emit SubparDuplicate (per-file). |
 | DetectEmbeddableAlbumArt | — | EmbeddableAlbumArt | EmbeddableAlbumArt (stale, via set reconciliation) |

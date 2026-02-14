@@ -50,11 +50,31 @@ impl TagCanonicalityStateV2 {
     ///
     /// Returns the action to take based on the input.
     pub fn handle_key(&mut self, key: KeyEvent) -> TagCanonicalityActionV2 {
-        // Ctrl+R: Show review
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('r' | 'R'))
-        {
-            return TagCanonicalityActionV2::ShowReview;
+        // If flag confirmation popup is showing, intercept all input
+        if self.flag_confirmation_pending {
+            return match key.code {
+                KeyCode::Enter => {
+                    self.flag_confirmation_pending = false;
+                    TagCanonicalityActionV2::FlagNonCompilation
+                }
+                KeyCode::Esc => {
+                    self.flag_confirmation_pending = false;
+                    TagCanonicalityActionV2::None
+                }
+                _ => TagCanonicalityActionV2::None,
+            };
+        }
+
+        // Ctrl shortcuts
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('r' | 'R') => return TagCanonicalityActionV2::ShowReview,
+                KeyCode::Char('f' | 'F') if self.is_album_artist_mode => {
+                    self.flag_confirmation_pending = true;
+                    return TagCanonicalityActionV2::None;
+                }
+                _ => {}
+            }
         }
 
         // When the text input is focused, delegate to it first
@@ -111,6 +131,14 @@ impl TagCanonicalityStateV2 {
                 if let Some(variant) = self.data.variants.get(self.variant_cursor as usize) {
                     self.canonical_input.set_value(variant.value.clone());
                 }
+                TagCanonicalityActionV2::None
+            }
+
+            // E: jump to text field for editing
+            KeyCode::Char('e' | 'E') if !text_input_focused => {
+                self.variant_cursor = -1;
+                self.canonical_input.focused = true;
+                self.focus_pane = FocusPaneV2::Variants;
                 TagCanonicalityActionV2::None
             }
 

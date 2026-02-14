@@ -1744,20 +1744,22 @@ fn execute_apply_index_tag_ops(
     let mut history_entries: Vec<(String, Option<String>, Option<String>)> = Vec::new();
 
     for op in &effective_ops {
-        let tag_name = op.tag_name.to_lowercase();
+        let tag_name = op.tag_name.to_uppercase();
 
         match (&op.old_value, &op.new_value) {
             (Some(old), Some(new)) => {
                 // Replace: UPDATE in place
+                // Use UPPER() for tag_name match - corpus_tags may store original case from
+                // audio files but ops are normalized to uppercase.
                 tx.execute(
-                    "UPDATE corpus_tags SET tag_value = ?1 WHERE inode = ?2 AND tag_name = ?3 AND tag_value = ?4",
+                    "UPDATE corpus_tags SET tag_value = ?1 WHERE inode = ?2 AND UPPER(tag_name) = ?3 AND tag_value = ?4",
                     params![new, inode, &tag_name, old],
                 )?;
             }
             (Some(old), None) => {
                 // Drop: DELETE with exact match
                 tx.execute(
-                    "DELETE FROM corpus_tags WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3",
+                    "DELETE FROM corpus_tags WHERE inode = ?1 AND UPPER(tag_name) = ?2 AND tag_value = ?3",
                     params![inode, &tag_name, old],
                 )?;
             }

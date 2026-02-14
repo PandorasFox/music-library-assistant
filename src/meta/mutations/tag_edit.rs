@@ -115,13 +115,13 @@ fn execute_apply_tag_ops(
         let current_tags = db.get_corpus_tags(inode)?;
         let current_set: HashSet<(String, String)> = current_tags
             .iter()
-            .map(|t| (t.tag_name.to_lowercase(), t.tag_value.clone()))
+            .map(|t| (t.tag_name.to_uppercase(), t.tag_value.clone()))
             .collect();
 
         // Validate each op's expected old_value exists
         let mut validation_failed = false;
         for op in &inode_ops {
-            let key = op.tag_name.to_lowercase();
+            let key = op.tag_name.to_uppercase();
 
             // Validate expected old_value exists (for drop/replace)
             if let Some(ref old) = op.old_value {
@@ -155,11 +155,11 @@ fn execute_apply_tag_ops(
         // This is computed within the same read transaction — no race condition.
         let mut expected: Vec<(String, String)> = current_tags
             .iter()
-            .map(|t| (t.tag_name.to_lowercase(), t.tag_value.clone()))
+            .map(|t| (t.tag_name.to_uppercase(), t.tag_value.clone()))
             .collect();
 
         for op in &validated_ops {
-            let key = op.tag_name.to_lowercase();
+            let key = op.tag_name.to_uppercase();
             match (&op.old_value, &op.new_value) {
                 // Drop: remove the (key, old) pair
                 (Some(old), None) => {

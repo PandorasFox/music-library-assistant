@@ -539,7 +539,7 @@ impl UnifiedTagEditorState {
             .collect();
 
         // Sort alphabetically by name
-        new_fields.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        new_fields.sort_by(|a, b| a.name.to_uppercase().cmp(&b.name.to_uppercase()));
 
         // Add "New Tag" placeholder at the end
         new_fields.push(TagField {

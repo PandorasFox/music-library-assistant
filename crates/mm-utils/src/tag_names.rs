@@ -15,7 +15,7 @@
 const SEPARATORS: &[char] = &['_', '-', ' ', '.'];
 
 /// Normalize a tag name by:
-/// - Converting to lowercase
+/// - Converting to uppercase
 /// - Stripping all separator characters
 ///
 /// This gives a canonical form for comparison regardless of separator style.
@@ -25,13 +25,13 @@ const SEPARATORS: &[char] = &['_', '-', ' ', '.'];
 /// ```
 /// use mm_utils::tag_names::normalize_tag_name;
 ///
-/// assert_eq!(normalize_tag_name("CATALOGNUMBER"), "catalognumber");
-/// assert_eq!(normalize_tag_name("catalog_number"), "catalognumber");
-/// assert_eq!(normalize_tag_name("Catalog-Number"), "catalognumber");
-/// assert_eq!(normalize_tag_name("catalog number"), "catalognumber");
+/// assert_eq!(normalize_tag_name("CATALOGNUMBER"), "CATALOGNUMBER");
+/// assert_eq!(normalize_tag_name("catalog_number"), "CATALOGNUMBER");
+/// assert_eq!(normalize_tag_name("Catalog-Number"), "CATALOGNUMBER");
+/// assert_eq!(normalize_tag_name("catalog number"), "CATALOGNUMBER");
 /// ```
 pub fn normalize_tag_name(name: &str) -> String {
-    name.to_lowercase()
+    name.to_uppercase()
         .chars()
         .filter(|c| !SEPARATORS.contains(c))
         .collect()
@@ -216,18 +216,18 @@ mod tests {
 
     #[test]
     fn test_normalize_tag_name() {
-        // All should normalize to "catalognumber"
-        assert_eq!(normalize_tag_name("CATALOGNUMBER"), "catalognumber");
-        assert_eq!(normalize_tag_name("catalog_number"), "catalognumber");
-        assert_eq!(normalize_tag_name("Catalog-Number"), "catalognumber");
-        assert_eq!(normalize_tag_name("catalog number"), "catalognumber");
-        assert_eq!(normalize_tag_name("Catalog.Number"), "catalognumber");
-        assert_eq!(normalize_tag_name("CATALOG_NUMBER"), "catalognumber");
+        // All should normalize to "CATALOGNUMBER"
+        assert_eq!(normalize_tag_name("CATALOGNUMBER"), "CATALOGNUMBER");
+        assert_eq!(normalize_tag_name("catalog_number"), "CATALOGNUMBER");
+        assert_eq!(normalize_tag_name("Catalog-Number"), "CATALOGNUMBER");
+        assert_eq!(normalize_tag_name("catalog number"), "CATALOGNUMBER");
+        assert_eq!(normalize_tag_name("Catalog.Number"), "CATALOGNUMBER");
+        assert_eq!(normalize_tag_name("CATALOG_NUMBER"), "CATALOGNUMBER");
 
         // Album artist variations
-        assert_eq!(normalize_tag_name("album_artist"), "albumartist");
-        assert_eq!(normalize_tag_name("ALBUMARTIST"), "albumartist");
-        assert_eq!(normalize_tag_name("Album Artist"), "albumartist");
+        assert_eq!(normalize_tag_name("album_artist"), "ALBUMARTIST");
+        assert_eq!(normalize_tag_name("ALBUMARTIST"), "ALBUMARTIST");
+        assert_eq!(normalize_tag_name("Album Artist"), "ALBUMARTIST");
     }
 
     #[test]

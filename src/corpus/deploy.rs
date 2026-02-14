@@ -63,19 +63,19 @@ pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String,
 
     // Determine album artist (prefer album_artist, fallback to artist)
     let album_artist = tags
-        .get("album_artist")
-        .or_else(|| tags.get("artist"))
+        .get("ALBUM_ARTIST")
+        .or_else(|| tags.get("ARTIST"))
         .map(|s| s.as_str())
         .unwrap_or("[no album artist]");
 
-    if let Some(album) = tags.get("album") {
+    if let Some(album) = tags.get("ALBUM") {
         // Full path: {album_artist}/{album}/{track}. {title}.{ext}
         let mut path = PathBuf::new();
         path.push(sanitize_path_component(album_artist));
         path.push(sanitize_path_component(album));
 
-        let filename = if let Some(title) = tags.get("title") {
-            if let Some(track_num_str) = tags.get("track_number") {
+        let filename = if let Some(title) = tags.get("TITLE") {
+            if let Some(track_num_str) = tags.get("TRACK_NUMBER") {
                 if let Ok(track_num) = track_num_str.parse::<i32>() {
                     // When disc_number is present, prefix track with disc to
                     // disambiguate multi-disc releases (e.g. "1-01. Title.ext")
@@ -113,7 +113,7 @@ pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String,
         let mut path = PathBuf::new();
         path.push(sanitize_path_component(album_artist));
 
-        let filename = if let Some(title) = tags.get("title") {
+        let filename = if let Some(title) = tags.get("TITLE") {
             format!("{}.{}", sanitize_path_component(title), ext)
         } else {
             Path::new(file_path)
@@ -145,11 +145,11 @@ mod tests {
     #[test]
     fn test_compute_deployment_path_full() {
         let tags: HashMap<String, String> = [
-            ("artist".to_string(), "Artist Name".to_string()),
-            ("album".to_string(), "Album Name".to_string()),
-            ("album_artist".to_string(), "Album Artist".to_string()),
-            ("title".to_string(), "Track Title".to_string()),
-            ("track_number".to_string(), "1".to_string()),
+            ("ARTIST".to_string(), "Artist Name".to_string()),
+            ("ALBUM".to_string(), "Album Name".to_string()),
+            ("ALBUM_ARTIST".to_string(), "Album Artist".to_string()),
+            ("TITLE".to_string(), "Track Title".to_string()),
+            ("TRACK_NUMBER".to_string(), "1".to_string()),
         ]
         .into_iter()
         .collect();
@@ -164,8 +164,8 @@ mod tests {
     #[test]
     fn test_compute_deployment_path_single() {
         let tags: HashMap<String, String> = [
-            ("artist".to_string(), "Artist Name".to_string()),
-            ("title".to_string(), "Single Track".to_string()),
+            ("ARTIST".to_string(), "Artist Name".to_string()),
+            ("TITLE".to_string(), "Single Track".to_string()),
         ]
         .into_iter()
         .collect();
@@ -177,9 +177,9 @@ mod tests {
     #[test]
     fn test_compute_deployment_path_no_album_artist() {
         let tags: HashMap<String, String> = [
-            ("album".to_string(), "Album".to_string()),
-            ("title".to_string(), "Title".to_string()),
-            ("track_number".to_string(), "5".to_string()),
+            ("ALBUM".to_string(), "Album".to_string()),
+            ("TITLE".to_string(), "Title".to_string()),
+            ("TRACK_NUMBER".to_string(), "5".to_string()),
         ]
         .into_iter()
         .collect();
@@ -194,11 +194,11 @@ mod tests {
     #[test]
     fn test_compute_deployment_path_with_disc_number() {
         let tags: HashMap<String, String> = [
-            ("album_artist".to_string(), "Hiro".to_string()),
-            ("album".to_string(), "OutRun 20th Anniversary Box".to_string()),
-            ("title".to_string(), "MAGICAL SOUND SHOWER".to_string()),
-            ("track_number".to_string(), "1".to_string()),
-            ("disc_number".to_string(), "1".to_string()),
+            ("ALBUM_ARTIST".to_string(), "Hiro".to_string()),
+            ("ALBUM".to_string(), "OutRun 20th Anniversary Box".to_string()),
+            ("TITLE".to_string(), "MAGICAL SOUND SHOWER".to_string()),
+            ("TRACK_NUMBER".to_string(), "1".to_string()),
+            ("DISC_NUMBER".to_string(), "1".to_string()),
         ]
         .into_iter()
         .collect();
@@ -213,21 +213,21 @@ mod tests {
     #[test]
     fn test_compute_deployment_path_multi_disc_no_collision() {
         let tags_disc1: HashMap<String, String> = [
-            ("album_artist".to_string(), "Hiro".to_string()),
-            ("album".to_string(), "OutRun Box".to_string()),
-            ("title".to_string(), "Radiation".to_string()),
-            ("track_number".to_string(), "1".to_string()),
-            ("disc_number".to_string(), "1".to_string()),
+            ("ALBUM_ARTIST".to_string(), "Hiro".to_string()),
+            ("ALBUM".to_string(), "OutRun Box".to_string()),
+            ("TITLE".to_string(), "Radiation".to_string()),
+            ("TRACK_NUMBER".to_string(), "1".to_string()),
+            ("DISC_NUMBER".to_string(), "1".to_string()),
         ]
         .into_iter()
         .collect();
 
         let tags_disc10: HashMap<String, String> = [
-            ("album_artist".to_string(), "Hiro".to_string()),
-            ("album".to_string(), "OutRun Box".to_string()),
-            ("title".to_string(), "Radiation".to_string()),
-            ("track_number".to_string(), "1".to_string()),
-            ("disc_number".to_string(), "10".to_string()),
+            ("ALBUM_ARTIST".to_string(), "Hiro".to_string()),
+            ("ALBUM".to_string(), "OutRun Box".to_string()),
+            ("TITLE".to_string(), "Radiation".to_string()),
+            ("TRACK_NUMBER".to_string(), "1".to_string()),
+            ("DISC_NUMBER".to_string(), "10".to_string()),
         ]
         .into_iter()
         .collect();
@@ -249,10 +249,10 @@ mod tests {
     #[test]
     fn test_compute_deployment_path_lossy_flac_preserves_compound_ext() {
         let tags: HashMap<String, String> = [
-            ("album_artist".to_string(), "Artist".to_string()),
-            ("album".to_string(), "Album".to_string()),
-            ("title".to_string(), "Track".to_string()),
-            ("track_number".to_string(), "1".to_string()),
+            ("ALBUM_ARTIST".to_string(), "Artist".to_string()),
+            ("ALBUM".to_string(), "Album".to_string()),
+            ("TITLE".to_string(), "Track".to_string()),
+            ("TRACK_NUMBER".to_string(), "1".to_string()),
         ]
         .into_iter()
         .collect();
@@ -268,8 +268,8 @@ mod tests {
     #[test]
     fn test_compute_deployment_path_lossy_flac_single() {
         let tags: HashMap<String, String> = [
-            ("artist".to_string(), "Artist".to_string()),
-            ("title".to_string(), "Single".to_string()),
+            ("ARTIST".to_string(), "Artist".to_string()),
+            ("TITLE".to_string(), "Single".to_string()),
         ]
         .into_iter()
         .collect();
@@ -283,10 +283,10 @@ mod tests {
     fn test_compute_deployment_path_disc_number_fuzzy_match() {
         // disc_number should be found even with different naming conventions
         let tags: HashMap<String, String> = [
-            ("album_artist".to_string(), "Artist".to_string()),
-            ("album".to_string(), "Album".to_string()),
-            ("title".to_string(), "Track".to_string()),
-            ("track_number".to_string(), "3".to_string()),
+            ("ALBUM_ARTIST".to_string(), "Artist".to_string()),
+            ("ALBUM".to_string(), "Album".to_string()),
+            ("TITLE".to_string(), "Track".to_string()),
+            ("TRACK_NUMBER".to_string(), "3".to_string()),
             ("DISCNUMBER".to_string(), "2".to_string()),
         ]
         .into_iter()

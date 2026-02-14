@@ -350,14 +350,14 @@ impl Database {
     }
 
     /// Get audio files with their present tag names (for missing tag detection, corpus only).
-    /// Returns: Vec<(inode, path, album_or_none, comma_separated_lowercase_tags)>
+    /// Returns: Vec<(inode, path, album_or_none, comma_separated_uppercase_tags)>
     #[allow(clippy::type_complexity)]
     pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
         // Only check missing tags for corpus files
         let query = r#"
             SELECT f.inode, f.path,
-                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND LOWER(tag_name) = 'album' LIMIT 1) as album,
-                   GROUP_CONCAT(LOWER(ct.tag_name), ',') as present_tags
+                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
+                   GROUP_CONCAT(UPPER(ct.tag_name), ',') as present_tags
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags ct ON f.inode = ct.inode
@@ -392,7 +392,7 @@ impl Database {
         let sql = format!(
             r#"SELECT DISTINCT ct.inode FROM corpus_tags ct
                INNER JOIN files f ON ct.inode = f.inode AND f.source = 'corpus'
-               WHERE LOWER(ct.tag_name) = LOWER(?1) AND ct.tag_value IN ({})"#,
+               WHERE UPPER(ct.tag_name) = UPPER(?1) AND ct.tag_value IN ({})"#,
             placeholders.join(",")
         );
 
@@ -468,7 +468,7 @@ impl Database {
             JOIN audio_info a ON f.inode = a.inode
             JOIN corpus_tags ct ON f.inode = ct.inode
             WHERE f.is_dir = 0 AND f.source = 'corpus'
-            ORDER BY f.inode, LOWER(ct.tag_name)
+            ORDER BY f.inode, UPPER(ct.tag_name)
         "#;
 
         let mut stmt = self.conn.prepare(query)?;
@@ -508,19 +508,19 @@ impl Database {
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags album
-                ON f.inode = album.inode AND LOWER(album.tag_name) = 'album'
+                ON f.inode = album.inode AND UPPER(album.tag_name) = 'ALBUM'
             LEFT JOIN corpus_tags artist
-                ON f.inode = artist.inode AND LOWER(artist.tag_name) = 'artist'
+                ON f.inode = artist.inode AND UPPER(artist.tag_name) = 'ARTIST'
             LEFT JOIN corpus_tags album_artist
-                ON f.inode = album_artist.inode AND LOWER(album_artist.tag_name) = 'album_artist'
+                ON f.inode = album_artist.inode AND UPPER(album_artist.tag_name) = 'ALBUM_ARTIST'
             LEFT JOIN corpus_tags catalog
-                ON f.inode = catalog.inode AND LOWER(catalog.tag_name) = 'catalognumber'
+                ON f.inode = catalog.inode AND UPPER(catalog.tag_name) = 'CATALOGNUMBER'
             LEFT JOIN corpus_tags isrc
-                ON f.inode = isrc.inode AND LOWER(isrc.tag_name) = 'isrc'
+                ON f.inode = isrc.inode AND UPPER(isrc.tag_name) = 'ISRC'
             LEFT JOIN corpus_tags year
-                ON f.inode = year.inode AND LOWER(year.tag_name) = 'year'
+                ON f.inode = year.inode AND UPPER(year.tag_name) = 'YEAR'
             LEFT JOIN corpus_tags flagcomp
-                ON f.inode = flagcomp.inode AND LOWER(flagcomp.tag_name) = 'flagcompilation'
+                ON f.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'FLAGCOMPILATION'
             WHERE f.is_dir = 0 AND f.source = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
             GROUP BY f.inode
         "#;
@@ -569,7 +569,7 @@ impl Database {
     }
 
     /// Get all audio files with their tags (for search functionality).
-    /// Tags are keyed by lowercase tag name; values are collected into Vec
+    /// Tags are keyed by uppercase tag name; values are collected into Vec
     /// since a single tag name can have multiple values (e.g. multiple genres).
     pub fn get_all_audio_files_with_tags(&self, source: FileSource) -> Result<Vec<(AudioFile, HashMap<String, Vec<String>>)>> {
         let files = self.get_all_audio_files(source)?;
@@ -578,7 +578,7 @@ impl Database {
             let tags = self.get_corpus_tags(file.inode())?;
             let mut tag_map: HashMap<String, Vec<String>> = HashMap::new();
             for t in tags {
-                tag_map.entry(t.tag_name.to_lowercase()).or_default().push(t.tag_value);
+                tag_map.entry(t.tag_name.to_uppercase()).or_default().push(t.tag_value);
             }
             results.push((file, tag_map));
         }

@@ -267,7 +267,7 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
                     let display = truncate_right(&text, max_width);
 
                     // Highlight the tag being split
-                    let style = if name.to_lowercase() == state.data.compound.tag_name.to_lowercase()
+                    let style = if name.to_uppercase() == state.data.compound.tag_name.to_uppercase()
                         && value == &state.data.compound.compound_value
                     {
                         Style::default().fg(Color::Yellow)

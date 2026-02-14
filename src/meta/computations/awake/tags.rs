@@ -61,7 +61,7 @@ pub fn execute_detect_missing_tags(
         .health_detection
         .required_tags
         .iter()
-        .map(|s| s.to_lowercase())
+        .map(|s| s.to_uppercase())
         .collect();
 
     // Clear all existing MissingTag signals (routes through db_thread)
@@ -373,7 +373,7 @@ pub fn execute_detect_compound_tags_for_inode(
     let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
 
     for tag in &tags {
-        let tag_name_lower = tag.tag_name.to_lowercase();
+        let tag_name_upper = tag.tag_name.to_uppercase();
 
         // Check if this value is whitelisted as canonical
         if read_only_db.is_canonical_tag(&tag.tag_name, &tag.tag_value).unwrap_or(false) {
@@ -381,7 +381,7 @@ pub fn execute_detect_compound_tags_for_inode(
         }
 
         // Walk the priority chain of split rules for this tag
-        if let Some(rules) = tag_split_rules.get(&tag_name_lower) {
+        if let Some(rules) = tag_split_rules.get(&tag_name_upper) {
             for rule in rules {
                 let matched = match rule {
                     crate::config::SplitRule::Separator(sep) => {
@@ -402,9 +402,9 @@ pub fn execute_detect_compound_tags_for_inode(
                         if CompoundTagValue::is_compound(&tag.tag_value, sep) {
                             let split_parts = CompoundTagValue::split_value(&tag.tag_value, sep);
                             // Only match if at least one part is already known
-                            let existing = tag_values_cache.entry(tag_name_lower.clone()).or_insert_with(|| {
+                            let existing = tag_values_cache.entry(tag_name_upper.clone()).or_insert_with(|| {
                                 read_only_db
-                                    .get_distinct_tag_values(&tag_name_lower)
+                                    .get_distinct_tag_values(&tag_name_upper)
                                     .unwrap_or_default()
                                     .into_iter()
                                     .map(|(value, _count)| value)
@@ -462,7 +462,7 @@ pub fn execute_detect_compound_tags_for_inode(
     // Populate matching_parts for each compound by checking which split parts
     // exist as standalone values in the corpus. This enables "safe split" detection.
     for compound in &mut compounds {
-        let tag_name = compound.tag_name.to_lowercase();
+        let tag_name = compound.tag_name.to_uppercase();
 
         // Get or fetch existing values for this tag type (reuses cache from above)
         let existing_values = tag_values_cache.entry(tag_name.clone()).or_insert_with(|| {

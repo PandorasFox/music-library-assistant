@@ -54,7 +54,7 @@ pub fn execute_detect_deploy_conflicts(
         let tags = read_only_db.get_corpus_tags(signal.inode).unwrap_or_default();
         let tag_map: HashMap<String, String> = tags
             .into_iter()
-            .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
             .collect();
 
         let deploy_path = compute_deployment_path_with_tags(&signal.path, &tag_map)
@@ -211,7 +211,7 @@ pub fn execute_derive_deploy_health_signals(
                 let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
                 let tag_map: std::collections::HashMap<String, String> = tags
                     .into_iter()
-                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                    .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
                     .collect();
 
                 // Compute expected relative path within the library
@@ -392,7 +392,7 @@ pub fn execute_derive_corpus_deploy_status(
         let tags = read_only_db.get_corpus_tags(signal.inode).unwrap_or_default();
         let tag_map: HashMap<String, String> = tags
             .into_iter()
-            .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
             .collect();
         let expected_relative = compute_deployment_path_with_tags(&signal.path, &tag_map);
         let deploy_path = expected_relative.to_string_lossy().to_string();

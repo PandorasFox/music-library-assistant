@@ -64,14 +64,14 @@ impl UnifiedTagEditorState {
                         // Get old normalized name before renaming
                         let old_normalized = fields
                             .get(self.current_field_idx)
-                            .map(|f| f.name.to_lowercase());
+                            .map(|f| f.name.to_uppercase());
 
                         if let Some(old_norm) = old_normalized {
                             let new_name = self.name_buffer.clone();
                             // Rename all fields with the same normalized name
                             // (handles multi-value tags: renaming "genre" renames all genre entries)
                             for f in fields.iter_mut() {
-                                if f.name.to_lowercase() == old_norm {
+                                if f.name.to_uppercase() == old_norm {
                                     f.name = new_name.clone();
                                 }
                             }
@@ -260,12 +260,12 @@ impl UnifiedTagEditorState {
     pub(super) fn is_multi_value_field(&self) -> Option<usize> {
         let fields = self.tag_fields.get(self.current_item_idx)?;
         let current_field = fields.get(self.current_field_idx)?;
-        let normalized_name = current_field.name.to_lowercase();
+        let normalized_name = current_field.name.to_uppercase();
 
         // Count fields with same normalized name
         let count = fields
             .iter()
-            .filter(|f| f.name.to_lowercase() == normalized_name && f.name != "New Tag")
+            .filter(|f| f.name.to_uppercase() == normalized_name && f.name != "New Tag")
             .count();
 
         if count > 1 {
@@ -286,10 +286,10 @@ impl UnifiedTagEditorState {
             None => return,
         };
 
-        let normalized_name = current_field.name.to_lowercase();
+        let normalized_name = current_field.name.to_uppercase();
         let values: Vec<String> = fields
             .iter()
-            .filter(|f| f.name.to_lowercase() == normalized_name)
+            .filter(|f| f.name.to_uppercase() == normalized_name)
             .map(|f| f.value.clone())
             .collect();
 
@@ -320,11 +320,11 @@ impl UnifiedTagEditorState {
         };
 
         // Find all fields with the same normalized name
-        let normalized_name = field_name.to_lowercase();
+        let normalized_name = field_name.to_uppercase();
         let matching_indices: Vec<usize> = fields
             .iter()
             .enumerate()
-            .filter(|(_, f)| f.name.to_lowercase() == normalized_name)
+            .filter(|(_, f)| f.name.to_uppercase() == normalized_name)
             .map(|(i, _)| i)
             .collect();
 

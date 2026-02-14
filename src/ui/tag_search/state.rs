@@ -410,7 +410,7 @@ impl TagSearchState {
         }
 
         let query = condition.value.to_lowercase();
-        let tag_name = condition.tag_name.to_lowercase();
+        let tag_name = condition.tag_name.to_uppercase();
 
         let values = aft.tags.get(&tag_name);
 

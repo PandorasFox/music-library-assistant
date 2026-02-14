@@ -195,7 +195,7 @@ impl Default for TagSplittingOpinions {
     fn default() -> Self {
         let mut tag_split_rules = std::collections::HashMap::new();
         tag_split_rules.insert(
-            "artist".to_string(),
+            "ARTIST".to_string(),
             vec![
                 SplitRule::Separator(";".to_string()),
                 SplitRule::CollaborationKeywords(vec![
@@ -210,7 +210,7 @@ impl Default for TagSplittingOpinions {
             ],
         );
         tag_split_rules.insert(
-            "genre".to_string(),
+            "GENRE".to_string(),
             vec![
                 SplitRule::Separator(";".to_string()),
                 SplitRule::Separator(",".to_string()),
@@ -748,7 +748,7 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
 fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplittingOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            let tag_name = child.name().value().to_string();
+            let tag_name = child.name().value().to_uppercase();
 
             if let Some(rule_nodes) = child.children() {
                 let mut rules: Vec<SplitRule> = Vec::new();

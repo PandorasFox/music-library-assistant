@@ -228,7 +228,7 @@ pub fn execute_detect_metadata_duplicates(
         inode_tags
             .entry(inode)
             .or_default()
-            .push((tag_name.to_lowercase(), tag_value));
+            .push((tag_name.to_uppercase(), tag_value));
     }
 
     let mut sig_to_inodes: HashMap<String, Vec<i64>> = HashMap::new();
@@ -628,15 +628,15 @@ pub fn execute_analyze_fingerprint_overlaps(
                 let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
                 let tag_map: HashMap<String, String> = tags
                     .into_iter()
-                    .map(|t| (t.tag_name.to_lowercase(), t.tag_value))
+                    .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
                     .collect();
 
                 identities.push(TrackReleaseIdentity {
                     inode,
                     path: audio_file.path().to_string(),
-                    album: tag_map.get("album").cloned().unwrap_or_default(),
-                    title: tag_map.get("title").cloned().unwrap_or_default(),
-                    isrc: tag_map.get("isrc").cloned().unwrap_or_default(),
+                    album: tag_map.get("ALBUM").cloned().unwrap_or_default(),
+                    title: tag_map.get("TITLE").cloned().unwrap_or_default(),
+                    isrc: tag_map.get("ISRC").cloned().unwrap_or_default(),
                     // Use fuzzy lookup for catalog number - handles "catalog_number" vs "catalognumber"
                     catalog_number: find_tag_in_map(&tag_map, "catalognumber")
                         .map(|s| s.to_string())

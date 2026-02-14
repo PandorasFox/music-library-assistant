@@ -81,7 +81,7 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
         for field in orig_fields {
             if field.name != "New Tag" {
                 orig_values
-                    .entry(field.name.to_lowercase())
+                    .entry(field.name.to_uppercase())
                     .or_default()
                     .push(field);
             }
@@ -90,7 +90,7 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
         for field in curr_fields {
             if field.name != "New Tag" {
                 curr_values
-                    .entry(field.name.to_lowercase())
+                    .entry(field.name.to_uppercase())
                     .or_default()
                     .push(field);
             }
@@ -261,7 +261,7 @@ pub fn aggregate_tags_across_audio_files(audio_files: &[AudioFile]) -> Vec<Aggre
                 continue;
             }
 
-            let normalized = field.name.to_lowercase();
+            let normalized = field.name.to_uppercase();
 
             tag_values
                 .entry(normalized.clone())
@@ -292,7 +292,7 @@ pub fn aggregate_tags_across_audio_files(audio_files: &[AudioFile]) -> Vec<Aggre
         .collect();
 
     // Sort alphabetically by tag name
-    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    result.sort_by(|a, b| a.name.to_uppercase().cmp(&b.name.to_uppercase()));
 
     // Add "New Tag" placeholder at end
     result.push(AggregatedTagField {

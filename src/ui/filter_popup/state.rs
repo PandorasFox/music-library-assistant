@@ -198,7 +198,7 @@ impl FilterCondition {
             return true;
         }
 
-        let values = tags.get(&self.tag_name.to_lowercase());
+        let values = tags.get(&self.tag_name.to_uppercase());
         let query = self.tag_value.to_lowercase();
 
         match self.tag_comparison {

@@ -301,14 +301,14 @@ impl UnifiedTagEditorState {
                 };
 
                 // Check if this field is part of a multi-value group
-                let normalized_name = field.name.to_lowercase();
+                let normalized_name = field.name.to_uppercase();
                 let value_count = fields
                     .iter()
-                    .filter(|f| f.name.to_lowercase() == normalized_name && f.name != "New Tag")
+                    .filter(|f| f.name.to_uppercase() == normalized_name && f.name != "New Tag")
                     .count();
                 let is_first_of_group = fields
                     .iter()
-                    .position(|f| f.name.to_lowercase() == normalized_name)
+                    .position(|f| f.name.to_uppercase() == normalized_name)
                     .map(|pos| pos == idx)
                     .unwrap_or(true);
 

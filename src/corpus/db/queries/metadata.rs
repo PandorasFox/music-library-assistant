@@ -18,7 +18,7 @@ impl Database {
             r#"SELECT ct.tag_value, COUNT(DISTINCT ct.inode) as file_count
                FROM corpus_tags ct
                INNER JOIN files f ON ct.inode = f.inode AND f.source = 'corpus'
-               WHERE LOWER(ct.tag_name) = LOWER(?1) AND ct.tag_value IS NOT NULL AND ct.tag_value != ''
+               WHERE UPPER(ct.tag_name) = UPPER(?1) AND ct.tag_value IS NOT NULL AND ct.tag_value != ''
                GROUP BY ct.tag_value
                ORDER BY file_count DESC"#,
         )?;
@@ -60,23 +60,23 @@ impl Database {
                INNER JOIN files f ON album.inode = f.inode AND f.source = 'corpus'
                LEFT JOIN corpus_tags album_artist
                    ON album.inode = album_artist.inode
-                   AND LOWER(album_artist.tag_name) = 'album_artist'
+                   AND UPPER(album_artist.tag_name) = 'ALBUM_ARTIST'
                LEFT JOIN corpus_tags artist
                    ON album.inode = artist.inode
-                   AND LOWER(artist.tag_name) = 'artist'
+                   AND UPPER(artist.tag_name) = 'ARTIST'
                LEFT JOIN corpus_tags isrc
                    ON album.inode = isrc.inode
-                   AND LOWER(isrc.tag_name) = 'isrc'
+                   AND UPPER(isrc.tag_name) = 'ISRC'
                LEFT JOIN corpus_tags catalog
                    ON album.inode = catalog.inode
-                   AND LOWER(catalog.tag_name) = 'catalog_number'
+                   AND UPPER(catalog.tag_name) = 'CATALOG_NUMBER'
                LEFT JOIN corpus_tags year
                    ON album.inode = year.inode
-                   AND LOWER(year.tag_name) = 'year'
+                   AND UPPER(year.tag_name) = 'YEAR'
                LEFT JOIN corpus_tags date
                    ON album.inode = date.inode
-                   AND LOWER(date.tag_name) = 'date'
-               WHERE LOWER(album.tag_name) = 'album'
+                   AND UPPER(date.tag_name) = 'DATE'
+               WHERE UPPER(album.tag_name) = 'ALBUM'
                    AND album.tag_value IS NOT NULL
                    AND album.tag_value != ''"#,
         )?;

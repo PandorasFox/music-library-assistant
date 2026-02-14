@@ -14,7 +14,9 @@
 mod first_time_setup;
 pub mod intake_confirmation;
 mod migrations;
+mod vacuum;
 
 pub use first_time_setup::handle_first_time_setup;
 pub use intake_confirmation::{IntakeConfirmationState, IntakeConfirmationAction};
 pub use migrations::run_migrations;
+pub use vacuum::check_and_prompt_vacuum;

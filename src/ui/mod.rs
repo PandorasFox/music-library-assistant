@@ -389,6 +389,14 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
         startup::run_migrations(&mut terminal, &mut witch)?;
     }
 
+    // Check if DB compaction would help (after migrations, before db_thread)
+    startup::check_and_prompt_vacuum(
+        &mut terminal,
+        &db_path,
+        config.opinions.startup.vacuum_threshold,
+        &mut witch,
+    )?;
+
     witch.spawn_db_thread();
 
     let mut app = App::new_with_witch(config, witch);

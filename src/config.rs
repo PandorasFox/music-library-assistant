@@ -108,12 +108,16 @@ pub struct StartupOpinions {
     /// Catches out-of-band tag changes (external tools modified tags) and corrupt files.
     /// Slower startup but ensures database matches reality.
     pub force_check_all_files_at_startup: bool,
+    /// Free-page ratio threshold for prompting DB compaction (default: 0.1 = 10%).
+    /// Set to 0.0 to disable.
+    pub vacuum_threshold: f64,
 }
 
 impl Default for StartupOpinions {
     fn default() -> Self {
         Self {
             force_check_all_files_at_startup: false,
+            vacuum_threshold: 0.1,
         }
     }
 }
@@ -626,6 +630,13 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.force_check_all_files_at_startup = val;
+                        }
+                    }
+                }
+                "vacuum-threshold" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.vacuum_threshold = val;
                         }
                     }
                 }

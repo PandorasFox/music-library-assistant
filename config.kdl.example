@@ -46,6 +46,11 @@ opinions {
         // Catches out-of-band tag changes (external tools modified tags) and corrupt files.
         // Slower startup but ensures database matches reality.
         // force-check-all-files false
+
+        // Free-page ratio threshold for prompting DB compaction (default: 0.1 = 10%).
+        // When free pages exceed this fraction of total pages, MM will prompt to VACUUM.
+        // Set to 0.0 to disable the prompt entirely.
+        // vacuum-threshold 0.1
     }
 
     // -------------------------------------------------------------------------

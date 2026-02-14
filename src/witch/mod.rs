@@ -1036,6 +1036,24 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
+    // Database Maintenance (Pre-db_thread, Witness-Guarded)
+    // -------------------------------------------------------------------------
+
+    /// Execute VACUUM on the database, guarded by DecisionWitness.
+    ///
+    /// Runs synchronously before db_thread is spawned. Call only after
+    /// operator approval (Enter in the vacuum prompt).
+    pub fn execute_vacuum(&mut self, db_path: &std::path::Path) -> anyhow::Result<()> {
+        self.with_operator_decision(|_scope| {
+            // Witness exists within this scope — operator authorized the action.
+            let conn = rusqlite::Connection::open(db_path)?;
+            conn.execute_batch("VACUUM")?;
+            drop(conn);
+            Ok(())
+        })
+    }
+
+    // -------------------------------------------------------------------------
     // Read-Only Database Access (UI Queries)
     // -------------------------------------------------------------------------
 

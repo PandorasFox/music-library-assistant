@@ -430,6 +430,20 @@ impl Database {
         Ok(result)
     }
 
+    /// Check whether an audio file has embedded pictures.
+    pub fn get_has_pictures(&self, inode: i64) -> Result<bool> {
+        let result = self.conn.query_row(
+            "SELECT has_pictures FROM audio_info WHERE inode = ?1",
+            params![inode],
+            |row| row.get::<_, i32>(0),
+        );
+        match result {
+            Ok(v) => Ok(v != 0),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Get the corpus path for a single inode.
     pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
         let mut stmt = self.conn.prepare(

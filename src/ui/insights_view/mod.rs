@@ -183,6 +183,8 @@ pub enum InsightAction {
     LaunchSubparDuplicateResolution,
     /// Launch embed album art modal
     LaunchEmbedAlbumArt,
+    /// Launch manual review modal (redundant dups, deploy conflicts, metadata dups)
+    LaunchManualReview,
     /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -271,7 +273,7 @@ impl BucketEntry {
             count: Some(count),
             color: if count > 0 { Color::Yellow } else { Color::Green },
             rank: 0,
-            action: InsightAction::NotImplemented,
+            action: InsightAction::LaunchManualReview,
         }
     }
 
@@ -341,6 +343,7 @@ impl BucketEntry {
         let action = match signal_type {
             "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
             "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview, // Default to review
+            "metadata_dup" | "deploy_conflict" => InsightAction::LaunchManualReview,
             _ => InsightAction::NotImplemented,
         };
 

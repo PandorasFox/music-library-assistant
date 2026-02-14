@@ -30,6 +30,7 @@ pub mod deploy_modal;
 pub mod directory_cluster_modal;
 pub mod embed_album_art_modal;
 pub mod eye;
+pub mod manual_review_modal;
 pub mod filter_popup;
 pub mod helpers;
 pub mod insights_view;
@@ -221,6 +222,7 @@ impl App {
             ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_key(key)),
             ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_key(key)),
             ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_key(key)),
+            ActiveView::ManualReview(s) => ViewAction::ManualReview(s.handle_key(key)),
             ActiveView::TransactionReview(review) => ViewAction::TransactionReview(review.handle_key(key)),
         };
 

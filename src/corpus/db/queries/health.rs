@@ -973,5 +973,71 @@ impl Database {
 
         Ok(inodes)
     }
+
+    // ========================================================================
+    // Redundant Duplicate Resolution Queries
+    // ========================================================================
+
+    /// Get all redundant duplicate groups with deserialized data.
+    ///
+    /// Returns (signal_key, data) pairs for each group. Each group contains
+    /// files with identical fingerprints and identical quality scores that
+    /// require operator choice to resolve.
+    pub fn get_redundant_duplicate_groups(&self) -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>> {
+        use crate::meta::signals::data::RedundantDuplicateData;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT key, data FROM signal_redundant_duplicate ORDER BY key"
+        )?;
+
+        let mut results = Vec::new();
+        let rows = stmt.query_map(params![], |row| {
+            let key: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((key, blob))
+        })?;
+
+        for row in rows {
+            let (key, blob) = row?;
+            if let Ok(data) = bincode::deserialize::<RedundantDuplicateData>(&blob) {
+                results.push((key, data));
+            }
+        }
+
+        Ok(results)
+    }
+
+    // ========================================================================
+    // Metadata Duplicate Resolution Queries
+    // ========================================================================
+
+    /// Get all metadata duplicate groups with deserialized data.
+    ///
+    /// Returns (signal_key, data) pairs for each group. Each group contains
+    /// files with identical tag signatures (artist/album/title) that may need
+    /// tag editing or stashing to resolve.
+    pub fn get_metadata_duplicate_groups(&self) -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>> {
+        use crate::meta::signals::data::MetadataDuplicateData;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT key, data FROM signal_metadata_duplicate ORDER BY key"
+        )?;
+
+        let mut results = Vec::new();
+        let rows = stmt.query_map(params![], |row| {
+            let key: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((key, blob))
+        })?;
+
+        for row in rows {
+            let (key, blob) = row?;
+            if let Ok(data) = bincode::deserialize::<MetadataDuplicateData>(&blob) {
+                results.push((key, data));
+            }
+        }
+
+        Ok(results)
+    }
 }
 

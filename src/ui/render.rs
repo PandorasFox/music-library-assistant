@@ -17,8 +17,8 @@ use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle};
 use super::{
-    compound_split_v2, filter_popup, insights_view, oob_conflict_modal, oob_sync_modal,
-    progressive_worker, tag_canonicity_v2, transaction_review,
+    compound_split_v2, filter_popup, insights_view, manual_review_modal, oob_conflict_modal,
+    oob_sync_modal, progressive_worker, tag_canonicity_v2, transaction_review,
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
@@ -233,6 +233,10 @@ fn render_content(
             vname = "directory_cluster_resolution";
             preview.render(f, area);
         }
+        ActiveView::ManualReview(ref state) => {
+            vname = "manual_review";
+            manual_review_modal::render(f, area, state);
+        }
     }
 
     // Render filter popup overlay if active
@@ -390,6 +394,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::OobConflictInspection(_) => "oob_conflict_inspection",
         ActiveView::TagCanonicityResolution { .. } => "tag_canonicity_resolution",
         ActiveView::CompoundTagSplit { .. } => "compound_tag_split",
+        ActiveView::ManualReview(_) => "manual_review",
         ActiveView::TransactionReview(_) => "transaction_review",
     }
 }

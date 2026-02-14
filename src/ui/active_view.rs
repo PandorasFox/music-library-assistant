@@ -13,6 +13,7 @@ use crate::ui::{
     eye::Eye,
     filter_popup,
     insights_view,
+    manual_review_modal,
     missing_directory_modal,
     missing_file_modal,
     moved_file_modal,
@@ -80,6 +81,9 @@ pub(crate) enum ActiveView {
         safe_mode: bool,
     },
 
+    // Manual review (iterate through groups, stash/edit files)
+    ManualReview(manual_review_modal::ManualReviewState),
+
     // Transaction review (view stack holds suspended views)
     TransactionReview(transaction_review::TransactionReviewState),
 }
@@ -109,6 +113,7 @@ impl ActiveView {
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
+            Self::ManualReview(s) => Some(s.header_suffix()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
     }
@@ -135,6 +140,7 @@ impl ActiveView {
             Self::OobConflictInspection(s) => s.selected_path(),
             Self::DeploymentPreview(s) => s.selected_path(),
             Self::UnifiedTagEditor(s) => s.selected_path(),
+            Self::ManualReview(s) => s.selected_path(),
             _ => None,
         }
     }
@@ -193,6 +199,7 @@ pub(crate) enum ViewAction {
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
+    ManualReview(manual_review_modal::ManualReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
 }
 

@@ -12,10 +12,11 @@
 //! - `simple_resolutions`: Missing file/dir, corrupt, shit format, subpar dupe, directory overlap
 
 mod compound_split;
-mod tag_canonicity;
-mod oob_resolution;
 mod deploy;
+mod manual_review;
+mod oob_resolution;
 mod simple_resolutions;
+mod tag_canonicity;
 mod witness;
 
 use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
@@ -62,6 +63,7 @@ impl App {
             ViewAction::OobConflictInspection(a) => self.handle_oob_conflict_action(a, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => self.handle_tag_canonicity_action(a, witness.as_ref()),
             ViewAction::CompoundTagSplit(a) => self.handle_compound_split_action(a, witness.as_ref()),
+            ViewAction::ManualReview(a) => self.handle_manual_review_action(a, witness.as_ref()),
             ViewAction::TransactionReview(a) => self.handle_transaction_review_action(a, witness.as_ref()),
         }
     }
@@ -229,6 +231,35 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchMissingDirectoryResolution) => {
                         self.start_missing_directory_resolution();
+                    }
+                    Some(insights_view::InsightAction::LaunchManualReview) => {
+                        // Determine ReviewKind from the selected insight type
+                        let kind = if let ActiveView::Insights(ref v) = self.view {
+                            v.selected_insight_type().and_then(|t| match t {
+                                insights_view::InsightType::RedundantDuplicates => {
+                                    Some(crate::ui::manual_review_modal::ReviewKind::RedundantDuplicate)
+                                }
+                                insights_view::InsightType::OtherSignal { .. } => {
+                                    // Check the signal_type from the entry
+                                    v.selected_entry().and_then(|e| {
+                                        match e.label.as_str() {
+                                            "Deploy Conflicts" => Some(crate::ui::manual_review_modal::ReviewKind::DeployConflict),
+                                            "Metadata Duplicates" => Some(crate::ui::manual_review_modal::ReviewKind::MetadataDuplicate),
+                                            _ => None,
+                                        }
+                                    })
+                                }
+                                _ => None,
+                            })
+                        } else {
+                            None
+                        };
+                        match kind {
+                            Some(k) => self.start_manual_review(k),
+                            None => {
+                                self.status_message = Some("Unknown review type".to_string());
+                            }
+                        }
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Not yet implemented".to_string());

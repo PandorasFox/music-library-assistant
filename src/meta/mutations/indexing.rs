@@ -1095,6 +1095,7 @@ mod tests {
             bitrate_kbps: Some(1411),
             sample_rate: Some(44100),
             fingerprint: Some(vec![0xabc123]),
+            has_pictures: false,
             tags: TagSet::new(vec![
                 ("artist".to_string(), "Test Artist".to_string()),
                 ("album".to_string(), "Test Album".to_string()),

@@ -650,6 +650,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_file_in_corpus_inodes()
     }
 
+    /// Check whether an audio file has embedded pictures.
+    pub fn get_has_pictures(&self, inode: i64) -> Result<bool> {
+        self.db.get_has_pictures(inode)
+    }
+
     /// Get the corpus path for a single inode.
     pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
         self.db.get_corpus_path_for_inode(inode)
@@ -709,6 +714,20 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get all inodes that have a CompoundTag signal containing a specific compound value.
     pub fn get_inodes_with_compound_value(&self, tag_name: &str, compound_value: &str) -> Result<Vec<i64>> {
         self.db.get_inodes_with_compound_value(tag_name, compound_value)
+    }
+
+    // =========================================================================
+    // Redundant / Metadata Duplicate Queries
+    // =========================================================================
+
+    /// Get all redundant duplicate groups with deserialized data.
+    pub fn get_redundant_duplicate_groups(&self) -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>> {
+        self.db.get_redundant_duplicate_groups()
+    }
+
+    /// Get all metadata duplicate groups with deserialized data.
+    pub fn get_metadata_duplicate_groups(&self) -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>> {
+        self.db.get_metadata_duplicate_groups()
     }
 
     // =========================================================================

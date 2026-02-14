@@ -18,6 +18,21 @@ pub enum TagEditorSource {
     DirectoryEdit,
     /// From tag search results
     TagSearch,
+    /// Embedded within a health modal (tag canonicity, compound split, etc.)
+    HealthModal,
+}
+
+/// Launch mode for the tag editor — standalone (owns transaction) or embedded (parent owns transaction).
+#[derive(Debug, Clone)]
+pub enum TagEditorLaunchMode {
+    /// Normal standalone mode — tag editor owns the transaction lifecycle.
+    Standalone,
+    /// Embedded within a health modal — parent owns the transaction.
+    /// Changes are collected and staged as a single decision at the parent's decision index.
+    Embedded {
+        decision_index: usize,
+        decision_label: String,
+    },
 }
 
 /// Editing mode for the tag editor
@@ -105,6 +120,14 @@ pub enum UnifiedTagEditorAction {
     RequestFillFromDb { inode: Option<i64> },
     /// Request to show transaction review (requires daemon access to populate decisions)
     RequestTransactionReview,
+    /// Close embedded tag editor without staging (Esc from embedded mode)
+    CloseEmbedded,
+    /// Stage collected mutations at parent's decision index and close embedded editor
+    StageAndCloseEmbedded {
+        decision_index: usize,
+        decision_label: String,
+        mutations: Vec<Mutation>,
+    },
 }
 
 /// Modal dialogs for the unified tag editor

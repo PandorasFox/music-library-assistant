@@ -388,10 +388,22 @@ impl App {
             UnifiedTagEditorAction::CloseModal => {}
 
             UnifiedTagEditorAction::StageDecisionAndNavigate { index, mutations, direction } => {
-                let Some(w) = witness else { return };
-                // Stage the decision AND navigate (from confirmation modal Enter)
                 use crate::ui::tag_editor::types::NavigationDirection;
-                self.stage_tag_editor_decision(index, mutations, w);
+                let is_embedded = matches!(&self.view, ActiveView::UnifiedTagEditor(ref e) if e.is_embedded());
+
+                if is_embedded {
+                    // Embedded mode: track locally, don't stage to transaction
+                    if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
+                        editor.set_staged_mutations(mutations);
+                        editor.staged_decision_count += 1;
+                    }
+                } else {
+                    // Standalone mode: stage to transaction (requires witness)
+                    let Some(w) = witness else { return };
+                    self.stage_tag_editor_decision(index, mutations, w);
+                }
+
+                // Navigate in both modes
                 if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
                     match direction {
                         NavigationDirection::Next => {
@@ -480,6 +492,27 @@ impl App {
                     None => {
                         self.status_message = Some("Track not indexed - no database tags available".to_string());
                     }
+                }
+            }
+
+            UnifiedTagEditorAction::CloseEmbedded => {
+                // Return to parent health modal without staging
+                if !self.pop_and_restore() {
+                    self.start_insights_view();
+                }
+            }
+
+            UnifiedTagEditorAction::StageAndCloseEmbedded { decision_index, decision_label, mutations } => {
+                let Some(_w) = witness else { return };
+                // Stage collected mutations at parent's decision index
+                if let Some(ref mut witch) = self.witch {
+                    let _ = super::operator_decisions::stage_decision(
+                        witch, decision_index, &decision_label, mutations,
+                    );
+                }
+                // Return to parent health modal
+                if !self.pop_and_restore() {
+                    self.start_insights_view();
                 }
             }
 

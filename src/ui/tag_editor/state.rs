@@ -15,8 +15,8 @@ use super::mutations::{
 };
 use super::types::{
     AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, TagChange,
-    TagEditContext, TagEditorButton, TagEditorMode, TagEditorSource, TagField,
-    UnifiedTagEditorFocus, UnifiedTagEditorModal,
+    TagEditContext, TagEditorButton, TagEditorLaunchMode, TagEditorMode, TagEditorSource,
+    TagField, UnifiedTagEditorFocus, UnifiedTagEditorModal,
 };
 
 // ============================================================================
@@ -125,6 +125,13 @@ pub struct UnifiedTagEditorState {
     /// Staged mutations for current item (set after StageDecision, cleared on item change)
     /// Used to skip confirmation dialog when changes match what's already staged.
     pub staged_mutations_for_current: Option<Vec<Mutation>>,
+
+    // ========================================================================
+    // Launch Mode
+    // ========================================================================
+
+    /// Whether this editor is standalone (owns transaction) or embedded (parent owns transaction).
+    pub launch_mode: TagEditorLaunchMode,
 }
 
 impl UnifiedTagEditorState {
@@ -205,6 +212,7 @@ impl UnifiedTagEditorState {
             context_list_visible_height: 0,
             staged_decision_count: 0,
             staged_mutations_for_current: None,
+            launch_mode: TagEditorLaunchMode::Standalone,
         }
     }
 
@@ -241,6 +249,17 @@ impl UnifiedTagEditorState {
         audio_files: Vec<AudioFile>,
     ) -> Self {
         Self::new(TagEditorMode::Aggregated, audio_files, TagEditorSource::DirectoryEdit, None)
+    }
+
+    /// Builder method to set embedded mode (called after construction).
+    pub fn with_embedded_mode(mut self, decision_index: usize, decision_label: String) -> Self {
+        self.launch_mode = TagEditorLaunchMode::Embedded { decision_index, decision_label };
+        self
+    }
+
+    /// Whether this editor is running in embedded mode (parent owns transaction).
+    pub fn is_embedded(&self) -> bool {
+        matches!(self.launch_mode, TagEditorLaunchMode::Embedded { .. })
     }
 
     /// Check if using Aggregated mode (unified view across all tracks)
@@ -382,6 +401,29 @@ impl UnifiedTagEditorState {
         };
 
         changes_to_mutations(&current_changes, &audio_files, &self.tag_fields)
+    }
+
+    /// Collect mutations across ALL items that have changes.
+    ///
+    /// Used by embedded mode to gather edits from all files the user confirmed
+    /// via Tab navigation, combined into a single mutation set for staging at
+    /// the parent's decision index.
+    pub fn collect_all_mutations(&self) -> Vec<Mutation> {
+        if self.is_aggregated_mode() {
+            return self.generate_mutations();
+        }
+
+        let audio_files = match &self.context {
+            TagEditContext::SingleFile { audio_file, .. } => vec![audio_file.clone()],
+            TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
+        };
+
+        let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
+        if all_changes.is_empty() {
+            return Vec::new();
+        }
+
+        changes_to_mutations(&all_changes, &audio_files, &self.tag_fields)
     }
 
     /// Revert to original state for current item only

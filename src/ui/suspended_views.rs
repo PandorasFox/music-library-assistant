@@ -11,6 +11,7 @@
 use crate::ui::{
     insights_view,
     progressive_worker,
+    tag_editor,
     transaction_review,
     ActiveView,
     active_view::SuspendedView,
@@ -22,6 +23,7 @@ use super::App;
 pub(crate) enum SuspendTarget {
     TransactionReview(transaction_review::TransactionReviewState),
     ProgressiveWork(progressive_worker::ProgressiveWorkerState),
+    EmbeddedTagEditor(tag_editor::UnifiedTagEditorState),
 }
 
 impl SuspendTarget {
@@ -29,6 +31,7 @@ impl SuspendTarget {
         match self {
             Self::TransactionReview(s) => ActiveView::TransactionReview(s),
             Self::ProgressiveWork(s) => ActiveView::ProgressiveWork(s),
+            Self::EmbeddedTagEditor(s) => ActiveView::UnifiedTagEditor(s),
         }
     }
 }

@@ -8,8 +8,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::state::UnifiedTagEditorState;
 use super::types::{
     FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton,
-    UnifiedTagEditorAction, UnifiedTagEditorFocus, UnifiedTagEditorModal,
-    UnsavedChangesButton,
+    TagEditorLaunchMode, UnifiedTagEditorAction, UnifiedTagEditorFocus,
+    UnifiedTagEditorModal, UnsavedChangesButton,
 };
 
 impl UnifiedTagEditorState {
@@ -40,8 +40,11 @@ impl UnifiedTagEditorState {
                             UnsavedChangesButton::DiscardAndProceed => {
                                 self.drop_changes_for_current_item();
                                 self.modal = None;
-                                // UnsavedChanges is now only used for Exit
-                                UnifiedTagEditorAction::DiscardTransaction
+                                if self.is_embedded() {
+                                    UnifiedTagEditorAction::CloseEmbedded
+                                } else {
+                                    UnifiedTagEditorAction::DiscardTransaction
+                                }
                             }
                         }
                     }
@@ -213,6 +216,8 @@ impl UnifiedTagEditorState {
                         selected_button: UnsavedChangesButton::default(),
                     });
                     UnifiedTagEditorAction::None
+                } else if self.is_embedded() {
+                    UnifiedTagEditorAction::CloseEmbedded
                 } else {
                     UnifiedTagEditorAction::DiscardTransaction
                 }
@@ -303,9 +308,13 @@ impl UnifiedTagEditorState {
                 UnifiedTagEditorAction::None
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+R: Request transaction review
-                // UI layer will query daemon for decisions and populate the modal
-                UnifiedTagEditorAction::RequestTransactionReview
+                if self.is_embedded() {
+                    // Ctrl+R disabled in embedded mode (parent owns transaction)
+                    UnifiedTagEditorAction::None
+                } else {
+                    // Ctrl+R: Request transaction review
+                    UnifiedTagEditorAction::RequestTransactionReview
+                }
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.clear_current_field();
@@ -361,22 +370,38 @@ impl UnifiedTagEditorState {
             KeyCode::Enter => {
                 match self.selected_button {
                     TagEditorButton::ReviewAll => {
-                        let current_unstaged = self.has_changes_for_current_item()
-                            && !self.changes_match_staged();
-                        let has_anything = current_unstaged || self.staged_decision_count > 0;
-
-                        if current_unstaged {
-                            // Stage current file's changes, then open review
-                            let mutations = self.generate_mutations_for_current_item();
-                            UnifiedTagEditorAction::StageDecisionAndReview {
-                                index: self.current_item_idx,
-                                mutations,
+                        if self.is_embedded() {
+                            // Embedded mode: collect all mutations and return to parent
+                            let mutations = self.collect_all_mutations();
+                            if mutations.is_empty() {
+                                UnifiedTagEditorAction::CloseEmbedded
+                            } else if let TagEditorLaunchMode::Embedded { decision_index, ref decision_label } = self.launch_mode {
+                                UnifiedTagEditorAction::StageAndCloseEmbedded {
+                                    decision_index,
+                                    decision_label: decision_label.clone(),
+                                    mutations,
+                                }
+                            } else {
+                                unreachable!()
                             }
-                        } else if has_anything {
-                            // Already-staged decisions exist, go straight to review
-                            UnifiedTagEditorAction::RequestTransactionReview
                         } else {
-                            UnifiedTagEditorAction::StatusMessage("No changes to review".to_string())
+                            let current_unstaged = self.has_changes_for_current_item()
+                                && !self.changes_match_staged();
+                            let has_anything = current_unstaged || self.staged_decision_count > 0;
+
+                            if current_unstaged {
+                                // Stage current file's changes, then open review
+                                let mutations = self.generate_mutations_for_current_item();
+                                UnifiedTagEditorAction::StageDecisionAndReview {
+                                    index: self.current_item_idx,
+                                    mutations,
+                                }
+                            } else if has_anything {
+                                // Already-staged decisions exist, go straight to review
+                                UnifiedTagEditorAction::RequestTransactionReview
+                            } else {
+                                UnifiedTagEditorAction::StatusMessage("No changes to review".to_string())
+                            }
                         }
                     }
                     TagEditorButton::RevertThisFile => {

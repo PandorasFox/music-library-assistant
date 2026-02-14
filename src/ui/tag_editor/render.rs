@@ -228,6 +228,7 @@ impl UnifiedTagEditorState {
                     TagEditorSource::CorpusBrowser => "File",
                     TagEditorSource::DirectoryEdit => "File",
                     TagEditorSource::TagSearch => "Search Result",
+                    TagEditorSource::HealthModal => "Health",
                 },
                 TagEditContext::BulkEdit { source, .. } => match source {
                     TagEditorSource::DirectoryEdit => "Directory",
@@ -537,7 +538,9 @@ impl UnifiedTagEditorState {
         for button in &buttons {
             let is_selected = *button == self.selected_button;
             let label = match button {
-                TagEditorButton::ReviewAll => "Review All",
+                TagEditorButton::ReviewAll => {
+                    if self.is_embedded() { "Save & Return" } else { "Review All" }
+                }
                 TagEditorButton::RevertThisFile => "Revert This File",
                 TagEditorButton::FillFromDisk => "Fill from Disk",
                 TagEditorButton::FillFromDb => "Fill from DB",

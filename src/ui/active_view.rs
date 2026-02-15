@@ -12,6 +12,7 @@ use crate::ui::{
     embed_album_art_modal,
     eye::Eye,
     filter_popup,
+    inbox_view,
     insights_view,
     manual_review_modal,
     missing_album_modal,
@@ -43,6 +44,7 @@ pub(crate) enum ActiveView {
     Insights(insights_view::InsightsViewState),
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
+    Inbox(inbox_view::InboxViewState),
 
     // Progress (non-interactive, owns eye animation)
     Progress {
@@ -99,6 +101,7 @@ impl ActiveView {
             Self::Insights(_) => Some("Corpus Insights"),
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
+            Self::Inbox(_) => Some("Inbox"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),
@@ -147,6 +150,7 @@ impl ActiveView {
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(s) => s.selected_path(),
             Self::ManualReview(s) => s.selected_path(),
+            Self::Inbox(s) => s.entries.get(s.selected).map(|e| e.path.as_str()),
             _ => None,
         }
     }
@@ -155,7 +159,7 @@ impl ActiveView {
     pub(crate) fn uses_unified_titlebar(&self) -> bool {
         matches!(
             self,
-            Self::Insights(_) | Self::CorpusBrowser(_) | Self::TagSearch(_)
+            Self::Insights(_) | Self::CorpusBrowser(_) | Self::TagSearch(_) | Self::Inbox(_)
         )
     }
 }
@@ -189,6 +193,7 @@ pub(crate) enum ViewAction {
     Insights(insights_view::InsightsAction),
     CorpusBrowser(tree_browser::TreeBrowserAction),
     TagSearch(tag_search::TagSearchAction),
+    Inbox(inbox_view::InboxAction),
     ExitConfirm(ExitConfirmAction),
     IntakeConfirmation(startup::IntakeConfirmationAction),
     UnifiedTagEditor(tag_editor::UnifiedTagEditorAction),

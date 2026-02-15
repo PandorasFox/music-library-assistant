@@ -688,6 +688,21 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_file_in_inbox_inodes()
     }
 
+    /// Get inbox signal counts (unindexed, healthy).
+    pub fn get_inbox_signal_counts(&self) -> Result<(usize, usize)> {
+        self.db.get_inbox_signal_counts()
+    }
+
+    /// Get all inbox healthy files as (inode, path) pairs.
+    pub fn get_inbox_healthy_files(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_inbox_healthy_files()
+    }
+
+    /// Get all inbox unindexed files as (inode, path) pairs.
+    pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_inbox_unindexed_files()
+    }
+
     /// Check whether an audio file has embedded pictures.
     pub fn get_has_pictures(&self, inode: i64) -> Result<bool> {
         self.db.get_has_pictures(inode)

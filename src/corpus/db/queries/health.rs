@@ -286,6 +286,45 @@ impl Database {
         Ok(result)
     }
 
+    /// Get inbox signal counts for the inbox view.
+    ///
+    /// Returns (unindexed_count, healthy_count).
+    pub fn get_inbox_signal_counts(&self) -> Result<(usize, usize)> {
+        let unindexed: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM signal_inbox_unindexed",
+            params![],
+            |row| row.get(0),
+        )?;
+        let healthy: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM signal_inbox_healthy",
+            params![],
+            |row| row.get(0),
+        )?;
+        Ok((unindexed as usize, healthy as usize))
+    }
+
+    /// Get all inbox healthy files as (inode, path) pairs.
+    pub fn get_inbox_healthy_files(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path FROM signal_inbox_healthy ORDER BY path"
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Get all inbox unindexed files as (inode, path) pairs.
+    pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path FROM signal_inbox_unindexed ORDER BY path"
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
     // ========================================================================
     // Insights Data
     // ========================================================================

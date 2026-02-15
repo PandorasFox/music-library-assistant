@@ -35,6 +35,7 @@ pub enum LateralView {
     TagSearch,
     CorpusBrowser,
     Insights,
+    Inbox,
 }
 
 impl LateralView {
@@ -44,6 +45,7 @@ impl LateralView {
             LateralView::TagSearch => "Tag Search",
             LateralView::CorpusBrowser => "Corpus Browser",
             LateralView::Insights => "Insights & Operations",
+            LateralView::Inbox => "Inbox",
         }
     }
 
@@ -52,22 +54,24 @@ impl LateralView {
         match self {
             LateralView::TagSearch => LateralView::CorpusBrowser,
             LateralView::CorpusBrowser => LateralView::Insights,
-            LateralView::Insights => LateralView::TagSearch,
+            LateralView::Insights => LateralView::Inbox,
+            LateralView::Inbox => LateralView::TagSearch,
         }
     }
 
     /// Get the previous view in the ring (Shift-Tab)
     pub fn prev(&self) -> Self {
         match self {
-            LateralView::TagSearch => LateralView::Insights,
+            LateralView::TagSearch => LateralView::Inbox,
             LateralView::CorpusBrowser => LateralView::TagSearch,
             LateralView::Insights => LateralView::CorpusBrowser,
+            LateralView::Inbox => LateralView::Insights,
         }
     }
 
     /// All views in order
     pub fn all() -> &'static [LateralView] {
-        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights]
+        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::Inbox]
     }
 }
 
@@ -155,16 +159,18 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling: TagSearch → CorpusBrowser → Insights → TagSearch
+        // Test forward cycling: TagSearch → CorpusBrowser → Insights → Inbox → TagSearch
         let view = LateralView::TagSearch;
         assert_eq!(view.next(), LateralView::CorpusBrowser);
         assert_eq!(view.next().next(), LateralView::Insights);
-        assert_eq!(view.next().next().next(), LateralView::TagSearch);
+        assert_eq!(view.next().next().next(), LateralView::Inbox);
+        assert_eq!(view.next().next().next().next(), LateralView::TagSearch);
 
         // Test backward cycling from CorpusBrowser
         let view = LateralView::CorpusBrowser;
         assert_eq!(view.prev(), LateralView::TagSearch);
-        assert_eq!(view.prev().prev(), LateralView::Insights);
+        assert_eq!(view.prev().prev(), LateralView::Inbox);
+        assert_eq!(view.prev().prev().prev(), LateralView::Insights);
     }
 
     #[test]

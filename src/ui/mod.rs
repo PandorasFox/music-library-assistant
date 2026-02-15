@@ -33,6 +33,7 @@ pub mod eye;
 pub mod manual_review_modal;
 pub mod filter_popup;
 pub mod helpers;
+pub mod inbox_view;
 pub mod insights_view;
 pub mod missing_album_modal;
 pub mod missing_file_modal;
@@ -185,6 +186,7 @@ impl App {
             ActiveView::Insights(s) => ViewAction::Insights(s.handle_key(key)),
             ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_key(key)),
             ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_key(key)),
+            ActiveView::Inbox(s) => ViewAction::Inbox(s.handle_key(key)),
             ActiveView::ExitConfirm(state) => {
                 let a = match key.code {
                     KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
@@ -282,12 +284,21 @@ impl App {
         self.view = ActiveView::TagSearch(tag_search::TagSearchState::new());
     }
 
+    pub(super) fn start_inbox_view(&mut self) {
+        let mut state = inbox_view::InboxViewState::new();
+        if let Some(ref mut witch) = self.witch {
+            state.refresh(&witch.read_db());
+        }
+        self.view = ActiveView::Inbox(state);
+    }
+
     /// Start the lateral view identified by the given variant.
     pub(super) fn start_lateral_view(&mut self, view: widgets::LateralView) {
         match view {
             widgets::LateralView::TagSearch => self.start_tag_search(),
             widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
             widgets::LateralView::Insights => self.start_insights_view(),
+            widgets::LateralView::Inbox => self.start_inbox_view(),
         }
     }
 

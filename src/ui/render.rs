@@ -17,8 +17,9 @@ use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle};
 use super::{
-    compound_split_v2, filter_popup, insights_view, manual_review_modal, oob_conflict_modal,
-    oob_sync_modal, progressive_worker, tag_canonicity_v2, transaction_review,
+    compound_split_v2, filter_popup, inbox_view, insights_view, manual_review_modal,
+    oob_conflict_modal, oob_sync_modal, progressive_worker, tag_canonicity_v2,
+    transaction_review,
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
@@ -168,6 +169,10 @@ fn render_content(
         ActiveView::Insights(ref mut view) => {
             vname = "insights";
             insights_view::render_insights_view(f, area, view);
+        }
+        ActiveView::Inbox(ref mut state) => {
+            vname = "inbox";
+            inbox_view::render_inbox_view(f, area, state);
         }
         ActiveView::TagSearch(ref state) => {
             vname = "tag_search";
@@ -378,6 +383,7 @@ fn render_status_bar(
 fn view_name(view: &ActiveView) -> &'static str {
     match view {
         ActiveView::Insights(_) => "insights",
+        ActiveView::Inbox(_) => "inbox",
         ActiveView::CorpusBrowser(_) => "corpus_browser",
         ActiveView::TagSearch(_) => "tag_search",
         ActiveView::Progress { .. } => "progress",

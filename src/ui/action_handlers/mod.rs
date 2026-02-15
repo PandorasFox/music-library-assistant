@@ -47,6 +47,7 @@ impl App {
             ViewAction::Insights(a) => self.handle_insights_action(a),
             ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
+            ViewAction::Inbox(a) => self.handle_inbox_action(a),
             ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
             ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
             ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
@@ -641,6 +642,25 @@ impl App {
                     }
                 }
                 self.start_insights_view();
+            }
+        }
+    }
+
+    pub(super) fn handle_inbox_action(&mut self, action: super::inbox_view::InboxAction) {
+        match action {
+            super::inbox_view::InboxAction::None => {}
+            super::inbox_view::InboxAction::RequestQuit => {
+                if self.has_pending_operations() {
+                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                } else {
+                    self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
+                }
+            }
+            super::inbox_view::InboxAction::CycleNext => {
+                self.start_lateral_view(widgets::LateralView::Inbox.next());
+            }
+            super::inbox_view::InboxAction::CyclePrev => {
+                self.start_lateral_view(widgets::LateralView::Inbox.prev());
             }
         }
     }

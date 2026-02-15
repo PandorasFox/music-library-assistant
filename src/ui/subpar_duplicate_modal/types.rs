@@ -124,7 +124,7 @@ impl SubparDuplicateModalData {
             mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
                 path: PathBuf::from(&file.corpus_path),
                 inode: Some(file.inode),
-                source: Some("corpus".to_string()),
+                zone: Some("corpus".to_string()),
             }));
         }
 

@@ -12,7 +12,7 @@ use rusqlite::params;
 use std::collections::HashMap;
 
 use super::Database;
-use crate::corpus::db::types::{AudioFile, AudioInfo, AudioTag, FileEntry, FileSource};
+use crate::corpus::db::types::{AudioFile, AudioInfo, AudioTag, FileEntry, Zone};
 
 // ============================================================================
 // Fingerprint Conversion Helpers
@@ -42,11 +42,11 @@ impl Database {
     ///
     /// Unlike `get_audio_file_by_path()`, this does NOT require audio_info.
     /// Use this for files that may not have been successfully indexed (e.g., corrupt files).
-    pub fn get_file_entry_by_path(&self, path: &str, source: &str) -> Result<Option<FileEntry>> {
+    pub fn get_file_entry_by_path(&self, path: &str, zone: &str) -> Result<Option<FileEntry>> {
         let result = self.conn.query_row(
-            "SELECT inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at
-             FROM files WHERE path = ?1 AND source = ?2",
-            params![path, source],
+            "SELECT inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at
+             FROM files WHERE path = ?1 AND zone = ?2",
+            params![path, zone],
             Self::row_to_file_entry,
         );
 
@@ -60,7 +60,7 @@ impl Database {
     /// Get mtime info for files by inode (for incremental scanning).
     pub fn get_file_mtime_batch(
         &self,
-        source: FileSource,
+        zone: Zone,
         inodes: &[i64],
     ) -> Result<HashMap<i64, (i64, i64)>> {
         if inodes.is_empty() {
@@ -70,14 +70,14 @@ impl Database {
         let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!(
             "SELECT inode, mtime_secs, mtime_nanos FROM files
-             WHERE source = ? AND inode IN ({})",
+             WHERE zone = ? AND inode IN ({})",
             placeholders
         );
 
         let mut stmt = self.conn.prepare(&query)?;
 
-        let source_str = source.as_str();
-        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&source_str];
+        let zone_str = zone.as_str();
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&zone_str];
         for inode in inodes {
             params_vec.push(inode);
         }
@@ -98,7 +98,7 @@ impl Database {
     /// Get paths for files by inode (for move detection).
     pub fn get_file_paths_batch(
         &self,
-        source: FileSource,
+        zone: Zone,
         inodes: &[i64],
     ) -> Result<HashMap<i64, String>> {
         if inodes.is_empty() {
@@ -108,14 +108,14 @@ impl Database {
         let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!(
             "SELECT inode, path FROM files
-             WHERE source = ? AND inode IN ({})",
+             WHERE zone = ? AND inode IN ({})",
             placeholders
         );
 
         let mut stmt = self.conn.prepare(&query)?;
 
-        let source_str = source.as_str();
-        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&source_str];
+        let zone_str = zone.as_str();
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&zone_str];
         for inode in inodes {
             params_vec.push(inode);
         }
@@ -157,7 +157,7 @@ impl Database {
     pub fn get_audio_file_by_path(&self, path: &str) -> Result<Option<AudioFile>> {
         let result = self.conn.query_row(
             r#"SELECT
-                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
@@ -173,36 +173,36 @@ impl Database {
         }
     }
 
-    /// Get all audio files for a source.
-    pub fn get_all_audio_files(&self, source: FileSource) -> Result<Vec<AudioFile>> {
+    /// Get all audio files for a zone.
+    pub fn get_all_audio_files(&self, zone: Zone) -> Result<Vec<AudioFile>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.source = ?1 AND f.is_dir = 0
+            WHERE f.zone = ?1 AND f.is_dir = 0
             ORDER BY f.path"#
         )?;
 
-        let files = stmt.query_map(params![source.as_str()], Self::row_to_audio_file)?;
+        let files = stmt.query_map(params![zone.as_str()], Self::row_to_audio_file)?;
         files.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Get an audio file by inode from a specific source.
+    /// Get an audio file by inode from a specific zone.
     ///
-    /// Source is REQUIRED - querying by inode alone is incorrect because
-    /// the primary key is (path, source, inode). The same inode can exist
-    /// in multiple sources (corpus and library for hard-linked files).
-    pub fn get_audio_file_by_inode(&self, inode: i64, source: FileSource) -> Result<Option<AudioFile>> {
+    /// Zone is REQUIRED - querying by inode alone is incorrect because
+    /// the primary key is (path, zone, inode). The same inode can exist
+    /// in multiple zones (corpus and library for hard-linked files).
+    pub fn get_audio_file_by_inode(&self, inode: i64, zone: Zone) -> Result<Option<AudioFile>> {
         let result = self.conn.query_row(
             r#"SELECT
-                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.inode = ?1 AND f.source = ?2 AND f.is_dir = 0"#,
-            params![inode, source.as_str()],
+            WHERE f.inode = ?1 AND f.zone = ?2 AND f.is_dir = 0"#,
+            params![inode, zone.as_str()],
             Self::row_to_audio_file,
         );
 
@@ -213,15 +213,15 @@ impl Database {
         }
     }
 
-    /// Get multiple audio files by their inodes from a specific source.
+    /// Get multiple audio files by their inodes from a specific zone.
     ///
-    /// Source is REQUIRED - querying by inode alone is incorrect because
-    /// the primary key is (path, source, inode). The same inode can exist
-    /// in multiple sources (corpus and library for hard-linked files).
+    /// Zone is REQUIRED - querying by inode alone is incorrect because
+    /// the primary key is (path, zone, inode). The same inode can exist
+    /// in multiple zones (corpus and library for hard-linked files).
     pub fn get_audio_files_by_inodes(
         &self,
         inodes: &[i64],
-        source: FileSource,
+        zone: Zone,
     ) -> Result<Vec<AudioFile>> {
         if inodes.is_empty() {
             return Ok(Vec::new());
@@ -231,14 +231,14 @@ impl Database {
 
         let sql = format!(
             r#"SELECT
-                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.inode IN ({}) AND f.source = '{}' AND f.is_dir = 0
+            WHERE f.inode IN ({}) AND f.zone = '{}' AND f.is_dir = 0
             ORDER BY f.path"#,
             placeholders.join(", "),
-            source.as_str()
+            zone.as_str()
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -261,11 +261,11 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
-            WHERE f.source = 'corpus' AND f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
+            WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
             ORDER BY f.path"#,
         )?;
 
@@ -279,7 +279,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
@@ -300,7 +300,7 @@ impl Database {
         // Only detect duplicate inodes within corpus files
         let query = r#"SELECT inode, GROUP_CONCAT(path) as paths
                        FROM files
-                       WHERE is_dir = 0 AND source = 'corpus'
+                       WHERE is_dir = 0 AND zone = 'corpus'
                        GROUP BY inode
                        HAVING COUNT(*) > 1"#;
 
@@ -332,7 +332,7 @@ impl Database {
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags ct ON f.inode = ct.inode
-            WHERE f.is_dir = 0 AND f.source = 'corpus'
+            WHERE f.is_dir = 0 AND f.zone = 'corpus'
             GROUP BY f.inode
         "#;
 
@@ -366,7 +366,7 @@ impl Database {
                 JOIN audio_info a ON f.inode = a.inode
                 JOIN corpus_tags ct_album ON f.inode = ct_album.inode AND UPPER(ct_album.tag_name) = 'ALBUM'
                 JOIN corpus_tags ct_artist ON f.inode = ct_artist.inode AND UPPER(ct_artist.tag_name) = 'ARTIST'
-                WHERE f.is_dir = 0 AND f.source = 'corpus'
+                WHERE f.is_dir = 0 AND f.zone = 'corpus'
                 GROUP BY ct_album.tag_value
                 HAVING artist_count > 1
             )
@@ -389,7 +389,7 @@ impl Database {
         let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
         let sql = format!(
             r#"SELECT DISTINCT ct.inode FROM corpus_tags ct
-               INNER JOIN files f ON ct.inode = f.inode AND f.source = 'corpus'
+               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
                WHERE UPPER(ct.tag_name) = UPPER(?1) AND ct.tag_value IN ({})"#,
             placeholders.join(",")
         );
@@ -412,7 +412,7 @@ impl Database {
     /// Get all corpus audio file inodes mapped to their paths.
     pub fn get_all_corpus_inodes(&self) -> Result<HashMap<i64, String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM files WHERE source = 'corpus' AND is_dir = 0"
+            "SELECT inode, path FROM files WHERE zone = 'corpus' AND is_dir = 0"
         )?;
 
         let mut result = HashMap::new();
@@ -445,7 +445,7 @@ impl Database {
     /// Get the corpus path for a single inode.
     pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path FROM files WHERE inode = ?1 AND source = 'corpus' AND is_dir = 0 LIMIT 1"
+            "SELECT path FROM files WHERE inode = ?1 AND zone = 'corpus' AND is_dir = 0 LIMIT 1"
         )?;
 
         let mut rows = stmt.query(params![inode])?;
@@ -465,7 +465,7 @@ impl Database {
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             JOIN corpus_tags ct ON f.inode = ct.inode
-            WHERE f.is_dir = 0 AND f.source = 'corpus'
+            WHERE f.is_dir = 0 AND f.zone = 'corpus'
             ORDER BY f.inode, UPPER(ct.tag_name)
         "#;
 
@@ -519,7 +519,7 @@ impl Database {
                 ON f.inode = year.inode AND UPPER(year.tag_name) = 'YEAR'
             LEFT JOIN corpus_tags flagcomp
                 ON f.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'FLAGCOMPILATION'
-            WHERE f.is_dir = 0 AND f.source = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
+            WHERE f.is_dir = 0 AND f.zone = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
             GROUP BY f.inode
         "#;
 
@@ -569,8 +569,8 @@ impl Database {
     /// Get all audio files with their tags (for search functionality).
     /// Tags are keyed by uppercase tag name; values are collected into Vec
     /// since a single tag name can have multiple values (e.g. multiple genres).
-    pub fn get_all_audio_files_with_tags(&self, source: FileSource) -> Result<Vec<(AudioFile, HashMap<String, Vec<String>>)>> {
-        let files = self.get_all_audio_files(source)?;
+    pub fn get_all_audio_files_with_tags(&self, zone: Zone) -> Result<Vec<(AudioFile, HashMap<String, Vec<String>>)>> {
+        let files = self.get_all_audio_files(zone)?;
         let mut results = Vec::new();
         for file in files {
             let tags = self.get_corpus_tags(file.inode())?;
@@ -583,11 +583,11 @@ impl Database {
         Ok(results)
     }
 
-    /// Get audio file count, optionally filtered by source.
-    pub fn get_audio_file_count(&self, source: Option<&str>) -> Result<usize> {
-        let count: i64 = if let Some(src) = source {
+    /// Get audio file count, optionally filtered by zone.
+    pub fn get_audio_file_count(&self, zone: Option<&str>) -> Result<usize> {
+        let count: i64 = if let Some(src) = zone {
             self.conn.query_row(
-                "SELECT COUNT(*) FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.source = ?1 AND f.is_dir = 0",
+                "SELECT COUNT(*) FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.zone = ?1 AND f.is_dir = 0",
                 params![src],
                 |row| row.get(0),
             )?
@@ -607,13 +607,13 @@ impl Database {
 
     /// Convert a database row to a FileEntry struct.
     fn row_to_file_entry(row: &rusqlite::Row) -> rusqlite::Result<FileEntry> {
-        let source_str: String = row.get(1)?;
-        let source = FileSource::from_str(&source_str).unwrap_or(FileSource::Corpus);
+        let zone_str: String = row.get(1)?;
+        let zone = Zone::from_str(&zone_str).unwrap_or(Zone::Corpus);
         let is_dir: i32 = row.get(3)?;
 
         Ok(FileEntry {
             inode: row.get(0)?,
-            source,
+            zone,
             path: row.get(2)?,
             _is_dir: is_dir != 0,
             _mtime_secs: row.get(4)?,
@@ -641,12 +641,12 @@ impl Database {
     }
 
     /// Convert a joined row to an AudioFile struct.
-    /// Expected columns: f.inode, f.source, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos,
+    /// Expected columns: f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos,
     ///                   f.file_size, f.scanned_at, a.file_type, a.duration_ms, a.bitrate_kbps,
     ///                   a.sample_rate, a.fingerprint, a.needs_tag_flush
     fn row_to_audio_file(row: &rusqlite::Row) -> rusqlite::Result<AudioFile> {
-        let source_str: String = row.get(1)?;
-        let source = FileSource::from_str(&source_str).unwrap_or(FileSource::Corpus);
+        let zone_str: String = row.get(1)?;
+        let zone = Zone::from_str(&zone_str).unwrap_or(Zone::Corpus);
         let is_dir: i32 = row.get(3)?;
 
         let fp_blob: Option<Vec<u8>> = row.get(12)?;
@@ -656,7 +656,7 @@ impl Database {
         Ok(AudioFile {
             entry: FileEntry {
                 inode: row.get(0)?,
-                source,
+                zone,
                 path: row.get(2)?,
                 _is_dir: is_dir != 0,
                 _mtime_secs: row.get(4)?,
@@ -680,31 +680,31 @@ impl Database {
     // Write Operations (for db_thread)
     // ========================================================================
 
-    /// Drop file entry from index by inode and source.
+    /// Drop file entry from index by inode and zone.
     pub fn drop_file_index_by_inode(
         &self,
-        source: &str,
+        zone: &str,
         inode: i64,
         _witness: &impl crate::db_thread::SignalWitness,
     ) -> Result<usize> {
         let affected = self.conn.execute(
-            "DELETE FROM files WHERE source = ?1 AND inode = ?2",
-            params![source, inode],
+            "DELETE FROM files WHERE zone = ?1 AND inode = ?2",
+            params![zone, inode],
         )?;
         Ok(affected)
     }
 
-    /// Update file path for a given inode and source.
+    /// Update file path for a given inode and zone.
     pub fn update_file_path(
         &self,
-        source: &str,
+        zone: &str,
         inode: i64,
         new_path: &str,
         _witness: &impl crate::db_thread::SignalWitness,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE files SET path = ?1 WHERE source = ?2 AND inode = ?3",
-            params![new_path, source, inode],
+            "UPDATE files SET path = ?1 WHERE zone = ?2 AND inode = ?3",
+            params![new_path, zone, inode],
         )?;
         Ok(())
     }

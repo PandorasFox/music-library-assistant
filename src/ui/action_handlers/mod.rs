@@ -304,7 +304,7 @@ impl App {
     /// Loads all MissingTag signals, collects unique inodes, and opens
     /// the bulk tag editor so the operator can fill in missing tags.
     fn start_missing_tag_resolution(&mut self) {
-        use crate::corpus::db::types::FileSource;
+        use crate::corpus::db::types::Zone;
         use std::collections::BTreeSet;
 
         let read_db = self.read_db();
@@ -329,7 +329,7 @@ impl App {
             .into_iter()
             .collect();
 
-        let audio_files = match read_db.get_audio_files_by_inodes(&all_inodes, FileSource::Corpus) {
+        let audio_files = match read_db.get_audio_files_by_inodes(&all_inodes, Zone::Corpus) {
             Ok(f) => f,
             Err(e) => {
                 self.status_message = Some(format!("Failed to load audio files: {}", e));
@@ -512,7 +512,7 @@ impl App {
                 let read_db = self.read_db();
                 let audio_files = read_db.get_audio_files_by_inodes(
                     &inodes,
-                    crate::corpus::db::types::FileSource::Corpus,
+                    crate::corpus::db::types::Zone::Corpus,
                 ).unwrap_or_default();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(
@@ -541,7 +541,7 @@ impl App {
                 let read_db = self.read_db();
                 let audio_files = read_db.get_audio_files_by_inodes(
                     &inodes,
-                    crate::corpus::db::types::FileSource::Corpus,
+                    crate::corpus::db::types::Zone::Corpus,
                 ).unwrap_or_default();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(

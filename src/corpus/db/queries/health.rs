@@ -8,7 +8,7 @@ use anyhow::Result;
 use rusqlite::params;
 
 use super::Database;
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 
 impl Database {
     // ========================================================================
@@ -215,7 +215,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             r#"SELECT path, inode FROM files
-               WHERE is_dir = 1 AND source = 'corpus'"#
+               WHERE is_dir = 1 AND zone = 'corpus'"#
         )?;
         let rows = stmt.query_map(params![], |row| {
             let path: String = row.get(0)?;
@@ -588,7 +588,7 @@ impl Database {
             r#"SELECT a.file_type, COUNT(*) as cnt
                FROM files f
                JOIN audio_info a ON f.inode = a.inode
-               WHERE f.source = 'corpus' AND f.is_dir = 0
+               WHERE f.zone = 'corpus' AND f.is_dir = 0
                GROUP BY a.file_type
                ORDER BY cnt DESC"#
         )?;
@@ -773,7 +773,7 @@ impl Database {
 
             let mut conflicting_files = Vec::new();
             for inode in inodes {
-                if let Ok(Some(audio_file)) = self.get_audio_file_by_inode(inode, FileSource::Corpus) {
+                if let Ok(Some(audio_file)) = self.get_audio_file_by_inode(inode, Zone::Corpus) {
                     conflicting_files.push((audio_file.path().to_string(), inode));
                 }
             }
@@ -972,7 +972,7 @@ impl Database {
                FROM audio_info a
                JOIN files f ON a.inode = f.inode
                JOIN signal_healthy_file h ON a.inode = h.inode
-               WHERE f.source = 'corpus' AND a.has_pictures = 0"#
+               WHERE f.zone = 'corpus' AND a.has_pictures = 0"#
         )?;
         let rows = stmt.query_map(params![], |row| {
             Ok((row.get(0)?, row.get(1)?))

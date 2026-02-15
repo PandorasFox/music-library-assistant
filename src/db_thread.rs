@@ -45,7 +45,7 @@ use crate::config;
 #[derive(Debug, Clone)]
 pub struct FileData {
     pub inode: i64,
-    pub source: String,     // 'corpus', 'library', 'inbox'
+    pub zone: String,       // 'corpus', 'library', 'inbox'
     pub _is_dir: bool,
     pub mtime_secs: i64,
     pub mtime_nanos: i64,
@@ -220,9 +220,9 @@ enum SignalWriteOp {
         signal: crate::meta::signals::data::TypedSignalWrite,
     },
     /// Update file mtime in files table (after OOB verification).
-    /// Uses (source, inode) as the unique key for reliable updates.
+    /// Uses (zone, inode) as the unique key for reliable updates.
     UpdateFileMtime {
-        source: String,
+        zone: String,
         inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
@@ -281,19 +281,19 @@ enum SignalWriteOp {
     /// Upsert file entry in files table.
     UpsertFileEntry {
         path: String,
-        source: String,
+        zone: String,
         file_entry: FileEntryData,
     },
 
     /// Drop file from index by inode (removes from files table).
     DropFileIndexByInode {
-        source: String,
+        zone: String,
         inode: i64,
     },
 
     /// Update file path in files table (file moved/renamed).
     UpdateFilePath {
-        source: String,
+        zone: String,
         inode: i64,
         new_path: String,
     },
@@ -302,7 +302,7 @@ enum SignalWriteOp {
     /// Used during corpus/library scanning to track directory entries.
     IndexDirectory {
         path: String,
-        source: String,
+        zone: String,
         inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
@@ -669,10 +669,10 @@ impl SignalWriteSender {
     }
 
     /// Update file mtime in files table (after OOB verification).
-    /// Uses (source, inode) as the unique key for reliable updates.
+    /// Uses (zone, inode) as the unique key for reliable updates.
     pub fn update_file_mtime(
         &self,
-        source: &str,
+        zone: &str,
         inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
@@ -680,7 +680,7 @@ impl SignalWriteSender {
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::UpdateFileMtime {
-            source: source.to_string(),
+            zone: zone.to_string(),
             inode,
             mtime_secs,
             mtime_nanos,
@@ -788,14 +788,14 @@ impl SignalWriteSender {
     pub fn upsert_file_entry(
         &self,
         path: &str,
-        source: &str,
+        zone: &str,
         file_entry: FileEntryData,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::UpsertFileEntry {
             path: path.to_string(),
-            source: source.to_string(),
+            zone: zone.to_string(),
             file_entry,
         });
     }
@@ -803,13 +803,13 @@ impl SignalWriteSender {
     /// Drop file from index by inode.
     pub fn drop_file_index_by_inode(
         &self,
-        source: &str,
+        zone: &str,
         inode: i64,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::DropFileIndexByInode {
-            source: source.to_string(),
+            zone: zone.to_string(),
             inode,
         });
     }
@@ -817,14 +817,14 @@ impl SignalWriteSender {
     /// Update file path in files table (file moved/renamed).
     pub fn update_file_path(
         &self,
-        source: &str,
+        zone: &str,
         inode: i64,
         new_path: &str,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::UpdateFilePath {
-            source: source.to_string(),
+            zone: zone.to_string(),
             inode,
             new_path: new_path.to_string(),
         });
@@ -836,7 +836,7 @@ impl SignalWriteSender {
     pub fn index_directory(
         &self,
         path: &str,
-        source: &str,
+        zone: &str,
         inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
@@ -845,7 +845,7 @@ impl SignalWriteSender {
         self.mark_enqueued();
         let _ = self.tx.send(SignalWriteOp::IndexDirectory {
             path: path.to_string(),
-            source: source.to_string(),
+            zone: zone.to_string(),
             inode,
             mtime_secs,
             mtime_nanos,
@@ -1239,23 +1239,23 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             }
         }
         SignalWriteOp::UpdateFileMtime {
-            source,
+            zone,
             inode,
             mtime_secs,
             mtime_nanos,
         } => {
-            with_retry("update_file_mtime", source, || {
+            with_retry("update_file_mtime", zone, || {
                 use rusqlite::params;
                 let rows_affected = db.conn()
                     .execute(
-                        "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2 WHERE source = ?3 AND inode = ?4",
-                        params![mtime_secs, mtime_nanos, source, inode],
+                        "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2 WHERE zone = ?3 AND inode = ?4",
+                        params![mtime_secs, mtime_nanos, zone, inode],
                     )
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))?;
                 if rows_affected == 0 {
                     crate::logging::log_error(format!(
-                        "[DB_THREAD] update_file_mtime: no rows matched for source={}, inode={}",
-                        source, inode
+                        "[DB_THREAD] update_file_mtime: no rows matched for zone={}, inode={}",
+                        zone, inode
                     ));
                 }
                 Ok(())
@@ -1310,33 +1310,33 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::UpsertFileEntry { path, source, file_entry } => {
+        SignalWriteOp::UpsertFileEntry { path, zone, file_entry } => {
             with_retry("upsert_file_entry", path, || {
-                execute_upsert_file_entry(db, path, source, file_entry)
+                execute_upsert_file_entry(db, path, zone, file_entry)
             });
         }
 
-        SignalWriteOp::DropFileIndexByInode { source, inode } => {
-            with_retry("drop_file_index_by_inode", source, || {
-                db.drop_file_index_by_inode(source, *inode, &witness).map(|_| ())
+        SignalWriteOp::DropFileIndexByInode { zone, inode } => {
+            with_retry("drop_file_index_by_inode", zone, || {
+                db.drop_file_index_by_inode(zone, *inode, &witness).map(|_| ())
             });
         }
 
-        SignalWriteOp::UpdateFilePath { source, inode, new_path } => {
+        SignalWriteOp::UpdateFilePath { zone, inode, new_path } => {
             with_retry("update_file_path", new_path, || {
-                db.update_file_path(source, *inode, new_path, &witness)
+                db.update_file_path(zone, *inode, new_path, &witness)
             });
         }
 
         SignalWriteOp::IndexDirectory {
             path,
-            source,
+            zone,
             inode,
             mtime_secs,
             mtime_nanos,
         } => {
             with_retry("index_directory", path, || {
-                execute_index_directory(db, path, source, *inode, *mtime_secs, *mtime_nanos)
+                execute_index_directory(db, path, zone, *inode, *mtime_secs, *mtime_nanos)
             });
         }
 
@@ -1570,8 +1570,8 @@ fn execute_index_audio_file(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    // Determine which tag table to use based on source
-    let tag_table = if file_data.source == "inbox" {
+    // Determine which tag table to use based on zone
+    let tag_table = if file_data.zone == "inbox" {
         "inbox_tags"
     } else {
         "corpus_tags"
@@ -1584,12 +1584,12 @@ fn execute_index_audio_file(
     tx.execute(
         r#"
         INSERT OR REPLACE INTO files
-        (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
         "#,
         params![
             file_data.inode,
-            &file_data.source,
+            &file_data.zone,
             path,
             0i32, // is_dir = false for audio files
             file_data.mtime_secs,
@@ -1629,7 +1629,7 @@ fn execute_index_audio_file(
         write_tag_edit_history(&tx, file_data.inode, &changes, session_id)?;
 
         // Mark inode dirty for tag-dependent computations (only for corpus files)
-        if file_data.source == "corpus" {
+        if file_data.zone == "corpus" {
             mark_inode_dirty(&tx, file_data.inode)?;
         }
     }
@@ -1878,7 +1878,7 @@ fn execute_update_track_path_with_metadata(
 fn execute_upsert_file_entry(
     db: &Database,
     path: &str,
-    source: &str,
+    zone: &str,
     file_entry: &FileEntryData,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
@@ -1892,9 +1892,9 @@ fn execute_upsert_file_entry(
     // Upsert into files table
     db.conn().execute(
         r#"
-        INSERT INTO files (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        INSERT INTO files (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
         VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)
-        ON CONFLICT(inode, source, path) DO UPDATE SET
+        ON CONFLICT(inode, zone, path) DO UPDATE SET
             mtime_secs = excluded.mtime_secs,
             mtime_nanos = excluded.mtime_nanos,
             file_size = excluded.file_size,
@@ -1902,7 +1902,7 @@ fn execute_upsert_file_entry(
         "#,
         params![
             file_entry.inode,
-            source,
+            zone,
             path,
             file_entry.mtime_secs,
             file_entry.mtime_nanos,
@@ -1928,7 +1928,7 @@ fn execute_clear_tag_mismatches_for_track(_db: &Database, _path: &str) -> anyhow
 fn execute_index_directory(
     db: &Database,
     path: &str,
-    source: &str,
+    zone: &str,
     inode: i64,
     mtime_secs: i64,
     mtime_nanos: i64,
@@ -1945,12 +1945,12 @@ fn execute_index_directory(
     db.conn().execute(
         r#"
         INSERT OR REPLACE INTO files
-        (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
         VALUES (?1, ?2, ?3, 1, ?4, ?5, 0, ?6)
         "#,
         params![
             inode,
-            source,
+            zone,
             path,
             mtime_secs,
             mtime_nanos,
@@ -2014,7 +2014,7 @@ fn execute_set_has_pictures(
 
     db.conn().execute(
         "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2, file_size = ?3 \
-         WHERE inode = ?4 AND source = 'corpus'",
+         WHERE inode = ?4 AND zone = 'corpus'",
         params![mtime_secs, mtime_nanos, file_size, inode],
     )?;
 

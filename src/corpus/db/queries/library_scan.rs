@@ -1,6 +1,6 @@
 //! Library scan queries.
 //!
-//! Library files are stored in the `files` table with `source = 'library'`.
+//! Library files are stored in the `files` table with `zone = 'library'`.
 //! The path includes the library name as a prefix: `library_name/artist/album/track.flac`.
 //!
 //! Write operations require a witness for authorized execution.
@@ -22,14 +22,14 @@ pub struct LibraryScanEntry {
 impl Database {
     /// Clear all files for a library before re-scanning.
     ///
-    /// Deletes all files where source = 'library' and path starts with `library_name/`.
+    /// Deletes all files where zone = 'library' and path starts with `library_name/`.
     /// Called at the start of WalkLibrary to ensure fresh scan results.
     pub fn clear_library_files(&self, library_name: &str, _witness: &impl SignalWitness) -> Result<usize> {
         let pattern = dir_like_pattern_str(library_name);
         let count = self
             .conn
             .execute(
-                r"DELETE FROM files WHERE source = 'library' AND path LIKE ?1 ESCAPE '\'",
+                r"DELETE FROM files WHERE zone = 'library' AND path LIKE ?1 ESCAPE '\'",
                 params![pattern],
             )
             .context("Failed to clear library files")?;
@@ -38,7 +38,7 @@ impl Database {
 
     /// Record a file discovered during library scanning.
     ///
-    /// Stores the file in the `files` table with source = 'library'.
+    /// Stores the file in the `files` table with zone = 'library'.
     /// The path is stored as `library_name/relative_path_within_library`.
     #[allow(clippy::too_many_arguments)]
     pub fn record_library_file(
@@ -62,7 +62,7 @@ impl Database {
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO files
-                 (inode, source, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+                 (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
                  VALUES (?1, 'library', ?2, 0, ?3, ?4, ?5, ?6)",
                 params![
                     inode,
@@ -79,13 +79,13 @@ impl Database {
 
     /// Get all files for a library (for DeriveDeployHealthSignals).
     ///
-    /// Returns all files where source = 'library' and path starts with `library_name/`.
+    /// Returns all files where zone = 'library' and path starts with `library_name/`.
     pub fn get_library_files(&self, library_name: &str) -> Result<Vec<LibraryScanEntry>> {
         let pattern = dir_like_pattern_str(library_name);
         let mut stmt = self.conn.prepare(
             r"SELECT path, inode
              FROM files
-             WHERE source = 'library' AND path LIKE ?1 ESCAPE '\'
+             WHERE zone = 'library' AND path LIKE ?1 ESCAPE '\'
              ORDER BY path",
         )?;
 
@@ -104,10 +104,10 @@ impl Database {
 
     /// Get all library files across all libraries.
     ///
-    /// Returns all files where source = 'library'.
+    /// Returns all files where zone = 'library'.
     pub fn get_all_library_files(&self) -> Result<Vec<LibraryScanEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, inode FROM files WHERE source = 'library' ORDER BY path",
+            "SELECT path, inode FROM files WHERE zone = 'library' ORDER BY path",
         )?;
 
         let entries = stmt

@@ -140,7 +140,18 @@ impl Database {
         .context("Failed to set database pragmas")?;
 
         let db = Database { conn };
-        db.initialize_schema()?;
+
+        // Only initialize schema on truly new databases (no tables yet).
+        // Existing databases get schema changes through the migration system.
+        let table_count: i64 = db.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'files'",
+            [],
+            |row| row.get(0),
+        )?;
+        if table_count == 0 {
+            db.initialize_schema()?;
+        }
+
         Ok(db)
     }
 
@@ -168,6 +179,12 @@ impl Database {
         Ok(Database { conn })
     }
 
+    /// Create the full current schema from scratch (new databases only).
+    ///
+    /// This must stay in sync with the cumulative result of all structural
+    /// migrations in `MigrationRegistry` (column adds, renames, table
+    /// creates/drops, index changes). Data-only migrations like dirty-inode
+    /// re-seeding don't apply here.
     fn initialize_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
@@ -179,17 +196,17 @@ impl Database {
             -- Directories are tracked for scan optimization (skip unchanged dirs).
             CREATE TABLE IF NOT EXISTS files (
                 inode INTEGER NOT NULL,
-                source TEXT NOT NULL,           -- 'inbox', 'corpus', 'library'
+                zone TEXT NOT NULL,             -- 'inbox', 'corpus', 'library'
                 path TEXT NOT NULL,             -- relative path (library paths include library name prefix)
                 is_dir INTEGER NOT NULL,        -- 1 = directory, 0 = file
                 mtime_secs INTEGER NOT NULL,    -- filesystem mtime (same across hard links)
                 mtime_nanos INTEGER NOT NULL,
                 file_size INTEGER NOT NULL,     -- (same across hard links)
                 scanned_at INTEGER NOT NULL,
-                PRIMARY KEY (inode, source, path)
+                PRIMARY KEY (inode, zone, path)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_files_source ON files(source);
+            CREATE INDEX IF NOT EXISTS idx_files_zone ON files(zone);
             CREATE INDEX IF NOT EXISTS idx_files_inode ON files(inode);
             CREATE INDEX IF NOT EXISTS idx_files_is_dir ON files(is_dir);
             CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
@@ -362,7 +379,7 @@ impl Database {
 ///
 /// ```ignore
 /// let read_db = witch.read_db();
-/// let audio_files = read_db.get_all_audio_files(FileSource::Corpus)?;
+/// let audio_files = read_db.get_all_audio_files(Zone::Corpus)?;
 /// let signals = read_db.get_signals(None)?;
 /// ```
 ///
@@ -390,7 +407,7 @@ impl<'a> ReadOnlyDb<'a> {
     // =========================================================================
 
     /// Get all audio files for a source.
-    pub fn get_all_audio_files(&self, source: super::types::FileSource) -> Result<Vec<super::types::AudioFile>> {
+    pub fn get_all_audio_files(&self, source: super::types::Zone) -> Result<Vec<super::types::AudioFile>> {
         self.db.get_all_audio_files(source)
     }
 
@@ -400,12 +417,12 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get an audio file by inode from a specific source.
-    pub fn get_audio_file_by_inode(&self, inode: i64, source: super::types::FileSource) -> Result<Option<super::types::AudioFile>> {
+    pub fn get_audio_file_by_inode(&self, inode: i64, source: super::types::Zone) -> Result<Option<super::types::AudioFile>> {
         self.db.get_audio_file_by_inode(inode, source)
     }
 
     /// Get multiple audio files by their inodes from a specific source.
-    pub fn get_audio_files_by_inodes(&self, inodes: &[i64], source: super::types::FileSource) -> Result<Vec<super::types::AudioFile>> {
+    pub fn get_audio_files_by_inodes(&self, inodes: &[i64], source: super::types::Zone) -> Result<Vec<super::types::AudioFile>> {
         self.db.get_audio_files_by_inodes(inodes, source)
     }
 
@@ -420,7 +437,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get all audio files with their tags (for search functionality).
-    pub fn get_all_audio_files_with_tags(&self, source: super::types::FileSource) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, Vec<String>>)>> {
+    pub fn get_all_audio_files_with_tags(&self, source: super::types::Zone) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, Vec<String>>)>> {
         self.db.get_all_audio_files_with_tags(source)
     }
 
@@ -602,17 +619,17 @@ impl<'a> ReadOnlyDb<'a> {
     // File Entry Queries
     // =========================================================================
 
-    /// Get a file entry by path for a specific source (without requiring audio_info).
+    /// Get a file entry by path for a specific zone (without requiring audio_info).
     ///
     /// Use this for files that may not have been successfully indexed.
-    pub fn get_file_entry_by_path(&self, path: &str, source: &str) -> Result<Option<super::types::FileEntry>> {
-        self.db.get_file_entry_by_path(path, source)
+    pub fn get_file_entry_by_path(&self, path: &str, zone: &str) -> Result<Option<super::types::FileEntry>> {
+        self.db.get_file_entry_by_path(path, zone)
     }
 
     /// Get mtime info for files by inode (for incremental scanning).
     pub fn get_file_mtime_batch(
         &self,
-        source: super::types::FileSource,
+        source: super::types::Zone,
         inodes: &[i64],
     ) -> Result<std::collections::HashMap<i64, (i64, i64)>> {
         self.db.get_file_mtime_batch(source, inodes)
@@ -621,7 +638,7 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get paths for files by inode (for move detection).
     pub fn get_file_paths_batch(
         &self,
-        source: super::types::FileSource,
+        source: super::types::Zone,
         inodes: &[i64],
     ) -> Result<std::collections::HashMap<i64, String>> {
         self.db.get_file_paths_batch(source, inodes)

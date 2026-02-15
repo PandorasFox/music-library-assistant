@@ -29,29 +29,29 @@ There Shall Not be any other ways to interface with the DB. We have very nice re
 
 ### Corpus vs Library File Queries
 
-**CRITICAL: The `files` table contains BOTH corpus files AND library files.** They are distinguished by the `source` column (`'corpus'` vs `'library'`). The `audio_info` table contains audio metadata for files from BOTH sources.
+**CRITICAL: The `files` table contains BOTH corpus files AND library files.** They are distinguished by the `zone` column (`'corpus'` vs `'library'`). The `audio_info` table contains audio metadata for files from BOTH zones.
 
-**Health detection queries MUST filter by `source = 'corpus'`.** Computations like duplicate detection, missing tag detection, and overlap analysis should only operate on corpus files. Library files are deployment targets, not sources of truth.
+**Health detection queries MUST filter by `zone = 'corpus'`.** Computations like duplicate detection, missing tag detection, and overlap analysis should only operate on corpus files. Library files are deployment targets, not sources of truth.
 
 **Correct pattern for corpus-only queries:**
 ```sql
 -- When joining files with audio_info for health detection:
 SELECT ... FROM files f
 JOIN audio_info a ON f.inode = a.inode
-WHERE f.source = 'corpus' AND ...
+WHERE f.zone = 'corpus' AND ...
 
 -- When querying audio_info directly, JOIN with files to filter:
 SELECT a.fingerprint, GROUP_CONCAT(a.inode)
 FROM audio_info a
 JOIN files f ON a.inode = f.inode
-WHERE a.fingerprint IS NOT NULL AND f.source = 'corpus'
+WHERE a.fingerprint IS NOT NULL AND f.zone = 'corpus'
 GROUP BY a.fingerprint
 ```
 
 **Anti-patterns:**
-- Querying `audio_info` without joining `files` for source filtering
+- Querying `audio_info` without joining `files` for zone filtering
 - Assuming all files in `files` table are corpus files
-- Using `files` queries without `WHERE source = 'corpus'` in health detection
+- Using `files` queries without `WHERE zone = 'corpus'` in health detection
 
 **When library files ARE needed:**
 - `get_library_files()` - for deploy health checking

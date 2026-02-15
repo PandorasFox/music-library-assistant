@@ -3,7 +3,7 @@
 //! Handles all actions from the ManualReview modal: stash confirmation,
 //! tag editor launch, group navigation, and transaction management.
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::ui::{manual_review_modal, tag_editor, ActiveView};
 use crate::ui::manual_review_modal::types;
 use super::witness;
@@ -209,7 +209,7 @@ impl App {
         // Load audio files from database
         let audio_files = {
             let read_db = self.read_db();
-            match read_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus) {
+            match read_db.get_audio_files_by_inodes(&inodes, Zone::Corpus) {
                 Ok(files) => files,
                 Err(e) => {
                     self.status_message = Some(format!("Failed to load files: {}", e));

@@ -95,7 +95,7 @@ impl CompoundSplitDataV2 {
 
         for &inode in &group.inodes {
             if let Ok(Some(audio_file)) =
-                read_db.get_audio_file_by_inode(inode, crate::corpus::db::types::FileSource::Corpus)
+                read_db.get_audio_file_by_inode(inode, crate::corpus::db::types::Zone::Corpus)
             {
                 let path = audio_file.path();
                 let filename = Path::new(path)

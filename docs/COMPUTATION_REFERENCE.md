@@ -97,7 +97,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | UpdateCorpusFileSignals | — | FileInCorpus, UnindexedFile, MissingFile, HealthyFile | FileInCorpus, UnindexedFile, MissingFile, HealthyFile |
 | UpdateLibraryFileSignals | — | — | LibraryLeftover, LibraryStale |
 | UpdateDeploySignals | — | DeployedHealthy | DeployReady, LibraryLeftover, LibraryStale |
-| WalkLibrary | ScanLibraryDirectory × N | — | files (source='library') |
+| WalkLibrary | ScanLibraryDirectory × N | — | files (zone='library') |
 | ScanLibraryDirectory | — | — | — |
 
 ### Awake Phase Computations

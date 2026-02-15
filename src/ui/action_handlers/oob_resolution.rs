@@ -124,7 +124,7 @@ impl App {
             OobSyncDirection::DiskToIndex => (
                 "Sync disk tags \u{2192} index",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, source: None }))
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, zone: None }))
                     .collect(),
             ),
         };
@@ -305,7 +305,7 @@ impl App {
             ResolutionButton::AssimilateDisk => (
                 "Assimilate file tags \u{2192} DB",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, source: None }))
+                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, zone: None }))
                     .collect(),
             ),
         };
@@ -445,7 +445,7 @@ impl App {
                 let mut mutations = Vec::new();
                 for (inode, new_path) in state.files_for_mutation() {
                     mutations.push(Mutation::UpdateFilePath(UpdateFilePathMutation {
-                        source: "corpus".to_string(),
+                        zone: "corpus".to_string(),
                         inode,
                         new_path: PathBuf::from(&new_path),
                     }));

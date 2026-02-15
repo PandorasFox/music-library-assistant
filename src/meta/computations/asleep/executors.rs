@@ -15,7 +15,7 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::signals::data::*;
 use crate::meta::computations::types::ComputationWitness;
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -68,13 +68,13 @@ pub fn execute_clear_existing_observation_state(
 pub fn execute_walk_corpus(
     _read_only_db: &ReadOnlyDb<'_>,
     root: &Path,
-    source: &str,
+    zone: &str,
     force_check: bool,
     start: Instant,
 ) -> Result {
     let computation = Computation::WalkCorpus {
         root: root.to_path_buf(),
-        source: source.to_string(),
+        zone: zone.to_string(),
         force_check,
     };
 
@@ -107,7 +107,7 @@ pub fn execute_walk_corpus(
         .into_iter()
         .map(|directory| Computation::ScanCorpusDirectory {
             directory,
-            source: source.to_string(),
+            zone: zone.to_string(),
             force_check,
         })
         .collect();
@@ -127,14 +127,14 @@ pub fn execute_walk_corpus(
 pub fn execute_scan_corpus_directory(
     read_only_db: &ReadOnlyDb<'_>,
     directory: &Path,
-    source: &str,
+    zone: &str,
     force_check: bool,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = Computation::ScanCorpusDirectory {
         directory: directory.to_path_buf(),
-        source: source.to_string(),
+        zone: zone.to_string(),
         force_check,
     };
 
@@ -159,10 +159,10 @@ pub fn execute_scan_corpus_directory(
     }
 
     let resolver = paths::get_resolver();
-    let file_source = FileSource::from_str(source).unwrap_or(FileSource::Corpus);
+    let file_zone = Zone::from_str(zone).unwrap_or(Zone::Corpus);
 
     // Index this directory in the files table
-    index_directory(&sender, directory, source, resolver, witness);
+    index_directory(&sender, directory, zone, resolver, witness);
 
     // Collect disk state for files DIRECTLY in this directory (not recursive)
     let disk_state = collect_directory_files(directory);
@@ -181,10 +181,10 @@ pub fn execute_scan_corpus_directory(
 
     // Get indexed inodes from files table for comparison (mtime info)
     let inode_vec: Vec<i64> = disk_inodes.iter().copied().collect();
-    let indexed_by_inode = read_only_db.get_file_mtime_batch(file_source, &inode_vec).unwrap_or_default();
+    let indexed_by_inode = read_only_db.get_file_mtime_batch(file_zone, &inode_vec).unwrap_or_default();
 
     // Get indexed paths for move detection (same inode, different path)
-    let indexed_paths = read_only_db.get_file_paths_batch(file_source, &inode_vec).unwrap_or_default();
+    let indexed_paths = read_only_db.get_file_paths_batch(file_zone, &inode_vec).unwrap_or_default();
 
     let mut spawn: Vec<Computation> = Vec::new();
 
@@ -328,7 +328,7 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
 fn index_directory(
     sender: &db_thread::SignalWriteSender,
     directory: &Path,
-    source: &str,
+    zone: &str,
     resolver: &crate::corpus::paths::PathResolver,
     witness: &ComputationWitness,
 ) {
@@ -350,7 +350,7 @@ fn index_directory(
 
     sender.index_directory(
         &relative_dir_str,
-        source,
+        zone,
         dir_inode,
         mtime_secs,
         mtime_nanos,
@@ -415,7 +415,7 @@ pub fn execute_verify_mtime(
 /// Returns true if mtime differs or if we can't determine (fail-safe to emit signal).
 fn check_mtime_differs(read_only_db: &ReadOnlyDb<'_>, inode: i64, path: &Path) -> bool {
     // Get mtime info from files table for this inode
-    let mtime_info = match read_only_db.get_file_mtime_batch(FileSource::Corpus, &[inode]) {
+    let mtime_info = match read_only_db.get_file_mtime_batch(Zone::Corpus, &[inode]) {
         Ok(map) => match map.get(&inode) {
             Some((db_secs, db_nanos)) => (*db_secs, *db_nanos),
             None => return true, // Not in files table, assume differs

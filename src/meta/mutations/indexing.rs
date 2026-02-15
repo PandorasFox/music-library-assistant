@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::meta::signals::data::*;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
@@ -42,13 +42,13 @@ fn is_shit_format(file_type: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexFileFromPathMutation {
     pub path: PathBuf,
-    pub source: String,
+    pub zone: String,
 }
 
 /// Update file path in files table (for relocated files).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateFilePathMutation {
-    pub source: String,
+    pub zone: String,
     pub inode: i64,
     pub new_path: PathBuf,
 }
@@ -59,7 +59,7 @@ pub struct DropFromIndexMutation {
     pub path: PathBuf,
     /// Inode to also remove from files table (None for orphaned signals)
     pub inode: Option<i64>,
-    pub source: Option<String>,
+    pub zone: Option<String>,
 }
 
 /// Drop a directory and all its contents from the index.
@@ -88,11 +88,11 @@ pub struct ApplyDbTagsToDiskMutation {
 pub struct AssimilateDiskTagsToDbMutation {
     pub inode: i64,
     pub path: PathBuf,
-    /// File source, carried in-band when chain-spawned from Transcode to avoid
+    /// File zone, carried in-band when chain-spawned from Transcode to avoid
     /// a race where the old inode has already been deleted by db_thread before
     /// this mutation's read-only connection snapshots.
     /// None for standalone OOB resolution (no race — inode is stable).
-    pub source: Option<String>,
+    pub zone: Option<String>,
 }
 
 /// Flush committed DB tags to disk, with validation against expected state.
@@ -147,7 +147,7 @@ impl MutationExecutor for IndexFileFromPathMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        match execute_index_file_from_path(ctx.read_db, &self.path, &self.source, ctx.session_id, ctx.witness) {
+        match execute_index_file_from_path(ctx.read_db, &self.path, &self.zone, ctx.session_id, ctx.witness) {
             Ok(pending_signals) => MutationResult {
                 _mutation: Mutation::IndexFileFromPath(self.clone()),
                 success: true,
@@ -180,7 +180,7 @@ impl MutationExecutor for UpdateFilePathMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_update_file_path(ctx.read_db, &self.source, self.inode, &self.new_path, ctx.witness);
+        let result = execute_update_file_path(ctx.read_db, &self.zone, self.inode, &self.new_path, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -205,7 +205,7 @@ impl MutationExecutor for DropFromIndexMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_drop_from_index(ctx.read_db, &self.path, self.inode, self.source.as_deref(), ctx.witness);
+        let result = execute_drop_from_index(ctx.read_db, &self.path, self.inode, self.zone.as_deref(), ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -338,7 +338,7 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_assimilate_disk_tags_to_db(ctx.read_db, self.inode, &self.path, self.source.as_deref(), ctx.session_id, ctx.witness);
+        let result = execute_assimilate_disk_tags_to_db(ctx.read_db, self.inode, &self.path, self.zone.as_deref(), ctx.session_id, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -469,7 +469,7 @@ impl MutationExecutor for EmitExpectedMissingTagMutation {
 fn index_track_from_metadata(
     _db: &ReadOnlyDb<'_>,
     path: &Path,
-    source: &str,
+    zone: &str,
     metadata: &ExtractedMetadata,
     session_id: &str,
     witness: &MutationExecutionWitness,
@@ -505,7 +505,7 @@ fn index_track_from_metadata(
     // Build FileData from metadata
     let file_data = FileData {
         inode: metadata.inode,
-        source: source.to_string(),
+        zone: zone.to_string(),
         _is_dir: false,
         mtime_secs,
         mtime_nanos,
@@ -545,11 +545,11 @@ fn index_track_from_metadata(
 /// Returns pending signals to emit post-execution. Signals are determined from
 /// extracted metadata BEFORE the async DB write, avoiding race conditions where
 /// a post-execution DB read might not see the write yet.
-pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &str, session_id: &str, witness: &MutationExecutionWitness) -> Result<Vec<PendingSignal>> {
+pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, zone: &str, session_id: &str, witness: &MutationExecutionWitness) -> Result<Vec<PendingSignal>> {
     use crate::corpus::metadata;
 
     // Extract audio properties (returns ExtractedMetadata with empty tags)
-    let mut extracted = metadata::extract_metadata(path, source)
+    let mut extracted = metadata::extract_metadata(path, zone)
         .with_context(|| format!("Failed to extract metadata from {:?}", path))?;
 
     // Read tags using TagSet and populate the extracted metadata
@@ -583,7 +583,7 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
     }
 
     // Note: _db is unused - index_track_from_metadata routes through signal_sender
-    index_track_from_metadata(_db, path, source, &extracted, session_id, witness)?;
+    index_track_from_metadata(_db, path, zone, &extracted, session_id, witness)?;
 
     Ok(pending_signals)
 }
@@ -597,7 +597,7 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, source: &
 /// Routes write through signal_sender (fire-and-forget).
 pub fn execute_update_file_path(
     _db: &ReadOnlyDb<'_>,
-    source: &str,
+    zone: &str,
     inode: i64,
     new_path: &Path,
     witness: &MutationExecutionWitness,
@@ -625,7 +625,7 @@ pub fn execute_update_file_path(
     };
 
     // Route write through signal_sender
-    sender.update_file_path(source, inode, &relative_path.to_string_lossy(), witness);
+    sender.update_file_path(zone, inode, &relative_path.to_string_lossy(), witness);
 
     Ok(())
 }
@@ -691,7 +691,7 @@ pub fn execute_drop_from_index(
     _db: &ReadOnlyDb<'_>,
     path: &Path,
     inode: Option<i64>,
-    source: Option<&str>,
+    zone: Option<&str>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db_thread;
@@ -705,9 +705,9 @@ pub fn execute_drop_from_index(
     // Delete audio_info and corpus_tags entries via signal_sender
     sender.drop_from_index(&path_str, witness);
 
-    // Also delete files table entry if inode and source are provided
-    if let (Some(inode), Some(source)) = (inode, source) {
-        sender.drop_file_index_by_inode(source, inode, witness);
+    // Also delete files table entry if inode and zone are provided
+    if let (Some(inode), Some(zone)) = (inode, zone) {
+        sender.drop_file_index_by_inode(zone, inode, witness);
     }
 
     Ok(())
@@ -891,7 +891,7 @@ pub fn execute_acknowledge_mtime_only(
     for (inode, abs_path) in tracks {
         // Get audio file info (need relative path for DB operations)
         // OOB mtime resolution only operates on corpus files
-        let audio_file = match db.get_audio_file_by_inode(*inode, FileSource::Corpus)? {
+        let audio_file = match db.get_audio_file_by_inode(*inode, Zone::Corpus)? {
             Some(af) => af,
             None => continue, // Skip missing files
         };
@@ -906,9 +906,9 @@ pub fn execute_acknowledge_mtime_only(
             .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
             .unwrap_or((0, 0));
 
-        // Update file mtime via db_thread using (source, inode) key
+        // Update file mtime via db_thread using (zone, inode) key
         sender.update_file_mtime(
-            audio_file.entry.source.as_str(),
+            audio_file.entry.zone.as_str(),
             audio_file.inode(),
             mtime_secs,
             mtime_nanos,
@@ -1054,7 +1054,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     db: &ReadOnlyDb<'_>,
     inode: i64,
     abs_path: &std::path::Path,
-    in_band_source: Option<&str>,
+    in_band_zone: Option<&str>,
     session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
@@ -1080,14 +1080,14 @@ pub fn execute_assimilate_disk_tags_to_db(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Use in-band source when available (chain-spawned from Transcode), otherwise
+    // Use in-band zone when available (chain-spawned from Transcode), otherwise
     // fall back to DB read (standalone OOB resolution where inode is stable).
-    let source: &str = match in_band_source {
+    let zone: &str = match in_band_zone {
         Some(s) => s,
         None => {
-            let audio_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
+            let audio_file = db.get_audio_file_by_inode(inode, Zone::Corpus)?
                 .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
-            audio_file.entry.source.as_str()
+            audio_file.entry.zone.as_str()
         }
     };
 
@@ -1113,9 +1113,9 @@ pub fn execute_assimilate_disk_tags_to_db(
     // After transcode, the inode changed and we need the NEW inode for files table lookup.
     let current_inode = file_metadata.ino() as i64;
 
-    // Update file mtime via db_thread using (source, inode) key
+    // Update file mtime via db_thread using (zone, inode) key
     sender.update_file_mtime(
-        source,
+        zone,
         current_inode,
         mtime_secs,
         mtime_nanos,

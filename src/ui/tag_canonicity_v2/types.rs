@@ -13,7 +13,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::meta::signals::data::{
     InconsistentAlbumArtistSignal, TagCanonicitySignal,
 };
@@ -129,7 +129,7 @@ impl TagCanonicalityModalDataV2 {
 
         for &inode in inodes {
             if let Ok(Some(audio_file)) =
-                read_db.get_audio_file_by_inode(inode, FileSource::Corpus)
+                read_db.get_audio_file_by_inode(inode, Zone::Corpus)
             {
                 let path = audio_file.path();
                 let filename = Path::new(path)

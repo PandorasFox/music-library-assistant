@@ -12,6 +12,15 @@
 //! - Check column existence via `pragma_table_info` before `ALTER TABLE ADD COLUMN`
 //! - Guard other operations with existence checks
 //!
+//! ## Keeping in Sync with `initialize_schema`
+//!
+//! `Database::initialize_schema()` creates the full current schema for new
+//! databases. Any structural migration here (column add/rename, table
+//! create/drop, index change) must be reflected there too, so that a fresh
+//! database matches one that has been migrated through all versions.
+//! Data-only migrations (dirty-inode re-seeding, tag uppercasing) don't
+//! need a counterpart in `initialize_schema`.
+//!
 //! ## Current State
 //!
 //! Schema v1 is the inode-based files/audio_info/corpus_tags schema.
@@ -44,7 +53,7 @@ pub fn seed_dirty_inodes_for(db: &Database, computation_type: &str) -> Result<()
         SELECT a.inode, ?1, ?2
         FROM audio_info a
         JOIN files f ON a.inode = f.inode
-        WHERE f.source = 'corpus'
+        WHERE f.zone = 'corpus'
         "#,
         params![computation_type, now],
     )?;
@@ -331,6 +340,45 @@ impl MigrationRegistry {
             },
         });
 
+        // v9→v10: Rename files.source column to files.zone
+        //
+        // Disambiguates "zone" (where a file lives: corpus/library/inbox)
+        // from "source" (provenance: bandcamp/indie/etc). This is a pure
+        // rename with no data transformation.
+        registry.register(Migration {
+            from_version: 9,
+            to_version: 10,
+            description: "Rename files.source column to files.zone (zone vs provenance disambiguation)",
+            apply: |db| {
+                let conn = db.conn();
+
+                // Check if column is already named 'zone' (idempotent)
+                let has_zone: bool = conn.query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('files') WHERE name = 'zone'",
+                    [],
+                    |row| row.get(0),
+                )?;
+
+                if !has_zone {
+                    // SQLite >= 3.25 supports ALTER TABLE RENAME COLUMN
+                    conn.execute(
+                        "ALTER TABLE files RENAME COLUMN source TO zone",
+                        [],
+                    )?;
+                }
+
+                // Recreate index with new name (old index on 'source' column
+                // will now reference 'zone' after rename, but has stale name)
+                conn.execute("DROP INDEX IF EXISTS idx_files_source", [])?;
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_files_zone ON files(zone)",
+                    [],
+                )?;
+
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -425,9 +473,10 @@ mod tests {
         // v6→v7: re-seed after split rule priority reorder
         // v7→v8: uppercase all tag names
         // v8→v9: has_pictures column in audio_info
-        assert_eq!(registry.latest_version(), 9);
-        assert_eq!(registry.pending_migrations(1).len(), 8);
-        assert_eq!(registry.pending_migrations(8).len(), 1);
-        assert!(registry.pending_migrations(9).is_empty());
+        // v9→v10: rename files.source to files.zone
+        assert_eq!(registry.latest_version(), 10);
+        assert_eq!(registry.pending_migrations(1).len(), 9);
+        assert_eq!(registry.pending_migrations(9).len(), 1);
+        assert!(registry.pending_migrations(10).is_empty());
     }
 }

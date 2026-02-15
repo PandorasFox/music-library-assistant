@@ -48,7 +48,7 @@ pub enum Computation {
     /// Enumerates top-level directories under root and spawns per-directory scans.
     WalkCorpus {
         root: PathBuf,
-        source: String,
+        zone: String,
         /// When true, bypass mtime optimization and verify all indexed files.
         force_check: bool,
     },
@@ -60,7 +60,7 @@ pub enum Computation {
     /// mtime/tag verification as needed.
     ScanCorpusDirectory {
         directory: PathBuf,
-        source: String,
+        zone: String,
         /// When true, bypass mtime optimization and verify all indexed files.
         force_check: bool,
     },
@@ -113,11 +113,11 @@ impl Computation {
             Computation::ClearExistingObservationState => {
                 execute_clear_existing_observation_state(ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::WalkCorpus { root, source, force_check } => {
-                execute_walk_corpus(ctx.read_db, root, source, *force_check, ctx.start)
+            Computation::WalkCorpus { root, zone, force_check } => {
+                execute_walk_corpus(ctx.read_db, root, zone, *force_check, ctx.start)
             }
-            Computation::ScanCorpusDirectory { directory, source, force_check } => {
-                execute_scan_corpus_directory(ctx.read_db, directory, source, *force_check, ctx.witness, ctx.start)
+            Computation::ScanCorpusDirectory { directory, zone, force_check } => {
+                execute_scan_corpus_directory(ctx.read_db, directory, zone, *force_check, ctx.witness, ctx.start)
             }
             Computation::VerifyMtime { inode, path, expected_mtime_secs, expected_mtime_nanos } => {
                 execute_verify_mtime(ctx.read_db, *inode, path, *expected_mtime_secs, *expected_mtime_nanos, ctx.start)

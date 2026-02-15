@@ -224,7 +224,7 @@ impl ManualReviewData {
                 if let Some(info) = audio_info {
                     // Get file_size from files table
                     let file_size = read_db
-                        .get_audio_file_by_inode(file.inode, crate::corpus::db::types::FileSource::Corpus)
+                        .get_audio_file_by_inode(file.inode, crate::corpus::db::types::Zone::Corpus)
                         .ok()
                         .flatten()
                         .map(|af| af.entry.file_size)
@@ -263,7 +263,7 @@ pub fn stash_file_mutations(corpus_path: &str, inode: i64, stash_name: &str) -> 
         Mutation::DropFromIndex(DropFromIndexMutation {
             path: PathBuf::from(corpus_path),
             inode: Some(inode),
-            source: Some("corpus".to_string()),
+            zone: Some("corpus".to_string()),
         }),
     ]
 }

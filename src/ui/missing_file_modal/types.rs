@@ -165,14 +165,14 @@ impl MissingFileModalData {
             crate::meta::mutations::Mutation::DropFromIndex(DropFromIndexMutation {
                 path: PathBuf::from(&f.corpus_path),
                 inode: Some(f.inode),
-                source: Some("corpus".to_string()),
+                zone: Some("corpus".to_string()),
             })
         });
         let from_non_restorable = self.non_restorable.iter().map(|f| {
             crate::meta::mutations::Mutation::DropFromIndex(DropFromIndexMutation {
                 path: PathBuf::from(&f.corpus_path),
                 inode: f.inode,
-                source: Some("corpus".to_string()),
+                zone: Some("corpus".to_string()),
             })
         });
         from_restorable.chain(from_non_restorable).collect()

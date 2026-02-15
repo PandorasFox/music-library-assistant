@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::file_ops::MoveToStashMutation;
@@ -132,7 +132,7 @@ impl DirectoryClusterModalData {
                     std::collections::HashMap::new();
 
                 for &inode in &unique_inodes {
-                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, FileSource::Corpus) {
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, Zone::Corpus) {
                         paths.push(audio_file.path().to_string());
                         total_size += audio_file.entry.file_size;
                         *format_counts.entry(audio_file.audio.file_type.to_uppercase()).or_insert(0) += 1;
@@ -192,7 +192,7 @@ impl DirectoryClusterModalData {
 
                     if let Some(info) = audio_info {
                         let file_size = read_db
-                            .get_audio_file_by_inode(inode, FileSource::Corpus)
+                            .get_audio_file_by_inode(inode, Zone::Corpus)
                             .ok()
                             .flatten()
                             .map(|af| af.entry.file_size)
@@ -274,7 +274,7 @@ impl DirectoryClusterModalData {
                 mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
                     path: PathBuf::from(corpus_path),
                     inode,
-                    source: Some("corpus".to_string()),
+                    zone: Some("corpus".to_string()),
                 }));
             }
         }

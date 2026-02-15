@@ -3,7 +3,7 @@
 //! Handles the tag canonicity modal: loading signals, navigating between
 //! clusters, staging canonicalization decisions.
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::ui::{
     helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView,
     CanonicitySignalKind, TagCanonicityClusters,
@@ -182,7 +182,7 @@ impl App {
                 Some(w) => w.read_db(),
                 None => return,
             };
-            read_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus)
+            read_db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
                 .unwrap_or_default()
         };
 

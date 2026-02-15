@@ -17,7 +17,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT ct.tag_value, COUNT(DISTINCT ct.inode) as file_count
                FROM corpus_tags ct
-               INNER JOIN files f ON ct.inode = f.inode AND f.source = 'corpus'
+               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
                WHERE UPPER(ct.tag_name) = UPPER(?1) AND ct.tag_value IS NOT NULL AND ct.tag_value != ''
                GROUP BY ct.tag_value
                ORDER BY file_count DESC"#,
@@ -57,7 +57,7 @@ impl Database {
                    COALESCE(year.tag_value, '') as year,
                    COALESCE(date.tag_value, '') as date
                FROM corpus_tags album
-               INNER JOIN files f ON album.inode = f.inode AND f.source = 'corpus'
+               INNER JOIN files f ON album.inode = f.inode AND f.zone = 'corpus'
                LEFT JOIN corpus_tags album_artist
                    ON album.inode = album_artist.inode
                    AND UPPER(album_artist.tag_name) = 'ALBUM_ARTIST'
@@ -113,7 +113,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT s.inode, s.path, s.data
              FROM signal_oob_tag_sync s
-             INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'"
+             INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'"
         )?;
 
         let mut files = Vec::new();
@@ -187,7 +187,7 @@ impl Database {
         {
             let mut stmt = self.conn.prepare(
                 "SELECT s.inode, s.path FROM signal_mtime_only_mismatch s
-                 INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
+                 INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'
                  ORDER BY s.path"
             )?;
             let rows = stmt.query_map(params![], |row| {
@@ -204,7 +204,7 @@ impl Database {
         {
             let mut stmt = self.conn.prepare(
                 "SELECT s.inode, s.path, s.data FROM signal_oob_tag_sync s
-                 INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
+                 INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'
                  ORDER BY s.path"
             )?;
             let rows = stmt.query_map(params![], |row| {
@@ -230,7 +230,7 @@ impl Database {
         {
             let mut stmt = self.conn.prepare(
                 "SELECT s.inode, s.path FROM signal_oob_tag_conflict s
-                 INNER JOIN files f ON f.inode = s.inode AND f.source = 'corpus'
+                 INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'
                  ORDER BY s.path"
             )?;
             let rows = stmt.query_map(params![], |row| {

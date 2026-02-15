@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::transcode::{self, TranscodeTarget};
@@ -64,7 +64,7 @@ impl MutationExecutor for TranscodeMutation {
                 let spawn = vec![ctx.witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
                     inode: self.inode,
                     path: new_path,
-                    source: Some(source),
+                    zone: Some(source),
                 }))];
                 (true, None, spawn)
             }
@@ -100,7 +100,7 @@ impl MutationExecutor for TranscodeMutation {
 ///
 /// Transcodes the source file to the target format, stashes the original,
 /// and updates the audio file record in the database.
-/// Returns the file source on success (for in-band plumbing to spawned mutations).
+/// Returns the file zone on success (for in-band plumbing to spawned mutations).
 fn execute_transcode_impl(
     db: &ReadOnlyDb<'_>,
     inode: i64,
@@ -183,7 +183,7 @@ fn execute_transcode_impl(
 
     // Get the existing audio file to preserve fields we don't want to change
     // Transcode only operates on corpus files
-    let existing_file = db.get_audio_file_by_inode(inode, FileSource::Corpus)?
+    let existing_file = db.get_audio_file_by_inode(inode, Zone::Corpus)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
 
     // Convert new absolute path to relative for storage
@@ -205,7 +205,7 @@ fn execute_transcode_impl(
 
     let old_path = existing_file.path();
     let old_inode = existing_file.inode();
-    let source_str = existing_file.entry.source.as_str();
+    let zone_str = existing_file.entry.zone.as_str();
 
     // Update audio_info record: path, inode, file_size, file_type
     // Use old path for lookup, update to new path
@@ -230,17 +230,17 @@ fn execute_transcode_impl(
     };
     sender.upsert_file_entry(
         &relative_path_str,
-        source_str,
+        zone_str,
         file_entry,
         witness,
     );
 
     // Delete old files table entry if inode changed (which it will, since it's a new file)
     if old_inode != new_inode {
-        sender.drop_file_index_by_inode(source_str, old_inode, witness);
+        sender.drop_file_index_by_inode(zone_str, old_inode, witness);
     }
 
-    Ok(source_str.to_string())
+    Ok(zone_str.to_string())
 }
 
 // ============================================================================

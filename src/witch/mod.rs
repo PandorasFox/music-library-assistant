@@ -358,7 +358,7 @@ impl Witch {
         self.queue_computation_with_label(
             Computation::Asleep(asleep::Computation::WalkCorpus {
                 root: resolver.corpus_dir(),
-                source: "corpus".to_string(),
+                zone: "corpus".to_string(),
                 force_check,
             }),
             Some("Observing corpus".to_string()),
@@ -369,7 +369,7 @@ impl Witch {
             self.queue_computation_with_label(
                 Computation::Asleep(asleep::Computation::WalkCorpus {
                     root: resolver.libraries_dir().join("legacy"),
-                    source: "legacy".to_string(),
+                    zone: "legacy".to_string(),
                     force_check,
                 }),
                 Some("Observing legacy".to_string()),
@@ -704,7 +704,7 @@ impl Witch {
         self.queue_computation_with_label(
             Computation::Asleep(asleep::Computation::WalkCorpus {
                 root: resolver.corpus_dir(),
-                source: "corpus".to_string(),
+                zone: "corpus".to_string(),
                 force_check: false,
             }),
             Some("Re-observing corpus".to_string()),
@@ -715,7 +715,7 @@ impl Witch {
             self.queue_computation_with_label(
                 Computation::Asleep(asleep::Computation::WalkCorpus {
                     root: resolver.libraries_dir().join("legacy"),
-                    source: "legacy".to_string(),
+                    zone: "legacy".to_string(),
                     force_check: false,
                 }),
                 Some("Re-observing legacy".to_string()),
@@ -1074,7 +1074,7 @@ impl Witch {
     ///
     /// ```ignore
     /// let read_db = witch.read_db();
-    /// let audio_files = read_db.get_all_audio_files(FileSource::Corpus)?;
+    /// let audio_files = read_db.get_all_audio_files(Zone::Corpus)?;
     /// ```
     ///
     /// # Panics

@@ -6,11 +6,12 @@
 // New Schema Types (inode-based identity)
 // ============================================================================
 
-/// File source classification.
+/// Zone classification — which root directory a file lives in.
 ///
-/// Determines which root directory the file belongs to.
+/// Distinct from "source" in the provenance sense (e.g., bandcamp, indie).
+/// This enum tracks the *zone* a file occupies within MM's directory hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FileSource {
+pub enum Zone {
     /// File is in the corpus (source of truth)
     Corpus,
     /// File is in a library (deployment target)
@@ -19,7 +20,7 @@ pub enum FileSource {
     Inbox,
 }
 
-impl FileSource {
+impl Zone {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Corpus => "corpus",
@@ -38,7 +39,7 @@ impl FileSource {
     }
 }
 
-impl std::fmt::Display for FileSource {
+impl std::fmt::Display for Zone {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
@@ -52,8 +53,8 @@ impl std::fmt::Display for FileSource {
 pub struct FileEntry {
     /// The inode number (content identity)
     pub inode: i64,
-    /// Which root this path belongs to
-    pub source: FileSource,
+    /// Which zone this path belongs to (corpus, library, inbox)
+    pub zone: Zone,
     /// Relative path within the source root
     pub path: String,
     pub _is_dir: bool,

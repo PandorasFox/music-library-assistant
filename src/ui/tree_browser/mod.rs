@@ -89,7 +89,7 @@ impl TreeBrowserState {
         }
 
         // Query all audio files from database
-        let audio_files = match read_db.get_all_audio_files(crate::corpus::db::types::FileSource::Corpus) {
+        let audio_files = match read_db.get_all_audio_files(crate::corpus::db::types::Zone::Corpus) {
             Ok(af) => af,
             Err(_) => {
                 self.clear_filter();

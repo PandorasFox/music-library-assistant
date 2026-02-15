@@ -51,8 +51,8 @@ pub struct IntakeConfirmationState {
     pub total_bytes: u64,
     /// Files to index, keyed by inode
     pub files: Vec<UnindexedFileEntry>,
-    /// Source identifier ("corpus" or "legacy")
-    pub source: String,
+    /// Zone identifier ("corpus" or "legacy")
+    pub zone: String,
     /// Number of directories containing unindexed files
     pub _directory_count: usize,
     /// Files grouped by directory for display
@@ -80,7 +80,7 @@ impl IntakeConfirmationState {
     /// (matching the signal key) with paths for display and mutation creation.
     ///
     /// Returns None if there are no unindexed files.
-    pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, source: &str) -> Option<Self> {
+    pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, zone: &str) -> Option<Self> {
         // Get all UnindexedFile signals - these are pre-computed during Awakening
         let signals: Vec<UnindexedFileSignal> = match read_db.get_unindexed_file_signals() {
             Ok(s) => s,
@@ -165,7 +165,7 @@ impl IntakeConfirmationState {
             file_count: files.len(),
             total_bytes,
             files,
-            source: source.to_string(),
+            zone: zone.to_string(),
             _directory_count: directories.len(),
             grouped_files,
             scroll_offset: 0,
@@ -210,7 +210,7 @@ impl IntakeConfirmationState {
             .iter()
             .map(|entry| Mutation::IndexFileFromPath(IndexFileFromPathMutation {
                 path: entry.abs_path.clone(),
-                source: self.source.clone(),
+                zone: self.zone.clone(),
             }))
             .collect();
 

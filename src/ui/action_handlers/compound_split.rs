@@ -3,7 +3,7 @@
 //! Handles the compound tag split modal: loading signals, navigating between
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
 use crate::ui::suspended_views::SuspendTarget;
 use super::witness;
@@ -144,7 +144,7 @@ impl App {
                 Some(w) => w.read_db(),
                 None => return,
             };
-            read_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus)
+            read_db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
                 .unwrap_or_default()
         };
 

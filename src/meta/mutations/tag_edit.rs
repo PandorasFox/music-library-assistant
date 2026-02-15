@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
@@ -102,7 +102,7 @@ fn execute_apply_tag_ops(
 
     for (inode, inode_ops) in by_inode {
         // Get audio file info from DB
-        let audio_file = match db.get_audio_file_by_inode(inode, FileSource::Corpus)? {
+        let audio_file = match db.get_audio_file_by_inode(inode, Zone::Corpus)? {
             Some(f) => f,
             None => {
                 errors.push(format!("inode {} not found", inode));

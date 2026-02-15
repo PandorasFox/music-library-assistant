@@ -15,7 +15,7 @@ use crate::meta::computations::helpers::{
     ComputedAggregateSignal,
 };
 use crate::meta::computations::types::ComputationWitness;
-use crate::corpus::db::types::FileSource;
+use crate::corpus::db::types::Zone;
 use crate::meta::signals::data::{
     TypedSignalWrite, FingerprintOverlapSignal, MetadataDuplicateSignal, MetadataDuplicateData,
     DuplicateInodeSignal, SubparDuplicateSignal, SubparDuplicateData,
@@ -107,7 +107,7 @@ pub fn execute_detect_fingerprint_overlaps(
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
 
     // Get all corpus audio files with fingerprints and durations
-    let all_audio = match read_only_db.get_all_audio_files(FileSource::Corpus) {
+    let all_audio = match read_only_db.get_all_audio_files(Zone::Corpus) {
         Ok(files) => files,
         Err(e) => {
             return Result::failure(
@@ -786,7 +786,7 @@ pub fn execute_analyze_fingerprint_overlaps(
         total_groups += 1;
 
         // Get corpus audio files for this group
-        let audio_files = match read_only_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus) {
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&inodes, Zone::Corpus) {
             Ok(af) => af,
             Err(_) => continue,
         };
@@ -1083,7 +1083,7 @@ pub fn execute_detect_cross_source_overlaps(
         }
 
         // Get corpus audio files for this overlap group
-        let audio_files = match read_only_db.get_audio_files_by_inodes(&inodes, FileSource::Corpus) {
+        let audio_files = match read_only_db.get_audio_files_by_inodes(&inodes, Zone::Corpus) {
             Ok(f) => f,
             Err(_) => continue,
         };

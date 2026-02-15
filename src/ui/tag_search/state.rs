@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use crate::corpus::db::queries::ReadOnlyDb;
-use crate::corpus::db::types::{AudioFile, FileSource};
+use crate::corpus::db::types::{AudioFile, Zone};
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 
@@ -356,7 +356,7 @@ impl TagSearchState {
     /// Query the database based on conditions.
     fn query_database(&self, read_db: &ReadOnlyDb<'_>) -> Vec<AudioFileWithTags> {
         // Get all audio files with tags
-        let all_files = read_db.get_all_audio_files_with_tags(FileSource::Corpus).unwrap_or_default();
+        let all_files = read_db.get_all_audio_files_with_tags(Zone::Corpus).unwrap_or_default();
 
         // Convert to AudioFileWithTags and filter by conditions
         all_files

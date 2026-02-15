@@ -341,6 +341,23 @@ impl App {
             DirectoryClusterPreviewAction::None => {}
             DirectoryClusterPreviewAction::ConfirmCurrent => {
                 let Some(w) = witness else { return };
+
+                // Check if selected option is MarkExpected — handle via dedicated path
+                let is_mark_expected = matches!(
+                    &self.view,
+                    ActiveView::DirectoryClusterResolution(ref preview)
+                        if matches!(preview.selected_option(), Some(crate::ui::directory_cluster_modal::types::ClusterResolutionOption::MarkExpected))
+                );
+
+                if is_mark_expected {
+                    // Delegate to MarkExpected handler
+                    self.handle_directory_cluster_preview_action(
+                        DirectoryClusterPreviewAction::MarkExpected,
+                        Some(w),
+                    );
+                    return;
+                }
+
                 // Stage mutations for current cluster's selected option and advance
                 let (cluster_index, mutations) = match &self.view {
                     ActiveView::DirectoryClusterResolution(ref preview) => {
@@ -367,6 +384,46 @@ impl App {
                 };
                 if at_last {
                     // Last cluster - go to review
+                    self.start_transaction_review();
+                }
+            }
+            DirectoryClusterPreviewAction::MarkExpected => {
+                let Some(w) = witness else { return };
+                // Extract source_a/source_b from current cluster's key and stage EmitExpectedOverlap
+                let mutation = match &self.view {
+                    ActiveView::DirectoryClusterResolution(ref preview) => {
+                        preview.current_cluster().map(|cluster| {
+                            let parts: Vec<&str> = cluster.cluster_key.splitn(2, '|').collect();
+                            let source_a = parts.first().unwrap_or(&"").to_string();
+                            let source_b = parts.get(1).unwrap_or(&"").to_string();
+                            crate::meta::mutations::Mutation::EmitExpectedOverlap(
+                                crate::meta::mutations::indexing::EmitExpectedOverlapMutation {
+                                    source_a,
+                                    source_b,
+                                },
+                            )
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(mutation) = mutation {
+                    self.stage_directory_cluster_mutations(
+                        match &self.view {
+                            ActiveView::DirectoryClusterResolution(ref preview) => preview.current_cluster_index,
+                            _ => 0,
+                        },
+                        vec![mutation],
+                        "Mark expected overlap",
+                        w,
+                    );
+                }
+                // Navigate to next cluster
+                let at_last = if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
+                    !preview.navigate_next()
+                } else {
+                    true
+                };
+                if at_last {
                     self.start_transaction_review();
                 }
             }

@@ -63,6 +63,8 @@ pub enum DirectoryClusterPreviewAction {
     NavigatePrev,
     /// Jump to transaction review (Ctrl+R).
     ShowReview,
+    /// Mark current cluster's source pair as expected overlap (Ctrl+F).
+    MarkExpected,
     /// Cancel and return to Insights view.
     Cancel,
 }
@@ -179,6 +181,9 @@ impl DirectoryClusterPreviewState {
             }
         }
 
+        // Always offer "Mark expected" as the last option
+        options.push(ClusterResolutionOption::MarkExpected);
+
         options
     }
 
@@ -256,6 +261,11 @@ impl DirectoryClusterPreviewState {
         // Ctrl+R: show review
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
             return DirectoryClusterPreviewAction::ShowReview;
+        }
+
+        // Ctrl+F: mark expected overlap
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('f') {
+            return DirectoryClusterPreviewAction::MarkExpected;
         }
 
         match key.code {
@@ -660,6 +670,8 @@ impl DirectoryClusterPreviewState {
             Span::styled(" confirm ", Style::default().fg(Color::DarkGray)),
             Span::styled(" ^R", Style::default().fg(Color::Cyan)),
             Span::styled(" review ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" ^F", Style::default().fg(Color::Cyan)),
+            Span::styled(" expected ", Style::default().fg(Color::DarkGray)),
             Span::styled(" Esc", Style::default().fg(Color::Cyan)),
             Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
         ]);

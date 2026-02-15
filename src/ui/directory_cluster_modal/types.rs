@@ -51,6 +51,8 @@ pub enum ClusterResolutionOption {
     StashDirectory { stash_suffix: String },
     /// Auto-select based on quality (stash the lower-quality format)
     AutoQuality { stash_format: String },
+    /// Mark this source pair overlap as expected (suppress future signals)
+    MarkExpected,
 }
 
 impl ClusterResolutionOption {
@@ -60,6 +62,7 @@ impl ClusterResolutionOption {
             Self::AutoQuality { stash_format } => {
                 format!("Stash {} (quality)", stash_format)
             }
+            Self::MarkExpected => "Mark expected".to_string(),
         }
     }
 }
@@ -238,6 +241,11 @@ impl DirectoryClusterModalData {
             None => return mutations,
         };
 
+        // MarkExpected doesn't stash files — it emits an ExpectedOverlap signal
+        if matches!(option, ClusterResolutionOption::MarkExpected) {
+            return mutations;
+        }
+
         for dir in &cluster.directories {
             let should_stash = match option {
                 ClusterResolutionOption::StashDirectory { stash_suffix } => {
@@ -246,6 +254,7 @@ impl DirectoryClusterModalData {
                 ClusterResolutionOption::AutoQuality { stash_format } => {
                     dir.format_summary.starts_with(stash_format.as_str())
                 }
+                ClusterResolutionOption::MarkExpected => false,
             };
 
             if !should_stash || !dir.can_stash_dupes {
@@ -287,6 +296,11 @@ impl DirectoryClusterModalData {
             None => return Vec::new(),
         };
 
+        // MarkExpected has no files to stash
+        if matches!(option, ClusterResolutionOption::MarkExpected) {
+            return Vec::new();
+        }
+
         let mut entries = Vec::new();
         for dir in &cluster.directories {
             let should_stash = match option {
@@ -296,6 +310,7 @@ impl DirectoryClusterModalData {
                 ClusterResolutionOption::AutoQuality { stash_format } => {
                     dir.format_summary.starts_with(stash_format.as_str())
                 }
+                ClusterResolutionOption::MarkExpected => false,
             };
 
             if !should_stash || !dir.can_stash_dupes {

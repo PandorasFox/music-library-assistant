@@ -130,8 +130,11 @@ Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutation
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
 | EmitCanonicalTag | — | CanonicalTag | — | Whitelist a tag value as canonical (not compound) |
+| EmitExpectedOverlap | — | ExpectedOverlap | CrossSourceOverlap (matching pair key) | Whitelist a source directory pair as expected overlap |
 
 The EmitCanonicalTag mutation is used when an operator confirms that a compound-looking value (e.g., "Rinse & Repeat") is actually a single canonical entity (band name) and should not be split. It emits a CanonicalTag signal with key `{tag_name}:{tag_value}` (whitelist entry). Future compound detection runs check for CanonicalTag signals and skip whitelisted values.
+
+The EmitExpectedOverlap mutation is used when an operator confirms that cross-source overlap between two source directories is expected (e.g., tracks appearing on both original releases and game soundtracks). It emits an ExpectedOverlap signal with key `"source_a|source_b"` (sorted), then clears the corresponding CrossSourceOverlap signal. Future DetectCrossSourceOverlaps runs check for ExpectedOverlap signals and skip whitelisted pairs.
 
 ---
 

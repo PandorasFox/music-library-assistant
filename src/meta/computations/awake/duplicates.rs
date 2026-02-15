@@ -1064,6 +1064,7 @@ pub fn execute_detect_cross_source_overlaps(
 
     let mut total_overlaps = 0;
     let mut within_source_skipped = 0;
+    let mut expected_skipped = 0;
 
     // Build an inode->path lookup for generating track pairs with paths
     let mut inode_path_map: HashMap<i64, String> = HashMap::new();
@@ -1131,6 +1132,12 @@ pub fn execute_detect_cross_source_overlaps(
                     (source_b.as_str(), source_a.as_str())
                 };
                 let pair_key = format!("{}|{}", key_a, key_b);
+
+                // Skip expected overlaps
+                if read_only_db.is_expected_overlap(&pair_key).unwrap_or(false) {
+                    expected_skipped += 1;
+                    continue;
+                }
 
                 let overlap = source_pair_overlaps.entry(pair_key.clone()).or_insert_with(|| {
                     SourcePairOverlap {
@@ -1214,8 +1221,8 @@ pub fn execute_detect_cross_source_overlaps(
     }
 
     log_general(format!(
-        "[COMPUTE] DetectCrossSourceOverlaps: {} cross-source pairs ({} fingerprint overlaps, {} within-source skipped)",
-        emitted_count, total_overlaps, within_source_skipped
+        "[COMPUTE] DetectCrossSourceOverlaps: {} cross-source pairs ({} fingerprint overlaps, {} within-source skipped, {} expected skipped)",
+        emitted_count, total_overlaps, within_source_skipped, expected_skipped
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

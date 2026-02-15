@@ -216,6 +216,16 @@ pub struct CanonicalTagSignal {
     pub created_at: String,
 }
 
+/// Operator-confirmed expected overlap between two source directories.
+/// Suppresses CrossSourceOverlap signal emission for this source pair.
+#[derive(Debug, Clone)]
+pub struct ExpectedOverlapSignal {
+    pub key: String,        // "source_a|source_b" (sorted, same format as CrossSourceOverlap keys)
+    pub source_a: String,
+    pub source_b: String,
+    pub created_at: String,
+}
+
 /// Library file without corpus backing.
 #[derive(Debug, Clone)]
 pub struct LibraryLeftoverSignal {
@@ -466,6 +476,7 @@ pub enum TypedSignalWrite {
     CrossSourceOverlap(CrossSourceOverlapSignal),
     RedundantDuplicate(RedundantDuplicateSignal),
     EmbeddableAlbumArt(EmbeddableAlbumArtSignal),
+    ExpectedOverlap(ExpectedOverlapSignal),
 }
 
 impl TypedSignalWrite {
@@ -501,6 +512,7 @@ impl TypedSignalWrite {
             Self::CrossSourceOverlap(s) => s.insert(conn),
             Self::RedundantDuplicate(s) => s.insert(conn),
             Self::EmbeddableAlbumArt(s) => s.insert(conn),
+            Self::ExpectedOverlap(s) => s.insert(conn),
         }
     }
 
@@ -536,6 +548,7 @@ impl TypedSignalWrite {
             Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
             Self::RedundantDuplicate(s) => RedundantDuplicateSignal::exists(conn, &s.key),
             Self::EmbeddableAlbumArt(s) => EmbeddableAlbumArtSignal::exists(conn, &s.key),
+            Self::ExpectedOverlap(s) => ExpectedOverlapSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }

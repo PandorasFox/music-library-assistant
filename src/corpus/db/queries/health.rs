@@ -912,6 +912,19 @@ impl Database {
     }
 
     // ========================================================================
+    // ExpectedOverlap Whitelist Queries
+    // ========================================================================
+
+    /// Check if an ExpectedOverlap signal exists for this source pair key.
+    ///
+    /// Used by DetectCrossSourceOverlaps to skip expected source pair overlaps.
+    pub fn is_expected_overlap(&self, pair_key: &str) -> Result<bool> {
+        use crate::meta::signals::data::ExpectedOverlapSignal;
+        use crate::meta::signals::store::AggregateSignalStore;
+        Ok(ExpectedOverlapSignal::exists(&self.conn, pair_key).unwrap_or(false))
+    }
+
+    // ========================================================================
     // Embeddable Album Art Resolution Queries
     // ========================================================================
 

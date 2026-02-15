@@ -717,6 +717,15 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
+    // ExpectedOverlap Queries
+    // =========================================================================
+
+    /// Check if an ExpectedOverlap signal exists for this source pair key.
+    pub fn is_expected_overlap(&self, pair_key: &str) -> Result<bool> {
+        self.db.is_expected_overlap(pair_key)
+    }
+
+    // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================
 

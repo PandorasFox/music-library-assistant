@@ -213,7 +213,8 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::DbMigration { .. }
             | Mutation::UpdateFilePath(_)
             | Mutation::DropDirectoryFromIndex(_)
-            | Mutation::EmitCanonicalTag(_) => {}
+            | Mutation::EmitCanonicalTag(_)
+            | Mutation::EmitExpectedOverlap(_) => {}
 
             Mutation::EmbedAlbumArt(ref m) => {
                 inodes.insert(m.inode);

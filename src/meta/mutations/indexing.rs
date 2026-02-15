@@ -119,6 +119,13 @@ pub struct EmitCanonicalTagMutation {
     pub canonical_value: String,
 }
 
+/// Mark a source pair overlap as expected (suppress future CrossSourceOverlap signals).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmitExpectedOverlapMutation {
+    pub source_a: String,
+    pub source_b: String,
+}
+
 // ============================================================================
 // MutationExecutor Implementations
 // ============================================================================
@@ -353,6 +360,31 @@ impl MutationExecutor for EmitCanonicalTagMutation {
         };
         MutationResult {
             _mutation: Mutation::EmitCanonicalTag(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+}
+
+impl MutationExecutor for EmitExpectedOverlapMutation {
+    fn label(&self) -> &'static str { "Mark expected overlap" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_emit_expected_overlap(&self.source_a, &self.source_b, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::EmitExpectedOverlap(self.clone()),
             success,
             error,
             _duration_ms: start.elapsed().as_millis() as u64,
@@ -1096,6 +1128,52 @@ pub fn execute_emit_canonical_tag(
     crate::logging::log_general(format!(
         "[MUTATION] EmitCanonicalTag: {} = {:?} (cleared {} stale compound signals)",
         tag_name, canonical_value, affected_inodes.len()
+    ));
+
+    Ok(())
+}
+
+/// Execute EmitExpectedOverlap mutation - mark a source pair as expected overlap.
+///
+/// Creates an ExpectedOverlap aggregate signal that suppresses CrossSourceOverlap
+/// signal emission for this source pair in future DetectCrossSourceOverlaps runs.
+/// Also clears the existing CrossSourceOverlap signal for the pair.
+pub fn execute_emit_expected_overlap(
+    source_a: &str,
+    source_b: &str,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::db_thread;
+    use crate::meta::signals::data::ExpectedOverlapSignal;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Key format: sorted "source_a|source_b" (same as CrossSourceOverlap keys)
+    let (key_a, key_b) = if source_a < source_b {
+        (source_a, source_b)
+    } else {
+        (source_b, source_a)
+    };
+    let pair_key = format!("{}|{}", key_a, key_b);
+
+    // Emit ExpectedOverlap signal
+    sender.write_typed_signal(
+        TypedSignalWrite::ExpectedOverlap(ExpectedOverlapSignal {
+            key: pair_key.clone(),
+            source_a: key_a.to_string(),
+            source_b: key_b.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }),
+        witness,
+    );
+
+    // Clear the corresponding CrossSourceOverlap signal
+    sender.clear_aggregate_signal::<CrossSourceOverlapSignal>(&pair_key, witness);
+
+    crate::logging::log_general(format!(
+        "[MUTATION] EmitExpectedOverlap: {} (cleared CrossSourceOverlap)",
+        pair_key
     ));
 
     Ok(())

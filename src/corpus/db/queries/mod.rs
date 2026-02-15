@@ -670,6 +670,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_corpus_inodes()
     }
 
+    pub fn get_all_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
+        self.db.get_all_inbox_inodes()
+    }
+
     /// Get all FileInCorpus signal inodes with their paths.
     pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
         self.db.get_file_in_corpus_inodes()

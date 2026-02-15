@@ -139,6 +139,7 @@ pub fn handle_first_time_setup<B: Backend>(
     std::fs::create_dir_all(config.corpus_dir())?;
     std::fs::create_dir_all(config.libraries_dir())?;
     std::fs::create_dir_all(config.stash_dir())?;
+    std::fs::create_dir_all(config.inbox_dir())?;
 
     // Create database and set to latest schema version
     let db = Database::open(db_path)?;

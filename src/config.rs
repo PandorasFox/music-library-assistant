@@ -342,6 +342,10 @@ impl Config {
         self.root.join("stash")
     }
 
+    pub fn inbox_dir(&self) -> PathBuf {
+        self.root.join("inbox")
+    }
+
     // =========================================================================
     // Source directory queries
     // =========================================================================

@@ -364,6 +364,19 @@ impl Witch {
             Some("Observing corpus".to_string()),
         );
 
+        // Queue inbox walk if inbox directory exists
+        let inbox_dir = resolver.inbox_dir();
+        if inbox_dir.is_dir() {
+            self.queue_computation_with_label(
+                Computation::Asleep(asleep::Computation::WalkCorpus {
+                    root: inbox_dir,
+                    zone: "inbox".to_string(),
+                    force_check,
+                }),
+                Some("Observing inbox".to_string()),
+            );
+        }
+
         // Queue legacy library walk if enabled
         if self.legacy_enabled {
             self.queue_computation_with_label(
@@ -709,6 +722,19 @@ impl Witch {
             }),
             Some("Re-observing corpus".to_string()),
         );
+
+        // Re-walk inbox if directory exists (mtime-optimized)
+        let inbox_dir = resolver.inbox_dir();
+        if inbox_dir.is_dir() {
+            self.queue_computation_with_label(
+                Computation::Asleep(asleep::Computation::WalkCorpus {
+                    root: inbox_dir,
+                    zone: "inbox".to_string(),
+                    force_check: false,
+                }),
+                Some("Re-observing inbox".to_string()),
+            );
+        }
 
         // Re-walk legacy library if enabled (mtime-optimized)
         if self.legacy_enabled {

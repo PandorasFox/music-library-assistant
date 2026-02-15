@@ -428,6 +428,25 @@ impl Database {
         Ok(result)
     }
 
+    /// Get all inbox audio file inodes mapped to their paths.
+    pub fn get_all_inbox_inodes(&self) -> Result<HashMap<i64, String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path FROM files WHERE zone = 'inbox' AND is_dir = 0"
+        )?;
+
+        let mut result = HashMap::new();
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (inode, path) = row?;
+            result.insert(inode, path);
+        }
+
+        Ok(result)
+    }
+
     /// Check whether an audio file has embedded pictures.
     pub fn get_has_pictures(&self, inode: i64) -> Result<bool> {
         let result = self.conn.query_row(

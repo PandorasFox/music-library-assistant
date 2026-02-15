@@ -107,6 +107,11 @@ impl PathResolver {
     pub fn stash_dir(&self) -> PathBuf {
         self.root.join("stash")
     }
+
+    /// Get the inbox directory path.
+    pub fn inbox_dir(&self) -> PathBuf {
+        self.root.join("inbox")
+    }
 }
 
 // =============================================================================
@@ -127,6 +132,11 @@ pub fn is_library_path(rel: &Path) -> bool {
 #[cfg(test)]
 pub fn is_stash_path(rel: &Path) -> bool {
     rel.starts_with("stash")
+}
+
+/// Check if a root-relative path is an inbox path.
+pub fn is_inbox_path(rel: &Path) -> bool {
+    rel.starts_with("inbox")
 }
 
 #[cfg(test)]

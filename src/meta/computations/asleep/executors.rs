@@ -200,9 +200,12 @@ pub fn execute_scan_corpus_directory(
         };
         let relative_path_str = relative_path.to_string_lossy().to_string();
 
-        // Create FileInCorpus signal for every file on disk (keyed by inode, path in metadata)
+        // Create FileInCorpus signal for corpus files on disk (keyed by inode, path in metadata)
         // (ClearExistingObservationState cleared all stale signals at start of observation)
-        ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInCorpus(FileInCorpusSignal { inode: *inode, path: relative_path_str.clone() }), witness);
+        // Inbox files skip this — Phase 3 adds FileInInbox as a separate signal type.
+        if file_zone == Zone::Corpus {
+            ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInCorpus(FileInCorpusSignal { inode: *inode, path: relative_path_str.clone() }), witness);
+        }
 
         // Check if file is indexed and needs verification
         // indexed_by_inode returns HashMap<inode, (mtime_secs, mtime_nanos)>

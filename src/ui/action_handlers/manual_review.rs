@@ -86,6 +86,10 @@ impl App {
             ManualReviewAction::OpenTagEditorAggregated => {
                 self.open_manual_review_tag_editor(true);
             }
+
+            ManualReviewAction::MarkExpectedDuplicate => {
+                self.stage_mark_expected_duplicate();
+            }
         }
     }
 
@@ -120,6 +124,40 @@ impl App {
         // Mark file as stashed in the UI state
         if let ActiveView::ManualReview(ref mut state) = self.view {
             state.mark_stashed(group_idx, file_idx);
+        }
+    }
+
+    /// Stage an EmitExpectedDuplicate mutation for the current group's fingerprint key.
+    fn stage_mark_expected_duplicate(&mut self) {
+        let (group_idx, fingerprint_key, group_label, is_last) = {
+            let ActiveView::ManualReview(ref state) = self.view else { return };
+            if state.kind != types::ReviewKind::RedundantDuplicate { return; }
+            let Some(group) = state.current_group_ref() else { return };
+            let Some(ref key) = group.signal_key else { return };
+            (state.current_group, key.clone(), group.label.clone(), state.current_group + 1 >= state.data.groups.len())
+        };
+
+        let mutation = crate::meta::mutations::Mutation::EmitExpectedDuplicate(
+            crate::meta::mutations::indexing::EmitExpectedDuplicateMutation {
+                fingerprint_key,
+            },
+        );
+
+        if let Some(ref mut witch) = self.witch {
+            let label = format!("Mark expected duplicate: {}", group_label);
+            let _ = super::super::operator_decisions::stage_decision(
+                witch,
+                group_idx,
+                &label,
+                vec![mutation],
+            );
+        }
+
+        // Advance to next group or show review if at the end
+        if is_last {
+            self.start_transaction_review();
+        } else {
+            self.advance_manual_review_group(true);
         }
     }
 

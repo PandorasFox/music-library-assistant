@@ -48,6 +48,8 @@ pub enum ManualReviewAction {
     NavigateGroup(bool),
     /// Show transaction review.
     ShowReview,
+    /// Mark current group as expected duplicate (suppress future signals).
+    MarkExpectedDuplicate,
 }
 
 /// Tracks which button is focused in the stash confirmation popup.
@@ -238,6 +240,11 @@ impl ManualReviewState {
                 } else {
                     ManualReviewAction::None
                 }
+            }
+
+            // Mark expected duplicate
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                ManualReviewAction::MarkExpectedDuplicate
             }
 
             // Transaction review
@@ -541,6 +548,11 @@ fn render_controls_hint(f: &mut Frame, area: Rect, state: &ManualReviewState) {
     if state.kind.supports_tag_edit() {
         hints.push(Span::styled(" T/S-T", Style::default().fg(Color::Cyan)));
         hints.push(Span::styled(" tags ", Style::default().fg(Color::DarkGray)));
+    }
+
+    if state.kind == ReviewKind::RedundantDuplicate {
+        hints.push(Span::styled(" ^F", Style::default().fg(Color::Cyan)));
+        hints.push(Span::styled(" expected ", Style::default().fg(Color::DarkGray)));
     }
 
     hints.push(Span::styled(" ^R", Style::default().fg(Color::Cyan)));

@@ -19,7 +19,7 @@ use super::indexing::{
     IndexFileFromPathMutation, UpdateFilePathMutation, DropFromIndexMutation,
     DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
     FlushTagsToDiskMutation, AssimilateDiskTagsToDbMutation, EmitCanonicalTagMutation,
-    EmitExpectedOverlapMutation,
+    EmitExpectedOverlapMutation, EmitExpectedDuplicateMutation,
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
@@ -272,6 +272,9 @@ pub enum Mutation {
     /// Mark a source pair overlap as expected (suppress future CrossSourceOverlap signals).
     EmitExpectedOverlap(EmitExpectedOverlapMutation),
 
+    /// Mark a fingerprint overlap group as expected (suppress future duplicate signals).
+    EmitExpectedDuplicate(EmitExpectedDuplicateMutation),
+
     // ========================================================================
     // Album Art Operations (struct-backed — see album_art.rs for trait impl)
     // ========================================================================
@@ -302,6 +305,7 @@ impl Mutation {
             Mutation::AssimilateDiskTagsToDb(m) => Some(m),
             Mutation::EmitCanonicalTag(m) => Some(m),
             Mutation::EmitExpectedOverlap(m) => Some(m),
+            Mutation::EmitExpectedDuplicate(m) => Some(m),
             Mutation::EmbedAlbumArt(m) => Some(m),
             Mutation::DbMigration { .. } => None,
         }
@@ -328,6 +332,7 @@ impl Mutation {
                 | Mutation::AssimilateDiskTagsToDb(_)
                 | Mutation::EmitCanonicalTag(_)
                 | Mutation::EmitExpectedOverlap(_)
+                | Mutation::EmitExpectedDuplicate(_)
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
         )
     }
@@ -363,7 +368,8 @@ impl Mutation {
             | Mutation::AcknowledgeMtimeOnly(_)
             | Mutation::DropDirectoryFromIndex(_)
             | Mutation::EmitCanonicalTag(_)
-            | Mutation::EmitExpectedOverlap(_) => None,
+            | Mutation::EmitExpectedOverlap(_)
+            | Mutation::EmitExpectedDuplicate(_) => None,
         }
     }
 
@@ -456,6 +462,7 @@ impl Mutation {
             // Signal emission: DB-only, no directories affected
             Mutation::EmitCanonicalTag(_) => {}
             Mutation::EmitExpectedOverlap(_) => {}
+            Mutation::EmitExpectedDuplicate(_) => {}
 
             // Album art embedding: affects the audio file's directory
             Mutation::EmbedAlbumArt(m) => {

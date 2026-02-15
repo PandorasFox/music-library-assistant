@@ -925,6 +925,19 @@ impl Database {
     }
 
     // ========================================================================
+    // ExpectedDuplicate Whitelist Queries
+    // ========================================================================
+
+    /// Check if an ExpectedDuplicate signal exists for this fingerprint key.
+    ///
+    /// Used by AnalyzeFingerprintOverlaps to skip expected fingerprint overlap groups.
+    pub fn is_expected_duplicate(&self, fingerprint_key: &str) -> Result<bool> {
+        use crate::meta::signals::data::ExpectedDuplicateSignal;
+        use crate::meta::signals::store::AggregateSignalStore;
+        Ok(ExpectedDuplicateSignal::exists(&self.conn, fingerprint_key).unwrap_or(false))
+    }
+
+    // ========================================================================
     // Embeddable Album Art Resolution Queries
     // ========================================================================
 

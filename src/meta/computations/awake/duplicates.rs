@@ -769,10 +769,17 @@ pub fn execute_analyze_fingerprint_overlaps(
     let mut subpar_count = 0;
     let mut redundant_count = 0;
     let mut variant_skipped = 0;
+    let mut expected_skipped = 0;
 
     for signal in &fp_dup_signals {
         let inodes = signal.inodes.clone();
         if inodes.len() < 2 {
+            continue;
+        }
+
+        // Skip groups marked as expected duplicates by the operator
+        if read_only_db.is_expected_duplicate(&signal.key).unwrap_or(false) {
+            expected_skipped += 1;
             continue;
         }
 
@@ -949,8 +956,8 @@ pub fn execute_analyze_fingerprint_overlaps(
     }
 
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, emitted {} SubparDuplicate + {} RedundantDuplicate signals, skipped {} variants",
-        total_groups, subpar_count, redundant_count, variant_skipped
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, emitted {} SubparDuplicate + {} RedundantDuplicate signals, skipped {} variants, {} expected",
+        total_groups, subpar_count, redundant_count, variant_skipped, expected_skipped
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

@@ -96,6 +96,8 @@ pub struct ReviewGroup {
     pub label: String,
     /// Files in this group.
     pub files: Vec<ReviewFileEntry>,
+    /// Signal key for this group (fingerprint key for RedundantDuplicate, None for others).
+    pub signal_key: Option<String>,
 }
 
 /// Cached data for the manual review modal.
@@ -121,7 +123,7 @@ impl ManualReviewData {
         let signal_groups = read_db.get_redundant_duplicate_groups()?;
 
         let mut groups = Vec::new();
-        for (_key, data) in signal_groups {
+        for (key, data) in signal_groups {
             let label = format!("{} ({}×)", data.file_type, data.inodes.len());
 
             let mut files = Vec::new();
@@ -145,7 +147,7 @@ impl ManualReviewData {
             }
 
             if files.len() >= 2 {
-                groups.push(ReviewGroup { label, files });
+                groups.push(ReviewGroup { label, files, signal_key: Some(key) });
             }
         }
 
@@ -173,7 +175,7 @@ impl ManualReviewData {
                 .collect();
 
             if files.len() >= 2 {
-                groups.push(ReviewGroup { label, files });
+                groups.push(ReviewGroup { label, files, signal_key: None });
             }
         }
 
@@ -204,7 +206,7 @@ impl ManualReviewData {
             }
 
             if files.len() >= 2 {
-                groups.push(ReviewGroup { label, files });
+                groups.push(ReviewGroup { label, files, signal_key: None });
             }
         }
 

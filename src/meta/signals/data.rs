@@ -226,6 +226,14 @@ pub struct ExpectedOverlapSignal {
     pub created_at: String,
 }
 
+/// Operator-confirmed expected fingerprint overlap.
+/// Suppresses RedundantDuplicate and SubparDuplicate signal emission for this group.
+#[derive(Debug, Clone)]
+pub struct ExpectedDuplicateSignal {
+    pub key: String,        // fingerprint text (same key space as RedundantDuplicate)
+    pub created_at: String,
+}
+
 /// Library file without corpus backing.
 #[derive(Debug, Clone)]
 pub struct LibraryLeftoverSignal {
@@ -477,6 +485,7 @@ pub enum TypedSignalWrite {
     RedundantDuplicate(RedundantDuplicateSignal),
     EmbeddableAlbumArt(EmbeddableAlbumArtSignal),
     ExpectedOverlap(ExpectedOverlapSignal),
+    ExpectedDuplicate(ExpectedDuplicateSignal),
 }
 
 impl TypedSignalWrite {
@@ -513,6 +522,7 @@ impl TypedSignalWrite {
             Self::RedundantDuplicate(s) => s.insert(conn),
             Self::EmbeddableAlbumArt(s) => s.insert(conn),
             Self::ExpectedOverlap(s) => s.insert(conn),
+            Self::ExpectedDuplicate(s) => s.insert(conn),
         }
     }
 
@@ -549,6 +559,7 @@ impl TypedSignalWrite {
             Self::RedundantDuplicate(s) => RedundantDuplicateSignal::exists(conn, &s.key),
             Self::EmbeddableAlbumArt(s) => EmbeddableAlbumArtSignal::exists(conn, &s.key),
             Self::ExpectedOverlap(s) => ExpectedOverlapSignal::exists(conn, &s.key),
+            Self::ExpectedDuplicate(s) => ExpectedDuplicateSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }

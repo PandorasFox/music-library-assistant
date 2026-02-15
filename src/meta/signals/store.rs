@@ -673,6 +673,36 @@ impl AggregateSignalStore for ExpectedOverlapSignal {
     }
 }
 
+impl AggregateSignalStore for ExpectedDuplicateSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_expected_duplicate (
+        key TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_expected_duplicate";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_expected_duplicate (key, created_at) VALUES (?1, ?2)",
+            rusqlite::params![self.key, self.created_at],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_expected_duplicate WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_expected_duplicate WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
 impl AggregateSignalStore for CanonicalTagSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_canonical_tag (
         key TEXT PRIMARY KEY,
@@ -1202,6 +1232,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     // Aggregate signals
     conn.execute_batch(CanonicalTagSignal::TABLE_SQL)?;
     conn.execute_batch(ExpectedOverlapSignal::TABLE_SQL)?;
+    conn.execute_batch(ExpectedDuplicateSignal::TABLE_SQL)?;
     conn.execute_batch(LibraryLeftoverSignal::TABLE_SQL)?;
     conn.execute_batch(LibraryStaleSignal::TABLE_SQL)?;
     conn.execute_batch(FingerprintOverlapSignal::TABLE_SQL)?;

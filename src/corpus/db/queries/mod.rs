@@ -726,6 +726,15 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
+    // ExpectedDuplicate Queries
+    // =========================================================================
+
+    /// Check if an ExpectedDuplicate signal exists for this fingerprint key.
+    pub fn is_expected_duplicate(&self, fingerprint_key: &str) -> Result<bool> {
+        self.db.is_expected_duplicate(fingerprint_key)
+    }
+
+    // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================
 

@@ -126,6 +126,12 @@ pub struct EmitExpectedOverlapMutation {
     pub source_b: String,
 }
 
+/// Mark a fingerprint overlap group as expected (suppress future RedundantDuplicate/SubparDuplicate signals).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmitExpectedDuplicateMutation {
+    pub fingerprint_key: String,
+}
+
 // ============================================================================
 // MutationExecutor Implementations
 // ============================================================================
@@ -385,6 +391,31 @@ impl MutationExecutor for EmitExpectedOverlapMutation {
         };
         MutationResult {
             _mutation: Mutation::EmitExpectedOverlap(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+}
+
+impl MutationExecutor for EmitExpectedDuplicateMutation {
+    fn label(&self) -> &'static str { "Mark expected duplicate" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_emit_expected_duplicate(&self.fingerprint_key, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::EmitExpectedDuplicate(self.clone()),
             success,
             error,
             _duration_ms: start.elapsed().as_millis() as u64,
@@ -1174,6 +1205,42 @@ pub fn execute_emit_expected_overlap(
     crate::logging::log_general(format!(
         "[MUTATION] EmitExpectedOverlap: {} (cleared CrossSourceOverlap)",
         pair_key
+    ));
+
+    Ok(())
+}
+
+/// Execute EmitExpectedDuplicate mutation - mark a fingerprint group as expected.
+///
+/// Creates an ExpectedDuplicate aggregate signal that suppresses RedundantDuplicate
+/// and SubparDuplicate signal emission for this fingerprint group in future
+/// AnalyzeFingerprintOverlaps runs. Also clears the existing RedundantDuplicate
+/// signal for the fingerprint key.
+pub fn execute_emit_expected_duplicate(
+    fingerprint_key: &str,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::db_thread;
+    use crate::meta::signals::data::ExpectedDuplicateSignal;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    // Emit ExpectedDuplicate signal
+    sender.write_typed_signal(
+        TypedSignalWrite::ExpectedDuplicate(ExpectedDuplicateSignal {
+            key: fingerprint_key.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }),
+        witness,
+    );
+
+    // Clear the corresponding RedundantDuplicate signal
+    sender.clear_aggregate_signal::<RedundantDuplicateSignal>(fingerprint_key, witness);
+
+    crate::logging::log_general(format!(
+        "[MUTATION] EmitExpectedDuplicate: {} (cleared RedundantDuplicate)",
+        fingerprint_key
     ));
 
     Ok(())

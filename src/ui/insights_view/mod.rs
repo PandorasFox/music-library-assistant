@@ -185,6 +185,8 @@ pub enum InsightAction {
     LaunchEmbedAlbumArt,
     /// Launch manual review modal (redundant dups, deploy conflicts, metadata dups)
     LaunchManualReview,
+    /// Launch missing tag resolution (opens tag editor with all affected files)
+    LaunchMissingTagResolution,
     /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -343,6 +345,7 @@ impl BucketEntry {
         let action = match signal_type {
             "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
             "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview, // Default to review
+            "missing_tag" => InsightAction::LaunchMissingTagResolution,
             "metadata_dup" | "deploy_conflict" => InsightAction::LaunchManualReview,
             _ => InsightAction::NotImplemented,
         };

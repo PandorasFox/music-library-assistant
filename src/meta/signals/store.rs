@@ -947,6 +947,24 @@ impl AggregateSignalStore for MissingTagSignal {
     }
 }
 
+impl MissingTagSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM signal_missing_tag ORDER BY key"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            let data: MissingTagData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Self {
+                key: row.get(0)?,
+                data,
+            })
+        })?;
+        rows.collect()
+    }
+}
+
 impl AggregateSignalStore for DeployConflictSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_deploy_conflict (
         key TEXT PRIMARY KEY,

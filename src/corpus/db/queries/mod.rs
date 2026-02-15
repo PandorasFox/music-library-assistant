@@ -468,6 +468,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_fingerprint_overlap_signals()
     }
 
+    pub fn get_missing_tag_signals(&self) -> Result<Vec<crate::meta::signals::data::MissingTagSignal>> {
+        self.db.get_missing_tag_signals()
+    }
+
     /// Check if an inode-keyed corpus signal exists (generic, type-safe).
     pub fn corpus_signal_exists<S: crate::meta::signals::store::CorpusSignalStore>(&self, inode: i64) -> bool {
         S::exists(self.db.conn(), inode).unwrap_or(false)

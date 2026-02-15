@@ -96,6 +96,11 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Failed to query fingerprint overlap signals: {}", e))
     }
 
+    pub fn get_missing_tag_signals(&self) -> Result<Vec<crate::meta::signals::data::MissingTagSignal>> {
+        crate::meta::signals::data::MissingTagSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query missing tag signals: {}", e))
+    }
+
     /// Get compound tag signal groups aggregated by (tag_name, compound_value).
     ///
     /// Instead of returning one key per inode, groups all inodes sharing the same

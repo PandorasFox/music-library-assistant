@@ -261,6 +261,9 @@ impl App {
                             }
                         }
                     }
+                    Some(insights_view::InsightAction::LaunchMissingTagResolution) => {
+                        self.start_missing_tag_resolution();
+                    }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Not yet implemented".to_string());
                     }
@@ -290,6 +293,56 @@ impl App {
                 self.status_message = Some("No unindexed files to process".to_string());
             }
         }
+    }
+
+    /// Start missing tag resolution from Insights view.
+    ///
+    /// Loads all MissingTag signals, collects unique inodes, and opens
+    /// the bulk tag editor so the operator can fill in missing tags.
+    fn start_missing_tag_resolution(&mut self) {
+        use crate::corpus::db::types::FileSource;
+        use std::collections::BTreeSet;
+
+        let read_db = self.read_db();
+
+        let signals = match read_db.get_missing_tag_signals() {
+            Ok(s) => s,
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load missing tag signals: {}", e));
+                return;
+            }
+        };
+
+        if signals.is_empty() {
+            self.status_message = Some("No missing tag signals".to_string());
+            return;
+        }
+
+        // Collect all unique inodes across all signal groups
+        let all_inodes: Vec<i64> = signals.iter()
+            .flat_map(|s| s.data.inodes.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        let audio_files = match read_db.get_audio_files_by_inodes(&all_inodes, FileSource::Corpus) {
+            Ok(f) => f,
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load audio files: {}", e));
+                return;
+            }
+        };
+
+        if audio_files.is_empty() {
+            self.status_message = Some("No indexed audio files for missing tags".to_string());
+            return;
+        }
+
+        self.open_unified_tag_editor_bulk(
+            audio_files,
+            tag_editor::TagEditorSource::HealthModal,
+            None,
+        );
     }
 
     /// Handle tag search actions.

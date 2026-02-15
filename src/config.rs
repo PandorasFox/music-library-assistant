@@ -80,23 +80,18 @@ impl Default for QualityResolutionOpinions {
     }
 }
 
-/// Opinions for artist canonicalization
+/// Opinions for tag canonicalization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonicalizationOpinions {
-    /// Case-insensitive matching (default: true)
-    pub case_insensitive: bool,
-    /// Strip parentheticals like "(Live)" (default: false)
-    pub strip_parentheticals: bool,
-    /// Levenshtein similarity threshold (default: 0.85)
-    pub fuzzy_threshold: f64,
+    /// Strip EP/LP suffixes during album collision detection (default: false).
+    /// When true, "Album EP" and "Album" normalize to the same key and collide.
+    pub strip_album_format_suffixes: bool,
 }
 
 impl Default for CanonicalizationOpinions {
     fn default() -> Self {
         Self {
-            case_insensitive: true,
-            strip_parentheticals: false,
-            fuzzy_threshold: 0.85,
+            strip_album_format_suffixes: false,
         }
     }
 }
@@ -594,24 +589,10 @@ fn parse_canonicalization_opinions(node: &kdl::KdlNode, opinions: &mut Canonical
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "case-insensitive" => {
+                "strip-album-format-suffixes" => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
-                            opinions.case_insensitive = val;
-                        }
-                    }
-                }
-                "strip-parentheticals" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.strip_parentheticals = val;
-                        }
-                    }
-                }
-                "fuzzy-threshold" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_f64() {
-                            opinions.fuzzy_threshold = val;
+                            opinions.strip_album_format_suffixes = val;
                         }
                     }
                 }
@@ -1028,9 +1009,7 @@ opinions {
     }
 
     canonicalization {
-        case-insensitive false
-        strip-parentheticals true
-        fuzzy-threshold 0.90
+        strip-album-format-suffixes false
     }
 
     re-releases {
@@ -1047,9 +1026,7 @@ opinions {
         assert!(config.opinions.fingerprint_matching.require_matching_album);
         assert!(!config.opinions.quality_resolution.auto_resolve_format_tier);
         assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 75.0);
-        assert!(!config.opinions.canonicalization.case_insensitive);
-        assert!(config.opinions.canonicalization.strip_parentheticals);
-        assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.90);
+        assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
     #[test]
@@ -1067,9 +1044,7 @@ root "/archive"
         assert!(!config.opinions.fingerprint_matching.require_matching_album);
         assert!(config.opinions.quality_resolution.auto_resolve_format_tier);
         assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 50.0);
-        assert!(config.opinions.canonicalization.case_insensitive);
-        assert!(!config.opinions.canonicalization.strip_parentheticals);
-        assert_eq!(config.opinions.canonicalization.fuzzy_threshold, 0.85);
+        assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
     #[test]

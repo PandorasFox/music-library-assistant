@@ -373,26 +373,18 @@ fn render_input(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
 }
 
 /// Render the controls hint bar.
-fn render_controls(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
+fn render_controls(f: &mut Frame, area: Rect, _state: &TagCanonicalityStateV2) {
     use crate::ui::widgets::control_colors as cc;
 
-    let mut hints = vec![
+    let hints = vec![
         cc::toggle("[Space]"),
         cc::text(" toggle  "),
         cc::edit("[F]"),
         cc::text(" fill  "),
         cc::edit("[E]"),
         cc::text(" edit  "),
-    ];
-
-    if state.is_album_artist_mode {
-        hints.extend([
-            cc::action("[^F]"),
-            cc::text(" flag  "),
-        ]);
-    }
-
-    hints.extend([
+        cc::action("[^F]"),
+        cc::text(" flag  "),
         cc::confirm("[Enter]"),
         cc::text(" confirm  "),
         cc::edit("[T]"),
@@ -403,7 +395,7 @@ fn render_controls(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
         cc::text(" review  "),
         cc::cancel("[Esc]"),
         cc::text(" cancel"),
-    ]);
+    ];
 
     let hint = Paragraph::new(Line::from(hints)).alignment(Alignment::Center);
     f.render_widget(hint, area);

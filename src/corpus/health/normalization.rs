@@ -18,11 +18,23 @@ use super::album_normalization;
 /// - Preserves edition information (Deluxe, Complete, etc.)
 /// - Returns lowercase base_name for comparison
 ///
-/// Example: "My Album EP" and "My Album (LP)" -> same normalized key
-pub fn normalize_album(s: &str) -> String {
+/// When `strip_format_suffixes` is true (default), EP/LP suffixes are stripped
+/// so "My Album EP" and "My Album (LP)" produce the same key.
+/// When false, the format type is re-appended so they produce distinct keys.
+pub fn normalize_album(s: &str, strip_format_suffixes: bool) -> String {
+    use mm_utils::metadata_magic::AlbumFormat;
+
     let normalized = album_normalization::normalize_album(s);
-    // Return lowercase base name with edition if present
     let base = normalized.base_name.to_lowercase();
+    let base = if !strip_format_suffixes {
+        match normalized.format_type {
+            AlbumFormat::EP => format!("{} ep", base),
+            AlbumFormat::LP => format!("{} lp", base),
+            AlbumFormat::Standard => base,
+        }
+    } else {
+        base
+    };
     if let Some(edition) = &normalized.edition {
         format!("{} [{}]", base, edition.to_lowercase())
     } else {
@@ -46,12 +58,26 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_album() {
-        assert_eq!(normalize_album("My Album EP"), "my album");
-        assert_eq!(normalize_album("My Album (LP)"), "my album");
-        assert_eq!(normalize_album("My Album - EP"), "my album");
+    fn test_normalize_album_strip_suffixes() {
+        // Default behavior: strip EP/LP
+        assert_eq!(normalize_album("My Album EP", true), "my album");
+        assert_eq!(normalize_album("My Album (LP)", true), "my album");
+        assert_eq!(normalize_album("My Album - EP", true), "my album");
         assert_eq!(
-            normalize_album("My Album Deluxe Edition"),
+            normalize_album("My Album Deluxe Edition", true),
+            "my album [deluxe edition]"
+        );
+    }
+
+    #[test]
+    fn test_normalize_album_preserve_suffixes() {
+        // When strip_format_suffixes is false, EP/LP produce distinct keys
+        assert_eq!(normalize_album("My Album EP", false), "my album ep");
+        assert_eq!(normalize_album("My Album (LP)", false), "my album lp");
+        assert_eq!(normalize_album("My Album", false), "my album");
+        // Standard albums are unchanged
+        assert_eq!(
+            normalize_album("My Album Deluxe Edition", false),
             "my album [deluxe edition]"
         );
     }

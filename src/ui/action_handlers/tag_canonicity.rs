@@ -149,6 +149,11 @@ impl App {
                 self.stage_flag_non_compilation(w);
                 self.advance_to_next_cluster();
             }
+            tag_canonicity_v2::TagCanonicalityActionV2::FlagCanonical => {
+                let Some(w) = witness else { return };
+                self.stage_flag_canonical(w);
+                self.advance_to_next_cluster();
+            }
         }
     }
 
@@ -325,6 +330,42 @@ impl App {
                 witch,
                 cluster_idx,
                 "Flag non-compilation",
+                mutations,
+            );
+        }
+    }
+
+    /// Stage a "flag as canonical" decision for the current collision group.
+    ///
+    /// Emits an EmitCanonicalTag mutation for each variant in the current group,
+    /// which will suppress this collision in future DetectTagCanonicalizations runs.
+    fn stage_flag_canonical(&mut self, _witness: &witness::DecisionWitness) {
+        let (mutations, cluster_idx) = match &self.view {
+            ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
+                use crate::meta::mutations::Mutation;
+                use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
+
+                let mutations: Vec<Mutation> = state.data.variants.iter()
+                    .map(|variant| Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
+                        tag_name: state.data.tag_name.clone(),
+                        canonical_value: variant.value.clone(),
+                    }))
+                    .collect();
+
+                if mutations.is_empty() {
+                    return;
+                }
+
+                (mutations, clusters.current_index)
+            }
+            _ => return,
+        };
+
+        if let Some(ref mut witch) = self.witch {
+            let _ = super::super::operator_decisions::stage_decision(
+                witch,
+                cluster_idx,
+                "Flag canonical",
                 mutations,
             );
         }

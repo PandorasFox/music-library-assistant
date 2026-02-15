@@ -505,4 +505,6 @@ pub enum TagCanonicalityActionV2 {
     OpenTagEditorAggregated,
     /// Flag all tracks in this group as non-compilation (FLAGCOMPILATION=0)
     FlagNonCompilation,
+    /// Flag all variants in this collision as canonical (suppress future detection)
+    FlagCanonical,
 }

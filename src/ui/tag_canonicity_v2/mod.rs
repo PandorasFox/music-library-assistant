@@ -69,9 +69,13 @@ impl TagCanonicalityStateV2 {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('r' | 'R') => return TagCanonicalityActionV2::ShowReview,
-                KeyCode::Char('f' | 'F') if self.is_album_artist_mode => {
-                    self.flag_confirmation_pending = true;
-                    return TagCanonicalityActionV2::None;
+                KeyCode::Char('f' | 'F') => {
+                    if self.is_album_artist_mode {
+                        self.flag_confirmation_pending = true;
+                        return TagCanonicalityActionV2::None;
+                    } else {
+                        return TagCanonicalityActionV2::FlagCanonical;
+                    }
                 }
                 _ => {}
             }

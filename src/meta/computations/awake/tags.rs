@@ -145,6 +145,8 @@ pub fn execute_detect_missing_tags(
 /// Execute DetectTagCanonicalizations - detect tag canonicalization opportunities.
 ///
 /// Emits TagCanonicity aggregate signals for each detected collision cluster.
+/// Respects `strip_album_format_suffixes` from config for album collision detection.
+/// Skips collision groups where any variant has a CanonicalTag signal.
 pub fn execute_detect_tag_canonicalizations(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -168,6 +170,19 @@ pub fn execute_detect_tag_canonicalizations(
         }
     };
 
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to load config: {}", e),
+            );
+        }
+    };
+
+    let strip_format_suffixes = config.opinions.canonicalization.strip_album_format_suffixes;
+
     // Clear stale TagCanonicity signals before re-detecting
     sender.clear_all_of_aggregate_type::<TagCanonicitySignal>(witness);
 
@@ -179,6 +194,14 @@ pub fn execute_detect_tag_canonicalizations(
                                    witness: &ComputationWitness,
                                    count: &mut usize| {
         for collision in collisions {
+            // Skip groups where any variant has a CanonicalTag signal
+            let any_canonical = collision.variants.iter().any(|v| {
+                read_only_db.is_canonical_tag(&collision.tag_name, v).unwrap_or(false)
+            });
+            if any_canonical {
+                continue;
+            }
+
             // Get inodes for all variants in this collision
             let variant_refs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
             let inodes = read_only_db
@@ -214,7 +237,7 @@ pub fn execute_detect_tag_canonicalizations(
         emit_collision_signals(collisions, &sender, witness, &mut signal_count);
     }
 
-    if let Ok(collisions) = get_album_collisions(read_only_db) {
+    if let Ok(collisions) = get_album_collisions(read_only_db, strip_format_suffixes) {
         emit_collision_signals(collisions, &sender, witness, &mut signal_count);
     }
 

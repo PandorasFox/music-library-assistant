@@ -110,10 +110,13 @@ pub fn get_album_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollisi
 /// Albums are keyed by artist context to avoid false positives
 /// (e.g., "Greatest Hits" by different artists are NOT collisions).
 ///
+/// When `strip_format_suffixes` is true, EP/LP suffixes are stripped so
+/// "Album EP" and "Album" normalize to the same key. When false, they are distinct.
+///
 /// Additionally, variants with disjoint ISRCs or catalog numbers are considered
 /// distinct releases and NOT collisions (e.g., "Album EP" with ISRCs {A,B,C} and
 /// "Album" with ISRCs {D,E,F,G} are different releases, not canonicalization issues).
-pub fn get_album_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
+pub fn get_album_collisions(db: &ReadOnlyDb<'_>, strip_format_suffixes: bool) -> Result<Vec<TagCollision>> {
     let rows = db.get_album_data_for_collision_detection()?;
 
     // Group by (normalized_artist, normalized_album)
@@ -122,7 +125,7 @@ pub fn get_album_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
 
     for (album, artist_context, isrc, catalog_number, year, date) in rows {
         let normalized_artist = normalize_artist(&artist_context);
-        let normalized_album = normalize_album(&album);
+        let normalized_album = normalize_album(&album, strip_format_suffixes);
         let key = (normalized_artist, normalized_album);
 
         let variant_data = buckets

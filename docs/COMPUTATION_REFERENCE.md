@@ -109,7 +109,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
 | DetectMissingTags | — | MissingTag | MissingTag (all, then recreate) |
 | DetectMetadataDuplicates | — | MetadataDuplicate | MetadataDuplicate (all, then recreate) |
-| DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (all, then recreate) |
+| DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (all, then recreate). Loads `strip_album_format_suffixes` from config for album collision detection. Skips collision groups where any variant has a CanonicalTag signal |
 | DetectCompoundTagValues | DetectCompoundTagsForInode (per inode) | — | CompoundTag (all, before spawning) |
 | DetectCompoundTagsForInode | — | CompoundTag (per-file) | — |
 | DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (all, then recreate). Groups with `FLAGCOMPILATION=0` on any track are suppressed (no signal emitted) |

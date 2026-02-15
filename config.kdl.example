@@ -87,16 +87,9 @@ opinions {
     // Canonicalization - Tag normalization rules
     // -------------------------------------------------------------------------
     canonicalization {
-        // Case-insensitive matching (default: true)
-        // "the beatles" and "The Beatles" are considered the same
-        // case-insensitive true
-
-        // Strip parentheticals like "(Live)" or "(Remastered)" (default: false)
-        // strip-parentheticals false
-
-        // Fuzzy matching threshold 0.0-1.0 (default: 0.85)
-        // Higher = stricter matching, lower = more lenient
-        // fuzzy-threshold 0.85
+        // Strip EP/LP suffixes during album collision detection (default: false)
+        // When true, "Album EP" and "Album" normalize to the same key and collide.
+        // strip-album-format-suffixes false
     }
 
     // -------------------------------------------------------------------------

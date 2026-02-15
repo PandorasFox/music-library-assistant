@@ -619,11 +619,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_file_paths_batch(source, inodes)
     }
 
-    /// Get duplicate fingerprint groups.
-    pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
-        self.db.get_duplicate_fingerprint_groups()
-    }
-
     /// Get inode groups with duplicates (multiple paths for same inode).
     pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {
         self.db.get_duplicate_inode_groups()

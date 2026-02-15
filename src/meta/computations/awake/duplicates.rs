@@ -31,7 +31,46 @@ use super::{Computation, Result};
 // Fingerprint Duplicate Detection
 // ============================================================================
 
-/// Execute DetectFingerprintOverlaps - bulk detection of fingerprint overlaps.
+/// Simple union-find for grouping similar fingerprints.
+struct UnionFind {
+    parent: Vec<usize>,
+    rank: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+        }
+    }
+
+    fn find(&mut self, x: usize) -> usize {
+        if self.parent[x] != x {
+            self.parent[x] = self.find(self.parent[x]);
+        }
+        self.parent[x]
+    }
+
+    fn union(&mut self, x: usize, y: usize) {
+        let rx = self.find(x);
+        let ry = self.find(y);
+        if rx == ry {
+            return;
+        }
+        if self.rank[rx] < self.rank[ry] {
+            self.parent[rx] = ry;
+        } else if self.rank[rx] > self.rank[ry] {
+            self.parent[ry] = rx;
+        } else {
+            self.parent[ry] = rx;
+            self.rank[rx] += 1;
+        }
+    }
+}
+
+/// Execute DetectFingerprintOverlaps - bulk detection of fingerprint overlaps
+/// using similarity-based grouping rather than exact byte matching.
 pub fn execute_detect_fingerprint_overlaps(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -52,31 +91,144 @@ pub fn execute_detect_fingerprint_overlaps(
         }
     };
 
-    // Find all fingerprints with duplicates
-    let duplicate_groups = match read_only_db.get_duplicate_fingerprint_groups() {
-        Ok(groups) => groups,
+    // Load config for similarity threshold and duration tolerance
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query fingerprint duplicates: {}", e),
+                format!("Failed to load config: {}", e),
             );
         }
     };
 
-    // Build computed signals
+    let similarity_threshold = config.opinions.duplicate_analysis.fingerprint_similarity_threshold;
+    let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
+
+    // Get all corpus audio files with fingerprints and durations
+    let all_audio = match read_only_db.get_all_audio_files(FileSource::Corpus) {
+        Ok(files) => files,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to query audio files: {}", e),
+            );
+        }
+    };
+
+    // Filter to files that have both a fingerprint and a duration
+    let fingerprinted: Vec<_> = all_audio
+        .into_iter()
+        .filter(|af| af.audio.fingerprint.is_some() && af.audio.duration_ms.is_some())
+        .collect();
+
+    if fingerprinted.is_empty() {
+        log_general("[COMPUTE] DetectFingerprintOverlaps: no fingerprinted files");
+        // Reconcile with empty set to clear any stale signals
+        let (cleared, new_count, updated, unchanged) =
+            reconcile_aggregate_signals::<FingerprintOverlapSignal>(
+                read_only_db,
+                &sender,
+                Vec::new(),
+                witness,
+            );
+        log_general(format!(
+            "[COMPUTE] DetectFingerprintOverlaps: 0 groups, cleared={}, new={}, updated={}, unchanged={}",
+            cleared, new_count, updated, unchanged
+        ));
+        db_thread::wait_for_queue_drain();
+        return Result::success(
+            computation,
+            start.elapsed().as_millis() as u64,
+            vec![
+                Computation::AnalyzeFingerprintOverlaps,
+                Computation::DetectCrossSourceOverlaps,
+            ],
+        );
+    }
+
+    // Bucket by duration to reduce pairwise comparisons.
+    // cluster_by_duration returns Vec<Vec<&AudioFile>>; we need indices into `fingerprinted`.
+    // Build index-aware duration buckets manually.
+    let mut indexed: Vec<(usize, i64)> = fingerprinted
+        .iter()
+        .enumerate()
+        .map(|(i, af)| (i, af.audio.duration_ms.unwrap_or(0)))
+        .collect();
+    indexed.sort_by_key(|&(_, dur)| dur);
+
+    let mut buckets: Vec<Vec<usize>> = Vec::new();
+    let mut current_bucket: Vec<usize> = vec![indexed[0].0];
+    let mut bucket_start_duration = indexed[0].1;
+
+    for &(idx, duration) in indexed.iter().skip(1) {
+        if (duration - bucket_start_duration).abs() <= duration_tolerance_ms {
+            current_bucket.push(idx);
+        } else {
+            buckets.push(current_bucket);
+            current_bucket = vec![idx];
+            bucket_start_duration = duration;
+        }
+    }
+    buckets.push(current_bucket);
+
+    // Union-find across all fingerprinted files
+    let mut uf = UnionFind::new(fingerprinted.len());
+
+    for bucket in &buckets {
+        if bucket.len() < 2 {
+            continue;
+        }
+        // Pairwise similarity within this duration bucket
+        for i in 0..bucket.len() {
+            let idx_i = bucket[i];
+            let fp_i = fingerprinted[idx_i].audio.fingerprint.as_ref().unwrap();
+            for j in (i + 1)..bucket.len() {
+                let idx_j = bucket[j];
+                let fp_j = fingerprinted[idx_j].audio.fingerprint.as_ref().unwrap();
+
+                let similarity = fingerprint_similarity(fp_i, fp_j);
+                if similarity >= similarity_threshold {
+                    uf.union(idx_i, idx_j);
+                }
+            }
+        }
+    }
+
+    // Collect connected components from union-find
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..fingerprinted.len() {
+        let root = uf.find(i);
+        groups.entry(root).or_default().push(i);
+    }
+
+    // Build computed signals for groups of 2+
     let mut computed = Vec::new();
     let mut total_tracks = 0;
 
-    for (fp_blob, inodes_str) in duplicate_groups {
-        // Convert BLOB to Vec<u32> then to text for signal key
-        let fp_u32: Vec<u32> = fp_blob
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect();
-        let fingerprint_text = fingerprint_to_text(&fp_u32);
+    for (_, members) in &groups {
+        if members.len() < 2 {
+            continue;
+        }
 
-        let inodes = parse_inodes_csv(&inodes_str);
+        // Canonical key: fingerprint text of the lowest-inode member
+        let min_inode_idx = *members
+            .iter()
+            .min_by_key(|&&idx| fingerprinted[idx].inode())
+            .unwrap();
+        let canonical_fp = fingerprinted[min_inode_idx]
+            .audio
+            .fingerprint
+            .as_ref()
+            .unwrap();
+        let fingerprint_text = fingerprint_to_text(canonical_fp);
+
+        let inodes: Vec<i64> = members
+            .iter()
+            .map(|&idx| fingerprinted[idx].inode())
+            .collect();
         total_tracks += inodes.len();
 
         computed.push(ComputedAggregateSignal {

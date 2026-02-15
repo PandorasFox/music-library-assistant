@@ -294,37 +294,6 @@ impl Database {
         Ok(files)
     }
 
-    /// Get duplicate fingerprint groups (corpus files only).
-    /// Returns: Vec<(fingerprint_blob, comma_separated_inodes)>
-    pub fn get_duplicate_fingerprint_groups(&self) -> Result<Vec<(Vec<u8>, String)>> {
-        // Join with files table to filter by source = 'corpus'
-        // Library files should not be included in fingerprint overlap detection
-        // Empty fingerprints (length 0) occur for very short audio files where
-        // chromaprint can't generate a meaningful fingerprint. These must be
-        // excluded or they'll all be grouped together as "duplicates".
-        let query = "SELECT a.fingerprint, GROUP_CONCAT(a.inode) as inodes
-                     FROM audio_info a
-                     JOIN files f ON a.inode = f.inode
-                     WHERE a.fingerprint IS NOT NULL
-                       AND length(a.fingerprint) > 0
-                       AND f.source = 'corpus'
-                     GROUP BY a.fingerprint
-                     HAVING COUNT(*) > 1";
-
-        let mut stmt = self.conn.prepare(query)?;
-        let rows = stmt.query_map(params![], |row| {
-            let fp_blob: Vec<u8> = row.get(0)?;
-            let inodes_str: String = row.get(1)?;
-            Ok((fp_blob, inodes_str))
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
     /// Get inode groups with duplicates (multiple paths for same inode, corpus only).
     /// Returns: Vec<(inode, comma_separated_paths)>
     pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {

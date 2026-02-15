@@ -34,6 +34,7 @@ pub mod manual_review_modal;
 pub mod filter_popup;
 pub mod helpers;
 pub mod insights_view;
+pub mod missing_album_modal;
 pub mod missing_file_modal;
 pub mod missing_directory_modal;
 pub mod moved_file_modal;
@@ -222,6 +223,7 @@ impl App {
             ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_key(key)),
             ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_key(key)),
             ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_key(key)),
+            ActiveView::MissingAlbumSingleResolution(s) => ViewAction::MissingAlbumSingleResolution(s.handle_key(key)),
             ActiveView::ManualReview(s) => ViewAction::ManualReview(s.handle_key(key)),
             ActiveView::TransactionReview(review) => ViewAction::TransactionReview(review.handle_key(key)),
         };

@@ -132,12 +132,15 @@ Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutation
 | EmitCanonicalTag | — | CanonicalTag | — | Whitelist a tag value as canonical (not compound) |
 | EmitExpectedOverlap | — | ExpectedOverlap | CrossSourceOverlap (matching pair key) | Whitelist a source directory pair as expected overlap |
 | EmitExpectedDuplicate | — | ExpectedDuplicate | RedundantDuplicate (matching fingerprint key) | Whitelist a fingerprint overlap group as expected duplicate |
+| EmitExpectedMissingTag | — | ExpectedMissingTag | — | Whitelist inodes as having expected missing tags (persistent suppression). `is_db_only: true` |
 
 The EmitCanonicalTag mutation is used when an operator confirms that a compound-looking value (e.g., "Rinse & Repeat") is actually a single canonical entity (band name) and should not be split. It emits a CanonicalTag signal with key `{tag_name}:{tag_value}` (whitelist entry). Future compound detection runs check for CanonicalTag signals and skip whitelisted values.
 
 The EmitExpectedOverlap mutation is used when an operator confirms that cross-source overlap between two source directories is expected (e.g., tracks appearing on both original releases and game soundtracks). It emits an ExpectedOverlap signal with key `"source_a|source_b"` (sorted), then clears the corresponding CrossSourceOverlap signal. Future DetectCrossSourceOverlaps runs check for ExpectedOverlap signals and skip whitelisted pairs.
 
 The EmitExpectedDuplicate mutation is used when an operator confirms that a fingerprint overlap group is expected (e.g., different tracks that legitimately sound nearly identical, like "Act Clear" vs "Act Clear (Silver or Bronze Medal)" on a game soundtrack). It emits an ExpectedDuplicate signal with the fingerprint key, then clears the corresponding RedundantDuplicate signal. Future AnalyzeFingerprintOverlaps runs check for ExpectedDuplicate signals and skip the entire fingerprint group (suppressing both RedundantDuplicate and SubparDuplicate emission).
+
+The EmitExpectedMissingTag mutation is used when an operator confirms that certain inodes are expected to have missing tags (e.g., instrumental tracks intentionally lacking an ALBUM tag). It takes `inodes: Vec<i64>` and writes an ExpectedMissingTag corpus signal for each inode. `is_db_only: true`, `signal_clear_scope: None`, `affected_inode: None`. It does not spawn follow-up computations. Future DetectMissingTags runs check for ExpectedMissingTag signals and suppress those inodes from MissingAlbumSingleSignal emission.
 
 ---
 

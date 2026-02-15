@@ -59,7 +59,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | ScheduleContentAnalysis | Orchestrator: spawns all detection computations |
 | DetectFingerprintOverlaps | Find tracks with identical fingerprints |
 | DetectDuplicateInodes | Find tracks sharing same inode |
-| DetectMissingTags | Find tracks missing required tags |
+| DetectMissingTags | Find tracks missing required tags. Routes ALBUM-only-missing (with ARTIST+TITLE) to MissingAlbumSingleSignal; checks ExpectedMissingTag for suppression |
 | DetectMetadataDuplicates | Find tracks with identical tag sets |
 | DetectTagCanonicalizations | Find tag canonicalization opportunities |
 | DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums. Skips groups where any track has `FLAGCOMPILATION=0` |
@@ -107,7 +107,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | ScheduleContentAnalysis | All detection computations (except fingerprint-dependent) | — | — |
 | DetectFingerprintOverlaps | AnalyzeFingerprintOverlaps, DetectCrossSourceOverlaps (after wait_for_queue_drain) | FingerprintOverlap | FingerprintOverlap (stale) |
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
-| DetectMissingTags | — | MissingTag | MissingTag (all, then recreate) |
+| DetectMissingTags | — | MissingTag, MissingAlbumSingleSignal | MissingTag (all, then recreate), MissingAlbumSingleSignal (all, then recreate). Files with ALBUM missing but ARTIST+TITLE present are routed to MissingAlbumSingleSignal (keyed by lowercased artist) instead of MissingTag. Checks ExpectedMissingTag to suppress known-acceptable missing-album inodes |
 | DetectMetadataDuplicates | — | MetadataDuplicate | MetadataDuplicate (all, then recreate) |
 | DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (all, then recreate). Loads `strip_album_format_suffixes` from config for album collision detection. Skips collision groups where any variant has a CanonicalTag signal |
 | DetectCompoundTagValues | DetectCompoundTagsForInode (per inode) | — | CompoundTag (all, before spawning) |

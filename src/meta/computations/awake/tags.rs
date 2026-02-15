@@ -13,6 +13,7 @@ use crate::meta::signals::data::{
     TypedSignalWrite, TagCanonicitySignal, TagCanonicityData,
     InconsistentAlbumArtistSignal, InconsistentAlbumArtistData,
     MissingTagSignal, MissingTagData,
+    MissingAlbumSingleSignal, MissingAlbumSingleData, SingleTrackInfo,
     CompoundTagSignal, CompoundTagEntry as TypedCompoundEntry,
 };
 use crate::corpus::db::ReadOnlyDb;
@@ -76,8 +77,9 @@ pub fn execute_detect_missing_tags(
         HashSet::new()
     };
 
-    // Clear all existing MissingTag signals (routes through db_thread)
+    // Clear all existing MissingTag and MissingAlbumSingle signals (routes through db_thread)
     sender.clear_all_of_aggregate_type::<MissingTagSignal>(witness);
+    sender.clear_all_of_aggregate_type::<MissingAlbumSingleSignal>(witness);
 
     let tracks_with_tags = match read_only_db.get_audio_files_with_tag_presence() {
         Ok(rows) => rows,
@@ -90,9 +92,20 @@ pub fn execute_detect_missing_tags(
         }
     };
 
-    let mut groups: HashMap<String, (HashSet<String>, Vec<i64>)> = HashMap::new();
+    // Load suppressed inodes (ExpectedMissingTag) once
+    let suppressed_inodes: HashSet<i64> = {
+        use crate::meta::signals::data::ExpectedMissingTagSignal;
+        read_only_db.corpus_signal_all_inodes::<ExpectedMissingTagSignal>()
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    };
 
-    for (inode, path, album, present_tags_str) in tracks_with_tags {
+    let mut groups: HashMap<String, (HashSet<String>, Vec<i64>)> = HashMap::new();
+    // artist_key (lowercased) -> (display_artist, Vec<SingleTrackInfo>)
+    let mut album_single_groups: HashMap<String, (String, Vec<SingleTrackInfo>)> = HashMap::new();
+
+    for (inode, path, album, present_tags_str, artist, title) in tracks_with_tags {
 
         let present_tags: HashSet<String> = present_tags_str
             .unwrap_or_default()
@@ -118,6 +131,34 @@ pub fn execute_detect_missing_tags(
 
         if missing.is_empty() {
             continue;
+        }
+
+        // Check: ALBUM is missing, but ARTIST and TITLE present, and not suppressed
+        let album_tag = "ALBUM".to_string();
+        if let (true, Some(ref artist_val), Some(ref title_val)) = (
+            missing.contains(&album_tag) && !suppressed_inodes.contains(&inode),
+            &artist,
+            &title,
+        ) {
+            // Remove ALBUM from missing set for this check
+            let mut remaining = missing.clone();
+            remaining.remove(&album_tag);
+
+            let key = artist_val.to_lowercase();
+            let entry = album_single_groups.entry(key).or_insert_with(|| (artist_val.clone(), Vec::new()));
+            entry.1.push(SingleTrackInfo {
+                inode,
+                title: title_val.clone(),
+                path: path.clone(),
+            });
+
+            // If ALBUM was the ONLY missing tag, route entirely to album-single
+            if remaining.is_empty() {
+                continue;
+            }
+
+            // ALBUM is missing plus other tags — continue with remaining for regular MissingTag
+            missing = remaining;
         }
 
         let key = if let Some(album_name) = album {
@@ -152,9 +193,22 @@ pub fn execute_detect_missing_tags(
         }), witness);
     }
 
+    // Emit MissingAlbumSingle signals per artist group
+    let mut album_single_count = 0;
+    for (key, (artist, tracks)) in album_single_groups {
+        album_single_count += 1;
+        sender.write_typed_signal(TypedSignalWrite::MissingAlbumSingle(MissingAlbumSingleSignal {
+            key,
+            data: MissingAlbumSingleData {
+                artist,
+                tracks,
+            },
+        }), witness);
+    }
+
     log_general(format!(
-        "[COMPUTE] DetectMissingTags: {} groups with missing tags",
-        total_groups
+        "[COMPUTE] DetectMissingTags: {} groups with missing tags, {} album-single groups",
+        total_groups, album_single_count
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

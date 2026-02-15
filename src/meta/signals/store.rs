@@ -637,6 +637,35 @@ impl CompoundTagSignal {
     }
 }
 
+impl CorpusSignalStore for ExpectedMissingTagSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_expected_missing_tag (
+        inode INTEGER PRIMARY KEY,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_expected_missing_tag";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_expected_missing_tag (inode) VALUES (?1)",
+            rusqlite::params![self.inode],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_expected_missing_tag WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_expected_missing_tag WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
 // ============================================================================
 // Aggregate Signal Implementations
 // ============================================================================
@@ -965,6 +994,56 @@ impl MissingTagSignal {
     }
 }
 
+impl AggregateSignalStore for MissingAlbumSingleSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_missing_album_single (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_missing_album_single";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_missing_album_single (key, data) VALUES (?1, ?2)",
+            rusqlite::params![self.key, data],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_missing_album_single WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_missing_album_single WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl MissingAlbumSingleSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM signal_missing_album_single ORDER BY key"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            let data: MissingAlbumSingleData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Self {
+                key: row.get(0)?,
+                data,
+            })
+        })?;
+        rows.collect()
+    }
+}
+
 impl AggregateSignalStore for DeployConflictSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_deploy_conflict (
         key TEXT PRIMARY KEY,
@@ -1246,6 +1325,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(OutOfBandTagConflictSignal::TABLE_SQL)?;
     conn.execute_batch(SubparDuplicateSignal::TABLE_SQL)?;
     conn.execute_batch(CompoundTagSignal::TABLE_SQL)?;
+    conn.execute_batch(ExpectedMissingTagSignal::TABLE_SQL)?;
 
     // Aggregate signals
     conn.execute_batch(CanonicalTagSignal::TABLE_SQL)?;
@@ -1263,6 +1343,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(CrossSourceOverlapSignal::TABLE_SQL)?;
     conn.execute_batch(RedundantDuplicateSignal::TABLE_SQL)?;
     conn.execute_batch(EmbeddableAlbumArtSignal::TABLE_SQL)?;
+    conn.execute_batch(MissingAlbumSingleSignal::TABLE_SQL)?;
 
     Ok(())
 }

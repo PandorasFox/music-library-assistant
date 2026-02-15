@@ -233,6 +233,10 @@ fn render_content(
             vname = "directory_cluster_resolution";
             preview.render(f, area);
         }
+        ActiveView::MissingAlbumSingleResolution(ref state) => {
+            vname = "missing_album_single";
+            state.render(f, area);
+        }
         ActiveView::ManualReview(ref state) => {
             vname = "manual_review";
             manual_review_modal::render(f, area, state);
@@ -394,6 +398,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::OobConflictInspection(_) => "oob_conflict_inspection",
         ActiveView::TagCanonicityResolution { .. } => "tag_canonicity_resolution",
         ActiveView::CompoundTagSplit { .. } => "compound_tag_split",
+        ActiveView::MissingAlbumSingleResolution(_) => "missing_album_single",
         ActiveView::ManualReview(_) => "manual_review",
         ActiveView::TransactionReview(_) => "transaction_review",
     }

@@ -63,6 +63,7 @@ impl App {
             ViewAction::OobConflictInspection(a) => self.handle_oob_conflict_action(a, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => self.handle_tag_canonicity_action(a, witness.as_ref()),
             ViewAction::CompoundTagSplit(a) => self.handle_compound_split_action(a, witness.as_ref()),
+            ViewAction::MissingAlbumSingleResolution(a) => self.handle_missing_album_single_action(a, witness.as_ref()),
             ViewAction::ManualReview(a) => self.handle_manual_review_action(a, witness.as_ref()),
             ViewAction::TransactionReview(a) => self.handle_transaction_review_action(a, witness.as_ref()),
         }
@@ -264,6 +265,9 @@ impl App {
                     Some(insights_view::InsightAction::LaunchMissingTagResolution) => {
                         self.start_missing_tag_resolution();
                     }
+                    Some(insights_view::InsightAction::LaunchMissingAlbumSingleResolution) => {
+                        self.start_missing_album_single_resolution();
+                    }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Not yet implemented".to_string());
                     }
@@ -343,6 +347,182 @@ impl App {
             tag_editor::TagEditorSource::HealthModal,
             None,
         );
+    }
+
+    /// Start missing album single resolution from Insights view.
+    ///
+    /// Loads MissingAlbumSingle signals, converts to modal data, starts a
+    /// transaction, and switches to the MissingAlbumSingleResolution view.
+    fn start_missing_album_single_resolution(&mut self) {
+        use crate::ui::missing_album_modal;
+
+        let read_db = self.read_db();
+
+        let signals = match read_db.get_missing_album_single_signals() {
+            Ok(s) => s,
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load missing album singles: {}", e));
+                return;
+            }
+        };
+
+        if signals.is_empty() {
+            self.status_message = Some("No missing album singles".to_string());
+            return;
+        }
+
+        let data = missing_album_modal::MissingAlbumData::from_signals(signals);
+        let suffix = self.config.opinions.health_detection.single_album_suffix.clone();
+
+        // Start transaction for the resolution session
+        if let Some(ref mut witch) = self.witch {
+            let _ = witch.start_transaction("Missing album singles");
+        }
+
+        let state = missing_album_modal::MissingAlbumState::new(data, suffix);
+        self.view = ActiveView::MissingAlbumSingleResolution(state);
+    }
+
+    /// Handle missing album single resolution actions.
+    fn handle_missing_album_single_action(
+        &mut self,
+        action: crate::ui::missing_album_modal::MissingAlbumAction,
+        witness: Option<&witness::DecisionWitness>,
+    ) {
+        use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation, indexing::EmitExpectedMissingTagMutation};
+        use crate::ui::missing_album_modal::MissingAlbumAction;
+
+        match action {
+            MissingAlbumAction::None => {}
+
+            MissingAlbumAction::Cancel => {
+                self.cancel_and_return_to_insights("Missing album single resolution cancelled");
+            }
+
+            MissingAlbumAction::TagAsSingles => {
+                let Some(_w) = witness else { return };
+
+                // Generate TagOp::add_tag per track: ALBUM = "{title}{suffix}"
+                let (group_idx, ops): (usize, Vec<TagOp>) = {
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let Some(group) = state.current_group_data() else { return };
+                    let ops = group.tracks.iter().map(|t| {
+                        TagOp::add_tag(t.inode, "ALBUM", format!("{}{}", t.title, state.suffix))
+                    }).collect();
+                    (state.current_group, ops)
+                };
+
+                if !ops.is_empty() {
+                    let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
+                    if let Some(ref mut witch) = self.witch {
+                        let _ = super::operator_decisions::stage_decision(
+                            witch,
+                            group_idx,
+                            "Tag as singles",
+                            vec![mutation],
+                        );
+                    }
+                }
+
+                // Advance to next group or show review
+                let at_end = if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
+                    !state.advance_group()
+                } else {
+                    true
+                };
+                if at_end {
+                    self.start_transaction_review();
+                }
+            }
+
+            MissingAlbumAction::TagAllSingles => {
+                let Some(_w) = witness else { return };
+
+                // Generate TagOp::add_tag per track: ALBUM = "Singles"
+                let (group_idx, ops): (usize, Vec<TagOp>) = {
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let Some(group) = state.current_group_data() else { return };
+                    let ops = group.tracks.iter().map(|t| {
+                        TagOp::add_tag(t.inode, "ALBUM", "Singles")
+                    }).collect();
+                    (state.current_group, ops)
+                };
+
+                if !ops.is_empty() {
+                    let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
+                    if let Some(ref mut witch) = self.witch {
+                        let _ = super::operator_decisions::stage_decision(
+                            witch,
+                            group_idx,
+                            "Tag all as Singles",
+                            vec![mutation],
+                        );
+                    }
+                }
+
+                // Advance to next group or show review
+                let at_end = if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
+                    !state.advance_group()
+                } else {
+                    true
+                };
+                if at_end {
+                    self.start_transaction_review();
+                }
+            }
+
+            MissingAlbumAction::Suppress => {
+                let Some(_w) = witness else { return };
+
+                // Generate EmitExpectedMissingTag for all inodes in group
+                let (group_idx, inodes) = {
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let Some(group) = state.current_group_data() else { return };
+                    let inodes: Vec<i64> = group.tracks.iter().map(|t| t.inode).collect();
+                    (state.current_group, inodes)
+                };
+
+                if !inodes.is_empty() {
+                    let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
+                    if let Some(ref mut witch) = self.witch {
+                        let _ = super::operator_decisions::stage_decision(
+                            witch,
+                            group_idx,
+                            "Suppress missing album",
+                            vec![mutation],
+                        );
+                    }
+                }
+
+                // Advance to next group or show review
+                let at_end = if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
+                    !state.advance_group()
+                } else {
+                    true
+                };
+                if at_end {
+                    self.start_transaction_review();
+                }
+            }
+
+            MissingAlbumAction::NavigateGroup(forward) => {
+                if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
+                    if forward {
+                        if state.current_group + 1 < state.data.groups.len() {
+                            state.current_group += 1;
+                            state.track_cursor = 0;
+                        }
+                    } else if state.current_group > 0 {
+                        state.current_group -= 1;
+                        state.track_cursor = 0;
+                    }
+                }
+            }
+
+            MissingAlbumAction::ShowReview => {
+                self.start_transaction_review();
+            }
+        }
     }
 
     /// Handle tag search actions.

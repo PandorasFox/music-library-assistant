@@ -215,7 +215,8 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::DropDirectoryFromIndex(_)
             | Mutation::EmitCanonicalTag(_)
             | Mutation::EmitExpectedOverlap(_)
-            | Mutation::EmitExpectedDuplicate(_) => {}
+            | Mutation::EmitExpectedDuplicate(_)
+            | Mutation::EmitExpectedMissingTag(_) => {}
 
             Mutation::EmbedAlbumArt(ref m) => {
                 inodes.insert(m.inode);

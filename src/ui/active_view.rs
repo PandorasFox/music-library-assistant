@@ -14,6 +14,7 @@ use crate::ui::{
     filter_popup,
     insights_view,
     manual_review_modal,
+    missing_album_modal,
     missing_directory_modal,
     missing_file_modal,
     moved_file_modal,
@@ -81,6 +82,9 @@ pub(crate) enum ActiveView {
         safe_mode: bool,
     },
 
+    // Missing album singles resolution
+    MissingAlbumSingleResolution(missing_album_modal::MissingAlbumState),
+
     // Manual review (iterate through groups, stash/edit files)
     ManualReview(manual_review_modal::ManualReviewState),
 
@@ -113,6 +117,7 @@ impl ActiveView {
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
+            Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
             Self::ManualReview(s) => Some(s.header_suffix()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
@@ -140,6 +145,7 @@ impl ActiveView {
             Self::OobConflictInspection(s) => s.selected_path(),
             Self::DeploymentPreview(s) => s.selected_path(),
             Self::UnifiedTagEditor(s) => s.selected_path(),
+            Self::MissingAlbumSingleResolution(s) => s.selected_path(),
             Self::ManualReview(s) => s.selected_path(),
             _ => None,
         }
@@ -199,6 +205,7 @@ pub(crate) enum ViewAction {
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
+    MissingAlbumSingleResolution(missing_album_modal::MissingAlbumAction),
     ManualReview(manual_review_modal::ManualReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
 }

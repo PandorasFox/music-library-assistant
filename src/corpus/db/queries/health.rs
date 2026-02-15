@@ -101,6 +101,11 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Failed to query missing tag signals: {}", e))
     }
 
+    pub fn get_missing_album_single_signals(&self) -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>> {
+        crate::meta::signals::data::MissingAlbumSingleSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query missing album single signals: {}", e))
+    }
+
     /// Get compound tag signal groups aggregated by (tag_name, compound_value).
     ///
     /// Instead of returning one key per inode, groups all inodes sharing the same
@@ -390,6 +395,8 @@ impl Database {
 
         let embeddable_album_art = self.count_signal_type("embeddable_album_art")?;
 
+        let missing_album_single_count = self.count_signal_type("missing_album_single")?;
+
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
             subpar_duplicate_count,
@@ -398,6 +405,7 @@ impl Database {
             inconsistent_album_artist_count,
             compound_tags,
             embeddable_album_art,
+            missing_album_single_count,
         })
     }
 
@@ -537,6 +545,8 @@ impl Database {
             "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,
             "library_stale" => LibraryStaleSignal::count(&self.conn)?,
             "embeddable_album_art" => EmbeddableAlbumArtSignal::count(&self.conn)?,
+            "missing_album_single" => MissingAlbumSingleSignal::count(&self.conn)?,
+            "expected_missing_tag" => ExpectedMissingTagSignal::count(&self.conn)?,
             _ => 0,
         };
         Ok(count)

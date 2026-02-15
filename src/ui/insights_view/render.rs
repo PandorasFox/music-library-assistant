@@ -768,6 +768,27 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
+        InsightType::MissingAlbumSingle => {
+            lines.push(Line::from(Span::styled(
+                "Missing Album Singles",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Tracks with ARTIST and TITLE but no",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "ALBUM tag, grouped by artist.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to assign album values.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
         // Other bucket - dynamic entries
         InsightType::OtherSignal { index } => {
             // Get extended info from cached_data if available

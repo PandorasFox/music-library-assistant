@@ -125,6 +125,8 @@ pub struct HealthDetectionOpinions {
     /// When true, album_artist is only required on compilation albums (>1 distinct artist).
     /// Single-artist albums without album_artist won't be flagged. Default: true.
     pub album_artist_only_required_if_compilation: bool,
+    /// Suffix appended to track title when tagging as single (default: " (Single)").
+    pub single_album_suffix: String,
 }
 
 impl Default for HealthDetectionOpinions {
@@ -137,6 +139,7 @@ impl Default for HealthDetectionOpinions {
                 "album_artist".to_string(),
             ],
             album_artist_only_required_if_compilation: true,
+            single_album_suffix: String::new(),
         }
     }
 }
@@ -655,6 +658,13 @@ fn parse_health_detection_opinions(node: &kdl::KdlNode, opinions: &mut HealthDet
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.album_artist_only_required_if_compilation = val;
+                        }
+                    }
+                }
+                "single-album-suffix" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            opinions.single_album_suffix = val.to_string();
                         }
                     }
                 }

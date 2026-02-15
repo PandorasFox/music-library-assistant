@@ -62,6 +62,12 @@ pub struct MissingDirectorySignal {
     pub path: String,
 }
 
+/// Operator-suppressed missing tag (file genuinely shouldn't have the tag).
+#[derive(Debug, Clone)]
+pub struct ExpectedMissingTagSignal {
+    pub inode: i64,
+}
+
 // --- Signals with extra flat columns ---
 
 /// File in index but no longer exists in corpus.
@@ -434,6 +440,27 @@ pub struct RedundantDuplicateData {
     pub paths: Vec<String>, // parallel to inodes
 }
 
+/// Tracks missing an ALBUM tag but having ARTIST and TITLE (album-less singles).
+#[derive(Debug, Clone)]
+pub struct MissingAlbumSingleSignal {
+    pub key: String, // lowercased artist name for dedup
+    /// Serialized as bincode BLOB.
+    pub data: MissingAlbumSingleData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissingAlbumSingleData {
+    pub artist: String, // display-cased artist name
+    pub tracks: Vec<SingleTrackInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SingleTrackInfo {
+    pub inode: i64,
+    pub title: String,
+    pub path: String,
+}
+
 /// A pair of tracks from different sources that share a fingerprint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossSourceTrackPair {
@@ -486,6 +513,8 @@ pub enum TypedSignalWrite {
     EmbeddableAlbumArt(EmbeddableAlbumArtSignal),
     ExpectedOverlap(ExpectedOverlapSignal),
     ExpectedDuplicate(ExpectedDuplicateSignal),
+    MissingAlbumSingle(MissingAlbumSingleSignal),
+    ExpectedMissingTag(ExpectedMissingTagSignal),
 }
 
 impl TypedSignalWrite {
@@ -523,6 +552,8 @@ impl TypedSignalWrite {
             Self::EmbeddableAlbumArt(s) => s.insert(conn),
             Self::ExpectedOverlap(s) => s.insert(conn),
             Self::ExpectedDuplicate(s) => s.insert(conn),
+            Self::MissingAlbumSingle(s) => s.insert(conn),
+            Self::ExpectedMissingTag(s) => s.insert(conn),
         }
     }
 
@@ -560,6 +591,8 @@ impl TypedSignalWrite {
             Self::EmbeddableAlbumArt(s) => EmbeddableAlbumArtSignal::exists(conn, &s.key),
             Self::ExpectedOverlap(s) => ExpectedOverlapSignal::exists(conn, &s.key),
             Self::ExpectedDuplicate(s) => ExpectedDuplicateSignal::exists(conn, &s.key),
+            Self::MissingAlbumSingle(s) => MissingAlbumSingleSignal::exists(conn, &s.key),
+            Self::ExpectedMissingTag(s) => ExpectedMissingTagSignal::exists(conn, s.inode),
         };
         result.unwrap_or(false)
     }

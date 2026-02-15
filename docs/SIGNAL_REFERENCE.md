@@ -37,6 +37,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
 | InodeChanged | ScanCorpusDirectory | AcknowledgeInodeChanged | File was replaced (same path, new inode) |
+| ExpectedMissingTag | EmitExpectedMissingTag | — | Operator-confirmed expected missing tag (persistent suppression). Table: `signal_expected_missing_tag`. Suppresses MissingAlbumSingleSignal for this inode in DetectMissingTags |
 
 ---
 
@@ -80,7 +81,8 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | FingerprintOverlap | DetectFingerprintOverlaps | DetectFingerprintOverlaps | Tracks with identical fingerprints (internal signal) |
 | CrossSourceOverlap | DetectCrossSourceOverlaps | DetectCrossSourceOverlaps | Fingerprint overlaps spanning different source directories (from config `dir` stanzas). Key: sorted source pair, e.g., "web/releases/bandcamp\|web/releases/indie". Within-source overlaps are ignored. Metadata: `source_a`, `source_b`, `*_priority`, `*_can_stash`, `overlap_count`, `fingerprint_keys[]`, `track_pairs[]` |
 | DuplicateInode | DetectDuplicateInodes | DetectDuplicateInodes | Tracks sharing same inode |
-| MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags |
+| MissingTag | DetectMissingTags | DetectMissingTags | Tracks missing required tags. Files with ALBUM missing but ARTIST+TITLE present (and not suppressed by ExpectedMissingTag) are routed to MissingAlbumSingleSignal instead |
+| MissingAlbumSingleSignal | DetectMissingTags | DetectMissingTags | Tracks missing ALBUM tag but having ARTIST+TITLE. Key: lowercased artist name. Data (BLOB): artist name + tracks list. Suppressed for inodes with ExpectedMissingTag |
 | MetadataDuplicate | DetectMetadataDuplicates | DetectMetadataDuplicates | Tracks with identical tag sets |
 | TagCanonicity | DetectTagCanonicalizations | DetectTagCanonicalizations | Similar tags needing unification |
 | CompoundTag | DetectCompoundTagsForInode | DetectCompoundTagValues (clears all before spawning) | Per-file signal for tags matching a `SplitRule` in the priority chain. `separator` field contains either the literal separator string (e.g., `";"`) or a collaboration keyword label (e.g., `"feat."`, `"vs."`). Metadata: `{ inode, compounds: [{ tag_name, compound_value, split_parts, separator }] }` |
@@ -135,7 +137,7 @@ From `CLAUDE.md`:
 
 `DeriveCorpusSignals` includes a GC pass that clears orphaned corpus signals. After computing the known inode universe (disk inodes ∪ indexed inodes), it scans each corpus signal table for inodes outside that universe and deletes them. This catches signals that persist due to mutations that previously failed to return their affected inodes, or any future bugs in the post-mutation signal clearing pipeline.
 
-Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, MissingDirectory. FileInCorpus is excluded (it IS the disk observation).
+Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, MissingDirectory, ExpectedMissingTag. FileInCorpus is excluded (it IS the disk observation).
 
 ### Good Signals
 - `UnindexedFile` for path X (one file)

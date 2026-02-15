@@ -132,6 +132,12 @@ pub struct EmitExpectedDuplicateMutation {
     pub fingerprint_key: String,
 }
 
+/// Mark inodes as expected-missing-tag (suppress future MissingAlbumSingle signals).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmitExpectedMissingTagMutation {
+    pub inodes: Vec<i64>,
+}
+
 // ============================================================================
 // MutationExecutor Implementations
 // ============================================================================
@@ -416,6 +422,31 @@ impl MutationExecutor for EmitExpectedDuplicateMutation {
         };
         MutationResult {
             _mutation: Mutation::EmitExpectedDuplicate(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+}
+
+impl MutationExecutor for EmitExpectedMissingTagMutation {
+    fn label(&self) -> &'static str { "Mark expected missing tag" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_emit_expected_missing_tag(&self.inodes, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::EmitExpectedMissingTag(self.clone()),
             success,
             error,
             _duration_ms: start.elapsed().as_millis() as u64,
@@ -1241,6 +1272,36 @@ pub fn execute_emit_expected_duplicate(
     crate::logging::log_general(format!(
         "[MUTATION] EmitExpectedDuplicate: {} (cleared RedundantDuplicate)",
         fingerprint_key
+    ));
+
+    Ok(())
+}
+
+/// Execute EmitExpectedMissingTag mutation - mark inodes as expected-missing-tag.
+///
+/// Creates ExpectedMissingTag corpus signals for each inode, suppressing them
+/// from future MissingAlbumSingle signal emission.
+pub fn execute_emit_expected_missing_tag(
+    inodes: &[i64],
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::db_thread;
+
+    let sender = db_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    for &inode in inodes {
+        sender.write_typed_signal(
+            TypedSignalWrite::ExpectedMissingTag(ExpectedMissingTagSignal {
+                inode,
+            }),
+            witness,
+        );
+    }
+
+    crate::logging::log_general(format!(
+        "[MUTATION] EmitExpectedMissingTag: suppressed {} inodes",
+        inodes.len()
     ));
 
     Ok(())

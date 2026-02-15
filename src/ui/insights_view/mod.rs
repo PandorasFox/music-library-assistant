@@ -141,6 +141,7 @@ pub enum InsightType {
     CompoundTagValueSafe { tag_name: String },   // All split parts exist in corpus
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
     EmbeddableAlbumArt,
+    MissingAlbumSingle,
     // Library bucket entries
     LibraryStale,
     LibraryLeftover,
@@ -187,6 +188,8 @@ pub enum InsightAction {
     LaunchManualReview,
     /// Launch missing tag resolution (opens tag editor with all affected files)
     LaunchMissingTagResolution,
+    /// Launch missing album single resolution modal
+    LaunchMissingAlbumSingleResolution,
     /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -324,6 +327,18 @@ impl BucketEntry {
             color: if count > 0 { Color::Yellow } else { Color::DarkGray },
             rank: 0,
             action: InsightAction::LaunchCompoundTagSplitReview,
+        }
+    }
+
+    /// Create missing album single entry
+    fn missing_album_single(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::MissingAlbumSingle,
+            label: "Missing album singles".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            rank: 0,
+            action: InsightAction::LaunchMissingAlbumSingleResolution,
         }
     }
 
@@ -550,6 +565,11 @@ impl CachedBucketEntries {
             if entry.review_count > 0 {
                 entries.push(BucketEntry::compound_tag_value_review(&entry.tag_name, entry.review_count));
             }
+        }
+
+        // Missing album singles
+        if bucket.missing_album_single_count > 0 {
+            entries.push(BucketEntry::missing_album_single(bucket.missing_album_single_count));
         }
 
         // Embeddable album art at bottom
@@ -906,6 +926,7 @@ mod tests {
                 inconsistent_album_artist_count: 0,
                 compound_tags: vec![],
                 embeddable_album_art: 0,
+                missing_album_single_count: 0,
             },
             bucket_library: LibraryDeployBucket {
                 library_stale: 1,

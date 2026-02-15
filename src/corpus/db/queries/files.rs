@@ -319,14 +319,16 @@ impl Database {
     }
 
     /// Get audio files with their present tag names (for missing tag detection, corpus only).
-    /// Returns: Vec<(inode, path, album_or_none, comma_separated_uppercase_tags)>
+    /// Returns: Vec<(inode, path, album_or_none, comma_separated_uppercase_tags, artist_or_none, title_or_none)>
     #[allow(clippy::type_complexity)]
-    pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
+    pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
         // Only check missing tags for corpus files
         let query = r#"
             SELECT f.inode, f.path,
                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
-                   GROUP_CONCAT(UPPER(ct.tag_name), ',') as present_tags
+                   GROUP_CONCAT(UPPER(ct.tag_name), ',') as present_tags,
+                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
+                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             LEFT JOIN corpus_tags ct ON f.inode = ct.inode
@@ -341,6 +343,8 @@ impl Database {
                 row.get(1)?,
                 row.get(2)?,
                 row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
             ))
         })?;
 

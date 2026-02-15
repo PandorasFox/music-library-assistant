@@ -472,6 +472,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_missing_tag_signals()
     }
 
+    pub fn get_missing_album_single_signals(&self) -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>> {
+        self.db.get_missing_album_single_signals()
+    }
+
     /// Check if an inode-keyed corpus signal exists (generic, type-safe).
     pub fn corpus_signal_exists<S: crate::meta::signals::store::CorpusSignalStore>(&self, inode: i64) -> bool {
         S::exists(self.db.conn(), inode).unwrap_or(false)
@@ -630,7 +634,7 @@ impl<'a> ReadOnlyDb<'a> {
 
     /// Get audio files with their present tag names (for missing tag detection).
     #[allow(clippy::type_complexity)]
-    pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
+    pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
         self.db.get_audio_files_with_tag_presence()
     }
 

@@ -171,7 +171,7 @@ impl UnifiedTagEditorState {
     // Tag Creation
     // ========================================================================
 
-    fn create_new_tag(&mut self) {
+    pub(super) fn create_new_tag(&mut self) {
         let new_field = TagField {
             name: "new_tag".to_string(),
             value: String::new(),
@@ -183,6 +183,13 @@ impl UnifiedTagEditorState {
             let insert_pos = fields.len().saturating_sub(1);
             fields.insert(insert_pos, new_field);
             self.current_field_idx = insert_pos;
+            // Scroll to show the new tag
+            if self.field_visible_height > 0 {
+                let visible_end = self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
+                if self.current_field_idx >= visible_end {
+                    self.field_scroll_offset = self.current_field_idx.saturating_sub(self.field_visible_height.saturating_sub(2));
+                }
+            }
         }
 
         self.field_edit_state = FieldEditState::EditingName;

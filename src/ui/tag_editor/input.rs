@@ -320,6 +320,12 @@ impl UnifiedTagEditorState {
                 self.clear_current_field();
                 UnifiedTagEditorAction::None
             }
+            KeyCode::Char('n') if self.field_edit_state == FieldEditState::NonEditable
+                && !self.is_aggregated_mode() =>
+            {
+                self.create_new_tag();
+                UnifiedTagEditorAction::None
+            }
             KeyCode::Char(c) => {
                 if self.field_edit_state != FieldEditState::NonEditable {
                     self.insert_char(c);

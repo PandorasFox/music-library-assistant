@@ -25,6 +25,8 @@ pub struct SubparFileEntry {
     pub reason: String,
     /// Path to the superior version
     pub superior_path: String,
+    /// Fingerprint similarity score (0.0-100.0).
+    pub similarity_score: f64,
 }
 
 /// Cached data for the subpar duplicate resolution modal.
@@ -82,6 +84,7 @@ impl SubparDuplicateModalData {
                 inode,
                 reason,
                 superior_path: entry.superior_path,
+                similarity_score: entry.similarity_score,
             });
         }
 

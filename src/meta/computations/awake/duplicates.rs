@@ -476,51 +476,55 @@ fn classify_format(file_type: &str) -> FormatClass {
     }
 }
 
-/// Check if a format is lossless.
-fn is_lossless(file_type: &str) -> bool {
-    matches!(
-        file_type.to_lowercase().as_str(),
-        "flac" | "wav" | "aiff" | "aif" | "ape" | "wv"
-    )
-}
-
 /// Equivalence key for grouping files into quality tiers.
 ///
 /// Files with the same key are considered equivalent quality.
-/// For lossy formats the distinguishing metric is bitrate;
-/// for lossless formats it is sample rate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Bitrate is the primary metric for ALL formats (lossy and lossless alike),
+/// since sample rate rarely varies (almost always 44.1 or 48 kHz) while
+/// bitrate reliably distinguishes true lossless from lossy transcodes
+/// packaged in lossless containers (e.g. `.LOSSY.flac`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct QualityTier {
     format_class: FormatClass,
-    /// Bitrate for lossy, sample rate for lossless, 0 if unknown.
-    metric: i32,
+    /// Bitrate in kbps — primary quality metric for all formats.
+    bitrate: i32,
+    /// Sample rate in Hz — secondary tiebreaker.
+    sample_rate: i32,
+}
+
+impl Ord for QualityTier {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.format_class
+            .cmp(&other.format_class)
+            .then(self.bitrate.cmp(&other.bitrate))
+            .then(self.sample_rate.cmp(&other.sample_rate))
+    }
+}
+
+impl PartialOrd for QualityTier {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Build a QualityTier for a single audio file.
 fn quality_tier_of(file_type: &str, bitrate_kbps: Option<i32>, sample_rate: Option<i32>) -> QualityTier {
-    let format_class = classify_format(file_type);
-    let metric = if is_lossless(file_type) {
-        sample_rate.unwrap_or(0)
-    } else {
-        bitrate_kbps.unwrap_or(0)
-    };
-    QualityTier { format_class, metric }
+    QualityTier {
+        format_class: classify_format(file_type),
+        bitrate: bitrate_kbps.unwrap_or(0),
+        sample_rate: sample_rate.unwrap_or(0),
+    }
 }
 
 /// Determine the SubparReason when `inferior` is outranked by `superior`.
 fn subpar_reason_between(inferior: &QualityTier, superior: &QualityTier) -> SubparReason {
     if inferior.format_class < superior.format_class {
         SubparReason::SubparFormat
-    } else if is_lossless_class(inferior.format_class) && inferior.metric < superior.metric {
-        SubparReason::SubparSampleRate
-    } else {
+    } else if inferior.bitrate < superior.bitrate {
         SubparReason::SubparBitrate
+    } else {
+        SubparReason::SubparSampleRate
     }
-}
-
-/// Whether a FormatClass represents a lossless format.
-fn is_lossless_class(fc: FormatClass) -> bool {
-    matches!(fc, FormatClass::VorbisLossless | FormatClass::OtherLossless)
 }
 
 /// Compute fingerprint similarity using bit-level Hamming distance.
@@ -610,6 +614,7 @@ const VARIANT_KEYWORDS: &[&str] = &[
     "radio edit",
     "extended",
     "alternate",
+    "alt",
     "bonus",
     "unplugged",
     "orchestral",
@@ -617,10 +622,9 @@ const VARIANT_KEYWORDS: &[&str] = &[
     "stripped",
 ];
 
-/// Check if a title contains variant keywords.
-fn has_variant_keyword(title: &str) -> Option<&'static str> {
-    let lower = title.to_lowercase();
-    VARIANT_KEYWORDS.iter().find(|&&kw| lower.contains(kw)).copied()
+/// Check if a title contains any variant keyword.
+fn has_any_variant_keyword(title: &str) -> bool {
+    VARIANT_KEYWORDS.iter().any(|&kw| title.contains(kw))
 }
 
 /// Release identity information for variant detection.
@@ -639,7 +643,7 @@ struct TrackReleaseIdentity {
 /// Tracks are "same release" if:
 /// - Same catalog number (compilation albums with same ISRC but different catalog = different releases), OR
 /// - No catalog numbers + same album + ISRC match, OR
-/// - Same normalized album AND same normalized title AND no exclusive variant keywords
+/// - Same normalized album AND same normalized title AND no variant keyword mismatch
 ///
 /// IMPORTANT: Catalog number is checked BEFORE ISRC because the same recording (same ISRC)
 /// can appear on multiple compilation albums with different catalog numbers. These are
@@ -648,7 +652,7 @@ struct TrackReleaseIdentity {
 /// IMPORTANT: When no catalog numbers are present, album is checked BEFORE ISRC because
 /// ISRC identifies the recording, not the release — same ISRC on different albums (e.g.
 /// solo release vs compilation) means different releases, not redundant copies.
-fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
+fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity, elide_variants: bool) -> bool {
     // First: Check catalog numbers - different catalog = different release
     // This catches the compilation album case where the same recording (same ISRC)
     // appears on different albums with different catalog numbers.
@@ -673,19 +677,25 @@ fn is_same_release(a: &TrackReleaseIdentity, b: &TrackReleaseIdentity) -> bool {
         return true;
     }
 
-    // Fall through: Check for exclusive variant keywords in titles
-    let title_a = a.title.to_lowercase();
-    let title_b = b.title.to_lowercase();
+    // Variant title elision: if either title contains a variant keyword (remix, live,
+    // instrumental, etc.) and the titles aren't the same, treat as different variants.
+    // This avoids false matches between e.g. "Track (Remix)" and "Track (Remix) -Instrumental-"
+    // where both contain "remix" but are clearly different versions.
+    if elide_variants {
+        let title_a = a.title.to_lowercase();
+        let title_b = b.title.to_lowercase();
 
-    let variant_a = has_variant_keyword(&title_a);
-    let variant_b = has_variant_keyword(&title_b);
+        if title_a != title_b {
+            let has_variant_a = has_any_variant_keyword(&title_a);
+            let has_variant_b = has_any_variant_keyword(&title_b);
 
-    // If one has a variant keyword the other doesn't, they're different versions
-    match (variant_a, variant_b) {
-        (Some(kw_a), Some(kw_b)) if kw_a != kw_b => false, // Different variant types
-        (Some(_), None) | (None, Some(_)) => false,       // One is variant, other isn't
-        _ => true, // Both have same variant or neither has variant
+            if has_variant_a || has_variant_b {
+                return false; // Different titles + variant keyword = different versions
+            }
+        }
     }
+
+    true
 }
 
 /// Reason why a track is subpar.
@@ -739,6 +749,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 
     let similarity_threshold = config.opinions.duplicate_analysis.fingerprint_similarity_threshold;
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
+    let elide_variant_titles = config.opinions.duplicate_analysis.elide_variant_titles;
 
     // Clear all existing SubparDuplicate and RedundantDuplicate signals
     sender.clear_all_of_corpus_type::<SubparDuplicateSignal>(witness);
@@ -838,7 +849,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                     }
 
                     // Check if same release
-                    if !is_same_release(&identities[i], &identities[j]) {
+                    if !is_same_release(&identities[i], &identities[j], elide_variant_titles) {
                         variant_skipped += 1;
                         continue; // Different variants
                     }
@@ -906,10 +917,17 @@ pub fn execute_analyze_fingerprint_overlaps(
                 if !lower.is_empty() {
                     let superior_idx = best_indices[0];
                     let superior_identity = &identities[superior_idx];
+                    let superior_fp = cluster[superior_idx].audio.fingerprint.as_ref();
 
                     for (idx, tier) in &lower {
                         let audio_file = &cluster[*idx];
                         let reason = subpar_reason_between(tier, &best_tier);
+
+                        // Compute similarity score between subpar and superior
+                        let similarity_score = match (audio_file.audio.fingerprint.as_ref(), superior_fp) {
+                            (Some(fp_sub), Some(fp_sup)) => fingerprint_similarity(fp_sub, fp_sup),
+                            _ => 0.0,
+                        };
 
                         sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
                             inode: audio_file.inode(),
@@ -919,6 +937,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                                 superior_inode: superior_identity.inode,
                                 superior_path: superior_identity.path.clone(),
                                 dupe_group_fingerprint: signal.key.clone(),
+                                similarity_score,
                             },
                         }), witness);
 

@@ -233,11 +233,12 @@ impl SubparDuplicatePreviewState {
         let visible_lines = inner.height as usize;
         let scroll = self.scroll;
 
-        // Three columns: 45% subpar path | 10% reason | 45% superior path
+        // Four columns: 40% subpar path | 10% reason | 8% score | 42% superior path
         let total_width = inner.width as usize;
-        let left_width = (total_width * 45) / 100;
+        let left_width = (total_width * 40) / 100;
         let mid_width = (total_width * 10) / 100;
-        let right_width = total_width.saturating_sub(left_width + mid_width);
+        let score_width = (total_width * 8) / 100;
+        let right_width = total_width.saturating_sub(left_width + mid_width + score_width);
 
         let items: Vec<ListItem> = self
             .cached_data
@@ -262,6 +263,13 @@ impl SubparDuplicatePreviewState {
 
                 let subpar_path = truncate_left(&file.corpus_path, left_width.saturating_sub(1));
                 let superior_path = truncate_left(&file.superior_path, right_width.saturating_sub(1));
+                let score_str = format!("{:.1}%", file.similarity_score);
+
+                let score_style = if is_selected && list_focused {
+                    CURSOR_STYLE
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
 
                 let line = Line::from(vec![
                     Span::styled(
@@ -273,7 +281,11 @@ impl SubparDuplicatePreviewState {
                         reason_style,
                     ),
                     Span::styled(
-                        format!("{:<width$}", superior_path, width = right_width),
+                        format!("{:>width$}", score_str, width = score_width),
+                        score_style,
+                    ),
+                    Span::styled(
+                        format!(" {:<width$}", superior_path, width = right_width.saturating_sub(1)),
                         style,
                     ),
                 ]);
@@ -306,6 +318,10 @@ impl SubparDuplicatePreviewState {
                 Line::from(vec![
                     Span::styled("Better: ", Style::default().fg(Color::Green)),
                     Span::styled(&file.superior_path, Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("  [{:.1}% match]", file.similarity_score),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]),
             ]
         } else {

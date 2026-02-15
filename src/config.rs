@@ -227,7 +227,7 @@ impl Default for TagSplittingOpinions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuplicateAnalysisOpinions {
     /// Fingerprint similarity threshold (0-100). Pairs below this are not duplicates.
-    /// Default: 85.0
+    /// Default: 95.0
     pub fingerprint_similarity_threshold: f64,
     /// Duration tolerance in milliseconds. Tracks with duration difference above this
     /// are clustered separately. Default: 2000 (2 seconds)
@@ -240,15 +240,20 @@ pub struct DuplicateAnalysisOpinions {
     /// e.g., 3+ keys in monstercat = skip (don't emit signal).
     /// Default: 3
     pub within_directory_min_keys: usize,
+    /// Skip duplicate pairs where either title contains variant keywords (remix, live,
+    /// acoustic, etc.) and the titles differ. Prevents false duplicate matches between
+    /// different versions of the same track. Default: true
+    pub elide_variant_titles: bool,
 }
 
 impl Default for DuplicateAnalysisOpinions {
     fn default() -> Self {
         Self {
-            fingerprint_similarity_threshold: 85.0,
+            fingerprint_similarity_threshold: 95.0,
             duration_tolerance_ms: 2000,
             cross_directory_max_keys: 2,
             within_directory_min_keys: 3,
+            elide_variant_titles: true,
         }
     }
 }
@@ -817,6 +822,13 @@ fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut Duplica
                             if val > 0 {
                                 opinions.within_directory_min_keys = val as usize;
                             }
+                        }
+                    }
+                }
+                "elide-variant-titles" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.elide_variant_titles = val;
                         }
                     }
                 }

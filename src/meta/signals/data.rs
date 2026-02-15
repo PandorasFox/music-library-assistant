@@ -148,6 +148,9 @@ pub struct SubparDuplicateData {
     pub superior_inode: i64,
     pub superior_path: String,
     pub dupe_group_fingerprint: String,
+    /// Fingerprint similarity score (0.0-100.0) between subpar and superior.
+    #[serde(default)]
+    pub similarity_score: f64,
 }
 
 /// Per-file compound tag detection results.

@@ -296,6 +296,8 @@ pub struct SubparDuplicateEntry {
     pub reason: String,
     /// Path to the superior version
     pub superior_path: String,
+    /// Fingerprint similarity score (0.0-100.0).
+    pub similarity_score: f64,
 }
 
 // ============================================================================

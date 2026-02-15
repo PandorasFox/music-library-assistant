@@ -881,11 +881,13 @@ impl Database {
                         superior_inode: 0,
                         superior_path: String::new(),
                         dupe_group_fingerprint: String::new(),
+                        similarity_score: 0.0,
                     });
                 Ok(SubparDuplicateEntry {
                     corpus_path: path,
                     reason: data.reason,
                     superior_path: data.superior_path,
+                    similarity_score: data.similarity_score,
                 })
             })?
             .collect::<rusqlite::Result<Vec<SubparDuplicateEntry>>>()?;

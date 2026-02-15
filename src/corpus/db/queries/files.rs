@@ -95,6 +95,26 @@ impl Database {
         Ok(result)
     }
 
+    /// Look up the zone and path for an inode in corpus/inbox zones.
+    ///
+    /// Used for cross-zone move detection: when a file is found in zone A
+    /// but is indexed in zone B, this returns (zone_str, path) from zone B.
+    ///
+    /// Excludes Library zone — hard-linked deployments share inodes with
+    /// corpus, so including library would produce ambiguous results.
+    pub fn get_file_zone_and_path_by_inode(&self, inode: i64) -> Result<Option<(String, String)>> {
+        let result = self.conn.query_row(
+            "SELECT zone, path FROM files WHERE inode = ?1 AND zone != 'library'",
+            [inode],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        );
+        match result {
+            Ok(pair) => Ok(Some(pair)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Get paths for files by inode (for move detection).
     pub fn get_file_paths_batch(
         &self,
@@ -748,6 +768,59 @@ impl Database {
             "UPDATE files SET path = ?1 WHERE zone = ?2 AND inode = ?3",
             params![new_path, zone, inode],
         )?;
+        Ok(())
+    }
+
+    /// Update zone for a file (cross-zone move) and migrate tags between tag tables.
+    ///
+    /// Updates the zone column and copies tags from old tag table to new tag table,
+    /// then deletes the old tag rows.
+    pub fn update_file_zone(
+        &self,
+        old_zone: &str,
+        inode: i64,
+        new_zone: &str,
+        _witness: &impl crate::db_thread::SignalWitness,
+    ) -> Result<()> {
+        use crate::corpus::db::types::Zone;
+
+        // Update zone column
+        self.conn.execute(
+            "UPDATE files SET zone = ?1 WHERE zone = ?2 AND inode = ?3",
+            params![new_zone, old_zone, inode],
+        )?;
+
+        // Migrate tags between tag tables
+        let old_z = Zone::from_str(old_zone).unwrap_or(Zone::Corpus);
+        let new_z = Zone::from_str(new_zone).unwrap_or(Zone::Corpus);
+        let old_table = old_z.tag_table();
+        let new_table = new_z.tag_table();
+
+        if let (Some(src), Some(dst)) = (old_table, new_table) {
+            if src != dst {
+                // Copy tags from source to destination
+                self.conn.execute(
+                    &format!(
+                        "INSERT OR REPLACE INTO {} (inode, tag_name, tag_value) \
+                         SELECT inode, tag_name, tag_value FROM {} WHERE inode = ?1",
+                        dst, src
+                    ),
+                    params![inode],
+                )?;
+                // Delete from source
+                self.conn.execute(
+                    &format!("DELETE FROM {} WHERE inode = ?1", src),
+                    params![inode],
+                )?;
+            }
+        }
+
+        // Mark inode dirty for re-computation
+        self.conn.execute(
+            "INSERT OR IGNORE INTO dirty_inodes (inode) VALUES (?1)",
+            params![inode],
+        )?;
+
         Ok(())
     }
 

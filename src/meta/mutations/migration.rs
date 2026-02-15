@@ -394,6 +394,20 @@ impl MigrationRegistry {
             },
         });
 
+        // v11→v12: Add zone columns to signal_moved_file for cross-zone move detection
+        registry.register(Migration {
+            from_version: 11,
+            to_version: 12,
+            description: "Add old_zone/new_zone columns to signal_moved_file for cross-zone move detection",
+            apply: |db| {
+                db.conn().execute_batch(
+                    "ALTER TABLE signal_moved_file ADD COLUMN old_zone TEXT NOT NULL DEFAULT 'corpus';
+                     ALTER TABLE signal_moved_file ADD COLUMN new_zone TEXT NOT NULL DEFAULT 'corpus';"
+                )?;
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -490,9 +504,10 @@ mod tests {
         // v8→v9: has_pictures column in audio_info
         // v9→v10: rename files.source to files.zone
         // v10→v11: inbox signal tables
-        assert_eq!(registry.latest_version(), 11);
-        assert_eq!(registry.pending_migrations(1).len(), 10);
-        assert_eq!(registry.pending_migrations(10).len(), 1);
-        assert!(registry.pending_migrations(11).is_empty());
+        // v11→v12: zone columns in signal_moved_file
+        assert_eq!(registry.latest_version(), 12);
+        assert_eq!(registry.pending_migrations(1).len(), 11);
+        assert_eq!(registry.pending_migrations(11).len(), 1);
+        assert!(registry.pending_migrations(12).is_empty());
     }
 }

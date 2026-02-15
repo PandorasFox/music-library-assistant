@@ -444,11 +444,13 @@ impl App {
 
                 // Create UpdateFilePath mutations for each moved file
                 let mut mutations = Vec::new();
-                for (inode, new_path) in state.files_for_mutation() {
+                for (inode, new_path, old_zone, new_zone) in state.files_for_mutation() {
+                    let cross_zone = if old_zone != new_zone { Some(new_zone) } else { None };
                     mutations.push(Mutation::UpdateFilePath(UpdateFilePathMutation {
-                        zone: "corpus".to_string(),
+                        zone: old_zone,
                         inode,
                         new_path: PathBuf::from(&new_path),
+                        new_zone: cross_zone,
                     }));
                 }
 

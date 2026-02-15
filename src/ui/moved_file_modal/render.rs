@@ -20,7 +20,7 @@ pub fn render(state: &MovedFileState, f: &mut Frame, area: Rect) {
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(5),    // File list
-            Constraint::Length(5), // Details for selected file
+            Constraint::Length(6), // Details for selected file (extra line for zone)
             Constraint::Length(3), // Buttons
         ])
         .split(area);
@@ -101,7 +101,7 @@ fn render_details(state: &MovedFileState, f: &mut Frame, area: Rect) {
 
     let file = &state.files[state.current_file];
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("Old path: ", Style::default().fg(Color::DarkGray)),
             Span::styled(&file.old_path, Style::default().fg(Color::Red)),
@@ -115,6 +115,16 @@ fn render_details(state: &MovedFileState, f: &mut Frame, area: Rect) {
             Span::raw(file.inode.to_string()),
         ]),
     ];
+
+    // Show zone transition for cross-zone moves
+    if file.old_zone != file.new_zone {
+        lines.push(Line::from(vec![
+            Span::styled("Zone:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&file.old_zone, Style::default().fg(Color::Red)),
+            Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&file.new_zone, Style::default().fg(Color::Green)),
+        ]));
+    }
 
     let paragraph = Paragraph::new(lines);
     f.render_widget(paragraph, inner);

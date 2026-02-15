@@ -36,6 +36,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
+| MovedFile | ScanCorpusDirectory | UpdateFilePath | Same inode at different path (or different zone). Columns: `old_path`, `old_zone`, `new_zone`. Cross-zone moves (old_zone != new_zone) trigger zone update + tag migration on acknowledge |
 | InodeChanged | ScanCorpusDirectory | AcknowledgeInodeChanged | File was replaced (same path, new inode) |
 | ExpectedMissingTag | EmitExpectedMissingTag | — | Operator-confirmed expected missing tag (persistent suppression). Table: `signal_expected_missing_tag`. Suppresses MissingAlbumSingleSignal for this inode in DetectMissingTags |
 

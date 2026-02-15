@@ -294,10 +294,12 @@ enum SignalWriteOp {
     },
 
     /// Update file path in files table (file moved/renamed).
+    /// When new_zone differs from zone, also updates zone and migrates tags.
     UpdateFilePath {
         zone: String,
         inode: i64,
         new_path: String,
+        new_zone: Option<String>,
     },
 
     /// Index a directory entry in the files table.
@@ -821,11 +823,13 @@ impl SignalWriteSender {
     }
 
     /// Update file path in files table (file moved/renamed).
+    /// When new_zone is Some and differs from zone, also migrates zone and tags.
     pub fn update_file_path(
         &self,
         zone: &str,
         inode: i64,
         new_path: &str,
+        new_zone: Option<&str>,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -833,6 +837,7 @@ impl SignalWriteSender {
             zone: zone.to_string(),
             inode,
             new_path: new_path.to_string(),
+            new_zone: new_zone.map(|s| s.to_string()),
         });
     }
 
@@ -1328,10 +1333,18 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::UpdateFilePath { zone, inode, new_path } => {
+        SignalWriteOp::UpdateFilePath { zone, inode, new_path, new_zone } => {
             with_retry("update_file_path", new_path, || {
                 db.update_file_path(zone, *inode, new_path, &witness)
             });
+            // Cross-zone move: update zone column and migrate tags
+            if let Some(nz) = new_zone {
+                if nz != zone {
+                    with_retry("update_file_zone", nz, || {
+                        db.update_file_zone(zone, *inode, nz, &witness)
+                    });
+                }
+            }
         }
 
         SignalWriteOp::IndexDirectory {

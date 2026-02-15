@@ -216,17 +216,19 @@ pub fn execute_scan_corpus_directory(
         // Check if file is indexed and needs verification
         // indexed_by_inode returns HashMap<inode, (mtime_secs, mtime_nanos)>
         if let Some((db_mtime_secs, db_mtime_nanos)) = indexed_by_inode.get(inode) {
-            // File is indexed by inode - check if path changed (file was moved/renamed)
+            // File is indexed by inode in this zone - check if path changed (same-zone move)
             if let Some(db_path) = indexed_paths.get(inode) {
                 if db_path != &relative_path_str {
-                    // Same inode but different path - file was moved
-                    // Signal keyed by inode, with old_path and new_path in metadata
+                    // Same inode but different path - file was moved within zone
+                    let zone_str = file_zone.as_str().to_string();
                     if !read_only_db.corpus_signal_exists::<MovedFileSignal>(*inode) {
                         sender.write_typed_signal(
                             TypedSignalWrite::MovedFile(MovedFileSignal {
                                 inode: *inode,
                                 path: relative_path_str.clone(),
                                 old_path: db_path.to_string(),
+                                old_zone: zone_str.clone(),
+                                new_zone: zone_str,
                             }),
                             witness,
                         );
@@ -262,9 +264,29 @@ pub fn execute_scan_corpus_directory(
                 });
             }
         } else {
-            // Inode not in files table - check if path is indexed with different inode
-            // This detects file replacement (same path, new inode)
-            if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(&relative_path_str) {
+            // Inode not indexed in this zone — check for cross-zone move first.
+            // If the inode is indexed in a different zone, it was moved between zones
+            // (e.g. inbox→corpus or corpus→inbox).
+            if let Ok(Some((other_zone_str, old_path))) = read_only_db.get_file_zone_and_path_by_inode(*inode) {
+                let other_zone = Zone::from_str(&other_zone_str).unwrap_or(Zone::Corpus);
+                if other_zone != file_zone {
+                    // Cross-zone move detected
+                    if !read_only_db.corpus_signal_exists::<MovedFileSignal>(*inode) {
+                        sender.write_typed_signal(
+                            TypedSignalWrite::MovedFile(MovedFileSignal {
+                                inode: *inode,
+                                path: relative_path_str.clone(),
+                                old_path,
+                                old_zone: other_zone_str,
+                                new_zone: file_zone.as_str().to_string(),
+                            }),
+                            witness,
+                        );
+                    }
+                }
+            } else if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(&relative_path_str) {
+                // Not indexed anywhere in corpus/inbox — check if path is indexed
+                // with a different inode. This detects file replacement (same path, new inode).
                 if audio_file.inode() != *inode {
                     // Inode changed! File was replaced.
                     // Instead of emitting InodeChanged (obsolete), we emit:

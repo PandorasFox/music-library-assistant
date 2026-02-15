@@ -46,11 +46,16 @@ pub struct IndexFileFromPathMutation {
 }
 
 /// Update file path in files table (for relocated files).
+///
+/// When `new_zone` is set and differs from `zone`, this is a cross-zone move:
+/// the zone column is updated and tags are migrated between tag tables.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateFilePathMutation {
     pub zone: String,
     pub inode: i64,
     pub new_path: PathBuf,
+    /// If set, update the zone column to this value (cross-zone move).
+    pub new_zone: Option<String>,
 }
 
 /// Drop file from index (for missing files or orphaned signals).
@@ -184,7 +189,7 @@ impl MutationExecutor for UpdateFilePathMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_update_file_path(ctx.read_db, &self.zone, self.inode, &self.new_path, ctx.witness);
+        let result = execute_update_file_path(ctx.read_db, &self.zone, self.inode, &self.new_path, self.new_zone.as_deref(), ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -598,12 +603,16 @@ pub fn execute_index_file_from_path(_db: &ReadOnlyDb<'_>, path: &Path, zone: &st
 
 /// Execute UpdateFilePath mutation - update file path for relocated file.
 ///
+/// When `new_zone` is provided and differs from `zone`, also updates the zone
+/// column and migrates tags between tag tables.
+///
 /// Routes write through signal_sender (fire-and-forget).
 pub fn execute_update_file_path(
     _db: &ReadOnlyDb<'_>,
     zone: &str,
     inode: i64,
     new_path: &Path,
+    new_zone: Option<&str>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db_thread;
@@ -629,7 +638,7 @@ pub fn execute_update_file_path(
     };
 
     // Route write through signal_sender
-    sender.update_file_path(zone, inode, &relative_path.to_string_lossy(), witness);
+    sender.update_file_path(zone, inode, &relative_path.to_string_lossy(), new_zone, witness);
 
     Ok(())
 }

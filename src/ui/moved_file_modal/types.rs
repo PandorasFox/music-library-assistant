@@ -77,11 +77,11 @@ impl MovedFileState {
 
     /// Get data needed for UpdateFilePath mutations.
     ///
-    /// Returns (inode, new_path) pairs for queuing mutations.
-    pub fn files_for_mutation(&self) -> Vec<(i64, String)> {
+    /// Returns (inode, new_path, old_zone, new_zone) tuples for queuing mutations.
+    pub fn files_for_mutation(&self) -> Vec<(i64, String, String, String)> {
         self.files
             .iter()
-            .map(|f| (f.inode, f.new_path.clone()))
+            .map(|f| (f.inode, f.new_path.clone(), f.old_zone.clone(), f.new_zone.clone()))
             .collect()
     }
 

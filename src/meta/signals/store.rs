@@ -466,14 +466,16 @@ impl CorpusSignalStore for MovedFileSignal {
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         old_path TEXT NOT NULL,
+        old_zone TEXT NOT NULL DEFAULT 'corpus',
+        new_zone TEXT NOT NULL DEFAULT 'corpus',
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )";
     const TABLE_NAME: &'static str = "signal_moved_file";
 
     fn insert(&self, conn: &Connection) -> Result<()> {
         conn.execute(
-            "INSERT OR REPLACE INTO signal_moved_file (inode, path, old_path) VALUES (?1, ?2, ?3)",
-            rusqlite::params![self.inode, self.path, self.old_path],
+            "INSERT OR REPLACE INTO signal_moved_file (inode, path, old_path, old_zone, new_zone) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![self.inode, self.path, self.old_path, self.old_zone, self.new_zone],
         )?;
         Ok(())
     }

@@ -432,5 +432,9 @@ pub struct MovedFileInfo {
     pub inode: i64,
     pub old_path: String,
     pub new_path: String,
+    /// Zone the file was previously indexed in.
+    pub old_zone: String,
+    /// Zone the file is now found in.
+    pub new_zone: String,
 }
 

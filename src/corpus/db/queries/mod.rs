@@ -640,6 +640,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_file_mtime_batch(source, inodes)
     }
 
+    /// Look up the zone and path for an inode in corpus/inbox (excludes library).
+    pub fn get_file_zone_and_path_by_inode(&self, inode: i64) -> Result<Option<(String, String)>> {
+        self.db.get_file_zone_and_path_by_inode(inode)
+    }
+
     /// Get paths for files by inode (for move detection).
     pub fn get_file_paths_batch(
         &self,

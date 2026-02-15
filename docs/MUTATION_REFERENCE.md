@@ -86,7 +86,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
 | UpdateFileEntry | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update file entry in files table |
-| UpdateFilePath | — | — | MutableOnly scope signals for inode | Update path in files table; handles both absolute and relative new_path |
+| UpdateFilePath | — | — | MutableOnly scope signals for inode | Update path in files table; handles both absolute and relative new_path. When `new_zone` is set and differs from `zone`, also updates zone column and migrates tags between tag tables (e.g. inbox_tags → corpus_tags) |
 | CleanupStaleFiles | — | — | — | Remove orphaned file entries |
 
 ### File Operations

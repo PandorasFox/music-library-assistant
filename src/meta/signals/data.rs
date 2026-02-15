@@ -110,11 +110,18 @@ pub struct MissingFileSignal {
 }
 
 /// File was moved (same inode, different path than indexed).
+///
+/// When `old_zone` and `new_zone` differ, this is a cross-zone move
+/// (e.g. inbox→corpus). Same-zone moves leave both as the same value.
 #[derive(Debug, Clone)]
 pub struct MovedFileSignal {
     pub inode: i64,
     pub path: String,
     pub old_path: String,
+    /// Zone the file was previously indexed in.
+    pub old_zone: String,
+    /// Zone the file is now found in.
+    pub new_zone: String,
 }
 
 /// File is in a non-Vorbis container format.

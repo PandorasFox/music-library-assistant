@@ -249,12 +249,12 @@ impl Database {
 
     /// Get files with MovedFile signals (same inode, different path).
     ///
-    /// Reads from typed signal_moved_file table: inode, path (new), old_path.
+    /// Reads from typed signal_moved_file table: inode, path (new), old_path, zones.
     pub fn get_moved_files(&self) -> Result<Vec<crate::corpus::db::types::MovedFileInfo>> {
         use crate::corpus::db::types::MovedFileInfo;
 
         let mut stmt = self.conn.prepare(
-            "SELECT inode, old_path, path FROM signal_moved_file ORDER BY path"
+            "SELECT inode, old_path, path, old_zone, new_zone FROM signal_moved_file ORDER BY path"
         )?;
 
         let files: Vec<MovedFileInfo> = stmt.query_map(params![], |row| {
@@ -262,6 +262,8 @@ impl Database {
                 inode: row.get(0)?,
                 old_path: row.get(1)?,
                 new_path: row.get(2)?,
+                old_zone: row.get(3)?,
+                new_zone: row.get(4)?,
             })
         })?.filter_map(|r| r.ok()).collect();
 

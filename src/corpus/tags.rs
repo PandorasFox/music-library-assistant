@@ -143,7 +143,11 @@ impl TagSet {
                 let Ok(file) = std::fs::File::open(path) else { return false };
                 let mut reader = std::io::BufReader::new(file);
                 let Ok(flac) = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()) else { return false };
+                // Check both standalone PICTURE blocks and pictures in VorbisComments
+                // (METADATA_BLOCK_PICTURE). Bandcamp FLACs store art in VorbisComments.
                 !flac.pictures().is_empty()
+                    || flac.vorbis_comments()
+                        .map_or(false, |vc| !vc.pictures().is_empty())
             }
             "opus" => {
                 use lofty::config::ParseOptions;

@@ -253,6 +253,7 @@ enum SignalWriteOp {
     SetIndexTrackTags {
         path: String,
         tags: TagSet,
+        tag_table: String,
         session_id: String,
     },
 
@@ -261,6 +262,7 @@ enum SignalWriteOp {
     ApplyIndexTagOps {
         path: String,
         ops: Vec<crate::meta::mutations::TagOp>,
+        tag_table: String,
         session_id: String,
     },
 
@@ -730,6 +732,7 @@ impl SignalWriteSender {
         &self,
         path: &str,
         tags: TagSet,
+        tag_table: &str,
         session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
@@ -737,6 +740,7 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::SetIndexTrackTags {
             path: path.to_string(),
             tags,
+            tag_table: tag_table.to_string(),
             session_id: session_id.to_string(),
         });
     }
@@ -752,6 +756,7 @@ impl SignalWriteSender {
         &self,
         path: &str,
         ops: Vec<crate::meta::mutations::TagOp>,
+        tag_table: &str,
         session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
@@ -759,6 +764,7 @@ impl SignalWriteSender {
         let _ = self.tx.send(SignalWriteOp::ApplyIndexTagOps {
             path: path.to_string(),
             ops,
+            tag_table: tag_table.to_string(),
             session_id: session_id.to_string(),
         });
     }
@@ -1284,15 +1290,15 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::SetIndexTrackTags { path, tags, session_id } => {
+        SignalWriteOp::SetIndexTrackTags { path, tags, tag_table, session_id } => {
             with_retry("set_index_track_tags", path, || {
-                execute_set_index_track_tags(db, path, tags, session_id)
+                execute_set_index_track_tags(db, path, tags, tag_table, session_id)
             });
         }
 
-        SignalWriteOp::ApplyIndexTagOps { path, ops, session_id } => {
+        SignalWriteOp::ApplyIndexTagOps { path, ops, tag_table, session_id } => {
             with_retry("apply_index_tag_ops", path, || {
-                execute_apply_index_tag_ops(db, path, ops, session_id)
+                execute_apply_index_tag_ops(db, path, ops, tag_table, session_id)
             });
         }
 
@@ -1687,7 +1693,7 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
 /// Writes tag edit history for all changes (this IS an edit, not discovery).
 ///
 /// Used by AssimilateDiskTagsToDb when accepting disk changes.
-fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet, session_id: &str) -> anyhow::Result<()> {
+fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet, tag_table: &str, session_id: &str) -> anyhow::Result<()> {
 
     let inode = get_inode_by_path(db, path)?
         .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
@@ -1695,7 +1701,7 @@ fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet, sessio
     let tx = db.conn().unchecked_transaction()?;
 
     // Apply tags using the unified helper
-    let result = apply_tagset_to_inode(&tx, inode, tags, "corpus_tags")?;
+    let result = apply_tagset_to_inode(&tx, inode, tags, tag_table)?;
 
     if result.has_changes() {
         // Increment tags_version using the helper
@@ -1725,6 +1731,7 @@ fn execute_apply_index_tag_ops(
     db: &Database,
     path: &str,
     ops: &[crate::meta::mutations::TagOp],
+    tag_table: &str,
     session_id: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
@@ -1749,24 +1756,24 @@ fn execute_apply_index_tag_ops(
         match (&op.old_value, &op.new_value) {
             (Some(old), Some(new)) => {
                 // Replace: UPDATE in place
-                // Use UPPER() for tag_name match - corpus_tags may store original case from
+                // Use UPPER() for tag_name match - tag tables may store original case from
                 // audio files but ops are normalized to uppercase.
                 tx.execute(
-                    "UPDATE corpus_tags SET tag_value = ?1 WHERE inode = ?2 AND UPPER(tag_name) = ?3 AND tag_value = ?4",
+                    &format!("UPDATE {} SET tag_value = ?1 WHERE inode = ?2 AND UPPER(tag_name) = ?3 AND tag_value = ?4", tag_table),
                     params![new, inode, &tag_name, old],
                 )?;
             }
             (Some(old), None) => {
                 // Drop: DELETE with exact match
                 tx.execute(
-                    "DELETE FROM corpus_tags WHERE inode = ?1 AND UPPER(tag_name) = ?2 AND tag_value = ?3",
+                    &format!("DELETE FROM {} WHERE inode = ?1 AND UPPER(tag_name) = ?2 AND tag_value = ?3", tag_table),
                     params![inode, &tag_name, old],
                 )?;
             }
             (None, Some(new)) => {
                 // Add: INSERT OR IGNORE (idempotent - won't fail if already exists)
                 tx.execute(
-                    "INSERT OR IGNORE INTO corpus_tags (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                    &format!("INSERT OR IGNORE INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)", tag_table),
                     params![inode, &tag_name, new],
                 )?;
             }

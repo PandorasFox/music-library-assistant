@@ -42,6 +42,8 @@ use super::types::{Mutation, MutationResult, SignalClearScope, TagOp};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyTagOpsMutation {
     pub ops: Vec<TagOp>,
+    /// Which zone the target files belong to (determines tag table).
+    pub zone: Zone,
 }
 
 impl MutationExecutor for ApplyTagOpsMutation {
@@ -49,7 +51,7 @@ impl MutationExecutor for ApplyTagOpsMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let (result, spawn_mutations) = match execute_apply_tag_ops(ctx.read_db, &self.ops, ctx.session_id, ctx.witness) {
+        let (result, spawn_mutations) = match execute_apply_tag_ops(ctx.read_db, &self.ops, self.zone, ctx.session_id, ctx.witness) {
             Ok(spawned) => (Ok(()), spawned),
             Err(e) => (Err(e), Vec::new()),
         };
@@ -85,6 +87,7 @@ impl MutationExecutor for ApplyTagOpsMutation {
 fn execute_apply_tag_ops(
     db: &ReadOnlyDb<'_>,
     ops: &[TagOp],
+    zone: Zone,
     session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<SpawnedMutation>> {
@@ -102,17 +105,17 @@ fn execute_apply_tag_ops(
 
     for (inode, inode_ops) in by_inode {
         // Get audio file info from DB
-        let audio_file = match db.get_audio_file_by_inode(inode, Zone::Corpus)? {
+        let audio_file = match db.get_audio_file_by_inode(inode, zone)? {
             Some(f) => f,
             None => {
-                errors.push(format!("inode {} not found", inode));
+                errors.push(format!("inode {} not found in zone {:?}", inode, zone));
                 continue;
             }
         };
         let file_path = audio_file.path();
 
         // Get current tags as set for validation
-        let current_tags = db.get_corpus_tags(inode)?;
+        let current_tags = db.get_tags_for_zone(inode, zone)?;
         let current_set: HashSet<(String, String)> = current_tags
             .iter()
             .map(|t| (t.tag_name.to_uppercase(), t.tag_value.clone()))
@@ -181,7 +184,8 @@ fn execute_apply_tag_ops(
         let expected_tags = TagSet::new(expected);
 
         // Send ops directly to DB - TagOps map to INSERT/UPDATE/DELETE
-        sender.apply_index_tag_ops(file_path, validated_ops, session_id, witness);
+        let tag_table = zone.tag_table().expect("zone must have tag table");
+        sender.apply_index_tag_ops(file_path, validated_ops, tag_table, session_id, witness);
         sender.set_needs_disk_flush(file_path, true, witness);
 
         // Spawn disk flush — carries expected_tags for post-drain validation
@@ -191,6 +195,7 @@ fn execute_apply_tag_ops(
             inode,
             path: abs_path,
             expected_tags,
+            zone,
         })));
     }
 

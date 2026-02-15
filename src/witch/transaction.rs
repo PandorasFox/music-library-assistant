@@ -8,63 +8,66 @@ use super::types::{
     DecisionWitness, DiscardSummary, PendingTransaction,
     TransactionError, WitnessedDecision,
 };
+use crate::corpus::db::types::Zone;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 
-/// Coalesce ApplyTagOps mutations into a single mutation.
+/// Coalesce ApplyTagOps mutations into per-zone mutations.
 ///
 /// Multiple decisions may generate overlapping tag operations for the same inode.
 /// This function:
-/// 1. Extracts all TagOps from ApplyTagOps mutations
+/// 1. Extracts all TagOps from ApplyTagOps mutations, grouped by zone
 /// 2. Deduplicates by (inode, tag_name, old_value) → last new_value wins
-/// 3. Returns a single coalesced ApplyTagOps mutation plus other mutations unchanged
+/// 3. Returns one coalesced ApplyTagOps per zone, plus other mutations unchanged
 ///
 /// This ensures that if two signals affect the same track, both fixes are applied
 /// rather than the later one clobbering the earlier.
 fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
-    let mut all_ops: Vec<TagOp> = Vec::new();
+    let mut ops_by_zone: HashMap<Zone, Vec<TagOp>> = HashMap::new();
     let mut other: Vec<Mutation> = Vec::new();
 
     for mutation in mutations {
         match mutation {
-            Mutation::ApplyTagOps(m) => all_ops.extend(m.ops),
+            Mutation::ApplyTagOps(m) => ops_by_zone.entry(m.zone).or_default().extend(m.ops),
             m => other.push(m),
         }
     }
 
-    if all_ops.is_empty() {
+    if ops_by_zone.is_empty() {
         return other;
     }
 
-    // Deduplicate: (inode, tag_name, old_value) → last new_value wins
-    // This handles overlapping edits from multiple signals
-    let mut deduped: HashMap<(i64, String, Option<String>), Option<String>> = HashMap::new();
-    for op in all_ops {
-        if op.is_nop() {
-            continue;
+    let mut result = Vec::new();
+
+    for (zone, all_ops) in ops_by_zone {
+        // Deduplicate: (inode, tag_name, old_value) → last new_value wins
+        let mut deduped: HashMap<(i64, String, Option<String>), Option<String>> = HashMap::new();
+        for op in all_ops {
+            if op.is_nop() {
+                continue;
+            }
+            deduped.insert(
+                (op.inode, op.tag_name.clone(), op.old_value.clone()),
+                op.new_value,
+            );
         }
-        deduped.insert(
-            (op.inode, op.tag_name.clone(), op.old_value.clone()),
-            op.new_value,
-        );
+
+        let final_ops: Vec<TagOp> = deduped
+            .into_iter()
+            .map(|((inode, tag_name, old_value), new_value)| TagOp {
+                inode,
+                tag_name,
+                old_value,
+                new_value,
+            })
+            .collect();
+
+        if !final_ops.is_empty() {
+            result.push(Mutation::ApplyTagOps(ApplyTagOpsMutation { ops: final_ops, zone }));
+        }
     }
 
-    let final_ops: Vec<TagOp> = deduped
-        .into_iter()
-        .map(|((inode, tag_name, old_value), new_value)| TagOp {
-            inode,
-            tag_name,
-            old_value,
-            new_value,
-        })
-        .collect();
-
-    if final_ops.is_empty() {
-        return other;
-    }
-
-    // Single coalesced mutation at the start (tag ops before other mutations)
-    let mut result = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops: final_ops })];
+    // Tag ops before other mutations
     result.extend(other);
     result
 }

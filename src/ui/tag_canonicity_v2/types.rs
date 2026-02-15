@@ -478,7 +478,7 @@ impl TagCanonicalityStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops })]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus })]
         }
     }
 }

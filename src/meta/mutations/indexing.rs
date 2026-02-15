@@ -81,6 +81,8 @@ pub struct AcknowledgeMtimeOnlyMutation {
 pub struct ApplyDbTagsToDiskMutation {
     pub inode: i64,
     pub path: PathBuf,
+    /// Zone determines which tag table to read from (corpus_tags or inbox_tags).
+    pub zone: Zone,
 }
 
 /// Assimilate disk tags into DB (defer to corpus / accept disk changes).
@@ -110,6 +112,8 @@ pub struct FlushTagsToDiskMutation {
     pub inode: i64,
     pub path: PathBuf,
     pub expected_tags: TagSet,
+    /// Zone determines which tag table to read from for validation.
+    pub zone: Zone,
 }
 
 /// Emit a CanonicalTag signal to whitelist a tag value.
@@ -284,7 +288,7 @@ impl MutationExecutor for ApplyDbTagsToDiskMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_apply_db_tags_to_disk(ctx.read_db, self.inode, &self.path, ctx.witness);
+        let result = execute_apply_db_tags_to_disk(ctx.read_db, self.inode, &self.path, self.zone, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -311,7 +315,7 @@ impl MutationExecutor for FlushTagsToDiskMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_flush_tags_to_disk(self.inode, &self.path, &self.expected_tags, ctx.read_db, ctx.witness);
+        let result = execute_flush_tags_to_disk(self.inode, &self.path, &self.expected_tags, self.zone, ctx.read_db, ctx.witness);
         let (success, error) = match result {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
@@ -943,6 +947,7 @@ pub fn execute_apply_db_tags_to_disk(
     db: &ReadOnlyDb<'_>,
     inode: i64,
     abs_path: &std::path::Path,
+    zone: Zone,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::corpus::paths;
@@ -963,8 +968,8 @@ pub fn execute_apply_db_tags_to_disk(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // Get DB tags and convert to TagSet
-    let db_tags = db.get_corpus_tags(inode)?;
+    // Get DB tags from the zone-appropriate table and convert to TagSet
+    let db_tags = db.get_tags_for_zone(inode, zone)?;
     let tag_set = TagSet::new(
         db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
     );
@@ -993,6 +998,7 @@ pub fn execute_flush_tags_to_disk(
     inode: i64,
     abs_path: &std::path::Path,
     expected_tags: &TagSet,
+    zone: Zone,
     read_db: &crate::corpus::db::queries::ReadOnlyDb<'_>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
@@ -1015,8 +1021,8 @@ pub fn execute_flush_tags_to_disk(
         ))?;
     let rel_path_str = relative_path.to_string_lossy();
 
-    // 2. Read committed tags from DB
-    let db_tags = read_db.get_corpus_tags(inode)?;
+    // 2. Read committed tags from zone-appropriate table
+    let db_tags = read_db.get_tags_for_zone(inode, zone)?;
     let committed_tags = TagSet::new(
         db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
     );
@@ -1095,9 +1101,15 @@ pub fn execute_assimilate_disk_tags_to_db(
     let disk_tagset = TagSet::from_file(abs_path)
         .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
+    // Determine tag table from zone
+    let zone_enum = Zone::from_str(zone)
+        .ok_or_else(|| anyhow::anyhow!("Unknown zone: {}", zone))?;
+    let tag_table = zone_enum.tag_table()
+        .ok_or_else(|| anyhow::anyhow!("Zone {:?} has no tag table", zone_enum))?;
+
     // Update DB with disk tags via db_thread
     // Use rel_path_str (from mutation param), not track.path (potentially stale)
-    sender.set_index_track_tags(&rel_path_str, disk_tagset, session_id, witness);
+    sender.set_index_track_tags(&rel_path_str, disk_tagset, tag_table, session_id, witness);
 
     // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)

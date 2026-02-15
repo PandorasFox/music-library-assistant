@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::corpus::db::types::Zone;
 use crate::meta::signals::data::CompoundGroup;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
@@ -436,7 +437,7 @@ impl CompoundSplitStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops })]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus })]
         }
     }
 }

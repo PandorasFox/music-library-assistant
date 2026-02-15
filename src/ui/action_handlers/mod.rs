@@ -389,6 +389,7 @@ impl App {
         action: crate::ui::missing_album_modal::MissingAlbumAction,
         witness: Option<&witness::DecisionWitness>,
     ) {
+        use crate::corpus::db::types::Zone;
         use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation, indexing::EmitExpectedMissingTagMutation};
         use crate::ui::missing_album_modal::{MissingAlbumAction, AlbumResolution};
 
@@ -417,7 +418,7 @@ impl App {
                             }).collect()
                         };
                         if !ops.is_empty() {
-                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
                                     witch, group_idx, "Tag as singles", vec![mutation],
@@ -435,7 +436,7 @@ impl App {
                             }).collect()
                         };
                         if !ops.is_empty() {
-                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
                                     witch, group_idx, "Tag all as Singles", vec![mutation],

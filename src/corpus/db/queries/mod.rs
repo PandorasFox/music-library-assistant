@@ -441,9 +441,14 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_audio_files_with_tags(source)
     }
 
-    /// Get tags for an audio file by inode.
+    /// Get tags for an audio file by inode (corpus only).
     pub fn get_corpus_tags(&self, inode: i64) -> Result<Vec<super::types::AudioTag>> {
         self.db.get_corpus_tags(inode)
+    }
+
+    /// Get tags for an audio file by inode, dispatching to the correct tag table for the zone.
+    pub fn get_tags_for_zone(&self, inode: i64, zone: super::types::Zone) -> Result<Vec<super::types::AudioTag>> {
+        self.db.get_tags_for_zone(inode, zone)
     }
 
     // =========================================================================

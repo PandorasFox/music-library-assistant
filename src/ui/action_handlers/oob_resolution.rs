@@ -75,7 +75,7 @@ impl App {
     /// - IndexToDisk: ApplyDbTagsToDisk (writes DB tags to disk files)
     /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
     fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection, _witness: &witness::DecisionWitness) {
-        use crate::corpus::db::types::OobSyncDirection;
+        use crate::corpus::db::types::{OobSyncDirection, Zone};
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
 
@@ -118,7 +118,7 @@ impl App {
             OobSyncDirection::IndexToDisk => (
                 "Sync index tags \u{2192} disk",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path }))
+                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path, zone: Zone::Corpus }))
                     .collect(),
             ),
             OobSyncDirection::DiskToIndex => (
@@ -252,6 +252,7 @@ impl App {
     /// - ApplyDbTagsToDisk: writes DB tags to disk files
     /// - AssimilateDiskTagsToDb: reads disk tags into DB index
     fn stage_oob_bucket_resolution(&mut self, _witness: &witness::DecisionWitness) {
+        use crate::corpus::db::types::Zone;
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
         use crate::ui::oob_conflict_modal::types::ResolutionButton;
@@ -299,7 +300,7 @@ impl App {
             ResolutionButton::ApplyDb => (
                 "Apply DB tags \u{2192} files",
                 tracks.into_iter()
-                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path }))
+                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path, zone: Zone::Corpus }))
                     .collect(),
             ),
             ResolutionButton::AssimilateDisk => (

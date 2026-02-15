@@ -319,7 +319,7 @@ impl App {
                     return;
                 }
 
-                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops })];
+                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus })];
                 (mutations, clusters.current_index)
             }
             _ => return,

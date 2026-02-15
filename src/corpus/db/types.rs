@@ -10,7 +10,7 @@
 ///
 /// Distinct from "source" in the provenance sense (e.g., bandcamp, indie).
 /// This enum tracks the *zone* a file occupies within MM's directory hierarchy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Zone {
     /// File is in the corpus (source of truth)
     Corpus,
@@ -35,6 +35,15 @@ impl Zone {
             "library" => Some(Self::Library),
             "inbox" => Some(Self::Inbox),
             _ => None,
+        }
+    }
+
+    /// The tag table name for this zone. Library has no tags.
+    pub fn tag_table(&self) -> Option<&'static str> {
+        match self {
+            Self::Corpus => Some("corpus_tags"),
+            Self::Inbox => Some("inbox_tags"),
+            Self::Library => None,
         }
     }
 }

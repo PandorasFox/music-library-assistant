@@ -585,6 +585,29 @@ impl Database {
         Ok(tags)
     }
 
+    /// Get all tags for an audio file from the tag table appropriate for its zone.
+    ///
+    /// Corpus → corpus_tags, Inbox → inbox_tags, Library → error (no tags).
+    pub fn get_tags_for_zone(&self, inode: i64, zone: Zone) -> Result<Vec<AudioTag>> {
+        let table = zone.tag_table().ok_or_else(|| {
+            anyhow::anyhow!("zone {:?} has no tag table", zone)
+        })?;
+        let sql = format!(
+            "SELECT inode, tag_name, tag_value FROM {} WHERE inode = ?1 ORDER BY tag_name, tag_value",
+            table
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let tags = stmt.query_map(params![inode], |row| {
+            Ok(AudioTag {
+                inode: row.get(0)?,
+                tag_name: row.get(1)?,
+                tag_value: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(tags)
+    }
+
     /// Get all audio files with their tags (for search functionality).
     /// Tags are keyed by uppercase tag name; values are collected into Vec
     /// since a single tag name can have multiple values (e.g. multiple genres).

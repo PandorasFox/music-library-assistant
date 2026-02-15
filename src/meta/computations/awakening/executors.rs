@@ -98,7 +98,10 @@ pub fn execute_schedule_second_level_derivations(
     // Single global DeriveCorpusSignals replaces per-directory derivation
     log_general("[COMPUTE] ScheduleSecondLevelDerivations: spawning global DeriveCorpusSignals");
 
-    let mut spawn: Vec<Computation> = vec![Computation::DeriveCorpusSignals];
+    let mut spawn: Vec<Computation> = vec![
+        Computation::DeriveCorpusSignals,
+        Computation::DeriveInboxSignals,
+    ];
 
     // Also spawn library health computations for each configured library
     if let Ok(config) = crate::config::load_config() {
@@ -303,6 +306,132 @@ pub fn execute_derive_corpus_signals(
 
     Result::success(
         Computation::DeriveCorpusSignals,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+    )
+}
+
+// ============================================================================
+// Global Inbox Signal Derivation
+// ============================================================================
+
+/// Derive inbox signals via global inode set comparison.
+///
+/// Compares disk inodes (from FileInInbox signals) against inbox-indexed inodes:
+/// - disk_only (disk - indexed) → InboxUnindexed signals
+/// - both (disk ∩ indexed) → InboxHealthy signals
+/// Inbox files don't produce MissingFile — missing inbox files are simply gone.
+pub fn execute_derive_inbox_signals(
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    log_general("[COMPUTE] DeriveInboxSignals: starting inbox inode comparison");
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                Computation::DeriveInboxSignals,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Get disk state: FileInInbox signals (inode -> path)
+    let disk_inodes = match read_only_db.get_file_in_inbox_inodes() {
+        Ok(inodes) => inodes,
+        Err(e) => {
+            return Result::failure(
+                Computation::DeriveInboxSignals,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to get FileInInbox inodes: {}", e),
+            );
+        }
+    };
+
+    // No inbox files observed — nothing to derive
+    if disk_inodes.is_empty() {
+        log_general("[COMPUTE] DeriveInboxSignals: no inbox files, skipping");
+        return Result::success(
+            Computation::DeriveInboxSignals,
+            start.elapsed().as_millis() as u64,
+            Vec::new(),
+        );
+    }
+
+    // Get indexed state: files table WHERE zone='inbox' (inode -> path)
+    let indexed_inodes = match read_only_db.get_all_inbox_inodes() {
+        Ok(inodes) => inodes,
+        Err(e) => {
+            return Result::failure(
+                Computation::DeriveInboxSignals,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to get indexed inbox inodes: {}", e),
+            );
+        }
+    };
+
+    log_general(format!(
+        "[COMPUTE] DeriveInboxSignals: {} disk inodes, {} indexed inodes",
+        disk_inodes.len(),
+        indexed_inodes.len()
+    ));
+
+    let disk_set: HashSet<i64> = disk_inodes.keys().copied().collect();
+    let indexed_set: HashSet<i64> = indexed_inodes.keys().copied().collect();
+
+    let disk_only: Vec<i64> = disk_set.difference(&indexed_set).copied().collect();
+    let both: Vec<i64> = disk_set.intersection(&indexed_set).copied().collect();
+
+    // Emit InboxUnindexed signals for files on disk but not indexed
+    for inode in &disk_only {
+        if let Some(path) = disk_inodes.get(inode) {
+            ensure_typed_signal(
+                read_only_db,
+                &sender,
+                TypedSignalWrite::InboxUnindexed(InboxUnindexedSignal {
+                    inode: *inode,
+                    path: path.to_string(),
+                }),
+                witness,
+            );
+        }
+    }
+
+    // Emit InboxHealthy for files present in both disk and index
+    for inode in &both {
+        let path = disk_inodes.get(inode).or_else(|| indexed_inodes.get(inode));
+        let path_str = path.map(|p| p.as_str()).unwrap_or("");
+
+        // Clear stale InboxUnindexed signal
+        drop_stale_corpus_signal::<InboxUnindexedSignal>(
+            read_only_db,
+            &sender,
+            *inode,
+            witness,
+        );
+
+        ensure_typed_signal(
+            read_only_db,
+            &sender,
+            TypedSignalWrite::InboxHealthy(InboxHealthySignal {
+                inode: *inode,
+                path: path_str.to_string(),
+            }),
+            witness,
+        );
+    }
+
+    log_general(format!(
+        "[COMPUTE] DeriveInboxSignals: {} unindexed, {} healthy",
+        disk_only.len(),
+        both.len()
+    ));
+
+    Result::success(
+        Computation::DeriveInboxSignals,
         start.elapsed().as_millis() as u64,
         Vec::new(),
     )

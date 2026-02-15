@@ -41,6 +41,36 @@ pub struct HealthyFileSignal {
     pub path: String,
 }
 
+// ============================================================================
+// Inbox file signals (inode-keyed)
+// ============================================================================
+
+/// File exists in inbox directory.
+/// Emitted during inbox walk (Asleep phase).
+#[derive(Debug, Clone)]
+pub struct FileInInboxSignal {
+    pub inode: i64,
+    pub path: String,
+}
+
+/// File in inbox but not in index (needs indexing).
+#[derive(Debug, Clone)]
+pub struct InboxUnindexedSignal {
+    pub inode: i64,
+    pub path: String,
+}
+
+/// File in inbox + index with matching state (healthy).
+#[derive(Debug, Clone)]
+pub struct InboxHealthySignal {
+    pub inode: i64,
+    pub path: String,
+}
+
+// ============================================================================
+// Corpus health signals (inode-keyed)
+// ============================================================================
+
 /// File is corrupt (unreadable tags or waveform decode failure).
 #[derive(Debug, Clone)]
 pub struct CorruptFileSignal {
@@ -485,6 +515,10 @@ pub enum TypedSignalWrite {
     FileInCorpus(FileInCorpusSignal),
     UnindexedFile(UnindexedFileSignal),
     HealthyFile(HealthyFileSignal),
+    // Inbox file signals (inode-keyed)
+    FileInInbox(FileInInboxSignal),
+    InboxUnindexed(InboxUnindexedSignal),
+    InboxHealthy(InboxHealthySignal),
     CorruptFile(CorruptFileSignal),
     MtimeOnlyMismatch(MtimeOnlyMismatchSignal),
     MissingDirectory(MissingDirectorySignal),
@@ -525,6 +559,9 @@ impl TypedSignalWrite {
             Self::FileInCorpus(s) => s.insert(conn),
             Self::UnindexedFile(s) => s.insert(conn),
             Self::HealthyFile(s) => s.insert(conn),
+            Self::FileInInbox(s) => s.insert(conn),
+            Self::InboxUnindexed(s) => s.insert(conn),
+            Self::InboxHealthy(s) => s.insert(conn),
             Self::CorruptFile(s) => s.insert(conn),
             Self::MtimeOnlyMismatch(s) => s.insert(conn),
             Self::MissingDirectory(s) => s.insert(conn),
@@ -564,6 +601,9 @@ impl TypedSignalWrite {
             Self::FileInCorpus(s) => FileInCorpusSignal::exists(conn, s.inode),
             Self::UnindexedFile(s) => UnindexedFileSignal::exists(conn, s.inode),
             Self::HealthyFile(s) => HealthyFileSignal::exists(conn, s.inode),
+            Self::FileInInbox(s) => FileInInboxSignal::exists(conn, s.inode),
+            Self::InboxUnindexed(s) => InboxUnindexedSignal::exists(conn, s.inode),
+            Self::InboxHealthy(s) => InboxHealthySignal::exists(conn, s.inode),
             Self::CorruptFile(s) => CorruptFileSignal::exists(conn, s.inode),
             Self::MtimeOnlyMismatch(s) => MtimeOnlyMismatchSignal::exists(conn, s.inode),
             Self::MissingDirectory(s) => MissingDirectorySignal::exists(conn, s.inode),

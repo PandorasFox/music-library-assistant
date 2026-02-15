@@ -379,6 +379,21 @@ impl MigrationRegistry {
             },
         });
 
+        // v10→v11: Create inbox signal tables
+        registry.register(Migration {
+            from_version: 10,
+            to_version: 11,
+            description: "Create inbox signal tables (file_in_inbox, inbox_unindexed, inbox_healthy)",
+            apply: |db| {
+                use crate::meta::signals::store::CorpusSignalStore;
+                use crate::meta::signals::data::{FileInInboxSignal, InboxUnindexedSignal, InboxHealthySignal};
+                db.conn().execute_batch(FileInInboxSignal::TABLE_SQL)?;
+                db.conn().execute_batch(InboxUnindexedSignal::TABLE_SQL)?;
+                db.conn().execute_batch(InboxHealthySignal::TABLE_SQL)?;
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -474,9 +489,10 @@ mod tests {
         // v7→v8: uppercase all tag names
         // v8→v9: has_pictures column in audio_info
         // v9→v10: rename files.source to files.zone
-        assert_eq!(registry.latest_version(), 10);
-        assert_eq!(registry.pending_migrations(1).len(), 9);
-        assert_eq!(registry.pending_migrations(9).len(), 1);
-        assert!(registry.pending_migrations(10).is_empty());
+        // v10→v11: inbox signal tables
+        assert_eq!(registry.latest_version(), 11);
+        assert_eq!(registry.pending_migrations(1).len(), 10);
+        assert_eq!(registry.pending_migrations(10).len(), 1);
+        assert!(registry.pending_migrations(11).is_empty());
     }
 }

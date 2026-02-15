@@ -679,6 +679,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_file_in_corpus_inodes()
     }
 
+    pub fn get_file_in_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
+        self.db.get_file_in_inbox_inodes()
+    }
+
     /// Check whether an audio file has embedded pictures.
     pub fn get_has_pictures(&self, inode: i64) -> Result<bool> {
         self.db.get_has_pictures(inode)

@@ -265,6 +265,27 @@ impl Database {
         Ok(result)
     }
 
+    /// Get all FileInInbox signal inodes with their paths.
+    pub fn get_file_in_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path FROM signal_file_in_inbox"
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            Ok((inode, path))
+        })?;
+
+        let mut result = std::collections::HashMap::new();
+        for row in rows {
+            let (inode, path) = row?;
+            result.insert(inode, path);
+        }
+
+        Ok(result)
+    }
+
     // ========================================================================
     // Insights Data
     // ========================================================================

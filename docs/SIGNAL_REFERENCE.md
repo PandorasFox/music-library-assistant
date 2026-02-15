@@ -41,6 +41,16 @@ Signals are atomic facts about corpus state. They follow these principles:
 
 ---
 
+## Inbox File Signals (per-file)
+
+| Signal | Emitted By | Cleared By | Meaning |
+|--------|------------|------------|---------|
+| FileInInbox | ScanCorpusDirectory (zone=inbox) | ClearExistingObservationState | File discovered on disk in inbox/ |
+| InboxUnindexed | DeriveInboxSignals | DeriveInboxSignals | On disk in inbox but not in index |
+| InboxHealthy | DeriveInboxSignals | DeriveInboxSignals | In inbox, indexed, ready for operations |
+
+---
+
 ## Database State Flags
 
 These are not signals but database columns that track synchronization state.

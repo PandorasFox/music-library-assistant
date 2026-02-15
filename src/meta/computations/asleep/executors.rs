@@ -26,7 +26,7 @@ use super::{Computation, Result};
 // Phase 0: Clear Existing Observation State
 // ============================================================================
 
-/// Phase 0: Clear all FileInCorpus signals before a fresh corpus scan.
+/// Phase 0: Clear all observation signals (FileInCorpus, FileInInbox) before a fresh scan.
 ///
 /// This ensures deleted files don't retain stale signals that would cause them
 /// to appear as "healthy" instead of "missing" in DeriveCorpusSignals.
@@ -35,7 +35,7 @@ pub fn execute_clear_existing_observation_state(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    log_general("[COMPUTE] ClearExistingObservationState: clearing FileInCorpus signals");
+    log_general("[COMPUTE] ClearExistingObservationState: clearing observation signals");
 
     let sender = match db_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -48,8 +48,9 @@ pub fn execute_clear_existing_observation_state(
         }
     };
 
-    // Clear all FileInCorpus signals - they'll be rebuilt during the corpus walk
+    // Clear all observation signals - they'll be rebuilt during the corpus/inbox walks
     sender.clear_all_of_corpus_type::<FileInCorpusSignal>(witness);
+    sender.clear_all_of_corpus_type::<FileInInboxSignal>(witness);
 
     log_general("[COMPUTE] ClearExistingObservationState: complete");
 
@@ -200,11 +201,16 @@ pub fn execute_scan_corpus_directory(
         };
         let relative_path_str = relative_path.to_string_lossy().to_string();
 
-        // Create FileInCorpus signal for corpus files on disk (keyed by inode, path in metadata)
+        // Emit zone-appropriate observation signal (keyed by inode, path in metadata)
         // (ClearExistingObservationState cleared all stale signals at start of observation)
-        // Inbox files skip this — Phase 3 adds FileInInbox as a separate signal type.
-        if file_zone == Zone::Corpus {
-            ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInCorpus(FileInCorpusSignal { inode: *inode, path: relative_path_str.clone() }), witness);
+        match file_zone {
+            Zone::Corpus => {
+                ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInCorpus(FileInCorpusSignal { inode: *inode, path: relative_path_str.clone() }), witness);
+            }
+            Zone::Inbox => {
+                ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInInbox(FileInInboxSignal { inode: *inode, path: relative_path_str.clone() }), witness);
+            }
+            _ => {}
         }
 
         // Check if file is indexed and needs verification

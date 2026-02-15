@@ -83,7 +83,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 |-------------|--------|-----------------|-----------------|
 | ClearExistingObservationState | — | — | FileInCorpus (all) |
 | WalkCorpus | ScanCorpusDirectory × N (propagates `force_check`) | — | — |
-| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus | — | Also indexes directory entry (is_dir=1) in files table |
+| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus (corpus zone), FileInInbox (inbox zone) | — | Also indexes directory entry (is_dir=1) in files table |
 | VerifyMtime | VerifyTags (if mtime differs) | — | — |
 | VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) |
 | VerifyAudio | — | CorruptFile | CorruptFile (if audio valid) |
@@ -92,8 +92,9 @@ MM uses three-phase computations with compile-time enforced boundaries:
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
-| ScheduleSecondLevelDerivations | DeriveCorpusSignals, WalkLibrary × N | MissingDirectory | MissingDirectory (if dir exists again) |
+| ScheduleSecondLevelDerivations | DeriveCorpusSignals, DeriveInboxSignals, WalkLibrary × N | MissingDirectory | MissingDirectory (if dir exists again) |
 | DeriveCorpusSignals | — | UnindexedFile, MissingFile, HealthyFile | UnindexedFile, MissingFile, HealthyFile (stale); skips HealthyFile for OOB-flagged files. **GC backstop**: clears orphaned signals for inodes not in disk ∪ index |
+| DeriveInboxSignals | — | InboxUnindexed, InboxHealthy | InboxUnindexed (stale) |
 | UpdateCorpusFileSignals | — | FileInCorpus, UnindexedFile, MissingFile, HealthyFile | FileInCorpus, UnindexedFile, MissingFile, HealthyFile |
 | UpdateLibraryFileSignals | — | — | LibraryLeftover, LibraryStale |
 | UpdateDeploySignals | — | DeployedHealthy | DeployReady, LibraryLeftover, LibraryStale |

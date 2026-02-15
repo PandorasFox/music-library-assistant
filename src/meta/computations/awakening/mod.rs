@@ -12,8 +12,9 @@
 //!
 //! ## Computations
 //!
-//! - `ScheduleSecondLevelDerivations` - Orchestrator: spawns global corpus derivation
+//! - `ScheduleSecondLevelDerivations` - Orchestrator: spawns global corpus/inbox derivation
 //! - `DeriveCorpusSignals` - Global inode comparison for corpus signals
+//! - `DeriveInboxSignals` - Global inode comparison for inbox signals
 //! - `UpdateCorpusFileSignals` - Lightweight per-file corpus signal update (post-mutation)
 //! - `UpdateLibraryFileSignals` - Lightweight per-file library signal update (post-mutation)
 //! - `WalkLibrary` - Enumerate library directories for scanning
@@ -40,6 +41,13 @@ pub enum Computation {
     ///
     /// Orchestrator that spawns global corpus derivation and library walks.
     ScheduleSecondLevelDerivations,
+
+    /// Derive inbox signals via global inode set comparison.
+    ///
+    /// Compares disk inodes (FileInInbox signals) vs inbox-indexed inodes:
+    /// - disk_only (disk - indexed) → InboxUnindexed signals
+    /// - both (disk ∩ indexed) → InboxHealthy signals
+    DeriveInboxSignals,
 
     /// Derive corpus signals via global inode set comparison.
     ///
@@ -100,6 +108,7 @@ impl Computation {
     pub fn label(&self) -> &'static str {
         match self {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
+            Computation::DeriveInboxSignals => "Deriving inbox signals",
             Computation::DeriveCorpusSignals => "Deriving corpus signals",
             Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
@@ -114,6 +123,9 @@ impl Computation {
         match self {
             Computation::ScheduleSecondLevelDerivations => {
                 execute_schedule_second_level_derivations(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DeriveInboxSignals => {
+                execute_derive_inbox_signals(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::DeriveCorpusSignals => {
                 execute_derive_corpus_signals(ctx.read_db, ctx.witness, ctx.start)

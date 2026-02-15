@@ -240,6 +240,104 @@ impl HealthyFileSignal {
     }
 }
 
+// ============================================================================
+// Inbox file signal stores
+// ============================================================================
+
+impl CorpusSignalStore for FileInInboxSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_file_in_inbox (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_file_in_inbox";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_file_in_inbox (inode, path) VALUES (?1, ?2)",
+            rusqlite::params![self.inode, self.path],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_file_in_inbox WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_file_in_inbox WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl CorpusSignalStore for InboxUnindexedSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inbox_unindexed (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_inbox_unindexed";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_inbox_unindexed (inode, path) VALUES (?1, ?2)",
+            rusqlite::params![self.inode, self.path],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_inbox_unindexed WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_inbox_unindexed WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl CorpusSignalStore for InboxHealthySignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inbox_healthy (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_inbox_healthy";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_inbox_healthy (inode, path) VALUES (?1, ?2)",
+            rusqlite::params![self.inode, self.path],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_inbox_healthy WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_inbox_healthy WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
+// ============================================================================
+// Corpus health signal stores
+// ============================================================================
+
 impl CorpusSignalStore for CorruptFileSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_corrupt_file (
         inode INTEGER PRIMARY KEY,
@@ -1326,6 +1424,11 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(SubparDuplicateSignal::TABLE_SQL)?;
     conn.execute_batch(CompoundTagSignal::TABLE_SQL)?;
     conn.execute_batch(ExpectedMissingTagSignal::TABLE_SQL)?;
+
+    // Inbox file signals
+    conn.execute_batch(FileInInboxSignal::TABLE_SQL)?;
+    conn.execute_batch(InboxUnindexedSignal::TABLE_SQL)?;
+    conn.execute_batch(InboxHealthySignal::TABLE_SQL)?;
 
     // Aggregate signals
     conn.execute_batch(CanonicalTagSignal::TABLE_SQL)?;

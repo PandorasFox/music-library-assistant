@@ -351,6 +351,31 @@ impl Database {
         Ok(results)
     }
 
+    /// Get albums that are compilations (more than one distinct ARTIST value).
+    /// Returns the set of album names (as they appear in corpus_tags).
+    pub fn get_compilation_albums(&self) -> Result<std::collections::HashSet<String>> {
+        let query = r#"
+            SELECT album FROM (
+                SELECT ct_album.tag_value AS album,
+                       COUNT(DISTINCT ct_artist.tag_value) AS artist_count
+                FROM files f
+                JOIN audio_info a ON f.inode = a.inode
+                JOIN corpus_tags ct_album ON f.inode = ct_album.inode AND UPPER(ct_album.tag_name) = 'ALBUM'
+                JOIN corpus_tags ct_artist ON f.inode = ct_artist.inode AND UPPER(ct_artist.tag_name) = 'ARTIST'
+                WHERE f.is_dir = 0 AND f.source = 'corpus'
+                GROUP BY ct_album.tag_value
+                HAVING artist_count > 1
+            )
+        "#;
+
+        let mut stmt = self.conn.prepare(query)?;
+        let albums = stmt
+            .query_map(params![], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<std::collections::HashSet<String>>>()?;
+
+        Ok(albums)
+    }
+
     /// Get inodes that have any of the given tag values for a specific tag name.
     pub fn get_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
         if values.is_empty() {

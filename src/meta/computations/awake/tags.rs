@@ -56,13 +56,25 @@ pub fn execute_detect_missing_tags(
         }
     };
 
-    let required_tags: HashSet<String> = config
+    let mut required_tags: HashSet<String> = config
         .opinions
         .health_detection
         .required_tags
         .iter()
         .map(|s| s.to_uppercase())
         .collect();
+
+    // When album_artist_only_required_if_compilation is true, pull ALBUM_ARTIST
+    // out of the base required set and only enforce it on compilation albums.
+    let album_artist_key = "ALBUM_ARTIST".to_string();
+    let elide_album_artist = config.opinions.health_detection.album_artist_only_required_if_compilation
+        && required_tags.remove(&album_artist_key);
+
+    let compilation_albums: HashSet<String> = if elide_album_artist {
+        read_only_db.get_compilation_albums().unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
 
     // Clear all existing MissingTag signals (routes through db_thread)
     sender.clear_all_of_aggregate_type::<MissingTagSignal>(witness);
@@ -89,10 +101,20 @@ pub fn execute_detect_missing_tags(
             .map(|s| s.to_string())
             .collect();
 
-        let missing: HashSet<String> = required_tags
+        let mut missing: HashSet<String> = required_tags
             .difference(&present_tags)
             .cloned()
             .collect();
+
+        // Re-require ALBUM_ARTIST for compilation albums
+        if elide_album_artist {
+            let is_compilation = album.as_ref()
+                .map(|a| compilation_albums.contains(a))
+                .unwrap_or(false);
+            if is_compilation && !present_tags.contains(&album_artist_key) {
+                missing.insert(album_artist_key.clone());
+            }
+        }
 
         if missing.is_empty() {
             continue;

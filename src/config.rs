@@ -122,6 +122,9 @@ impl Default for StartupOpinions {
 pub struct HealthDetectionOpinions {
     /// Tags that must be present on every track (default: title, album, artist, album_artist)
     pub required_tags: Vec<String>,
+    /// When true, album_artist is only required on compilation albums (>1 distinct artist).
+    /// Single-artist albums without album_artist won't be flagged. Default: true.
+    pub album_artist_only_required_if_compilation: bool,
 }
 
 impl Default for HealthDetectionOpinions {
@@ -133,6 +136,7 @@ impl Default for HealthDetectionOpinions {
                 "artist".to_string(),
                 "album_artist".to_string(),
             ],
+            album_artist_only_required_if_compilation: true,
         }
     }
 }
@@ -631,16 +635,25 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
 fn parse_health_detection_opinions(node: &kdl::KdlNode, opinions: &mut HealthDetectionOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            if child.name().value() == "required-tags" {
-                // Collect all string values from the node entries
-                let tags: Vec<String> = child
-                    .entries()
-                    .iter()
-                    .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
-                    .collect();
-                if !tags.is_empty() {
-                    opinions.required_tags = tags;
+            match child.name().value() {
+                "required-tags" => {
+                    let tags: Vec<String> = child
+                        .entries()
+                        .iter()
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect();
+                    if !tags.is_empty() {
+                        opinions.required_tags = tags;
+                    }
                 }
+                "album-artist-only-required-if-compilation" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.album_artist_only_required_if_compilation = val;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }

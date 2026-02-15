@@ -630,6 +630,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_audio_files_with_tag_presence()
     }
 
+    /// Get albums that are compilations (more than one distinct ARTIST value).
+    pub fn get_compilation_albums(&self) -> Result<std::collections::HashSet<String>> {
+        self.db.get_compilation_albums()
+    }
+
     /// Get inodes that have any of the given tag values for a specific tag name.
     pub fn get_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
         self.db.get_inodes_for_tag_values(tag_name, values)

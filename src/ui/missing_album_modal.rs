@@ -1,21 +1,24 @@
 //! Missing Album Singles Resolution Modal
 //!
 //! Shows tracks that lack an ALBUM tag but have ARTIST and TITLE,
-//! grouped by artist. Offers quick actions to assign album values
-//! or suppress the signal.
+//! grouped by artist. Offers resolution options via selectable buttons:
 //!
+//! ## Controls
+//!
+//! - Shift+Up/Down: Cycle focus between track list and resolution buttons
+//! - Up/Down/j/k: Navigate track list (List focus)
+//! - Left/Right/h/l: Cycle resolution option (Buttons focus)
+//! - Enter: Confirm selected resolution (Buttons focus)
 //! - Tab/Shift-Tab: Navigate between artist groups
-//! - j/k/Up/Down: Navigate track list within group
-//! - Enter: Tag each track as "{title}{suffix}" (per-track singles)
-//! - S: Tag all tracks as "Singles"
-//! - Ctrl+F: Suppress (mark as expected-missing-tag)
+//! - t: Edit selected track in tag editor
+//! - T (Shift+T): Bulk-edit all tracks in group in tag editor
 //! - Ctrl+R: Show transaction review
 //! - Escape: Cancel
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Alignment, Rect},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
@@ -23,6 +26,47 @@ use ratatui::{
 
 use crate::meta::signals::data::MissingAlbumSingleSignal;
 use crate::ui::helpers::render_pane;
+use crate::ui::widgets::{
+    control_colors as cc, render_file_path_list, ConfirmationButton, FocusPane, PathEntry,
+    ResolutionLayout,
+};
+
+// ============================================================================
+// Resolution Option
+// ============================================================================
+
+/// Resolution option for a group of tracks missing ALBUM tags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlbumResolution {
+    /// ALBUM = "{title}{suffix}" per track
+    PerTrackTitle,
+    /// ALBUM = "Singles" for all tracks
+    AllSingles,
+    /// Suppress: emit ExpectedMissingTag
+    Suppress,
+}
+
+impl AlbumResolution {
+    fn next(self) -> Self {
+        match self {
+            Self::PerTrackTitle => Self::AllSingles,
+            Self::AllSingles => Self::Suppress,
+            Self::Suppress => Self::PerTrackTitle,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::PerTrackTitle => Self::Suppress,
+            Self::AllSingles => Self::PerTrackTitle,
+            Self::Suppress => Self::AllSingles,
+        }
+    }
+}
+
+// ============================================================================
+// Action Enum
+// ============================================================================
 
 /// Actions returned from the missing album modal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,17 +75,21 @@ pub enum MissingAlbumAction {
     None,
     /// Cancel and return to Insights view.
     Cancel,
-    /// Tag each track as "{title}{suffix}" for the current group.
-    TagAsSingles,
-    /// Tag all tracks in current group as "Singles".
-    TagAllSingles,
-    /// Suppress: emit ExpectedMissingTag for all inodes in current group.
-    Suppress,
+    /// Confirm the selected resolution for the current group.
+    Confirm(AlbumResolution),
     /// Navigate to next/prev artist group.
     NavigateGroup(bool),
     /// Show transaction review.
     ShowReview,
+    /// Open tag editor for all tracks in group (individual mode, Tab navigates).
+    EditTracks,
+    /// Open tag editor for all tracks in group (aggregated mode, unified view).
+    EditTracksAggregated,
 }
+
+// ============================================================================
+// Data Types
+// ============================================================================
 
 /// A single artist group with its tracks.
 #[derive(Debug, Clone)]
@@ -71,28 +119,43 @@ impl MissingAlbumData {
             .into_iter()
             .map(|s| ArtistGroup {
                 artist: s.data.artist,
-                tracks: s.data.tracks.into_iter().map(|t| TrackEntry {
-                    inode: t.inode,
-                    title: t.title,
-                    path: t.path,
-                }).collect(),
+                tracks: s
+                    .data
+                    .tracks
+                    .into_iter()
+                    .map(|t| TrackEntry {
+                        inode: t.inode,
+                        title: t.title,
+                        path: t.path,
+                    })
+                    .collect(),
             })
             .collect();
         Self { groups }
     }
 }
 
+// ============================================================================
+// State
+// ============================================================================
+
 /// State for the missing album singles resolution modal.
 #[derive(Debug)]
 pub struct MissingAlbumState {
-    /// Loaded data.
+    /// Loaded data (immutable — groups are never removed).
     pub data: MissingAlbumData,
     /// Current artist group index.
     pub current_group: usize,
     /// Track cursor within current group.
     pub track_cursor: usize,
-    /// Suffix from config opinion.
+    /// Track scroll offset within current group.
+    pub track_scroll: usize,
+    /// Suffix from config opinion (e.g., " (Single)").
     pub suffix: String,
+    /// Current focus pane (List or Buttons).
+    pub focus_pane: FocusPane,
+    /// Currently selected resolution option.
+    pub selected_resolution: AlbumResolution,
 }
 
 impl MissingAlbumState {
@@ -101,7 +164,10 @@ impl MissingAlbumState {
             data,
             current_group: 0,
             track_cursor: 0,
+            track_scroll: 0,
             suffix,
+            focus_pane: FocusPane::List,
+            selected_resolution: AlbumResolution::PerTrackTitle,
         }
     }
 
@@ -117,53 +183,50 @@ impl MissingAlbumState {
             .map(|t| t.path.as_str())
     }
 
-    /// Advance to next group after a decision. Returns true if there are more groups.
-    pub fn advance_group(&mut self) -> bool {
-        // Remove the current group (it was resolved)
-        if self.current_group < self.data.groups.len() {
-            self.data.groups.remove(self.current_group);
-        }
-        // Adjust cursor if we went past the end
-        if self.current_group >= self.data.groups.len() && !self.data.groups.is_empty() {
-            self.current_group = self.data.groups.len() - 1;
-        }
-        self.track_cursor = 0;
-        !self.data.groups.is_empty()
+    /// All inodes in the current group (for tag editor).
+    pub fn current_group_inodes(&self) -> Vec<i64> {
+        self.current_group_data()
+            .map(|g| g.tracks.iter().map(|t| t.inode).collect())
+            .unwrap_or_default()
     }
 
     /// Handle key input.
     pub fn handle_key(&mut self, key: KeyEvent) -> MissingAlbumAction {
+        // Shift+Up/Down: cycle focus pane
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Up => {
+                    self.focus_pane = self.focus_pane.prev();
+                    return MissingAlbumAction::None;
+                }
+                KeyCode::Down => {
+                    self.focus_pane = self.focus_pane.next();
+                    return MissingAlbumAction::None;
+                }
+                _ => {}
+            }
+        }
+
+        // Ctrl+R: show transaction review
+        if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return MissingAlbumAction::ShowReview;
+        }
+
         match key.code {
             KeyCode::Esc => MissingAlbumAction::Cancel,
 
-            KeyCode::Enter => MissingAlbumAction::TagAsSingles,
-
-            KeyCode::Char('s') | KeyCode::Char('S')
-                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                MissingAlbumAction::TagAllSingles
-            }
-
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                MissingAlbumAction::Suppress
-            }
-
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                MissingAlbumAction::ShowReview
-            }
-
+            // Group navigation
             KeyCode::Tab => MissingAlbumAction::NavigateGroup(true),
-
             KeyCode::BackTab => MissingAlbumAction::NavigateGroup(false),
 
-            KeyCode::Up | KeyCode::Char('k') => {
+            // Track list navigation (List focus)
+            KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::List => {
                 if self.track_cursor > 0 {
                     self.track_cursor -= 1;
                 }
                 MissingAlbumAction::None
             }
-
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::List => {
                 if let Some(group) = self.current_group_data() {
                     if self.track_cursor + 1 < group.tracks.len() {
                         self.track_cursor += 1;
@@ -172,27 +235,46 @@ impl MissingAlbumState {
                 MissingAlbumAction::None
             }
 
+            // Resolution button cycling (Buttons focus)
+            KeyCode::Left | KeyCode::Char('h') if self.focus_pane == FocusPane::Buttons => {
+                self.selected_resolution = self.selected_resolution.prev();
+                MissingAlbumAction::None
+            }
+            KeyCode::Right | KeyCode::Char('l') if self.focus_pane == FocusPane::Buttons => {
+                self.selected_resolution = self.selected_resolution.next();
+                MissingAlbumAction::None
+            }
+
+            // Confirm resolution (Buttons focus)
+            KeyCode::Enter if self.focus_pane == FocusPane::Buttons => {
+                if self.current_group_data().is_some() {
+                    MissingAlbumAction::Confirm(self.selected_resolution)
+                } else {
+                    MissingAlbumAction::None
+                }
+            }
+
+            // Tag editor shortcuts (available regardless of focus)
+            KeyCode::Char('t') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                MissingAlbumAction::EditTracks
+            }
+            KeyCode::Char('T') => MissingAlbumAction::EditTracksAggregated,
+
             _ => MissingAlbumAction::None,
         }
     }
 
     /// Render the modal.
     pub fn render(&self, f: &mut Frame, area: Rect) {
-        f.render_widget(Clear, area);
+        let padded = ResolutionLayout::padded(area);
+        f.render_widget(Clear, padded);
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),  // header
-                Constraint::Min(5),    // content
-                Constraint::Length(3), // controls
-            ])
-            .split(area);
+        let layout = ResolutionLayout::new(padded, 3, 3, 50);
 
         let group = self.current_group_data();
         let total_groups = self.data.groups.len();
 
-        // Header
+        // Info bar: artist name, group counter
         let header_text = if let Some(g) = group {
             format!(
                 " Artist: {} ({} tracks) [group {}/{}] ",
@@ -209,98 +291,163 @@ impl MissingAlbumState {
             .borders(Borders::ALL)
             .title(header_text)
             .border_style(Style::default().fg(Color::Yellow));
-        render_pane(f, chunks[0], header_block);
+        render_pane(f, layout.info_bar, header_block);
 
-        // Content: two-pane layout (tracks + preview)
+        // Content panes
         if let Some(g) = group {
-            let content_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(60),
-                    Constraint::Percentage(40),
-                ])
-                .split(chunks[1]);
+            self.render_track_list(f, layout.list_pane, g);
+            self.render_preview(f, layout.details_pane, g);
+        } else {
+            let empty = Paragraph::new("All groups resolved.")
+                .block(Block::default().borders(Borders::ALL));
+            f.render_widget(empty, layout.list_pane);
+        }
 
-            // Left pane: track list
-            let track_items: Vec<ListItem> = g
-                .tracks
-                .iter()
-                .enumerate()
-                .map(|(i, track)| {
-                    let is_selected = i == self.track_cursor;
-                    let style = if is_selected {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    let text = format!("  {} — {}", track.title, track.path);
-                    ListItem::new(Line::from(Span::styled(text, style)))
-                })
-                .collect();
+        // Buttons + hint bar
+        self.render_buttons(f, layout.buttons);
+    }
 
-            let track_list = List::new(track_items)
-                .block(Block::default().borders(Borders::ALL).title(" Tracks "));
-            f.render_widget(track_list, content_chunks[0]);
+    fn render_track_list(&self, f: &mut Frame, area: Rect, group: &ArtistGroup) {
+        let is_focused = self.focus_pane == FocusPane::List;
+        let border_color = if is_focused {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
 
-            // Right pane: preview of album tag assignments
-            let preview_items: Vec<ListItem> = g
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Tracks ")
+            .border_style(Style::default().fg(border_color));
+        let inner = render_pane(f, area, block);
+
+        let entries: Vec<PathEntry> = group
+            .tracks
+            .iter()
+            .map(|track| PathEntry {
+                path: &track.path,
+                prefix: vec![Span::styled(
+                    format!("{} — ", track.title),
+                    Style::default().fg(Color::White),
+                )],
+                suffix: vec![],
+            })
+            .collect();
+
+        render_file_path_list(f, inner, &entries, self.track_cursor, self.track_scroll);
+    }
+
+    fn render_preview(&self, f: &mut Frame, area: Rect, group: &ArtistGroup) {
+        let title = match self.selected_resolution {
+            AlbumResolution::PerTrackTitle => " Preview: Per-Track Title ",
+            AlbumResolution::AllSingles => " Preview: \"Singles\" ",
+            AlbumResolution::Suppress => " Preview: Suppress ",
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let inner = render_pane(f, area, block);
+
+        let lines: Vec<ListItem> = match self.selected_resolution {
+            AlbumResolution::PerTrackTitle => group
                 .tracks
                 .iter()
                 .map(|track| {
                     let album_val = format!("{}{}", track.title, self.suffix);
-                    let text = format!("  ALBUM = \"{}\"", album_val);
                     ListItem::new(Line::from(Span::styled(
-                        text,
+                        format!(" ALBUM = \"{}\"", album_val),
                         Style::default().fg(Color::Cyan),
                     )))
                 })
-                .collect();
+                .collect(),
+            AlbumResolution::AllSingles => group
+                .tracks
+                .iter()
+                .map(|_| {
+                    ListItem::new(Line::from(Span::styled(
+                        " ALBUM = \"Singles\"".to_string(),
+                        Style::default().fg(Color::Green),
+                    )))
+                })
+                .collect(),
+            AlbumResolution::Suppress => {
+                vec![ListItem::new(Line::from(Span::styled(
+                    " Signal will be suppressed (no tag changes)",
+                    Style::default().fg(Color::DarkGray),
+                )))]
+            }
+        };
 
-            let preview_list = List::new(preview_items)
-                .block(Block::default().borders(Borders::ALL).title(" Preview (Enter) "));
-            f.render_widget(preview_list, content_chunks[1]);
+        let list = List::new(lines);
+        f.render_widget(list, inner);
+    }
+
+    fn render_buttons(&self, f: &mut Frame, area: Rect) {
+        let is_focused = self.focus_pane == FocusPane::Buttons;
+        let border_color = if is_focused {
+            Color::Yellow
         } else {
-            let empty = Paragraph::new("All groups resolved.")
-                .block(Block::default().borders(Borders::ALL));
-            f.render_widget(empty, chunks[1]);
+            Color::DarkGray
+        };
+
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(border_color));
+        let inner = render_pane(f, area, block);
+
+        if inner.height == 0 {
+            return;
         }
 
-        // Controls
-        let controls = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " [Enter] ",
-                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" \"{{title}}{}\" ", self.suffix),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled(
-                " [S] ",
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" \"Singles\"  ", Style::default().fg(Color::White)),
-            Span::styled(
-                " [^F] ",
-                Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Suppress  ", Style::default().fg(Color::White)),
-            Span::styled(
-                " [Tab] ",
-                Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Next  ", Style::default().fg(Color::White)),
-            Span::styled(
-                " [Esc] ",
-                Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Cancel ", Style::default().fg(Color::White)),
-        ]))
-        .block(Block::default().borders(Borders::ALL));
+        // Resolution buttons (top line of inner area)
+        let button_area = Rect {
+            height: 1,
+            ..inner
+        };
 
-        f.render_widget(controls, chunks[2]);
+        let per_track_label = format!("\"{{title}}{}\"", self.suffix);
+        let buttons = [
+            ConfirmationButton::new(&per_track_label, Color::Cyan)
+                .selected(is_focused && self.selected_resolution == AlbumResolution::PerTrackTitle),
+            ConfirmationButton::new("\"Singles\"", Color::Green)
+                .selected(is_focused && self.selected_resolution == AlbumResolution::AllSingles),
+            ConfirmationButton::new("Suppress", Color::Yellow)
+                .selected(is_focused && self.selected_resolution == AlbumResolution::Suppress),
+        ];
+
+        crate::ui::widgets::render_button_row(f, button_area, &buttons);
+
+        // Hint line (bottom line of inner area)
+        if inner.height >= 2 {
+            let hint_area = Rect {
+                y: inner.y + inner.height - 1,
+                height: 1,
+                ..inner
+            };
+
+            let hints = Line::from(vec![
+                cc::nav("Shift+↑↓"),
+                cc::text(" focus  "),
+                cc::nav("←→"),
+                cc::text(" option  "),
+                cc::confirm("[Enter]"),
+                cc::text(" confirm  "),
+                cc::nav("[Tab]"),
+                cc::text(" group  "),
+                cc::edit("[t]"),
+                cc::text(" edit  "),
+                cc::edit("[T]"),
+                cc::text(" aggregate  "),
+                cc::review("[^R]"),
+                cc::text(" review  "),
+                cc::cancel("[Esc]"),
+                cc::text(" cancel"),
+            ]);
+
+            let hint_para = Paragraph::new(hints).alignment(Alignment::Center);
+            f.render_widget(hint_para, hint_area);
+        }
     }
 }

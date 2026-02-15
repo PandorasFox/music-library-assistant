@@ -390,7 +390,7 @@ impl App {
         witness: Option<&witness::DecisionWitness>,
     ) {
         use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation, indexing::EmitExpectedMissingTagMutation};
-        use crate::ui::missing_album_modal::MissingAlbumAction;
+        use crate::ui::missing_album_modal::{MissingAlbumAction, AlbumResolution};
 
         match action {
             MissingAlbumAction::None => {}
@@ -399,109 +399,78 @@ impl App {
                 self.cancel_and_return_to_insights("Missing album single resolution cancelled");
             }
 
-            MissingAlbumAction::TagAsSingles => {
+            MissingAlbumAction::Confirm(resolution) => {
                 let Some(_w) = witness else { return };
 
-                // Generate TagOp::add_tag per track: ALBUM = "{title}{suffix}"
-                let (group_idx, ops): (usize, Vec<TagOp>) = {
+                let group_idx = {
                     let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
-                    let Some(group) = state.current_group_data() else { return };
-                    let ops = group.tracks.iter().map(|t| {
-                        TagOp::add_tag(t.inode, "ALBUM", format!("{}{}", t.title, state.suffix))
-                    }).collect();
-                    (state.current_group, ops)
+                    state.current_group
                 };
 
-                if !ops.is_empty() {
-                    let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
-                    if let Some(ref mut witch) = self.witch {
-                        let _ = super::operator_decisions::stage_decision(
-                            witch,
-                            group_idx,
-                            "Tag as singles",
-                            vec![mutation],
-                        );
+                match resolution {
+                    AlbumResolution::PerTrackTitle => {
+                        let ops: Vec<TagOp> = {
+                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                            let Some(group) = state.current_group_data() else { return };
+                            group.tracks.iter().map(|t| {
+                                TagOp::add_tag(t.inode, "ALBUM", format!("{}{}", t.title, state.suffix))
+                            }).collect()
+                        };
+                        if !ops.is_empty() {
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
+                            if let Some(ref mut witch) = self.witch {
+                                let _ = super::operator_decisions::stage_decision(
+                                    witch, group_idx, "Tag as singles", vec![mutation],
+                                );
+                            }
+                        }
+                    }
+
+                    AlbumResolution::AllSingles => {
+                        let ops: Vec<TagOp> = {
+                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                            let Some(group) = state.current_group_data() else { return };
+                            group.tracks.iter().map(|t| {
+                                TagOp::add_tag(t.inode, "ALBUM", "Singles")
+                            }).collect()
+                        };
+                        if !ops.is_empty() {
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
+                            if let Some(ref mut witch) = self.witch {
+                                let _ = super::operator_decisions::stage_decision(
+                                    witch, group_idx, "Tag all as Singles", vec![mutation],
+                                );
+                            }
+                        }
+                    }
+
+                    AlbumResolution::Suppress => {
+                        let inodes: Vec<i64> = {
+                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                            state.current_group_inodes()
+                        };
+                        if !inodes.is_empty() {
+                            let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
+                            if let Some(ref mut witch) = self.witch {
+                                let _ = super::operator_decisions::stage_decision(
+                                    witch, group_idx, "Suppress missing album", vec![mutation],
+                                );
+                            }
+                        }
                     }
                 }
 
-                // Advance to next group or show review
-                let at_end = if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
-                    !state.advance_group()
-                } else {
-                    true
-                };
-                if at_end {
-                    self.start_transaction_review();
-                }
-            }
-
-            MissingAlbumAction::TagAllSingles => {
-                let Some(_w) = witness else { return };
-
-                // Generate TagOp::add_tag per track: ALBUM = "Singles"
-                let (group_idx, ops): (usize, Vec<TagOp>) = {
-                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
-                    let Some(group) = state.current_group_data() else { return };
-                    let ops = group.tracks.iter().map(|t| {
-                        TagOp::add_tag(t.inode, "ALBUM", "Singles")
-                    }).collect();
-                    (state.current_group, ops)
-                };
-
-                if !ops.is_empty() {
-                    let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops });
-                    if let Some(ref mut witch) = self.witch {
-                        let _ = super::operator_decisions::stage_decision(
-                            witch,
-                            group_idx,
-                            "Tag all as Singles",
-                            vec![mutation],
-                        );
+                // Advance to next unresolved group, or show review if at end
+                if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
+                    state.track_cursor = 0;
+                    state.track_scroll = 0;
+                    if state.current_group + 1 < state.data.groups.len() {
+                        state.current_group += 1;
+                    } else {
+                        // All groups visited — go to review
+                        self.start_transaction_review();
+                        return;
                     }
-                }
-
-                // Advance to next group or show review
-                let at_end = if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
-                    !state.advance_group()
-                } else {
-                    true
-                };
-                if at_end {
-                    self.start_transaction_review();
-                }
-            }
-
-            MissingAlbumAction::Suppress => {
-                let Some(_w) = witness else { return };
-
-                // Generate EmitExpectedMissingTag for all inodes in group
-                let (group_idx, inodes) = {
-                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
-                    let Some(group) = state.current_group_data() else { return };
-                    let inodes: Vec<i64> = group.tracks.iter().map(|t| t.inode).collect();
-                    (state.current_group, inodes)
-                };
-
-                if !inodes.is_empty() {
-                    let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
-                    if let Some(ref mut witch) = self.witch {
-                        let _ = super::operator_decisions::stage_decision(
-                            witch,
-                            group_idx,
-                            "Suppress missing album",
-                            vec![mutation],
-                        );
-                    }
-                }
-
-                // Advance to next group or show review
-                let at_end = if let ActiveView::MissingAlbumSingleResolution(ref mut state) = self.view {
-                    !state.advance_group()
-                } else {
-                    true
-                };
-                if at_end {
-                    self.start_transaction_review();
                 }
             }
 
@@ -511,16 +480,77 @@ impl App {
                         if state.current_group + 1 < state.data.groups.len() {
                             state.current_group += 1;
                             state.track_cursor = 0;
+                            state.track_scroll = 0;
                         }
                     } else if state.current_group > 0 {
                         state.current_group -= 1;
                         state.track_cursor = 0;
+                        state.track_scroll = 0;
                     }
                 }
             }
 
             MissingAlbumAction::ShowReview => {
                 self.start_transaction_review();
+            }
+
+            MissingAlbumAction::EditTracks => {
+                let (inodes, decision_index, label) = {
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let group = match state.current_group_data() {
+                        Some(g) => g,
+                        None => return,
+                    };
+                    // Offset decision index to avoid colliding with resolution decisions
+                    let idx = state.data.groups.len() + state.current_group;
+                    let label = format!("Manual tag edits: {}", group.artist);
+                    (state.current_group_inodes(), idx, label)
+                };
+                if inodes.is_empty() {
+                    return;
+                }
+                let read_db = self.read_db();
+                let audio_files = read_db.get_audio_files_by_inodes(
+                    &inodes,
+                    crate::corpus::db::types::FileSource::Corpus,
+                ).unwrap_or_default();
+                if !audio_files.is_empty() {
+                    self.open_embedded_tag_editor(
+                        tag_editor::TagEditorMode::Individual,
+                        audio_files,
+                        decision_index,
+                        label,
+                    );
+                }
+            }
+
+            MissingAlbumAction::EditTracksAggregated => {
+                let (inodes, decision_index, label) = {
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let group = match state.current_group_data() {
+                        Some(g) => g,
+                        None => return,
+                    };
+                    let idx = state.data.groups.len() + state.current_group;
+                    let label = format!("Manual tag edits: {}", group.artist);
+                    (state.current_group_inodes(), idx, label)
+                };
+                if inodes.is_empty() {
+                    return;
+                }
+                let read_db = self.read_db();
+                let audio_files = read_db.get_audio_files_by_inodes(
+                    &inodes,
+                    crate::corpus::db::types::FileSource::Corpus,
+                ).unwrap_or_default();
+                if !audio_files.is_empty() {
+                    self.open_embedded_tag_editor(
+                        tag_editor::TagEditorMode::Aggregated,
+                        audio_files,
+                        decision_index,
+                        label,
+                    );
+                }
             }
         }
     }

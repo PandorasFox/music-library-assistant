@@ -225,10 +225,22 @@ pub fn execute_detect_metadata_duplicates(
     let mut inode_tags: HashMap<i64, Vec<(String, String)>> = HashMap::new();
 
     for (inode, tag_name, tag_value) in all_tags {
+        let upper = tag_name.to_uppercase();
+        // Encoder tags are noise — they describe the tool, not the content.
+        if upper == "ENCODER"
+            || upper == "ENCODED_BY"
+            || upper == "ENCODER_SETTINGS"
+            || upper == "ENCODER_OPTIONS"
+            || upper == "ENCODING"
+            || upper == "ENCODING_TOOL"
+            || upper == "ENCODERSOFTWARE"
+        {
+            continue;
+        }
         inode_tags
             .entry(inode)
             .or_default()
-            .push((tag_name.to_uppercase(), tag_value));
+            .push((upper, tag_value));
     }
 
     let mut sig_to_inodes: HashMap<String, Vec<i64>> = HashMap::new();

@@ -1,8 +1,9 @@
 //! Cross-Source Overlap Resolution Types
 //!
 //! Data structures for the cross-source overlap resolution modal, including
-//! cluster entries, resolution options, and button state.
+//! cluster entries, resolution options, and stash file preview.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -13,6 +14,7 @@ use crate::meta::mutations::Mutation;
 use crate::meta::mutations::file_ops::MoveToStashMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
+use crate::ui::manual_review_modal::types::FileMetaSummary;
 
 /// A source directory within an overlap cluster.
 #[derive(Debug, Clone)]
@@ -45,21 +47,28 @@ pub struct DirectoryClusterEntry {
 /// Resolution option for a directory cluster.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClusterResolutionOption {
-    /// Keep one directory, stash the other(s)
-    KeepDirectory { keep_suffix: String },
-    /// Auto-select based on quality (higher format class wins)
-    AutoQuality { keep_format: String, stash_format: String },
+    /// Stash a specific directory (keep the other(s))
+    StashDirectory { stash_suffix: String },
+    /// Auto-select based on quality (stash the lower-quality format)
+    AutoQuality { stash_format: String },
 }
 
 impl ClusterResolutionOption {
     pub fn label(&self) -> String {
         match self {
-            Self::KeepDirectory { keep_suffix } => format!("Keep {}/", keep_suffix),
-            Self::AutoQuality { keep_format, stash_format } => {
-                format!("Keep {}, stash {}", keep_format, stash_format)
+            Self::StashDirectory { stash_suffix } => format!("Stash {}/", stash_suffix),
+            Self::AutoQuality { stash_format } => {
+                format!("Stash {} (quality)", stash_format)
             }
         }
     }
+}
+
+/// A file that would be stashed by a resolution option.
+#[derive(Debug, Clone)]
+pub struct StashFileEntry {
+    pub corpus_path: String,
+    pub inode: i64,
 }
 
 /// Cached data for the cross-source overlap resolution modal.
@@ -69,6 +78,8 @@ impl ClusterResolutionOption {
 pub struct DirectoryClusterModalData {
     /// Cross-source overlap clusters
     pub clusters: Vec<DirectoryClusterEntry>,
+    /// Audio metadata cache keyed by inode (loaded at init time).
+    pub file_meta_cache: HashMap<i64, FileMetaSummary>,
 }
 
 impl DirectoryClusterModalData {
@@ -164,7 +175,41 @@ impl DirectoryClusterModalData {
             });
         }
 
-        Ok(Self { clusters })
+        // Enrich with audio metadata for all unique inodes across all clusters
+        let mut file_meta_cache = HashMap::new();
+        for cluster in &clusters {
+            for dir in &cluster.directories {
+                for &inode in &dir.inodes {
+                    if file_meta_cache.contains_key(&inode) {
+                        continue;
+                    }
+                    let audio_info = read_db.get_audio_info(inode).ok().flatten();
+                    let tags = read_db.get_corpus_tags(inode).ok().unwrap_or_default();
+                    let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
+
+                    if let Some(info) = audio_info {
+                        let file_size = read_db
+                            .get_audio_file_by_inode(inode, FileSource::Corpus)
+                            .ok()
+                            .flatten()
+                            .map(|af| af.entry.file_size)
+                            .unwrap_or(0);
+
+                        file_meta_cache.insert(inode, FileMetaSummary {
+                            file_type: info.file_type,
+                            duration_ms: info.duration_ms,
+                            bitrate_kbps: info.bitrate_kbps,
+                            sample_rate: info.sample_rate,
+                            file_size,
+                            has_pictures,
+                            tags: tags.into_iter().map(|t| (t.tag_name, t.tag_value)).collect(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Self { clusters, file_meta_cache })
     }
 
     /// Total number of clusters.
@@ -179,8 +224,7 @@ impl DirectoryClusterModalData {
 
     /// Generate mutations for a resolution option on a specific cluster.
     ///
-    /// For KeepDirectory: MoveToStash + DropFromIndex for all directories EXCEPT the kept one.
-    /// For AutoQuality: Same logic, but picks the keep directory by format quality.
+    /// Stashes the directory identified by the option (respecting `can_stash_dupes`).
     pub fn mutations_for_resolution(
         &self,
         cluster_index: usize,
@@ -194,36 +238,28 @@ impl DirectoryClusterModalData {
             None => return mutations,
         };
 
-        let keep_suffix = match option {
-            ClusterResolutionOption::KeepDirectory { keep_suffix } => keep_suffix.clone(),
-            ClusterResolutionOption::AutoQuality { keep_format, .. } => {
-                // Find directory with the preferred format
-                cluster
-                    .directories
-                    .iter()
-                    .find(|d| d.format_summary.starts_with(keep_format))
-                    .map(|d| d.path_suffix.clone())
-                    .unwrap_or_default()
-            }
-        };
-
-        // Stash all directories except the one we're keeping.
-        // Respect can_stash_dupes: skip directories that disallow stashing.
         for dir in &cluster.directories {
-            if dir.path_suffix == keep_suffix || !dir.can_stash_dupes {
+            let should_stash = match option {
+                ClusterResolutionOption::StashDirectory { stash_suffix } => {
+                    dir.path_suffix == *stash_suffix
+                }
+                ClusterResolutionOption::AutoQuality { stash_format } => {
+                    dir.format_summary.starts_with(stash_format.as_str())
+                }
+            };
+
+            if !should_stash || !dir.can_stash_dupes {
                 continue;
             }
 
             for (idx, corpus_path) in dir.paths.iter().enumerate() {
                 let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
 
-                // MoveToStash mutation
                 mutations.push(Mutation::MoveToStash(MoveToStashMutation {
                     path: abs_path,
                     stash_name: "overlaps".to_string(),
                 }));
 
-                // DropFromIndex mutation
                 let inode = dir.inodes.get(idx).copied();
 
                 mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
@@ -236,36 +272,43 @@ impl DirectoryClusterModalData {
 
         mutations
     }
-}
 
-/// Which action button is selected in the modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SelectedButton {
-    Confirm,
-    #[default]
-    Cancel,
-}
+    /// Collect files that would be stashed by a resolution option on a specific cluster.
+    ///
+    /// Mirrors the stash logic from `mutations_for_resolution()` but returns
+    /// `StashFileEntry` values instead of mutations.
+    pub fn stash_files_for_option(
+        &self,
+        cluster_index: usize,
+        option: &ClusterResolutionOption,
+    ) -> Vec<StashFileEntry> {
+        let cluster = match self.clusters.get(cluster_index) {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
 
-impl SelectedButton {
-    /// Move selection left.
-    pub fn left(&mut self, has_options: bool) {
-        *self = match *self {
-            Self::Cancel => {
-                if has_options {
-                    Self::Confirm
-                } else {
-                    Self::Cancel
+        let mut entries = Vec::new();
+        for dir in &cluster.directories {
+            let should_stash = match option {
+                ClusterResolutionOption::StashDirectory { stash_suffix } => {
+                    dir.path_suffix == *stash_suffix
                 }
-            }
-            Self::Confirm => Self::Confirm,
-        };
-    }
+                ClusterResolutionOption::AutoQuality { stash_format } => {
+                    dir.format_summary.starts_with(stash_format.as_str())
+                }
+            };
 
-    /// Move selection right.
-    pub fn right(&mut self, _has_options: bool) {
-        *self = match *self {
-            Self::Confirm => Self::Cancel,
-            Self::Cancel => Self::Cancel,
-        };
+            if !should_stash || !dir.can_stash_dupes {
+                continue;
+            }
+            for (idx, corpus_path) in dir.paths.iter().enumerate() {
+                let inode = dir.inodes.get(idx).copied().unwrap_or(0);
+                entries.push(StashFileEntry {
+                    corpus_path: corpus_path.clone(),
+                    inode,
+                });
+            }
+        }
+        entries
     }
 }

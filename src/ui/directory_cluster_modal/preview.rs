@@ -1,10 +1,12 @@
 //! Directory Overlap Cluster Resolution Preview UI
 //!
-//! Shows directory overlap clusters with resolution options, allowing
-//! the operator to choose which directory to keep for each cluster.
+//! Shows directory overlap clusters with resolution options and a stash file
+//! preview list, allowing the operator to see exactly which files will be
+//! stashed before confirming.
 //!
 //! Navigation:
-//! - Up/Down: Navigate resolution options
+//! - Up/Down: Navigate resolution options (Options pane) or files (FileList pane)
+//! - Shift+Up/Down: Toggle focus between Options and FileList panes
 //! - Tab/Shift+Tab: Navigate between clusters (stage decision and advance)
 //! - Enter: Confirm selected option for current cluster
 //! - Ctrl+R: Jump to transaction review
@@ -19,8 +21,9 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{ClusterResolutionOption, DirectoryClusterModalData, SelectedButton};
-use crate::ui::helpers::{render_pane, truncate_left};
+use super::types::{ClusterResolutionOption, DirectoryClusterModalData, StashFileEntry};
+use crate::ui::helpers::{render_pane, truncate_left, truncate_right};
+use crate::ui::widgets::file_path_list::{render_file_path_list, PathEntry};
 use crate::ui::widgets::CURSOR_STYLE;
 
 /// Which pane has focus
@@ -28,21 +31,21 @@ use crate::ui::widgets::CURSOR_STYLE;
 pub enum FocusPane {
     #[default]
     Options,
-    Buttons,
+    FileList,
 }
 
 impl FocusPane {
     fn next(self) -> Self {
         match self {
-            Self::Options => Self::Buttons,
-            Self::Buttons => Self::Buttons,
+            Self::Options => Self::FileList,
+            Self::FileList => Self::FileList,
         }
     }
 
     fn prev(self) -> Self {
         match self {
             Self::Options => Self::Options,
-            Self::Buttons => Self::Options,
+            Self::FileList => Self::Options,
         }
     }
 }
@@ -75,10 +78,14 @@ pub struct DirectoryClusterPreviewState {
     pub selected_option_index: usize,
     /// Resolution options for current cluster (rebuilt when cluster changes).
     pub current_options: Vec<ClusterResolutionOption>,
-    /// Which button is selected.
-    pub selected_button: SelectedButton,
     /// Which pane has focus.
     pub focus_pane: FocusPane,
+    /// Files that would be stashed by the currently selected option.
+    pub stash_files: Vec<StashFileEntry>,
+    /// Cursor position within the stash file list.
+    pub file_cursor: usize,
+    /// Scroll offset for the stash file list.
+    pub file_scroll: usize,
 }
 
 impl DirectoryClusterPreviewState {
@@ -98,13 +105,21 @@ impl DirectoryClusterPreviewState {
             Self::build_options_for_cluster(&cached_data.clusters[0])
         };
 
+        let stash_files = if !current_options.is_empty() {
+            cached_data.stash_files_for_option(0, &current_options[0])
+        } else {
+            Vec::new()
+        };
+
         Self {
             cached_data,
             current_cluster_index: 0,
             selected_option_index: 0,
             current_options,
-            selected_button: SelectedButton::Cancel,
             focus_pane: FocusPane::Options,
+            stash_files,
+            file_cursor: 0,
+            file_scroll: 0,
         }
     }
 
@@ -149,21 +164,17 @@ impl DirectoryClusterPreviewState {
                     .all(|d| d.can_stash_dupes);
                 if stashable {
                     options.push(ClusterResolutionOption::AutoQuality {
-                        keep_format: (*best_format).to_string(),
                         stash_format: (*worst_format).to_string(),
                     });
                 }
             }
         }
 
-        // Add per-directory options: "Keep X" stashes all others, so only
-        // offer it when every *other* directory allows stashing.
-        for (i, dir) in cluster.directories.iter().enumerate() {
-            let others_stashable = cluster.directories.iter().enumerate()
-                .all(|(j, d)| j == i || d.can_stash_dupes);
-            if others_stashable {
-                options.push(ClusterResolutionOption::KeepDirectory {
-                    keep_suffix: dir.path_suffix.clone(),
+        // Add per-directory options: "Stash X" is available when X allows stashing.
+        for dir in &cluster.directories {
+            if dir.can_stash_dupes {
+                options.push(ClusterResolutionOption::StashDirectory {
+                    stash_suffix: dir.path_suffix.clone(),
                 });
             }
         }
@@ -179,6 +190,18 @@ impl DirectoryClusterPreviewState {
             Vec::new()
         };
         self.selected_option_index = 0;
+        self.recompute_stash_files();
+    }
+
+    /// Recompute the stash file list from the currently selected option.
+    fn recompute_stash_files(&mut self) {
+        self.stash_files = if let Some(option) = self.current_options.get(self.selected_option_index) {
+            self.cached_data.stash_files_for_option(self.current_cluster_index, option)
+        } else {
+            Vec::new()
+        };
+        self.file_cursor = 0;
+        self.file_scroll = 0;
     }
 
     /// Get the currently selected resolution option.
@@ -215,8 +238,6 @@ impl DirectoryClusterPreviewState {
 
     /// Handle key input.
     pub fn handle_key(&mut self, key: KeyEvent) -> DirectoryClusterPreviewAction {
-        let has_options = !self.current_options.is_empty();
-
         // Shift+Up/Down: move focus between panes
         if key.modifiers.contains(KeyModifiers::SHIFT) {
             match key.code {
@@ -242,23 +263,27 @@ impl DirectoryClusterPreviewState {
             KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::Options => {
                 if self.selected_option_index > 0 {
                     self.selected_option_index -= 1;
+                    self.recompute_stash_files();
                 }
                 DirectoryClusterPreviewAction::None
             }
             KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::Options => {
                 if self.selected_option_index + 1 < self.current_options.len() {
                     self.selected_option_index += 1;
+                    self.recompute_stash_files();
                 }
                 DirectoryClusterPreviewAction::None
             }
 
-            // Button navigation (when buttons focused)
-            KeyCode::Left | KeyCode::Char('h') if self.focus_pane == FocusPane::Buttons => {
-                self.selected_button.left(has_options);
+            // Navigate file list (when file list focused)
+            KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::FileList => {
+                self.file_cursor = self.file_cursor.saturating_sub(1);
                 DirectoryClusterPreviewAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') if self.focus_pane == FocusPane::Buttons => {
-                self.selected_button.right(has_options);
+            KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::FileList => {
+                if self.file_cursor + 1 < self.stash_files.len() {
+                    self.file_cursor += 1;
+                }
                 DirectoryClusterPreviewAction::None
             }
 
@@ -272,18 +297,8 @@ impl DirectoryClusterPreviewState {
             }
             KeyCode::BackTab => DirectoryClusterPreviewAction::NavigatePrev,
 
-            // Enter: confirm (context-dependent)
-            KeyCode::Enter => {
-                if self.focus_pane == FocusPane::Buttons {
-                    match self.selected_button {
-                        SelectedButton::Confirm => DirectoryClusterPreviewAction::ConfirmCurrent,
-                        SelectedButton::Cancel => DirectoryClusterPreviewAction::Cancel,
-                    }
-                } else {
-                    // Enter on options pane = confirm current option
-                    DirectoryClusterPreviewAction::ConfirmCurrent
-                }
-            }
+            // Enter: confirm current option
+            KeyCode::Enter => DirectoryClusterPreviewAction::ConfirmCurrent,
 
             // Cancel
             KeyCode::Esc => DirectoryClusterPreviewAction::Cancel,
@@ -297,19 +312,21 @@ impl DirectoryClusterPreviewState {
         // Clear background
         f.render_widget(Clear, area);
 
-        // Layout: title + content + controls
+        // Layout: title + top panes (capped) + stash preview (fills) + hints
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(10),   // Content
-                Constraint::Length(3), // Controls
+                Constraint::Length(3),    // Title
+                Constraint::Percentage(25), // Top panes (directories + options)
+                Constraint::Min(5),       // Stash file preview
+                Constraint::Length(2),    // Hints bar
             ])
             .split(area);
 
         self.render_title(f, main_chunks[0]);
-        self.render_content(f, main_chunks[1]);
-        self.render_controls(f, main_chunks[2]);
+        self.render_top_panes(f, main_chunks[1]);
+        self.render_stash_preview(f, main_chunks[2]);
+        self.render_hints(f, main_chunks[3]);
     }
 
     fn render_title(&self, f: &mut Frame, area: Rect) {
@@ -333,7 +350,7 @@ impl DirectoryClusterPreviewState {
         f.render_widget(title, area);
     }
 
-    fn render_content(&self, f: &mut Frame, area: Rect) {
+    fn render_top_panes(&self, f: &mut Frame, area: Rect) {
         let options_focused = self.focus_pane == FocusPane::Options;
 
         // Split into directories pane (left) and options pane (right)
@@ -450,55 +467,204 @@ impl DirectoryClusterPreviewState {
         f.render_widget(list, inner);
     }
 
-    fn render_controls(&self, f: &mut Frame, area: Rect) {
-        let has_options = !self.current_options.is_empty();
-        let buttons_focused = self.focus_pane == FocusPane::Buttons;
+    fn render_stash_preview(&self, f: &mut Frame, area: Rect) {
+        let file_list_focused = self.focus_pane == FocusPane::FileList;
+        let count = self.stash_files.len();
+        let title = format!(" Files to Stash ({}) ", count);
 
-        // Build button line
-        let mut buttons = Vec::new();
+        if file_list_focused {
+            // Split 66/34: file list on left, detail pane on right
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(66),
+                    Constraint::Percentage(34),
+                ])
+                .split(area);
 
-        // Confirm button
-        let confirm_style = if !has_options {
-            Style::default().fg(Color::DarkGray)
-        } else if buttons_focused && self.selected_button == SelectedButton::Confirm {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            // File list pane (focused)
+            let list_block = Block::default()
+                .title(title)
+                .title_style(Style::default().fg(Color::Cyan))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+
+            let inner = render_pane(f, chunks[0], list_block);
+            self.render_file_list(f, inner);
+
+            // Detail pane
+            self.render_file_detail(f, chunks[1]);
         } else {
-            Style::default().fg(Color::Cyan)
+            // Full-width file list (unfocused)
+            let block = Block::default()
+                .title(title)
+                .title_style(Style::default().fg(Color::DarkGray))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray));
+
+            let inner = render_pane(f, area, block);
+            self.render_file_list(f, inner);
+        }
+    }
+
+    fn render_file_list(&self, f: &mut Frame, area: Rect) {
+        if self.stash_files.is_empty() {
+            let empty = Paragraph::new("No files to stash")
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(empty, area);
+            return;
+        }
+
+        let entries: Vec<PathEntry> = self.stash_files
+            .iter()
+            .map(|sf| PathEntry::plain(&sf.corpus_path))
+            .collect();
+
+        render_file_path_list(f, area, &entries, self.file_cursor, self.file_scroll);
+    }
+
+    fn render_file_detail(&self, f: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Details ")
+            .title_style(Style::default().fg(Color::DarkGray))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner = render_pane(f, area, block);
+
+        let file = self.stash_files.get(self.file_cursor);
+        let max_lines = inner.height as usize;
+
+        let label_style = Style::default().fg(Color::DarkGray);
+        let value_style = Style::default().fg(Color::White);
+
+        let mut lines = Vec::new();
+
+        let Some(file) = file else {
+            lines.push(Line::from(Span::styled(
+                "No file selected",
+                Style::default().fg(Color::DarkGray),
+            )));
+            let para = Paragraph::new(lines);
+            f.render_widget(para, inner);
+            return;
         };
-        buttons.push(Span::styled(" Confirm ", confirm_style));
-        buttons.push(Span::raw("  "));
 
-        // Cancel button
-        let cancel_style = if buttons_focused && self.selected_button == SelectedButton::Cancel {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        buttons.push(Span::styled(" Cancel ", cancel_style));
+        // Path
+        lines.push(Line::from(vec![
+            Span::styled("Path: ", label_style),
+            Span::styled(&file.corpus_path, value_style),
+        ]));
 
-        // Hint text
-        buttons.push(Span::raw("    "));
-        buttons.push(Span::styled(
-            "[↑↓ select] [Tab next] [Ctrl+R review] [Enter confirm]",
-            Style::default().fg(Color::DarkGray),
-        ));
+        // Audio metadata from cache
+        if let Some(meta) = self.cached_data.file_meta_cache.get(&file.inode) {
+            lines.push(Line::from(""));
 
-        let controls = Paragraph::new(Line::from(buttons)).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(if buttons_focused {
-                    Color::Cyan
+            lines.push(Line::from(vec![
+                Span::styled("Format: ", label_style),
+                Span::styled(meta.file_type.to_uppercase(), value_style),
+            ]));
+
+            if let Some(dur) = meta.duration_ms {
+                let secs = dur / 1000;
+                let mins = secs / 60;
+                let rem = secs % 60;
+                lines.push(Line::from(vec![
+                    Span::styled("Duration: ", label_style),
+                    Span::styled(format!("{}:{:02}", mins, rem), value_style),
+                ]));
+            }
+
+            if let Some(br) = meta.bitrate_kbps {
+                lines.push(Line::from(vec![
+                    Span::styled("Bitrate: ", label_style),
+                    Span::styled(format!("{} kbps", br), value_style),
+                ]));
+            }
+
+            if let Some(sr) = meta.sample_rate {
+                let display = if sr >= 1000 && sr % 1000 == 0 {
+                    format!("{} kHz", sr / 1000)
+                } else if sr >= 1000 {
+                    format!("{:.1} kHz", sr as f64 / 1000.0)
                 } else {
-                    Color::DarkGray
-                })),
-        );
+                    format!("{} Hz", sr)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Sample rate: ", label_style),
+                    Span::styled(display, value_style),
+                ]));
+            }
 
+            if meta.file_size > 0 {
+                let size_str = if meta.file_size >= 1_048_576 {
+                    format!("{:.1} MB", meta.file_size as f64 / 1_048_576.0)
+                } else {
+                    format!("{:.0} KB", meta.file_size as f64 / 1024.0)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Size: ", label_style),
+                    Span::styled(size_str, value_style),
+                ]));
+            }
+
+            let art_label = if meta.has_pictures { "Yes" } else { "No" };
+            let art_style = if meta.has_pictures {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Album art: ", label_style),
+                Span::styled(art_label, art_style),
+            ]));
+
+            // Tags section
+            if !meta.tags.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Tags:",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+
+                let tag_budget = max_lines.saturating_sub(lines.len());
+                for (name, value) in meta.tags.iter().take(tag_budget) {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {}: ", name), label_style),
+                        Span::styled(truncate_right(value, 30), value_style),
+                    ]));
+                }
+                let remaining = meta.tags.len().saturating_sub(tag_budget);
+                if remaining > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ... +{} more", remaining),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        }
+
+        let para = Paragraph::new(lines);
+        f.render_widget(para, inner);
+    }
+
+    fn render_hints(&self, f: &mut Frame, area: Rect) {
+        let hints = Line::from(vec![
+            Span::styled(" \u{2191}\u{2193}", Style::default().fg(Color::Cyan)),
+            Span::styled(" select ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" \u{21e7}\u{2191}\u{2193}", Style::default().fg(Color::Cyan)),
+            Span::styled(" pane ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Tab", Style::default().fg(Color::Cyan)),
+            Span::styled(" next ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Enter", Style::default().fg(Color::Cyan)),
+            Span::styled(" confirm ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" ^R", Style::default().fg(Color::Cyan)),
+            Span::styled(" review ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Esc", Style::default().fg(Color::Cyan)),
+            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        ]);
+
+        let controls = Paragraph::new(hints);
         f.render_widget(controls, area);
     }
 }

@@ -22,7 +22,7 @@ use crate::corpus::tags::TagSet;
 use crate::witch::MutationExecutionWitness;
 
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{ExtractedMetadata, Mutation, MutationResult, PendingSignal, SignalClearScope};
+use super::types::{DiffEntry, ExtractedMetadata, Mutation, MutationResult, PendingSignal, SignalClearScope, path_filename};
 
 /// File types that should trigger ShitFormat signal (non-Vorbis containers).
 /// Includes lossy formats with poor metadata and lossless needing remux.
@@ -182,6 +182,10 @@ impl MutationExecutor for IndexFileFromPathMutation {
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(path_filename(&self.path), "[unindexed]", self.path.display())]
+    }
 }
 
 impl MutationExecutor for UpdateFilePathMutation {
@@ -207,6 +211,14 @@ impl MutationExecutor for UpdateFilePathMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.new_path),
+            &self.zone,
+            self.new_path.display(),
+        )]
+    }
 }
 
 impl MutationExecutor for DropFromIndexMutation {
@@ -232,6 +244,10 @@ impl MutationExecutor for DropFromIndexMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
     fn affected_inodes(&self) -> Vec<i64> { self.inode.into_iter().collect() }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(path_filename(&self.path), self.path.display(), "[removed]")]
+    }
 }
 
 impl MutationExecutor for DropDirectoryFromIndexMutation {
@@ -257,6 +273,14 @@ impl MutationExecutor for DropDirectoryFromIndexMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.directory_path),
+            "[indexed]",
+            "[removed]",
+        )]
+    }
 }
 
 impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
@@ -286,6 +310,12 @@ impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         self.tracks.iter().map(|(_, path)| path.clone()).collect()
     }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        self.tracks.iter().map(|(_, path)| {
+            DiffEntry::new(path_filename(path), "[mtime mismatch]", "acknowledged")
+        }).collect()
+    }
 }
 
 impl MutationExecutor for ApplyDbTagsToDiskMutation {
@@ -313,6 +343,10 @@ impl MutationExecutor for ApplyDbTagsToDiskMutation {
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(path_filename(&self.path), "disk tags", "overwrite \u{2192} DB")]
+    }
 }
 
 impl MutationExecutor for FlushTagsToDiskMutation {
@@ -367,6 +401,10 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(path_filename(&self.path), "DB tags", "accept \u{2190} disk")]
+    }
 }
 
 impl MutationExecutor for EmitCanonicalTagMutation {
@@ -392,6 +430,10 @@ impl MutationExecutor for EmitCanonicalTagMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(&self.tag_name, "[non-canonical]", &self.canonical_value)]
+    }
 }
 
 impl MutationExecutor for EmitExpectedOverlapMutation {
@@ -417,6 +459,10 @@ impl MutationExecutor for EmitExpectedOverlapMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new("Expected overlap", &self.source_a, &self.source_b)]
+    }
 }
 
 impl MutationExecutor for EmitExpectedDuplicateMutation {
@@ -442,6 +488,10 @@ impl MutationExecutor for EmitExpectedDuplicateMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new("Expected duplicate", "[flagged]", &self.fingerprint_key)]
+    }
 }
 
 impl MutationExecutor for EmitExpectedMissingTagMutation {
@@ -467,6 +517,14 @@ impl MutationExecutor for EmitExpectedMissingTagMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "Expected missing tag",
+            "[flagged]",
+            format!("{} inodes", self.inodes.len()),
+        )]
+    }
 }
 
 /// Index a track from extracted metadata (internal helper).

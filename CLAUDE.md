@@ -156,7 +156,6 @@ Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing
    - `operator_decisions::stage_decision()` - add decision to active transaction
    - `operator_decisions::commit_transaction()` - commit all staged decisions
    - `operator_decisions::discard_transaction()` - discard all staged decisions
-   - `operator_decisions::execute_single_decision()` - start, add, commit in one call
 
 2. These functions are called ONLY from Enter keypress handlers in confirmation modals.
 

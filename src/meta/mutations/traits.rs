@@ -75,4 +75,12 @@ pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
     fn paths_for_signal_updates(&self) -> Vec<std::path::PathBuf> {
         Vec::new()
     }
+
+    /// Diff entries for transaction review display.
+    ///
+    /// Returns field-level diffs (label, old_value, new_value) for rendering
+    /// red→green change visualization. Default empty — mutations opt in.
+    fn diff_entries(&self) -> Vec<super::types::DiffEntry> {
+        Vec::new()
+    }
 }

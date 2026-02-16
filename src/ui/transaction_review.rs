@@ -17,21 +17,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::meta::mutations::Mutation;
+use crate::meta::mutations::{DiffEntry, Mutation};
 use crate::ui::widgets::{centered_rect_fixed, ConfirmationButton, render_button_row};
 use crate::witch::Witch;
 
 // ============================================================================
 // Types
 // ============================================================================
-
-/// A single field-level diff for display in transaction review.
-#[derive(Debug, Clone)]
-pub struct DiffEntry {
-    pub label: String,
-    pub old_value: String,
-    pub new_value: String,
-}
 
 /// Summary of a single decision for display.
 #[derive(Debug, Clone)]
@@ -241,31 +233,6 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
     inodes.len()
 }
 
-/// Generate diff entries for an ApplyConfigEdits mutation by comparing
-/// old and new config field-by-field using the editor's group builder.
-fn generate_config_diff_entries(mutation: &crate::meta::mutations::config_edit::ApplyConfigEditsMutation) -> Vec<DiffEntry> {
-    use crate::ui::config_editor::build::build_groups_from_config;
-
-    let old_groups = build_groups_from_config(&mutation.old_config, None);
-    let new_groups = build_groups_from_config(&mutation.new_config, None);
-
-    let mut diffs = Vec::new();
-
-    for (old_group, new_group) in old_groups.iter().zip(new_groups.iter()) {
-        for (old_field, new_field) in old_group.fields.iter().zip(new_group.fields.iter()) {
-            if !old_field.value.eq_value(&new_field.value) {
-                diffs.push(DiffEntry {
-                    label: old_field.label.to_string(),
-                    old_value: old_field.value.display(),
-                    new_value: new_field.value.display(),
-                });
-            }
-        }
-    }
-
-    diffs
-}
-
 /// Fetch decision summaries from the Witch's active transaction.
 pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
     witch
@@ -273,16 +240,11 @@ pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
         .iter()
         .filter_map(|&idx| {
             witch.get_decision(idx).map(|d| {
-                // Generate diff entries for config edit mutations
                 let diff_entries = d.mutations.iter()
-                    .filter_map(|m| {
-                        if let Mutation::ApplyConfigEdits(ref ce) = m {
-                            Some(generate_config_diff_entries(ce))
-                        } else {
-                            None
-                        }
+                    .flat_map(|m| match m.as_executor() {
+                        Some(e) => e.diff_entries(),
+                        None => Vec::new(),
                     })
-                    .flatten()
                     .collect();
 
                 DecisionSummary {

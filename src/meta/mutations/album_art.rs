@@ -11,7 +11,7 @@ use crate::meta::signals::data::EmbeddableAlbumArtSignal;
 use crate::witch::MutationExecutionWitness;
 
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
+use super::types::{DiffEntry, Mutation, MutationResult, SignalClearScope, SignalToClear, path_filename};
 
 /// Embed a sidecar image into an audio file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,6 +84,14 @@ impl MutationExecutor for EmbedAlbumArtMutation {
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.audio_path.clone()]
+    }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.audio_path),
+            "[no embedded art]",
+            path_filename(&self.image_path),
+        )]
     }
 }
 

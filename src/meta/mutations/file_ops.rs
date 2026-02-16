@@ -15,7 +15,7 @@ use crate::meta::computations::{Computation, awakening};
 use crate::meta::signals::data::*;
 
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
+use super::types::{DiffEntry, Mutation, MutationResult, SignalClearScope, SignalToClear, path_filename};
 
 // ============================================================================
 // Mutation Structs
@@ -98,6 +98,14 @@ impl MutationExecutor for MoveMutation {
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
     }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.source),
+            self.source.display(),
+            self.destination.display(),
+        )]
+    }
 }
 
 impl MutationExecutor for MoveToStashMutation {
@@ -155,6 +163,14 @@ impl MutationExecutor for MoveToStashMutation {
     }
 
     // MoveToStash: no signal updates needed (file is gone)
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.path),
+            self.path.display(),
+            format!("\u{2192} {}", self.stash_name),
+        )]
+    }
 }
 
 impl MutationExecutor for HardLinkMutation {
@@ -191,6 +207,14 @@ impl MutationExecutor for HardLinkMutation {
             corpus_path: self.source.clone(),
             library_path: self.destination.clone(),
         })]
+    }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.source),
+            self.source.display(),
+            self.destination.display(),
+        )]
     }
 }
 
@@ -237,6 +261,14 @@ impl MutationExecutor for LibraryMoveMutation {
         }
         Vec::new()
     }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.source),
+            self.source.display(),
+            self.destination.display(),
+        )]
+    }
 }
 
 impl MutationExecutor for InboxToCorpusMutation {
@@ -280,6 +312,14 @@ impl MutationExecutor for InboxToCorpusMutation {
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.inbox_path.clone(), self.corpus_path.clone()]
+    }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.inbox_path),
+            self.inbox_path.display(),
+            self.corpus_path.display(),
+        )]
     }
 }
 

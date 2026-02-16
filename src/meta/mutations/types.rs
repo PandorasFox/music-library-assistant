@@ -8,7 +8,7 @@
 //! - Cancelled mid-execution
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::meta::computations::Computation;
 use crate::meta::signals::data::TypedSignalWrite;
@@ -93,6 +93,38 @@ impl TagOp {
             _ => false,
         }
     }
+}
+
+// ============================================================================
+// Diff Display Types
+// ============================================================================
+
+/// A single field-level diff for display in transaction review.
+///
+/// Rendered as red (old_value) → green (new_value) with a label.
+#[derive(Debug, Clone)]
+pub struct DiffEntry {
+    pub label: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
+impl DiffEntry {
+    pub fn new(label: impl Into<String>, old_value: impl ToString, new_value: impl ToString) -> Self {
+        Self {
+            label: label.into(),
+            old_value: old_value.to_string(),
+            new_value: new_value.to_string(),
+        }
+    }
+}
+
+/// Extract filename from a path for use as a diff label.
+pub fn path_filename(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 // ============================================================================

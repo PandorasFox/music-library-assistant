@@ -351,10 +351,22 @@ pub fn execute_derive_inbox_signals(
         }
     };
 
-    // No inbox files observed — still need GC to clear orphaned signals from prior cycles
+    // No inbox files observed — cascade-drop any stale indexed inbox state, then GC
     if disk_inodes.is_empty() {
-        log_general("[COMPUTE] DeriveInboxSignals: no inbox files, running GC only");
-        let sender = sender; // already cloned above
+        log_general("[COMPUTE] DeriveInboxSignals: no inbox files on disk");
+
+        // Drop inbox state for any inodes still indexed as inbox
+        let indexed_inodes = read_only_db.get_all_inbox_inodes().unwrap_or_default();
+        if !indexed_inodes.is_empty() {
+            log_general(format!(
+                "[COMPUTE] DeriveInboxSignals: dropping inbox state for {} gone file(s)",
+                indexed_inodes.len()
+            ));
+            for inode in indexed_inodes.keys() {
+                sender.drop_inbox_file_state(*inode, witness);
+            }
+        }
+
         let gc_total = gc_orphaned_inbox_signals(read_only_db, &sender, &HashSet::new(), witness);
         if gc_total > 0 {
             log_general(format!(
@@ -432,16 +444,32 @@ pub fn execute_derive_inbox_signals(
         );
     }
 
+    // ========================================================================
+    // Cascade-drop inbox state for files gone from disk
+    // ========================================================================
+    let index_only: Vec<i64> = indexed_set.difference(&disk_set).copied().collect();
+    if !index_only.is_empty() {
+        log_general(format!(
+            "[COMPUTE] DeriveInboxSignals: dropping inbox state for {} gone file(s)",
+            index_only.len()
+        ));
+        for inode in &index_only {
+            sender.drop_inbox_file_state(*inode, witness);
+        }
+    }
+
     log_general(format!(
-        "[COMPUTE] DeriveInboxSignals: {} unindexed, {} healthy",
+        "[COMPUTE] DeriveInboxSignals: {} unindexed, {} healthy, {} gone",
         disk_only.len(),
-        both.len()
+        both.len(),
+        index_only.len()
     ));
 
     // ========================================================================
     // GC Backstop: Clear orphaned inbox signals for inodes no longer known
     // ========================================================================
-    let known_inodes: HashSet<i64> = disk_set.union(&indexed_set).copied().collect();
+    // Disk presence is the sole authority — only disk inodes are "known"
+    let known_inodes: HashSet<i64> = disk_set;
     let gc_total = gc_orphaned_inbox_signals(read_only_db, &sender, &known_inodes, witness);
     if gc_total > 0 {
         log_general(format!(

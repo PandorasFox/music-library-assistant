@@ -341,6 +341,19 @@ enum SignalWriteOp {
     // should be distinguished at the type level, not via SQL string matching.
 
     // =========================================================================
+    // Inbox State Operations (Awakening phase cascade cleanup)
+    // =========================================================================
+
+    /// Drop all inbox state for an inode no longer observed on disk.
+    ///
+    /// Cascade-deletes inbox_tags, files (zone='inbox'), and all per-inode
+    /// inbox signals. Does NOT touch audio_info (corpus may share the inode
+    /// after a move) or corpus signals.
+    DropInboxFileState {
+        inode: i64,
+    },
+
+    // =========================================================================
     // Dirty Inode Operations (for incremental computations)
     // =========================================================================
 
@@ -918,6 +931,24 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
+    // Inbox State Operations (Awakening phase cascade cleanup)
+    // =========================================================================
+
+    /// Drop all inbox state for an inode no longer observed on disk in inbox.
+    ///
+    /// Cascade-deletes inbox_tags, files (zone='inbox'), and all per-inode
+    /// inbox signals (FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch)
+    /// plus MovedFile. Does NOT touch audio_info or corpus signals.
+    pub fn drop_inbox_file_state(
+        &self,
+        inode: i64,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::DropInboxFileState { inode });
+    }
+
+    // =========================================================================
     // Dirty Inode Operations (for incremental computations)
     // =========================================================================
 
@@ -1374,6 +1405,12 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         SignalWriteOp::SetHasPictures { inode, mtime_secs, mtime_nanos, file_size } => {
             with_retry("set_has_pictures", &inode.to_string(), || {
                 execute_set_has_pictures(db, *inode, *mtime_secs, *mtime_nanos, *file_size)
+            });
+        }
+
+        SignalWriteOp::DropInboxFileState { inode } => {
+            with_retry("drop_inbox_file_state", &inode.to_string(), || {
+                execute_drop_inbox_file_state(db, *inode)
             });
         }
 
@@ -2037,6 +2074,43 @@ fn execute_set_has_pictures(
          WHERE inode = ?4 AND zone = 'corpus'",
         params![mtime_secs, mtime_nanos, file_size, inode],
     )?;
+
+    Ok(())
+}
+
+/// Execute DropInboxFileState: cascade-drop all inbox state for an inode.
+///
+/// Called when DeriveInboxSignals detects an inode that was indexed as inbox
+/// but is no longer observed on disk. Cleans up:
+/// - inbox_tags rows
+/// - files table entry (zone='inbox' only)
+/// - Per-inode inbox signals: FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch
+/// - MovedFile signal (inbox->X moves become disappear+reappear instead)
+///
+/// Does NOT touch audio_info (corpus may reference same inode after mv)
+/// or corpus signals (FileInCorpus, HealthyFile, etc.).
+fn execute_drop_inbox_file_state(db: &Database, inode: i64) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    let conn = db.conn();
+
+    // Delete inbox tags for this inode
+    conn.execute("DELETE FROM inbox_tags WHERE inode = ?1", params![inode])?;
+
+    // Delete inbox file entry (only zone='inbox', not corpus)
+    conn.execute(
+        "DELETE FROM files WHERE zone = 'inbox' AND inode = ?1",
+        params![inode],
+    )?;
+
+    // Clear per-inode inbox signals
+    let _ = FileInInboxSignal::clear_by_inode(conn, inode);
+    let _ = InboxUnindexedSignal::clear_by_inode(conn, inode);
+    let _ = InboxHealthySignal::clear_by_inode(conn, inode);
+    let _ = InboxCorpusMatchSignal::clear_by_inode(conn, inode);
+
+    // Clear MovedFile — inbox->X moves become disappear+reappear
+    let _ = MovedFileSignal::clear_by_inode(conn, inode);
 
     Ok(())
 }

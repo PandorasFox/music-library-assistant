@@ -96,7 +96,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 |-------------|--------|-----------------|-----------------|
 | ScheduleSecondLevelDerivations | DeriveCorpusSignals, DeriveInboxSignals, WalkLibrary × N | MissingDirectory | MissingDirectory (if dir exists again) |
 | DeriveCorpusSignals | — | UnindexedFile, MissingFile, HealthyFile | UnindexedFile, MissingFile, HealthyFile (stale); skips HealthyFile for OOB-flagged files. **GC backstop**: clears orphaned signals for inodes not in disk ∪ index |
-| DeriveInboxSignals | — | InboxUnindexed, InboxHealthy | InboxUnindexed (stale) |
+| DeriveInboxSignals | — | InboxUnindexed, InboxHealthy | InboxUnindexed (stale). **Cascade-drop**: for indexed inbox inodes no longer on disk, drops all inbox state via DropInboxFileState (inbox_tags, files zone='inbox', FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch, MovedFile). Disk presence is sole authority — GC backstop uses disk_set only (not disk ∪ indexed) |
 | UpdateCorpusFileSignals | — | FileInCorpus, UnindexedFile, MissingFile, HealthyFile | FileInCorpus, UnindexedFile, MissingFile, HealthyFile |
 | UpdateLibraryFileSignals | — | — | LibraryLeftover, LibraryStale |
 | UpdateDeploySignals | — | DeployedHealthy | DeployReady, LibraryLeftover, LibraryStale |

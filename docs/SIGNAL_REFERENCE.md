@@ -46,10 +46,10 @@ Signals are atomic facts about corpus state. They follow these principles:
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
-| FileInInbox | ScanCorpusDirectory (zone=inbox) | ClearExistingObservationState | File discovered on disk in inbox/ |
-| InboxUnindexed | DeriveInboxSignals | DeriveInboxSignals | On disk in inbox but not in index |
-| InboxHealthy | DeriveInboxSignals | DeriveInboxSignals, InboxToCorpus (MutableOnly scope) | In inbox, indexed, ready for operations |
-| InboxCorpusMatch | DetectInboxCorpusMatches | DetectInboxCorpusMatches | Inbox file has fingerprint+duration match against corpus file(s). Data (bincode BLOB): `corpus_matches[]` with `corpus_inode`, `corpus_path`, `similarity` |
+| FileInInbox | ScanCorpusDirectory (zone=inbox) | ClearExistingObservationState, DropInboxFileState | File discovered on disk in inbox/. **Authority signal for inbox file presence**: when absent (file gone from disk), DeriveInboxSignals cascade-drops all inbox state for the inode via DropInboxFileState |
+| InboxUnindexed | DeriveInboxSignals | DeriveInboxSignals, DropInboxFileState | On disk in inbox but not in index |
+| InboxHealthy | DeriveInboxSignals | DeriveInboxSignals, DropInboxFileState, InboxToCorpus (MutableOnly scope) | In inbox, indexed, ready for operations |
+| InboxCorpusMatch | DetectInboxCorpusMatches | DetectInboxCorpusMatches, DropInboxFileState | Inbox file has fingerprint+duration match against corpus file(s). Data (bincode BLOB): `corpus_matches[]` with `corpus_inode`, `corpus_path`, `similarity` |
 | InboxTagCanonicity | DetectInboxTagCanonicity | DetectInboxTagCanonicity | Inbox tag value differs from corpus canonical spelling. Aggregate signal keyed by `{tag_name}:{normalized_key}`. Data (bincode BLOB): `inbox_variants[]` (value, count), `inbox_inodes[]`, `corpus_variants[]` (value, count). Novel inbox values (no corpus equivalent) are NOT flagged |
 
 ---

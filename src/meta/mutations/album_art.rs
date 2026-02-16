@@ -172,8 +172,7 @@ fn embed_picture_flac(
     flac.insert_picture(picture, None)
         .with_context(|| "Failed to insert picture into FLAC")?;
 
-    let write_opts = WriteOptions::new().preferred_padding(0);
-    flac.save_to_path(path, write_opts)
+    flac.save_to_path(path, WriteOptions::new())
         .with_context(|| format!("Failed to save FLAC with picture: {}", path.display()))?;
 
     Ok(())

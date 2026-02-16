@@ -28,6 +28,7 @@ const TITLE_PANE_WIDTH: u16 = 16;
 /// Views available in the lateral view ring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LateralView {
+    Config,
     TagSearch,
     CorpusBrowser,
     Insights,
@@ -39,6 +40,7 @@ impl LateralView {
     /// Display label for this view
     pub fn label(&self) -> &'static str {
         match self {
+            LateralView::Config => "Config",
             LateralView::TagSearch => "Tag Search",
             LateralView::CorpusBrowser => "Corpus Browser",
             LateralView::Insights => "Insights & Operations",
@@ -50,18 +52,20 @@ impl LateralView {
     /// Get the next view in the ring (Tab)
     pub fn next(&self) -> Self {
         match self {
+            LateralView::Config => LateralView::TagSearch,
             LateralView::TagSearch => LateralView::CorpusBrowser,
             LateralView::CorpusBrowser => LateralView::Insights,
             LateralView::Insights => LateralView::Inbox,
             LateralView::Inbox => LateralView::Deploy,
-            LateralView::Deploy => LateralView::TagSearch,
+            LateralView::Deploy => LateralView::Config,
         }
     }
 
     /// Get the previous view in the ring (Shift-Tab)
     pub fn prev(&self) -> Self {
         match self {
-            LateralView::TagSearch => LateralView::Deploy,
+            LateralView::Config => LateralView::Deploy,
+            LateralView::TagSearch => LateralView::Config,
             LateralView::CorpusBrowser => LateralView::TagSearch,
             LateralView::Insights => LateralView::CorpusBrowser,
             LateralView::Inbox => LateralView::Insights,
@@ -71,7 +75,7 @@ impl LateralView {
 
     /// All views in order
     pub fn all() -> &'static [LateralView] {
-        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::Inbox, LateralView::Deploy]
+        &[LateralView::Config, LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::Inbox, LateralView::Deploy]
     }
 }
 
@@ -170,23 +174,25 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling: TagSearch → CorpusBrowser → Insights → Inbox → Deploy → TagSearch
-        let view = LateralView::TagSearch;
-        assert_eq!(view.next(), LateralView::CorpusBrowser);
-        assert_eq!(view.next().next(), LateralView::Insights);
-        assert_eq!(view.next().next().next(), LateralView::Inbox);
-        assert_eq!(view.next().next().next().next(), LateralView::Deploy);
-        assert_eq!(view.next().next().next().next().next(), LateralView::TagSearch);
+        // Test forward cycling: Config → TagSearch → CorpusBrowser → Insights → Inbox → Deploy → Config
+        let view = LateralView::Config;
+        assert_eq!(view.next(), LateralView::TagSearch);
+        assert_eq!(view.next().next(), LateralView::CorpusBrowser);
+        assert_eq!(view.next().next().next(), LateralView::Insights);
+        assert_eq!(view.next().next().next().next(), LateralView::Inbox);
+        assert_eq!(view.next().next().next().next().next(), LateralView::Deploy);
+        assert_eq!(view.next().next().next().next().next().next(), LateralView::Config);
 
-        // Test backward cycling from CorpusBrowser
-        let view = LateralView::CorpusBrowser;
-        assert_eq!(view.prev(), LateralView::TagSearch);
+        // Test backward cycling from TagSearch
+        let view = LateralView::TagSearch;
+        assert_eq!(view.prev(), LateralView::Config);
         assert_eq!(view.prev().prev(), LateralView::Deploy);
         assert_eq!(view.prev().prev().prev(), LateralView::Inbox);
     }
 
     #[test]
     fn test_lateral_view_labels() {
+        assert_eq!(LateralView::Config.label(), "Config");
         assert_eq!(LateralView::TagSearch.label(), "Tag Search");
         assert_eq!(LateralView::CorpusBrowser.label(), "Corpus Browser");
         assert_eq!(LateralView::Insights.label(), "Insights & Operations");

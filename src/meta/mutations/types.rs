@@ -25,6 +25,7 @@ use super::indexing::{
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
 use super::album_art::EmbedAlbumArtMutation;
+use super::config_edit::ApplyConfigEditsMutation;
 
 // ============================================================================
 // TagOp - Incremental Tag Operations
@@ -287,6 +288,12 @@ pub enum Mutation {
     // ========================================================================
     /// Embed a sidecar image into an audio file.
     EmbedAlbumArt(EmbedAlbumArtMutation),
+
+    // ========================================================================
+    // Config Operations (struct-backed — see config_edit.rs for trait impl)
+    // ========================================================================
+    /// Apply edited config to disk (comment-preserving KDL modification).
+    ApplyConfigEdits(ApplyConfigEditsMutation),
 }
 
 impl Mutation {
@@ -316,6 +323,7 @@ impl Mutation {
             Mutation::EmitExpectedDuplicate(m) => Some(m),
             Mutation::EmitExpectedMissingTag(m) => Some(m),
             Mutation::EmbedAlbumArt(m) => Some(m),
+            Mutation::ApplyConfigEdits(m) => Some(m),
             Mutation::DbMigration { .. } => None,
         }
     }
@@ -382,7 +390,8 @@ impl Mutation {
             | Mutation::EmitCanonicalTag(_)
             | Mutation::EmitExpectedOverlap(_)
             | Mutation::EmitExpectedDuplicate(_)
-            | Mutation::EmitExpectedMissingTag(_) => None,
+            | Mutation::EmitExpectedMissingTag(_)
+            | Mutation::ApplyConfigEdits(_) => None,
         }
     }
 
@@ -494,6 +503,9 @@ impl Mutation {
                     dirs.push(parent.to_path_buf());
                 }
             }
+
+            // Config edits: no corpus directories affected
+            Mutation::ApplyConfigEdits(_) => {}
         }
 
         // Deduplicate directories

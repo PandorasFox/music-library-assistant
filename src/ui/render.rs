@@ -17,7 +17,7 @@ use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
 use super::{
-    compound_split_v2, filter_popup, inbox_view, insights_view, manual_review_modal,
+    compound_split_v2, config_editor, filter_popup, inbox_view, insights_view, manual_review_modal,
     oob_conflict_modal, oob_sync_modal, progressive_worker, tag_canonicity_v2,
     transaction_review,
 };
@@ -158,6 +158,10 @@ fn render_content(
         ActiveView::Progress { .. } => {
             // Never reached - handled separately in render_app() before this function
             vname = "progress";
+        }
+        ActiveView::ConfigEditor(ref state) => {
+            vname = "config_editor";
+            config_editor::render::render(f, area, state);
         }
         ActiveView::ProgressiveWork(ref worker) => {
             vname = "progressive_work";
@@ -399,6 +403,7 @@ fn render_status_bar(
 /// Get a short name for the active view (for perf logging).
 fn view_name(view: &ActiveView) -> &'static str {
     match view {
+        ActiveView::ConfigEditor(_) => "config_editor",
         ActiveView::Insights(_) => "insights",
         ActiveView::Inbox(_) => "inbox",
         ActiveView::CorpusBrowser(_) => "corpus_browser",

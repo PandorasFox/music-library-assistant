@@ -61,6 +61,7 @@ fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> R
                 duration_ms: start.elapsed().as_millis() as u64,
                 queue_wait_ms,
                 thread_stats: None,
+                config_update: None,
             })
         }
     }
@@ -142,6 +143,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 duration_ms: start.elapsed().as_millis() as u64,
                 queue_wait_ms,
                 thread_stats: None,
+                config_update: None,
             };
         }
     };
@@ -194,6 +196,17 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Apply structured post-execution pipeline
     let spawn = apply_post_execution(&mutation, success, &pending_signals, &discovered_inodes, &witness);
 
+    // Extract config update for ApplyConfigEdits mutations
+    let config_update = if success {
+        if let Mutation::ApplyConfigEdits(ref m) = &mutation {
+            Some(m.new_config.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     TaskResult {
         success,
         error,
@@ -203,6 +216,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         duration_ms,
         queue_wait_ms,
         thread_stats: None, // Mutations don't use thread-local stats
+        config_update,
     }
 }
 
@@ -227,6 +241,7 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
         duration_ms: result.duration_ms,
         queue_wait_ms,
         thread_stats,
+        config_update: None,
     }
 }
 
@@ -263,6 +278,7 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
         duration_ms: start.elapsed().as_millis() as u64,
         queue_wait_ms,
         thread_stats: None, // Migrations don't use thread-local stats
+        config_update: None,
     }
 }
 

@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, SharedConfig};
 use crate::meta::computations::{Computation, asleep, awakening, awake};
 use crate::corpus::db::{Database, ReadOnlyDb};
 use crate::meta::mutations::Mutation;
@@ -174,6 +174,10 @@ pub struct Witch {
 
     /// Handle to the dedicated logging thread for shutdown coordination.
     log_thread_handle: Option<crate::logging::LogThreadHandle>,
+
+    /// Shared config reference for runtime config updates.
+    /// Set after construction via `set_shared_config()`.
+    shared_config: Option<SharedConfig>,
 }
 
 impl Witch {
@@ -239,6 +243,7 @@ impl Witch {
             worker_stats_shared,
             ui_read_cache: UiReadCache::new(),
             log_thread_handle,
+            shared_config: None,
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
@@ -264,6 +269,27 @@ impl Witch {
             );
         }
         she
+    }
+
+    // -------------------------------------------------------------------------
+    // Shared Config
+    // -------------------------------------------------------------------------
+
+    /// Store the shared config reference after construction.
+    ///
+    /// Called from `run_menu()` after both App and Witch are created.
+    pub fn set_shared_config(&mut self, shared: SharedConfig) {
+        self.shared_config = Some(shared);
+    }
+
+    /// Replace the in-memory config with a new version (after config edit mutation).
+    ///
+    /// Write-locks briefly; safe because tick() and render() are sequential on main thread.
+    pub fn update_shared_config(&self, new_config: Config) {
+        if let Some(ref shared) = self.shared_config {
+            let mut guard = shared.write().expect("SharedConfig lock poisoned");
+            *guard = new_config;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -470,6 +496,11 @@ impl Witch {
                     }
                     self.recent_errors.push_back(err);
                 }
+            }
+
+            // Apply config update if present (from ApplyConfigEdits mutation)
+            if let Some(new_config) = result.config_update {
+                self.update_shared_config(new_config);
             }
 
             // Collect spawned follow-up computations and mutations
@@ -814,6 +845,7 @@ impl Witch {
                         duration_ms: queue_time.elapsed().as_millis() as u64,
                         queue_wait_ms: 0,
                         thread_stats: None,
+                        config_update: None,
                     }
                 }
             };

@@ -12,6 +12,7 @@ All mutation code lives in `src/meta/mutations/`:
 - **Indexing**: `indexing.rs` (IndexTrack, IndexFileFromPath, DropFromIndex, DropDirectoryFromIndex)
 - **File operations**: `file_ops.rs` (Move, Copy, MoveToStash, HardLink, LibraryMove, etc.)
 - **Transcoding**: `transcode.rs` (Transcode executor)
+- **Config editing**: `config_edit.rs` (ApplyConfigEdits executor)
 - **Migrations**: `migration.rs` (MigrationRegistry)
 
 ## Overview
@@ -144,6 +145,14 @@ The EmitExpectedOverlap mutation is used when an operator confirms that cross-so
 The EmitExpectedDuplicate mutation is used when an operator confirms that a fingerprint overlap group is expected (e.g., different tracks that legitimately sound nearly identical, like "Act Clear" vs "Act Clear (Silver or Bronze Medal)" on a game soundtrack). It emits an ExpectedDuplicate signal with the fingerprint key, then clears the corresponding RedundantDuplicate signal. Future AnalyzeFingerprintOverlaps runs check for ExpectedDuplicate signals and skip the entire fingerprint group (suppressing both RedundantDuplicate and SubparDuplicate emission).
 
 The EmitExpectedMissingTag mutation is used when an operator confirms that certain inodes are expected to have missing tags (e.g., instrumental tracks intentionally lacking an ALBUM tag). It takes `inodes: Vec<i64>` and writes an ExpectedMissingTag corpus signal for each inode. `is_db_only: true`, `signal_clear_scope: None`, `affected_inode: None`. It does not spawn follow-up computations. Future DetectMissingTags runs check for ExpectedMissingTag signals and suppress those inodes from MissingAlbumSingleSignal emission.
+
+### Config Operations
+
+| Mutation | Spawns Mutations | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
+|----------|------------------|---------------------|-----------------|-----------------|-------|
+| ApplyConfigEdits | — | — | — | — | Writes edited config to disk via comment-preserving KDL modification. Returns new Config in `TaskResult.config_update` for in-memory update via `Witch::update_shared_config()` |
+
+The ApplyConfigEdits mutation is created by the Config Editor view when the operator saves edited config fields. It carries the original KDL text, old config, and new config. On execution, it backs up `config.kdl` to `config.kdl.bak`, then applies field-level edits to the KDL document preserving comments and formatting. The new config is propagated back to the main thread via `TaskResult.config_update`, where `Witch::tick()` updates the `SharedConfig` (Arc<RwLock<Config>>). `is_db_only: false` (writes to filesystem), `signal_clear_scope: None`, `affected_inodes: empty`. No spawned computations or signal effects.
 
 ---
 

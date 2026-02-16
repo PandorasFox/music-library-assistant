@@ -24,6 +24,7 @@ pub mod operator_decisions;
 pub mod transaction_review;
 
 pub mod bulk_selection;
+pub mod config_editor;
 pub mod compound_split_v2;
 pub mod corrupt_file_modal;
 pub mod deploy_modal;
@@ -77,7 +78,7 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::Config;
+use crate::config::{Config, SharedConfig};
 
 // ============================================================================
 // Application State
@@ -85,7 +86,7 @@ use crate::config::Config;
 
 /// Main application state
 pub(crate) struct App {
-    pub(super) config: Config,
+    pub(super) shared_config: SharedConfig,
     should_quit: bool,
     pub(super) status_message: Option<String>,
 
@@ -106,10 +107,10 @@ pub(crate) struct App {
 }
 
 impl App {
-    /// Create a new App with a pre-existing Witch instance.
-    fn new_with_witch(config: Config, witch: crate::witch::Witch) -> Self {
+    /// Create a new App with a pre-existing Witch instance and shared config.
+    fn new_with_witch(shared_config: SharedConfig, witch: crate::witch::Witch) -> Self {
         Self {
-            config,
+            shared_config,
             should_quit: false,
             status_message: None,
             view: ActiveView::Insights(insights_view::InsightsViewState::new()),
@@ -118,6 +119,11 @@ impl App {
             filter_overlay: None,
             view_stack: Vec::new(),
         }
+    }
+
+    /// Read-lock the shared config for accessing config values.
+    pub(super) fn config(&self) -> std::sync::RwLockReadGuard<'_, Config> {
+        crate::config::read_shared_config(&self.shared_config)
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -185,6 +191,7 @@ impl App {
         let action = match &mut self.view {
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
+            ActiveView::ConfigEditor(s) => ViewAction::ConfigEditor(s.handle_key(key)),
             ActiveView::Insights(s) => ViewAction::Insights(s.handle_key(key)),
             ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_key(key)),
             ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_key(key)),
@@ -268,7 +275,8 @@ impl App {
 
     /// Start the configured default view (post-startup landing screen).
     pub(super) fn start_default_view(&mut self) {
-        match self.config.opinions.startup.default_view {
+        let default_view = self.config().opinions.startup.default_view;
+        match default_view {
             crate::config::StartupView::Insights => self.start_insights_view(),
             crate::config::StartupView::Search => self.start_tag_search(),
             crate::config::StartupView::Browser => self.start_corpus_browser(),
@@ -315,12 +323,25 @@ impl App {
     /// Start the lateral view identified by the given variant.
     pub(super) fn start_lateral_view(&mut self, view: widgets::LateralView) {
         match view {
+            widgets::LateralView::Config => self.start_config_editor(),
             widgets::LateralView::TagSearch => self.start_tag_search(),
             widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
             widgets::LateralView::Insights => self.start_insights_view(),
             widgets::LateralView::Inbox => self.start_inbox_view(),
             widgets::LateralView::Deploy => self.start_deploy_view(),
         }
+    }
+
+    /// Start the config editor view.
+    pub(super) fn start_config_editor(&mut self) {
+        let config = self.config().clone();
+        let kdl_content = crate::config::get_config_dir()
+            .ok()
+            .map(|dir| dir.join("config.kdl"))
+            .and_then(|path| std::fs::read_to_string(path).ok());
+        self.view = ActiveView::ConfigEditor(
+            config_editor::ConfigEditorState::new(&config, kdl_content),
+        );
     }
 
     /// Start the deploy lateral view.
@@ -356,11 +377,13 @@ impl App {
 
     pub(super) fn start_corpus_browser(&mut self) {
         let variant_config = tree_browser::CorpusBrowserConfig::default();
-        let corpus_dir = self.config.corpus_dir();
-        let deploy_source_paths: Vec<std::path::PathBuf> = self.config.source_dirs
+        let config = self.config();
+        let corpus_dir = config.corpus_dir();
+        let deploy_source_paths: Vec<std::path::PathBuf> = config.source_dirs
             .iter()
             .map(|sd| corpus_dir.join(&sd.path))
             .collect();
+        drop(config);
         self.view = ActiveView::CorpusBrowser(tree_browser::TreeBrowserState::corpus_browser(
             corpus_dir,
             variant_config,
@@ -384,9 +407,12 @@ impl App {
     /// Get or create the Witch.
     pub(super) fn witch(&mut self) -> &mut crate::witch::Witch {
         if self.witch.is_none() {
-            let force_check = self.config.opinions.startup.force_check_all_files_at_startup;
+            let (force_check, config_clone) = {
+                let config = self.config();
+                (config.opinions.startup.force_check_all_files_at_startup, config.clone())
+            };
             let log_rx = self.log_rx.take();
-            self.witch = Some(crate::witch::Witch::with_opinions(&self.config, false, force_check, log_rx));
+            self.witch = Some(crate::witch::Witch::with_opinions(&config_clone, false, force_check, log_rx));
         }
         self.witch.as_mut().unwrap()
     }
@@ -450,7 +476,12 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     }
 
     let force_check = config.opinions.startup.force_check_all_files_at_startup;
-    let mut witch = crate::witch::Witch::with_opinions(&config, false, force_check, Some(log_rx));
+    let vacuum_threshold = config.opinions.startup.vacuum_threshold;
+    let shared_config = config.into_shared();
+    let mut witch = {
+        let cfg = crate::config::read_shared_config(&shared_config);
+        crate::witch::Witch::with_opinions(&cfg, false, force_check, Some(log_rx))
+    };
 
     if witch.needs_migrations() {
         startup::run_migrations(&mut terminal, &mut witch)?;
@@ -460,13 +491,14 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     startup::check_and_prompt_vacuum(
         &mut terminal,
         &db_path,
-        config.opinions.startup.vacuum_threshold,
+        vacuum_threshold,
         &mut witch,
     )?;
 
     witch.spawn_db_thread();
+    witch.set_shared_config(shared_config.clone());
 
-    let mut app = App::new_with_witch(config, witch);
+    let mut app = App::new_with_witch(shared_config, witch);
 
     app.witch().start_observing();
 

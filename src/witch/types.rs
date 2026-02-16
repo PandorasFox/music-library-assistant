@@ -474,6 +474,8 @@ pub(super) struct TaskResult {
     pub queue_wait_ms: u64,
     /// Snapshot of thread stats after execution (for computations)
     pub thread_stats: Option<crate::meta::computations::ThreadStats>,
+    /// Updated config from ApplyConfigEdits mutation (applied to SharedConfig in tick()).
+    pub config_update: Option<crate::config::Config>,
 }
 
 // ============================================================================

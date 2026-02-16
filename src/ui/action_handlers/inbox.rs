@@ -131,7 +131,7 @@ impl App {
 
     /// Start inbox corpus match resolution modal.
     pub(in crate::ui) fn start_inbox_corpus_match_resolution(&mut self) {
-        let fuzz = self.config.opinions.quality_resolution.inbox_bitrate_fuzz_percent;
+        let fuzz = self.config().opinions.quality_resolution.inbox_bitrate_fuzz_percent;
         let data = self.witch.as_mut()
             .and_then(|w| {
                 let read_db = w.read_db();
@@ -194,9 +194,10 @@ impl App {
 
     /// Start the inbox organize workflow.
     fn start_inbox_organize(&mut self) {
+        let config = self.config().clone();
         let state = self.witch.as_mut().and_then(|w| {
             let read_db = w.read_db();
-            inbox_organize::InboxOrganizeState::load_from_read_db(&read_db, &self.config)
+            inbox_organize::InboxOrganizeState::load_from_read_db(&read_db, &config)
         });
 
         match state {

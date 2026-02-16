@@ -13,7 +13,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
@@ -25,12 +25,21 @@ use crate::witch::Witch;
 // Types
 // ============================================================================
 
+/// A single field-level diff for display in transaction review.
+#[derive(Debug, Clone)]
+pub struct DiffEntry {
+    pub label: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
 /// Summary of a single decision for display.
 #[derive(Debug, Clone)]
 pub struct DecisionSummary {
     pub label: String,
     pub mutation_count: usize,
     pub track_count: usize,
+    pub diff_entries: Vec<DiffEntry>,
 }
 
 /// Which button is focused.
@@ -216,7 +225,8 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::EmitCanonicalTag(_)
             | Mutation::EmitExpectedOverlap(_)
             | Mutation::EmitExpectedDuplicate(_)
-            | Mutation::EmitExpectedMissingTag(_) => {}
+            | Mutation::EmitExpectedMissingTag(_)
+            | Mutation::ApplyConfigEdits(_) => {}
 
             Mutation::EmbedAlbumArt(ref m) => {
                 inodes.insert(m.inode);
@@ -231,16 +241,56 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
     inodes.len()
 }
 
+/// Generate diff entries for an ApplyConfigEdits mutation by comparing
+/// old and new config field-by-field using the editor's group builder.
+fn generate_config_diff_entries(mutation: &crate::meta::mutations::config_edit::ApplyConfigEditsMutation) -> Vec<DiffEntry> {
+    use crate::ui::config_editor::build::build_groups_from_config;
+
+    let old_groups = build_groups_from_config(&mutation.old_config, None);
+    let new_groups = build_groups_from_config(&mutation.new_config, None);
+
+    let mut diffs = Vec::new();
+
+    for (old_group, new_group) in old_groups.iter().zip(new_groups.iter()) {
+        for (old_field, new_field) in old_group.fields.iter().zip(new_group.fields.iter()) {
+            if !old_field.value.eq_value(&new_field.value) {
+                diffs.push(DiffEntry {
+                    label: old_field.label.to_string(),
+                    old_value: old_field.value.display(),
+                    new_value: new_field.value.display(),
+                });
+            }
+        }
+    }
+
+    diffs
+}
+
 /// Fetch decision summaries from the Witch's active transaction.
 pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
     witch
         .decision_indices()
         .iter()
         .filter_map(|&idx| {
-            witch.get_decision(idx).map(|d| DecisionSummary {
-                label: d.label.clone(),
-                mutation_count: d.mutations.len(),
-                track_count: count_unique_files(&d.mutations),
+            witch.get_decision(idx).map(|d| {
+                // Generate diff entries for config edit mutations
+                let diff_entries = d.mutations.iter()
+                    .filter_map(|m| {
+                        if let Mutation::ApplyConfigEdits(ref ce) = m {
+                            Some(generate_config_diff_entries(ce))
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                    .collect();
+
+                DecisionSummary {
+                    label: d.label.clone(),
+                    mutation_count: d.mutations.len(),
+                    track_count: count_unique_files(&d.mutations),
+                    diff_entries,
+                }
             })
         })
         .collect()
@@ -252,6 +302,17 @@ pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
 
 /// Render the transaction review modal.
 pub fn render(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisions: &[DecisionSummary]) {
+    let has_diffs = decisions.iter().any(|d| !d.diff_entries.is_empty());
+
+    if has_diffs {
+        render_fullscreen(f, area, state, decisions);
+    } else {
+        render_modal(f, area, state, decisions);
+    }
+}
+
+/// Standard centered modal for decisions without diffs (tag edits, etc.).
+fn render_modal(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisions: &[DecisionSummary]) {
     // Clamp cursor to valid range
     let max_cursor = decisions.len().saturating_sub(1);
     let cursor = state.cursor.min(max_cursor);
@@ -299,8 +360,71 @@ pub fn render(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisio
     // Render decision list
     render_decision_list(f, chunks[0], decisions, cursor, state.scroll);
 
-    // Render buttons
-    render_button_row(f, chunks[2], &[
+    // Render buttons + hints
+    render_buttons_and_hints(f, chunks[2], chunks[3], state);
+}
+
+/// Full-screen layout with red/green diff display for config edits.
+fn render_fullscreen(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisions: &[DecisionSummary]) {
+    let max_cursor = decisions.len().saturating_sub(1);
+    let cursor = state.cursor.min(max_cursor);
+
+    let total_mutations: usize = decisions.iter().map(|d| d.mutation_count).sum();
+
+    let title = format!(
+        " Review: {} decision{}, {} mutation{} ",
+        decisions.len(),
+        if decisions.len() == 1 { "" } else { "s" },
+        total_mutations,
+        if total_mutations == 1 { "" } else { "s" },
+    );
+
+    let block = Block::default()
+        .title(title)
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    // Decide how much space the decision list gets vs the diff area.
+    // If only 1 decision, give the list just 1 row; otherwise give it more.
+    let list_height = if decisions.len() <= 1 { 1 } else { decisions.len().min(5) as u16 };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(list_height), // Decision list
+            Constraint::Length(1),           // Separator
+            Constraint::Min(3),             // Diff area
+            Constraint::Length(1),           // Spacer
+            Constraint::Length(1),           // Buttons
+            Constraint::Length(1),           // Hints
+        ])
+        .split(inner);
+
+    // Render decision list
+    render_decision_list(f, chunks[0], decisions, cursor, state.scroll);
+
+    // Separator line
+    let sep = Paragraph::new(Line::from(vec![
+        Span::styled("─".repeat(chunks[1].width as usize), Style::default().fg(Color::DarkGray)),
+    ]));
+    f.render_widget(sep, chunks[1]);
+
+    // Render diff entries for the selected decision
+    if let Some(decision) = decisions.get(cursor) {
+        render_diff_entries(f, chunks[2], &decision.diff_entries);
+    }
+
+    // Render buttons + hints
+    render_buttons_and_hints(f, chunks[4], chunks[5], state);
+}
+
+fn render_buttons_and_hints(f: &mut Frame, button_area: Rect, hint_area: Rect, state: &TransactionReviewState) {
+    render_button_row(f, button_area, &[
         ConfirmationButton::new("Cancel", Color::White)
             .selected(state.button_focus == ReviewButtonFocus::Cancel),
         ConfirmationButton::new("Discard", Color::Red)
@@ -309,7 +433,6 @@ pub fn render(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisio
             .selected(state.button_focus == ReviewButtonFocus::Confirm),
     ]);
 
-    // Render hints
     use crate::ui::widgets::control_colors as cc;
 
     let hints = Line::from(vec![
@@ -325,7 +448,61 @@ pub fn render(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisio
         cc::text(" cancel"),
     ]);
     let hint = Paragraph::new(hints).alignment(Alignment::Center);
-    f.render_widget(hint, chunks[3]);
+    f.render_widget(hint, hint_area);
+}
+
+/// Render diff entries with red (old) → green (new) coloring.
+fn render_diff_entries(f: &mut Frame, area: Rect, entries: &[DiffEntry]) {
+    if entries.is_empty() {
+        let empty = Paragraph::new("No changes")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        f.render_widget(empty, area);
+        return;
+    }
+
+    let visible_height = area.height as usize;
+
+    let items: Vec<ListItem> = entries
+        .iter()
+        .take(visible_height)
+        .map(|entry| {
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("  {:<36} ", entry.label),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    &entry.old_value,
+                    Style::default().fg(Color::Red),
+                ),
+                Span::styled(
+                    " → ",
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    &entry.new_value,
+                    Style::default().fg(Color::Green),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items);
+    f.render_widget(list, area);
+
+    // Scroll indicator
+    if entries.len() > visible_height {
+        let indicator_area = Rect {
+            x: area.x + area.width.saturating_sub(3),
+            y: area.y,
+            width: 2,
+            height: 1,
+        };
+        let indicator = Paragraph::new("v").style(Style::default().fg(Color::DarkGray));
+        f.render_widget(indicator, indicator_area);
+    }
 }
 
 fn render_decision_list(

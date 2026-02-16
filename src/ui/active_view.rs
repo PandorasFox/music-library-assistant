@@ -6,6 +6,7 @@
 
 use crate::ui::{
     compound_split_v2,
+    config_editor,
     corrupt_file_modal,
     deploy_modal,
     directory_cluster_modal,
@@ -43,6 +44,7 @@ use crate::ui::{
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ActiveView {
     // Lateral view ring
+    ConfigEditor(config_editor::ConfigEditorState),
     Insights(insights_view::InsightsViewState),
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
@@ -102,6 +104,7 @@ impl ActiveView {
     /// Get a header suffix for the title bar, if applicable.
     pub(crate) fn header_suffix(&self) -> Option<&'static str> {
         match self {
+            Self::ConfigEditor(_) => Some("Config Editor"),
             Self::Insights(_) => Some("Corpus Insights"),
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
@@ -167,6 +170,7 @@ impl ActiveView {
     pub(crate) fn lateral_view(&self) -> Option<crate::ui::widgets::LateralView> {
         use crate::ui::widgets::LateralView;
         match self {
+            Self::ConfigEditor(_) => Some(LateralView::Config),
             Self::TagSearch(_) => Some(LateralView::TagSearch),
             Self::CorpusBrowser(_) => Some(LateralView::CorpusBrowser),
             Self::Insights(_) => Some(LateralView::Insights),
@@ -203,6 +207,7 @@ pub(crate) enum SuspendedView {
 /// consumed by Phase 2 (dispatch on &mut self).
 pub(crate) enum ViewAction {
     None,
+    ConfigEditor(config_editor::ConfigEditorAction),
     Insights(insights_view::InsightsAction),
     CorpusBrowser(tree_browser::TreeBrowserAction),
     TagSearch(tag_search::TagSearchAction),

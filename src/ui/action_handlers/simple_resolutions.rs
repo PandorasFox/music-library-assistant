@@ -191,7 +191,7 @@ impl App {
         }
 
         // Thread opinion: lossy files -> FLAC capture instead of Opus transcode
-        data.lossy_to_flac = self.config.opinions.lossy_shit_formats_to_flac;
+        data.lossy_to_flac = self.config().opinions.lossy_shit_formats_to_flac;
 
         // Create preview state with cached data
         let preview = shit_format_modal::ShitFormatPreviewState::new(data);

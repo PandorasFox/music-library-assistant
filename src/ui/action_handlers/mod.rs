@@ -45,6 +45,7 @@ impl App {
 
         match action {
             ViewAction::None => {}
+            ViewAction::ConfigEditor(a) => self.handle_config_editor_action(a),
             ViewAction::Insights(a) => self.handle_insights_action(a),
             ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
@@ -145,6 +146,59 @@ impl App {
     // =========================================================================
     // View Action Handlers
     // =========================================================================
+
+    fn handle_config_editor_action(&mut self, action: super::config_editor::ConfigEditorAction) {
+        use crate::meta::mutations::Mutation;
+        use crate::meta::mutations::config_edit::ApplyConfigEditsMutation;
+
+        match action {
+            super::config_editor::ConfigEditorAction::None => {}
+            super::config_editor::ConfigEditorAction::Save => {
+                // Build mutation from editor state and stage for transaction review.
+                let mutation_data = if let ActiveView::ConfigEditor(ref state) = self.view {
+                    if state.has_edits() {
+                        let new_config = state.build_config();
+                        let original_kdl = state.original_kdl.clone().unwrap_or_default();
+                        let old_config = state.original_config.clone();
+                        Some((original_kdl, old_config, new_config))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some((original_kdl, old_config, new_config)) = mutation_data {
+                    let mutation = Mutation::ApplyConfigEdits(ApplyConfigEditsMutation {
+                        original_kdl,
+                        old_config,
+                        new_config,
+                    });
+
+                    if let Some(ref mut witch) = self.witch {
+                        let _ = witch.start_transaction("Config update");
+                        let _ = super::operator_decisions::stage_decision(
+                            witch, 0, "Apply config changes", vec![mutation],
+                        );
+                    }
+
+                    self.start_transaction_review();
+                } else {
+                    // No edits — just return to insights
+                    self.start_insights_view();
+                }
+            }
+            super::config_editor::ConfigEditorAction::Discard => {
+                self.start_insights_view();
+            }
+            super::config_editor::ConfigEditorAction::CycleNext => {
+                self.start_lateral_view(widgets::LateralView::Config.next());
+            }
+            super::config_editor::ConfigEditorAction::CyclePrev => {
+                self.start_lateral_view(widgets::LateralView::Config.prev());
+            }
+        }
+    }
 
     pub(super) fn handle_insights_action(&mut self, action: insights_view::InsightsAction) {
         match action {
@@ -284,7 +338,7 @@ impl App {
     ///
     /// Gathers unindexed files and opens the intake confirmation modal.
     fn start_intake_confirmation_from_insights(&mut self) {
-        let corpus_root = self.config.corpus_dir();
+        let corpus_root = self.config().corpus_dir();
         let intake_state = self.witch.as_mut().and_then(|w| {
             let read_db = w.read_db();
             startup::IntakeConfirmationState::gather(&read_db, &corpus_root, "insights")
@@ -373,7 +427,7 @@ impl App {
         }
 
         let data = missing_album_modal::MissingAlbumData::from_signals(signals);
-        let suffix = self.config.opinions.health_detection.single_album_suffix.clone();
+        let suffix = self.config().opinions.health_detection.single_album_suffix.clone();
 
         // Start transaction for the resolution session
         if let Some(ref mut witch) = self.witch {

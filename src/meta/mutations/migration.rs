@@ -532,9 +532,10 @@ mod tests {
         // v10→v11: inbox signal tables
         // v11→v12: zone columns in signal_moved_file
         // v12→v13: inbox corpus match signal table
-        assert_eq!(registry.latest_version(), 13);
-        assert_eq!(registry.pending_migrations(1).len(), 12);
-        assert_eq!(registry.pending_migrations(12).len(), 1);
-        assert!(registry.pending_migrations(13).is_empty());
+        // v13→v14: inbox tag canonicity signal table
+        assert_eq!(registry.latest_version(), 14);
+        assert_eq!(registry.pending_migrations(1).len(), 13);
+        assert_eq!(registry.pending_migrations(13).len(), 1);
+        assert!(registry.pending_migrations(14).is_empty());
     }
 }

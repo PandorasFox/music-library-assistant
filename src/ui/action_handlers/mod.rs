@@ -59,6 +59,7 @@ impl App {
             ViewAction::ShitFormatResolution(a) => self.handle_shit_format_preview_action(a, witness.as_ref()),
             ViewAction::EmbedAlbumArtResolution(a) => self.handle_embed_album_art_preview_action(a, witness.as_ref()),
             ViewAction::SubparDuplicateResolution(a) => self.handle_subpar_duplicate_preview_action(a, witness.as_ref()),
+            ViewAction::InboxCorpusMatchResolution(a) => self.handle_inbox_corpus_match_preview_action(a, witness.as_ref()),
             ViewAction::DirectoryClusterResolution(a) => self.handle_directory_cluster_preview_action(a, witness.as_ref()),
             ViewAction::MovedFileAcknowledge(a) => self.handle_moved_file_action(a, witness.as_ref()),
             ViewAction::OobSyncResolution(a) => self.handle_oob_sync_action(a, witness.as_ref()),
@@ -592,6 +593,12 @@ impl App {
     fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction, _witness: Option<&witness::DecisionWitness>) {
         use super::operator_decisions;
 
+        // Determine zone before matching (used for post-action routing)
+        let is_inbox_zone = matches!(
+            self.view,
+            ActiveView::IntakeConfirmation(ref s) if s.zone == "inbox"
+        );
+
         match action {
             startup::IntakeConfirmationAction::None => {}
             startup::IntakeConfirmationAction::Confirmed => {
@@ -603,9 +610,13 @@ impl App {
                 };
 
                 if mutations.is_empty() {
-                    // No files to index (all deleted since detection?) - skip to Insights
-                    crate::logging::log_general("IntakeConfirmation: no mutations to queue, skipping to Insights");
-                    self.start_insights_view();
+                    // No files to index (all deleted since detection?)
+                    crate::logging::log_general("IntakeConfirmation: no mutations to queue");
+                    if is_inbox_zone {
+                        self.view = ActiveView::Inbox(super::inbox_view::InboxViewState::new());
+                    } else {
+                        self.start_insights_view();
+                    }
                 } else {
                     let count = mutations.len();
                     crate::logging::log_general(format!(
@@ -632,9 +643,9 @@ impl App {
                 }
             }
             startup::IntakeConfirmationAction::Skipped => {
-                // User skipped - no mutations ran, skip content analysis entirely
-                // UnindexedFile signals remain for later handling
-                crate::logging::log_general("IntakeConfirmation: user skipped indexing, going to Insights");
+                // User skipped - no mutations ran
+                // Unindexed signals remain for later handling
+                crate::logging::log_general("IntakeConfirmation: user skipped indexing");
 
                 // Discard any active transaction from review modal
                 if let Some(ref mut witch) = self.witch {
@@ -642,7 +653,12 @@ impl App {
                         let _ = operator_decisions::discard_transaction(witch);
                     }
                 }
-                self.start_insights_view();
+
+                if is_inbox_zone {
+                    self.view = ActiveView::Inbox(super::inbox_view::InboxViewState::new());
+                } else {
+                    self.start_insights_view();
+                }
             }
         }
     }

@@ -252,6 +252,22 @@ pub struct DirectoryBreakdownEntry {
 }
 
 // ============================================================================
+// Inbox Overview Data Types
+// ============================================================================
+
+/// Aggregate overview data for the inbox view.
+/// Computed at cache refresh time, never in render.
+#[derive(Debug, Clone, Default)]
+pub struct InboxOverviewData {
+    /// Total files present in inbox
+    pub file_in_inbox: usize,
+    /// Files with fingerprint match against corpus
+    pub corpus_match: usize,
+    /// Files not yet indexed
+    pub unindexed: usize,
+}
+
+// ============================================================================
 // Deploy Modal Data Types
 // ============================================================================
 
@@ -424,6 +440,40 @@ pub struct BucketedOobFile {
     pub inode: i64,
     pub path: String,
     pub bucket: ConflictBucket,
+}
+
+// ============================================================================
+// Inbox Corpus Match Resolution Types
+// ============================================================================
+
+/// Classification of an inbox file relative to its corpus matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchClassification {
+    /// Inbox copy is better quality than all corpus matches
+    Better,
+    /// Same quality tier as best corpus match — safe to stash
+    Equivalent,
+    /// Inbox copy is lower quality — safe to stash
+    Subpar,
+}
+
+/// Detail about a single corpus file matching an inbox file.
+#[derive(Debug, Clone)]
+pub struct CorpusMatchDetail {
+    pub _corpus_inode: i64,
+    pub corpus_path: String,
+    pub corpus_quality: String,
+    pub similarity: f64,
+}
+
+/// An inbox file with corpus fingerprint matches and quality classification.
+#[derive(Debug, Clone)]
+pub struct InboxCorpusMatchEntry {
+    pub inbox_inode: i64,
+    pub inbox_path: String,
+    pub inbox_quality: String,
+    pub corpus_matches: Vec<CorpusMatchDetail>,
+    pub classification: MatchClassification,
 }
 
 /// A file with a MovedFile signal (same inode, different path).

@@ -351,9 +351,17 @@ pub fn execute_derive_inbox_signals(
         }
     };
 
-    // No inbox files observed — nothing to derive
+    // No inbox files observed — still need GC to clear orphaned signals from prior cycles
     if disk_inodes.is_empty() {
-        log_general("[COMPUTE] DeriveInboxSignals: no inbox files, skipping");
+        log_general("[COMPUTE] DeriveInboxSignals: no inbox files, running GC only");
+        let sender = sender; // already cloned above
+        let gc_total = gc_orphaned_inbox_signals(read_only_db, &sender, &HashSet::new(), witness);
+        if gc_total > 0 {
+            log_general(format!(
+                "[COMPUTE] DeriveInboxSignals: GC cleared {} orphaned signal(s)",
+                gc_total
+            ));
+        }
         return Result::success(
             Computation::DeriveInboxSignals,
             start.elapsed().as_millis() as u64,
@@ -430,6 +438,20 @@ pub fn execute_derive_inbox_signals(
         both.len()
     ));
 
+    // ========================================================================
+    // GC Backstop: Clear orphaned inbox signals for inodes no longer known
+    // ========================================================================
+    let known_inodes: HashSet<i64> = disk_set.union(&indexed_set).copied().collect();
+    let gc_total = gc_orphaned_inbox_signals(read_only_db, &sender, &known_inodes, witness);
+    if gc_total > 0 {
+        log_general(format!(
+            "[COMPUTE] DeriveInboxSignals: GC cleared {} orphaned signal(s)",
+            gc_total
+        ));
+    }
+
+    log_general("[COMPUTE] DeriveInboxSignals: complete");
+
     Result::success(
         Computation::DeriveInboxSignals,
         start.elapsed().as_millis() as u64,
@@ -462,6 +484,24 @@ fn gc_orphaned_corpus_signals(
     total += gc_signal_table::<DeployedHealthySignal>(read_only_db, sender, known_inodes, witness);
     total += gc_signal_table::<MissingDirectorySignal>(read_only_db, sender, known_inodes, witness);
     // FileInCorpus excluded: it IS the disk observation, always part of known_inodes
+    total
+}
+
+/// GC orphaned inbox signals whose inodes are not in the known universe.
+///
+/// Returns the total number of orphaned signals cleared.
+/// FileInInbox excluded: it IS the disk observation, same reason FileInCorpus is excluded.
+fn gc_orphaned_inbox_signals(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &db_thread::SignalWriteSender,
+    known_inodes: &HashSet<i64>,
+    witness: &ComputationWitness,
+) -> usize {
+    let mut total = 0;
+    total += gc_signal_table::<InboxUnindexedSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<InboxHealthySignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<InboxCorpusMatchSignal>(read_only_db, sender, known_inodes, witness);
+    // FileInInbox excluded: it IS the disk observation, always part of known_inodes
     total
 }
 

@@ -455,7 +455,7 @@ pub fn md5_hash(s: &str) -> u64 {
 /// Quality tier for audio format classification.
 /// Higher value = better format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum FormatClass {
+pub(crate) enum FormatClass {
     /// Lossy non-Vorbis (MP3, M4A, AAC, WMA)
     OtherLossy = 0,
     /// Lossless non-Vorbis (WAV, AIFF, APE, WV)
@@ -467,7 +467,7 @@ enum FormatClass {
 }
 
 /// Classify a file type into its format class.
-fn classify_format(file_type: &str) -> FormatClass {
+pub(crate) fn classify_format(file_type: &str) -> FormatClass {
     match file_type.to_lowercase().as_str() {
         "flac" => FormatClass::VorbisLossless,
         "opus" | "ogg" => FormatClass::VorbisLossy,
@@ -484,12 +484,12 @@ fn classify_format(file_type: &str) -> FormatClass {
 /// bitrate reliably distinguishes true lossless from lossy transcodes
 /// packaged in lossless containers (e.g. `.LOSSY.flac`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct QualityTier {
-    format_class: FormatClass,
+pub(crate) struct QualityTier {
+    pub(crate) format_class: FormatClass,
     /// Bitrate in kbps — primary quality metric for all formats.
-    bitrate: i32,
+    pub(crate) bitrate: i32,
     /// Sample rate in Hz — secondary tiebreaker.
-    sample_rate: i32,
+    pub(crate) sample_rate: i32,
 }
 
 impl Ord for QualityTier {
@@ -508,7 +508,7 @@ impl PartialOrd for QualityTier {
 }
 
 /// Build a QualityTier for a single audio file.
-fn quality_tier_of(file_type: &str, bitrate_kbps: Option<i32>, sample_rate: Option<i32>) -> QualityTier {
+pub(crate) fn quality_tier_of(file_type: &str, bitrate_kbps: Option<i32>, sample_rate: Option<i32>) -> QualityTier {
     QualityTier {
         format_class: classify_format(file_type),
         bitrate: bitrate_kbps.unwrap_or(0),

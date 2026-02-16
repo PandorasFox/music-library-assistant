@@ -9,6 +9,7 @@ use rusqlite::params;
 
 use super::Database;
 use crate::corpus::db::types::Zone;
+use crate::meta::computations::awake::QualityTier;
 
 impl Database {
     // ========================================================================
@@ -286,17 +287,6 @@ impl Database {
         Ok(result)
     }
 
-    /// Get all inbox healthy files as (inode, path) pairs.
-    pub fn get_inbox_healthy_files(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM signal_inbox_healthy ORDER BY path"
-        )?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-    }
-
     /// Get all inbox unindexed files as (inode, path) pairs.
     pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
@@ -308,20 +298,19 @@ impl Database {
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
-    /// Get all inbox corpus match signals (inbox files that match corpus fingerprints).
-    pub fn get_inbox_corpus_match_files(&self) -> Result<Vec<(i64, String, crate::meta::signals::data::InboxCorpusMatchData)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path, data FROM signal_inbox_corpus_match ORDER BY path"
-        )?;
-        let rows = stmt.query_map(params![], |row| {
-            let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            let data: crate::meta::signals::data::InboxCorpusMatchData = bincode::deserialize(&blob)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Blob, Box::new(e)))?;
-            Ok((inode, path, data))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    // ========================================================================
+    // Inbox Overview Data
+    // ========================================================================
+
+    /// Get InboxOverviewData for the Inbox view.
+    ///
+    /// Computes signal counts via typed table counts. Called by UiReadCache.
+    pub fn get_inbox_overview_data(&self) -> Result<crate::corpus::db::types::InboxOverviewData> {
+        Ok(crate::corpus::db::types::InboxOverviewData {
+            file_in_inbox: self.count_signal_type("file_in_inbox")?,
+            corpus_match: self.count_signal_type("inbox_corpus_match")?,
+            unindexed: self.count_signal_type("inbox_unindexed")?,
+        })
     }
 
     // ========================================================================
@@ -1074,6 +1063,168 @@ impl Database {
         }
 
         Ok(inodes)
+    }
+
+    // ========================================================================
+    // Inbox Corpus Match Resolution Queries
+    // ========================================================================
+
+    /// Get all inbox corpus match entries with quality classification.
+    ///
+    /// Reads InboxCorpusMatch signals, deserializes bincode BLOB data,
+    /// looks up quality info for both inbox and corpus files via audio_info,
+    /// and classifies each entry as Superior/Equivalent/Inferior.
+    ///
+    /// `bitrate_fuzz_percent` applies a tolerance when comparing bitrates:
+    /// files with the same format class and sample rate whose bitrates differ
+    /// by less than this percentage are treated as equivalent.
+    pub fn get_inbox_corpus_match_entries(&self, bitrate_fuzz_percent: f64) -> Result<Vec<crate::corpus::db::types::InboxCorpusMatchEntry>> {
+        use crate::corpus::db::types::{InboxCorpusMatchEntry, CorpusMatchDetail, MatchClassification};
+        use crate::meta::signals::data::InboxCorpusMatchData;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path, data FROM signal_inbox_corpus_match ORDER BY path"
+        )?;
+
+        let mut results = Vec::new();
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((inode, path, blob))
+        })?;
+
+        for row in rows {
+            let (inbox_inode, inbox_path, blob) = row?;
+
+            let match_data: InboxCorpusMatchData = match bincode::deserialize(&blob) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            if match_data.corpus_matches.is_empty() {
+                continue;
+            }
+
+            // Look up inbox file quality
+            let inbox_quality = self.get_quality_string(inbox_inode);
+            let inbox_tier = self.get_quality_tier(inbox_inode);
+
+            // Build corpus match details
+            let mut corpus_details = Vec::new();
+            let mut best_corpus_tier: Option<QualityTier> = None;
+
+            for cm in &match_data.corpus_matches {
+                let corpus_quality = self.get_quality_string(cm.corpus_inode);
+                let corpus_tier = self.get_quality_tier(cm.corpus_inode);
+
+                if let Some(ct) = corpus_tier {
+                    match best_corpus_tier {
+                        None => best_corpus_tier = Some(ct),
+                        Some(ref best) => {
+                            if ct > *best {
+                                best_corpus_tier = Some(ct);
+                            }
+                        }
+                    }
+                }
+
+                corpus_details.push(CorpusMatchDetail {
+                    _corpus_inode: cm.corpus_inode,
+                    corpus_path: cm.corpus_path.clone(),
+                    corpus_quality,
+                    similarity: cm.similarity,
+                });
+            }
+
+            // Classify: compare inbox quality tier against best corpus tier,
+            // applying bitrate fuzz for same-format same-samplerate comparisons.
+            let classification = match (inbox_tier, best_corpus_tier) {
+                (Some(inbox_t), Some(corpus_t)) => {
+                    if inbox_t.format_class == corpus_t.format_class
+                        && inbox_t.sample_rate == corpus_t.sample_rate
+                        && bitrate_fuzz_percent > 0.0
+                    {
+                        // Same format class + sample rate: apply bitrate fuzz
+                        let max_br = inbox_t.bitrate.max(corpus_t.bitrate) as f64;
+                        let diff = (inbox_t.bitrate - corpus_t.bitrate).unsigned_abs() as f64;
+                        if max_br > 0.0 && (diff / max_br * 100.0) <= bitrate_fuzz_percent {
+                            MatchClassification::Equivalent
+                        } else {
+                            use std::cmp::Ordering;
+                            match Ord::cmp(&inbox_t, &corpus_t) {
+                                Ordering::Greater => MatchClassification::Better,
+                                Ordering::Equal => MatchClassification::Equivalent,
+                                Ordering::Less => MatchClassification::Subpar,
+                            }
+                        }
+                    } else {
+                        use std::cmp::Ordering;
+                        match Ord::cmp(&inbox_t, &corpus_t) {
+                            Ordering::Greater => MatchClassification::Better,
+                            Ordering::Equal => MatchClassification::Equivalent,
+                            Ordering::Less => MatchClassification::Subpar,
+                        }
+                    }
+                }
+                // If we can't determine quality, default to Equivalent (safe to stash)
+                _ => MatchClassification::Equivalent,
+            };
+
+            results.push(InboxCorpusMatchEntry {
+                inbox_inode,
+                inbox_path,
+                inbox_quality,
+                corpus_matches: corpus_details,
+                classification,
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// Get a human-readable quality string for an inode from audio_info.
+    fn get_quality_string(&self, inode: i64) -> String {
+        let mut stmt = match self.conn.prepare(
+            "SELECT file_type, bitrate_kbps, sample_rate FROM audio_info WHERE inode = ?1"
+        ) {
+            Ok(s) => s,
+            Err(_) => return "Unknown".to_string(),
+        };
+
+        match stmt.query_row(params![inode], |row| {
+            let file_type: String = row.get(0)?;
+            let bitrate: Option<i32> = row.get(1)?;
+            let sample_rate: Option<i32> = row.get(2)?;
+            Ok((file_type, bitrate, sample_rate))
+        }) {
+            Ok((file_type, bitrate, sample_rate)) => {
+                let ft = file_type.to_uppercase();
+                match (bitrate, sample_rate) {
+                    (Some(br), Some(sr)) => format!("{} {}kbps {}Hz", ft, br, sr),
+                    (Some(br), None) => format!("{} {}kbps", ft, br),
+                    (None, Some(sr)) => format!("{} {}Hz", ft, sr),
+                    (None, None) => ft,
+                }
+            }
+            Err(_) => "Unknown".to_string(),
+        }
+    }
+
+    /// Get quality tier for an inode from audio_info (for comparison).
+    fn get_quality_tier(&self, inode: i64) -> Option<crate::meta::computations::awake::QualityTier> {
+        use crate::meta::computations::awake::quality_tier_of;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT file_type, bitrate_kbps, sample_rate FROM audio_info WHERE inode = ?1"
+        ).ok()?;
+
+        stmt.query_row(params![inode], |row| {
+            let file_type: String = row.get(0)?;
+            let bitrate: Option<i32> = row.get(1)?;
+            let sample_rate: Option<i32> = row.get(2)?;
+            Ok(quality_tier_of(&file_type, bitrate, sample_rate))
+        }).ok()
     }
 
     // ========================================================================

@@ -69,6 +69,11 @@ pub struct QualityResolutionOpinions {
     pub auto_resolve_format_tier: bool,
     /// Bitrate diff above this % = clear winner (default: 50.0)
     pub bitrate_threshold_percent: f64,
+    /// Inbox-to-corpus bitrate fuzz tolerance as a percentage (default: 5.0).
+    /// Files within this % bitrate difference (same format class and sample rate)
+    /// are treated as equivalent rather than superior/inferior. Suppresses noise
+    /// from minor FLAC compression differences across encoder versions.
+    pub inbox_bitrate_fuzz_percent: f64,
 }
 
 impl Default for QualityResolutionOpinions {
@@ -76,6 +81,7 @@ impl Default for QualityResolutionOpinions {
         Self {
             auto_resolve_format_tier: true,
             bitrate_threshold_percent: 50.0,
+            inbox_bitrate_fuzz_percent: 5.0,
         }
     }
 }
@@ -594,6 +600,13 @@ fn parse_quality_resolution_opinions(node: &kdl::KdlNode, opinions: &mut Quality
                         }
                     }
                 }
+                "inbox-bitrate-fuzz-percent" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.inbox_bitrate_fuzz_percent = val;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1045,6 +1058,7 @@ opinions {
     quality-resolution {
         auto-resolve-format-tier false
         bitrate-threshold-percent 75.0
+        inbox-bitrate-fuzz-percent 3.0
     }
 
     canonicalization {
@@ -1065,6 +1079,7 @@ opinions {
         assert!(config.opinions.fingerprint_matching.require_matching_album);
         assert!(!config.opinions.quality_resolution.auto_resolve_format_tier);
         assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 75.0);
+        assert_eq!(config.opinions.quality_resolution.inbox_bitrate_fuzz_percent, 3.0);
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
@@ -1083,6 +1098,7 @@ root "/archive"
         assert!(!config.opinions.fingerprint_matching.require_matching_album);
         assert!(config.opinions.quality_resolution.auto_resolve_format_tier);
         assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 50.0);
+        assert_eq!(config.opinions.quality_resolution.inbox_bitrate_fuzz_percent, 5.0);
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 

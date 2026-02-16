@@ -1,0 +1,139 @@
+//! Inbox Corpus Match Resolution Modal Types
+//!
+//! Data structures for the inbox corpus match resolution modal, including
+//! file entries, quality classification, and button state.
+
+use std::path::PathBuf;
+
+use anyhow::Result;
+
+use crate::corpus::db::ReadOnlyDb;
+use crate::corpus::db::types::{InboxCorpusMatchEntry, MatchClassification};
+use crate::meta::mutations::Mutation;
+use crate::meta::mutations::file_ops::MoveToStashMutation;
+use crate::meta::mutations::indexing::DropFromIndexMutation;
+use crate::corpus::paths;
+
+/// Cached data for the inbox corpus match resolution modal.
+///
+/// Loaded once when the modal opens. All renders use this cached data.
+/// Entries sorted: Equivalent first, then Subpar, then Better.
+#[derive(Debug, Clone, Default)]
+pub struct InboxCorpusMatchModalData {
+    pub entries: Vec<InboxCorpusMatchEntry>,
+}
+
+impl InboxCorpusMatchModalData {
+    /// Load inbox corpus match entries from the database.
+    ///
+    /// `bitrate_fuzz_percent` is the tolerance for treating near-identical
+    /// bitrates as equivalent (e.g. 5.0 = 5% tolerance).
+    pub fn load(read_db: &ReadOnlyDb<'_>, bitrate_fuzz_percent: f64) -> Result<Self> {
+        let mut entries = read_db.get_inbox_corpus_match_entries(bitrate_fuzz_percent)?;
+
+        // Sort: Equivalent first, then Subpar, then Better
+        entries.sort_by_key(|e| match e.classification {
+            MatchClassification::Equivalent => 0,
+            MatchClassification::Subpar => 1,
+            MatchClassification::Better => 2,
+        });
+
+        Ok(Self { entries })
+    }
+
+    /// Total number of entries.
+    pub fn total_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Count of entries safe to stash (Equivalent + Subpar).
+    pub fn stashable_count(&self) -> usize {
+        self.entries.iter().filter(|e| {
+            matches!(e.classification, MatchClassification::Equivalent | MatchClassification::Subpar)
+        }).count()
+    }
+
+    /// Count by classification: (better, equivalent, subpar).
+    pub fn count_by_class(&self) -> (usize, usize, usize) {
+        let mut better = 0;
+        let mut equivalent = 0;
+        let mut subpar = 0;
+        for e in &self.entries {
+            match e.classification {
+                MatchClassification::Better => better += 1,
+                MatchClassification::Equivalent => equivalent += 1,
+                MatchClassification::Subpar => subpar += 1,
+            }
+        }
+        (better, equivalent, subpar)
+    }
+
+    /// Generate MoveToStash + DropFromIndex mutations for stashable entries.
+    ///
+    /// Only Equivalent and Subpar entries are stashed. Better entries
+    /// (inbox is higher quality) are left alone.
+    pub fn stash_and_drop_mutations(&self) -> Vec<Mutation> {
+        self.stash_mutations_for(|c| matches!(c, MatchClassification::Equivalent | MatchClassification::Subpar))
+    }
+
+    /// Generate MoveToStash + DropFromIndex mutations for ALL entries,
+    /// including those classified as Better.
+    pub fn stash_all_mutations(&self) -> Vec<Mutation> {
+        self.stash_mutations_for(|_| true)
+    }
+
+    fn stash_mutations_for(&self, predicate: impl Fn(MatchClassification) -> bool) -> Vec<Mutation> {
+        let resolver = paths::get_resolver();
+        let mut mutations = Vec::new();
+
+        for entry in &self.entries {
+            if !predicate(entry.classification) {
+                continue;
+            }
+
+            let abs_path = resolver.resolve(std::path::Path::new(&entry.inbox_path));
+
+            mutations.push(Mutation::MoveToStash(MoveToStashMutation {
+                path: abs_path,
+                stash_name: "inbox_duplicate".to_string(),
+            }));
+
+            mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
+                path: PathBuf::from(&entry.inbox_path),
+                inode: Some(entry.inbox_inode),
+                zone: Some("inbox".to_string()),
+            }));
+        }
+
+        mutations
+    }
+}
+
+/// Which action button is selected in the modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SelectedButton {
+    /// Stash only equivalent + subpar entries
+    StashEquivalents,
+    /// Stash ALL inbox duplicates (including better-quality ones)
+    StashAll,
+    #[default]
+    Cancel,
+}
+
+impl SelectedButton {
+    pub fn left(&mut self) {
+        *self = match *self {
+            Self::Cancel => Self::StashAll,
+            Self::StashAll => Self::StashEquivalents,
+            Self::StashEquivalents => Self::StashEquivalents,
+        };
+    }
+
+    pub fn right(&mut self) {
+        *self = match *self {
+            Self::StashEquivalents => Self::StashAll,
+            Self::StashAll => Self::Cancel,
+            Self::Cancel => Self::Cancel,
+        };
+    }
+}

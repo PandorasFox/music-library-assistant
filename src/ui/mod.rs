@@ -33,6 +33,7 @@ pub mod eye;
 pub mod manual_review_modal;
 pub mod filter_popup;
 pub mod helpers;
+pub mod inbox_corpus_match_modal;
 pub mod inbox_view;
 pub mod insights_view;
 pub mod missing_album_modal;
@@ -219,6 +220,7 @@ impl App {
             ActiveView::ShitFormatResolution(s) => ViewAction::ShitFormatResolution(s.handle_key(key)),
             ActiveView::EmbedAlbumArtResolution(s) => ViewAction::EmbedAlbumArtResolution(s.handle_key(key)),
             ActiveView::SubparDuplicateResolution(s) => ViewAction::SubparDuplicateResolution(s.handle_key(key)),
+            ActiveView::InboxCorpusMatchResolution(s) => ViewAction::InboxCorpusMatchResolution(s.handle_key(key)),
             ActiveView::DirectoryClusterResolution(s) => ViewAction::DirectoryClusterResolution(s.handle_key(key)),
             ActiveView::MovedFileAcknowledge(s) => ViewAction::MovedFileAcknowledge(s.handle_key(key)),
             ActiveView::OobSyncResolution(s) => ViewAction::OobSyncResolution(s.handle_key(key)),
@@ -285,11 +287,17 @@ impl App {
     }
 
     pub(super) fn start_inbox_view(&mut self) {
-        let mut state = inbox_view::InboxViewState::new();
-        if let Some(ref mut witch) = self.witch {
-            state.refresh(&witch.read_db());
+        // Check for inbox unindexed files — show intake popup if any
+        let intake_state = self.witch.as_mut().and_then(|w| {
+            let read_db = w.read_db();
+            startup::IntakeConfirmationState::gather_inbox(&read_db)
+        });
+
+        if let Some(state) = intake_state {
+            self.view = ActiveView::IntakeConfirmation(state);
+        } else {
+            self.view = ActiveView::Inbox(inbox_view::InboxViewState::new());
         }
-        self.view = ActiveView::Inbox(state);
     }
 
     /// Start the lateral view identified by the given variant.
@@ -482,6 +490,12 @@ fn run_app<B: ratatui::backend::Backend>(
             view.update(status.as_ref(), insights_data);
         }
 
+        // Update inbox view with cached overview data
+        if let ActiveView::Inbox(ref mut view) = app.view {
+            let inbox_data = app.witch.as_ref().and_then(|w| w.ui_read_cache().inbox_overview());
+            view.update(inbox_data);
+        }
+
         // Tick progress screen if active (includes eye animation update)
         if matches!(app.view, ActiveView::Progress { .. }) {
             app.tick_progress_screen();
@@ -496,6 +510,9 @@ fn run_app<B: ratatui::backend::Backend>(
         if let Some(ref the_witch) = app.witch {
             if matches!(app.view, ActiveView::Insights(_)) {
                 the_witch.ui_read_cache().want_insights_data();
+            }
+            if matches!(app.view, ActiveView::Inbox(_)) {
+                the_witch.ui_read_cache().want_inbox_overview();
             }
         }
 

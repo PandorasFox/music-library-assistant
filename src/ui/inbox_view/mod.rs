@@ -1,23 +1,26 @@
 //! Inbox View Module
 //!
-//! A full-screen view displaying inbox files pending triage.
+//! Aggregate signal overview for inbox files, similar to the Insights view
+//! but scoped to inbox-specific signals. Shows bucket entries with counts
+//! rather than individual files.
+//!
 //! Part of the lateral view ring - can cycle to adjacent views with Tab/Shift-Tab.
 //!
-//! Inbox files are grouped by signal type:
-//! - Corpus Match: files matching existing corpus by fingerprint (stash candidates)
-//! - Unindexed: files on disk not yet in audio_info
-//! - Healthy: files indexed and ready for operations
+//! Bucket entries (shown when count > 0):
+//! - Corpus matches (magenta) — inbox files matching corpus fingerprints
+//! - Unindexed (yellow) — inbox files not yet indexed
+//! - Files in inbox (gray) — total file count (informational)
 //!
 //! Actions:
-//! - Enter on matched file: stage stash + drop, open transaction review
-//! - Enter/T on healthy file: open tag editor via view stack push
-//! - T on any file: open tag editor via view stack push
+//! - Enter on "Unindexed": launch intake confirmation for inbox files
+//! - Enter on other entries: informational (future actions)
 
 mod render;
 
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::style::Color;
 
-use crate::meta::signals::data::InboxCorpusMatchData;
+use crate::corpus::db::types::InboxOverviewData;
 
 pub use render::render_inbox_view;
 
@@ -32,40 +35,39 @@ pub enum InboxAction {
     CycleNext,
     /// Cycle to previous view in ring
     CyclePrev,
-    /// Enter pressed on selected entry
-    LaunchSelected,
-    /// T pressed — open tag editor for selected entry
-    EditTags,
+    /// Launch intake confirmation for inbox unindexed files
+    LaunchIntake,
+    /// Launch inbox corpus match resolution modal
+    LaunchCorpusMatchResolution,
 }
 
-/// An entry in the inbox file list.
-#[derive(Debug, Clone)]
-pub struct InboxEntry {
-    pub inode: i64,
-    pub path: String,
-    pub status: InboxEntryStatus,
+/// What action an inbox bucket entry triggers on Enter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboxInsightAction {
+    /// Launch inbox intake confirmation
+    LaunchIntake,
+    /// Launch inbox corpus match resolution modal
+    LaunchCorpusMatchResolution,
+    /// Informational only, no action
+    Informational,
 }
 
-/// Status of an inbox entry.
+/// A single bucket entry in the inbox overview.
 #[derive(Debug, Clone)]
-pub enum InboxEntryStatus {
-    /// Inbox file has fingerprint match against corpus file(s)
-    CorpusMatch(InboxCorpusMatchData),
-    /// File not yet indexed
-    Unindexed,
-    /// File indexed and ready
-    Healthy,
+pub struct InboxBucketEntry {
+    pub label: String,
+    pub count: usize,
+    pub color: Color,
+    pub action: InboxInsightAction,
 }
 
 /// State for the inbox view.
 #[derive(Debug)]
 pub struct InboxViewState {
-    /// Combined list of inbox entries, ordered: matched → unindexed → healthy
-    pub entries: Vec<InboxEntry>,
+    /// Aggregate bucket entries (not individual files)
+    pub entries: Vec<InboxBucketEntry>,
     /// Currently selected index
     pub selected: usize,
-    /// Vertical scroll offset
-    pub scroll: usize,
 }
 
 impl InboxViewState {
@@ -73,60 +75,51 @@ impl InboxViewState {
         Self {
             entries: Vec::new(),
             selected: 0,
-            scroll: 0,
         }
     }
 
-    /// Refresh entries from the database.
-    pub fn refresh(&mut self, db: &crate::corpus::db::ReadOnlyDb<'_>) {
+    /// Update entries from cached overview data.
+    pub fn update(&mut self, data: Option<InboxOverviewData>) {
+        let Some(data) = data else { return };
+
         let mut entries = Vec::new();
 
-        // Corpus matches first (most actionable)
-        if let Ok(matches) = db.get_inbox_corpus_match_files() {
-            for (inode, path, data) in matches {
-                entries.push(InboxEntry {
-                    inode,
-                    path,
-                    status: InboxEntryStatus::CorpusMatch(data),
-                });
-            }
+        if data.corpus_match > 0 {
+            entries.push(InboxBucketEntry {
+                label: "Corpus matches".to_string(),
+                count: data.corpus_match,
+                color: Color::Magenta,
+                action: InboxInsightAction::LaunchCorpusMatchResolution,
+            });
         }
 
-        // Unindexed files
-        if let Ok(unindexed) = db.get_inbox_unindexed_files() {
-            for (inode, path) in unindexed {
-                entries.push(InboxEntry {
-                    inode,
-                    path,
-                    status: InboxEntryStatus::Unindexed,
-                });
-            }
+        if data.unindexed > 0 {
+            entries.push(InboxBucketEntry {
+                label: "Unindexed".to_string(),
+                count: data.unindexed,
+                color: Color::Yellow,
+                action: InboxInsightAction::LaunchIntake,
+            });
         }
 
-        // Healthy files
-        if let Ok(healthy) = db.get_inbox_healthy_files() {
-            for (inode, path) in healthy {
-                // Skip entries that already have a corpus match signal
-                let already_matched = entries.iter().any(|e| e.inode == inode);
-                if !already_matched {
-                    entries.push(InboxEntry {
-                        inode,
-                        path,
-                        status: InboxEntryStatus::Healthy,
-                    });
-                }
-            }
+        if data.file_in_inbox > 0 {
+            entries.push(InboxBucketEntry {
+                label: "Files in inbox".to_string(),
+                count: data.file_in_inbox,
+                color: Color::DarkGray,
+                action: InboxInsightAction::Informational,
+            });
         }
 
         self.entries = entries;
         // Clamp selection
-        if self.selected >= self.entries.len() && !self.entries.is_empty() {
+        if !self.entries.is_empty() && self.selected >= self.entries.len() {
             self.selected = self.entries.len() - 1;
         }
     }
 
     /// Get the currently selected entry, if any.
-    pub fn selected_entry(&self) -> Option<&InboxEntry> {
+    pub fn selected_entry(&self) -> Option<&InboxBucketEntry> {
         self.entries.get(self.selected)
     }
 
@@ -138,15 +131,12 @@ impl InboxViewState {
             KeyCode::BackTab => InboxAction::CyclePrev,
 
             KeyCode::Enter => {
-                if self.selected_entry().is_some() {
-                    InboxAction::LaunchSelected
-                } else {
-                    InboxAction::None
-                }
-            }
-            KeyCode::Char('t') | KeyCode::Char('T') => {
-                if self.selected_entry().is_some() {
-                    InboxAction::EditTags
+                if let Some(entry) = self.selected_entry() {
+                    match entry.action {
+                        InboxInsightAction::LaunchIntake => InboxAction::LaunchIntake,
+                        InboxInsightAction::LaunchCorpusMatchResolution => InboxAction::LaunchCorpusMatchResolution,
+                        InboxInsightAction::Informational => InboxAction::None,
+                    }
                 } else {
                     InboxAction::None
                 }
@@ -155,37 +145,26 @@ impl InboxViewState {
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
                     self.selected -= 1;
-                    self.ensure_visible();
                 }
                 InboxAction::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if !self.entries.is_empty() && self.selected < self.entries.len() - 1 {
                     self.selected += 1;
-                    self.ensure_visible();
                 }
                 InboxAction::None
             }
             KeyCode::Home => {
                 self.selected = 0;
-                self.scroll = 0;
                 InboxAction::None
             }
             KeyCode::End => {
                 if !self.entries.is_empty() {
                     self.selected = self.entries.len() - 1;
-                    self.ensure_visible();
                 }
                 InboxAction::None
             }
             _ => InboxAction::None,
         }
-    }
-
-    fn ensure_visible(&mut self) {
-        if self.selected < self.scroll {
-            self.scroll = self.selected;
-        }
-        // Scroll down is handled during render based on area height
     }
 }

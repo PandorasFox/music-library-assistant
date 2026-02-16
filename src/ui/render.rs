@@ -170,7 +170,7 @@ fn render_content(
             vname = "insights";
             insights_view::render_insights_view(f, area, view);
         }
-        ActiveView::Inbox(ref mut state) => {
+        ActiveView::Inbox(ref state) => {
             vname = "inbox";
             inbox_view::render_inbox_view(f, area, state);
         }
@@ -232,6 +232,10 @@ fn render_content(
         }
         ActiveView::SubparDuplicateResolution(ref preview) => {
             vname = "subpar_duplicate_resolution";
+            preview.render(f, area);
+        }
+        ActiveView::InboxCorpusMatchResolution(ref preview) => {
+            vname = "inbox_corpus_match_resolution";
             preview.render(f, area);
         }
         ActiveView::DirectoryClusterResolution(ref preview) => {
@@ -398,6 +402,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::ShitFormatResolution(_) => "shit_format_resolution",
         ActiveView::EmbedAlbumArtResolution(_) => "embed_album_art_resolution",
         ActiveView::SubparDuplicateResolution(_) => "subpar_duplicate_resolution",
+        ActiveView::InboxCorpusMatchResolution(_) => "inbox_corpus_match_resolution",
         ActiveView::DirectoryClusterResolution(_) => "directory_cluster_resolution",
         ActiveView::MovedFileAcknowledge(_) => "moved_file_acknowledge",
         ActiveView::OobSyncResolution(_) => "oob_sync_resolution",

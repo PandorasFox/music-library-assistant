@@ -27,7 +27,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::corpus::db::types::InsightsData;
+use crate::corpus::db::types::{InsightsData, InboxOverviewData};
 use crate::corpus::db::Database;
 
 // ============================================================================
@@ -264,16 +264,20 @@ impl<T> Drop for CacheWriter<T> {
 /// and `*()` methods to read cached values.
 pub struct UiReadCache {
     insights_data: CacheEntry<InsightsData>,
+    inbox_overview: CacheEntry<InboxOverviewData>,
 }
 
 impl UiReadCache {
     /// Insights data throttle (30 seconds - heavier computation).
     const INSIGHTS_THROTTLE: Duration = Duration::from_secs(30);
+    /// Inbox overview throttle (15 seconds - lightweight signal counts).
+    const INBOX_OVERVIEW_THROTTLE: Duration = Duration::from_secs(15);
 
     /// Create a new UI read cache with default throttle settings.
     pub fn new() -> Self {
         Self {
             insights_data: CacheEntry::new(Self::INSIGHTS_THROTTLE),
+            inbox_overview: CacheEntry::new(Self::INBOX_OVERVIEW_THROTTLE),
         }
     }
 
@@ -301,6 +305,25 @@ impl UiReadCache {
     /// transitioning to insights view.
     pub fn invalidate_insights_data(&self) {
         self.insights_data.invalidate();
+    }
+
+    // -------------------------------------------------------------------------
+    // Inbox Overview Data
+    // -------------------------------------------------------------------------
+
+    /// UI calls this when it wants inbox overview data.
+    pub fn want_inbox_overview(&self) {
+        self.inbox_overview.want();
+    }
+
+    /// Read the latest cached inbox overview data.
+    pub fn inbox_overview(&self) -> Option<InboxOverviewData> {
+        self.inbox_overview.get()
+    }
+
+    /// Invalidate inbox overview cache, forcing refresh on next want().
+    pub fn invalidate_inbox_overview(&self) {
+        self.inbox_overview.invalidate();
     }
 
     // -------------------------------------------------------------------------
@@ -332,6 +355,24 @@ impl UiReadCache {
                     }
                 }
                 // On error, abort (allows retry on next want)
+                writer.abort();
+                IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
+            });
+        }
+
+        // Inbox overview refresh
+        if let Some(writer) = self.inbox_overview.take_refresh() {
+            IN_FLIGHT_REFRESHES.fetch_add(1, Ordering::Release);
+            rayon::spawn(move || {
+                if let Ok(db_path) = config::get_db_path() {
+                    if let Ok(db) = Database::open_read_only(&db_path) {
+                        if let Ok(data) = db.get_inbox_overview_data() {
+                            writer.complete(data);
+                            IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
+                            return;
+                        }
+                    }
+                }
                 writer.abort();
                 IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
             });

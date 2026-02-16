@@ -172,6 +172,89 @@ impl IntakeConfirmationState {
         })
     }
 
+    /// Gather intake confirmation state for inbox unindexed files.
+    ///
+    /// Similar to `gather()` but queries `InboxUnindexedSignal` (inbox zone)
+    /// instead of `UnindexedFileSignal` (corpus zone).
+    ///
+    /// Returns None if there are no unindexed inbox files.
+    pub fn gather_inbox(read_db: &ReadOnlyDb<'_>) -> Option<Self> {
+        let unindexed = match read_db.get_inbox_unindexed_files() {
+            Ok(u) => u,
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "IntakeConfirmation::gather_inbox: query failed: {:?}", e
+                ));
+                return None;
+            }
+        };
+
+        log_general(format!(
+            "IntakeConfirmation::gather_inbox: found {} inbox unindexed files",
+            unindexed.len()
+        ));
+
+        if unindexed.is_empty() {
+            return None;
+        }
+
+        let resolver = paths::get_resolver();
+        let mut files: Vec<UnindexedFileEntry> = Vec::new();
+        let mut total_bytes: u64 = 0;
+        let mut directories: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut dir_to_files: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+        for (_inode, rel_path_str) in &unindexed {
+            let rel_path = std::path::Path::new(rel_path_str);
+            let abs_path = resolver.resolve(rel_path);
+
+            if abs_path.exists() && abs_path.is_file() {
+                if let Ok(meta) = std::fs::metadata(&abs_path) {
+                    total_bytes += meta.len();
+                }
+
+                if let Some(parent) = abs_path.parent() {
+                    directories.insert(parent.to_path_buf());
+                }
+
+                if let (Some(parent), Some(filename)) = (rel_path.parent(), rel_path.file_name()) {
+                    let dir_str = parent.to_string_lossy().to_string();
+                    let file_str = filename.to_string_lossy().to_string();
+                    dir_to_files.entry(dir_str).or_default().push(file_str);
+                }
+
+                files.push(UnindexedFileEntry { abs_path });
+            }
+        }
+
+        if files.is_empty() {
+            return None;
+        }
+
+        let grouped_files: Vec<DirectoryGroup> = dir_to_files
+            .into_iter()
+            .map(|(dir, mut filenames)| {
+                filenames.sort();
+                DirectoryGroup { display_path: dir, filenames }
+            })
+            .collect();
+
+        log_general(format!(
+            "IntakeConfirmation (inbox): gathered {} files ({} bytes) from {} directories",
+            files.len(), total_bytes, directories.len()
+        ));
+
+        Some(Self {
+            file_count: files.len(),
+            total_bytes,
+            files,
+            zone: "inbox".to_string(),
+            _directory_count: directories.len(),
+            grouped_files,
+            scroll_offset: 0,
+        })
+    }
+
     /// Compute total number of lines in the file list display
     fn total_list_lines(&self) -> usize {
         self.grouped_files

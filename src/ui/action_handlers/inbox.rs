@@ -1,19 +1,18 @@
 //! Inbox view action handlers.
 //!
-//! Handles Enter (stash matched / edit tags) and T (edit tags) actions
-//! from the inbox lateral view.
+//! Handles aggregate inbox overview actions:
+//! - Enter on "Unindexed" bucket: launch inbox intake confirmation
+//! - Enter on "Corpus matches" bucket: launch inbox corpus match resolution
 
 use crate::ui::active_view::ActiveView;
+use crate::ui::inbox_corpus_match_modal;
+use crate::ui::startup;
 use super::witness;
 use super::App;
 
 impl App {
-    pub(super) fn handle_inbox_action(&mut self, action: super::super::inbox_view::InboxAction, witness: Option<&witness::DecisionWitness>) {
-        use crate::corpus::paths;
-        use crate::meta::mutations::Mutation;
-        use crate::meta::mutations::file_ops::MoveToStashMutation;
-        use crate::meta::mutations::indexing::DropFromIndexMutation;
-        use super::super::inbox_view::{InboxAction, InboxEntryStatus};
+    pub(super) fn handle_inbox_action(&mut self, action: super::super::inbox_view::InboxAction, _witness: Option<&witness::DecisionWitness>) {
+        use super::super::inbox_view::InboxAction;
 
         match action {
             InboxAction::None => {}
@@ -30,63 +29,88 @@ impl App {
             InboxAction::CyclePrev => {
                 self.start_lateral_view(crate::ui::widgets::LateralView::Inbox.prev());
             }
-            InboxAction::LaunchSelected => {
-                // Extract entry info from current view (borrow ends here)
-                let entry_info = match &self.view {
-                    ActiveView::Inbox(ref state) => {
-                        state.selected_entry().map(|e| {
-                            let is_match = matches!(e.status, InboxEntryStatus::CorpusMatch(_));
-                            (e.inode, e.path.clone(), is_match)
-                        })
-                    }
-                    _ => None,
-                };
+            InboxAction::LaunchIntake => {
+                // Gather inbox unindexed files and show intake confirmation
+                let intake_state = self.witch.as_mut().and_then(|w| {
+                    let read_db = w.read_db();
+                    startup::IntakeConfirmationState::gather_inbox(&read_db)
+                });
 
-                if let Some((inode, path, is_match)) = entry_info {
-                    if is_match {
-                        // Matched file: stage MoveToStash + DropFromIndex → transaction review
-                        let Some(w) = witness else { return };
-                        let resolver = paths::get_resolver();
-                        let abs_path = resolver.resolve(std::path::Path::new(&path));
-                        let mutations = vec![
-                            Mutation::MoveToStash(MoveToStashMutation {
-                                path: abs_path,
-                                stash_name: "inbox_matches".to_string(),
-                            }),
-                            Mutation::DropFromIndex(DropFromIndexMutation {
-                                path: std::path::PathBuf::from(&path),
-                                inode: Some(inode),
-                                zone: Some("inbox".to_string()),
-                            }),
-                        ];
-                        self.stage_mutations_with_transaction(mutations, "Stash inbox match", w);
-                        self.start_transaction_review();
-                    } else {
-                        // Healthy/Unindexed file: open tag editor
-                        self.launch_inbox_tag_editor(&path);
+                match intake_state {
+                    Some(state) => {
+                        self.view = ActiveView::IntakeConfirmation(state);
+                    }
+                    None => {
+                        self.status_message = Some("No unindexed inbox files to process".to_string());
                     }
                 }
             }
-            InboxAction::EditTags => {
-                // T key: open tag editor for any selected file
-                let path = match &self.view {
-                    ActiveView::Inbox(ref state) => {
-                        state.selected_entry().map(|e| e.path.clone())
-                    }
-                    _ => None,
-                };
-                if let Some(path) = path {
-                    self.launch_inbox_tag_editor(&path);
-                }
+            InboxAction::LaunchCorpusMatchResolution => {
+                self.start_inbox_corpus_match_resolution();
             }
         }
     }
 
-    /// Open the tag editor for an inbox file, pushing the current view onto the stack.
-    fn launch_inbox_tag_editor(&mut self, rel_path: &str) {
-        let resolver = crate::corpus::paths::get_resolver();
-        let abs_path = resolver.resolve(std::path::Path::new(rel_path));
-        self.push_current_view();
-        self.start_tag_editor_for_path(&abs_path, false);
+    /// Start inbox corpus match resolution modal.
+    pub(in crate::ui) fn start_inbox_corpus_match_resolution(&mut self) {
+        let fuzz = self.config.opinions.quality_resolution.inbox_bitrate_fuzz_percent;
+        let data = self.witch.as_mut()
+            .and_then(|w| {
+                let read_db = w.read_db();
+                inbox_corpus_match_modal::InboxCorpusMatchModalData::load(&read_db, fuzz).ok()
+            })
+            .unwrap_or_default();
+
+        if data.total_count() == 0 {
+            self.status_message = Some("No inbox corpus matches to resolve".to_string());
+            return;
+        }
+
+        let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(data);
+        self.view = ActiveView::InboxCorpusMatchResolution(preview);
+    }
+
+    /// Handle inbox corpus match preview actions.
+    pub(super) fn handle_inbox_corpus_match_preview_action(
+        &mut self,
+        action: inbox_corpus_match_modal::InboxCorpusMatchPreviewAction,
+        witness: Option<&witness::DecisionWitness>,
+    ) {
+        match action {
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::None => {}
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStash => {
+                let Some(w) = witness else { return };
+                let mutations = match &self.view {
+                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
+                        preview.cached_data.stash_and_drop_mutations()
+                    }
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Stash inbox corpus matches", w);
+                    self.start_transaction_review();
+                } else {
+                    self.status_message = Some("No files to stash".to_string());
+                }
+            }
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStashAll => {
+                let Some(w) = witness else { return };
+                let mutations = match &self.view {
+                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
+                        preview.cached_data.stash_all_mutations()
+                    }
+                    _ => Vec::new(),
+                };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Stash all inbox duplicates", w);
+                    self.start_transaction_review();
+                } else {
+                    self.status_message = Some("No files to stash".to_string());
+                }
+            }
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::Cancel => {
+                self.cancel_and_return_to_insights("Inbox corpus match resolution cancelled");
+            }
+        }
     }
 }

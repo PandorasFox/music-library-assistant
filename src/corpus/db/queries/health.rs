@@ -304,6 +304,63 @@ impl Database {
     }
 
     // ========================================================================
+    // Inbox Organizable Queries
+    // ========================================================================
+
+    /// Get inbox files eligible for organizing into the corpus.
+    ///
+    /// "Organizable" = has InboxHealthySignal AND is NOT referenced by
+    /// InboxCorpusMatchSignal or InboxTagCanonicitySignal.
+    ///
+    /// SQL handles the healthy/corpus-match exclusion. Tag canonicity exclusion
+    /// is done in Rust because inbox_inodes are stored in a bincode BLOB.
+    pub fn get_organizable_inbox_files(&self) -> Result<Vec<(i64, String)>> {
+        use crate::meta::signals::data::InboxTagCanonicityData;
+
+        // Step 1: Get healthy inodes NOT in corpus match table (SQL)
+        let mut stmt = self.conn.prepare(
+            "SELECT h.inode, h.path FROM signal_inbox_healthy h
+             WHERE h.inode NOT IN (SELECT inode FROM signal_inbox_corpus_match)"
+        )?;
+        let candidates: Vec<(i64, String)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Step 2: Load tag canonicity inodes from bincode blobs
+        let mut tag_canon_inodes = std::collections::HashSet::new();
+        let mut canon_stmt = self.conn.prepare(
+            "SELECT data FROM signal_inbox_tag_canonicity"
+        )?;
+        let blobs: Vec<Vec<u8>> = canon_stmt.query_map([], |row| {
+            row.get(0)
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+
+        for blob in blobs {
+            if let Ok(data) = bincode::deserialize::<InboxTagCanonicityData>(&blob) {
+                for inode in &data.inbox_inodes {
+                    tag_canon_inodes.insert(*inode);
+                }
+            }
+        }
+
+        // Step 3: Filter out tag canonicity inodes
+        let result = if tag_canon_inodes.is_empty() {
+            candidates
+        } else {
+            candidates.into_iter()
+                .filter(|(inode, _)| !tag_canon_inodes.contains(inode))
+                .collect()
+        };
+
+        Ok(result)
+    }
+
+    /// Count inbox files eligible for organizing into the corpus.
+    pub fn get_organizable_inbox_count(&self) -> Result<usize> {
+        self.get_organizable_inbox_files().map(|v| v.len())
+    }
+
+    // ========================================================================
     // Inbox Overview Data
     // ========================================================================
 
@@ -316,6 +373,7 @@ impl Database {
             corpus_match: self.count_signal_type("inbox_corpus_match")?,
             unindexed: self.count_signal_type("inbox_unindexed")?,
             tag_canonicity: self.count_signal_type("inbox_tag_canonicity")?,
+            organizable: self.get_organizable_inbox_count().unwrap_or(0),
         })
     }
 
@@ -1298,6 +1356,48 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// Get deploy status for the Deploy view and titlebar indicator.
+    ///
+    /// Returns whether there's actionable deploy work and per-library file counts.
+    pub fn get_deploy_status(&self) -> Result<crate::corpus::db::types::DeployStatus> {
+        let needs_action: bool = self.conn.query_row(
+            "SELECT
+                EXISTS(SELECT 1 FROM signal_deploy_ready)
+                OR EXISTS(SELECT 1 FROM signal_library_stale)
+                OR EXISTS(SELECT 1 FROM signal_library_leftover)",
+            [],
+            |row| row.get(0),
+        )?;
+
+        // Per-library file counts: extract library_name from the path prefix before first '/'
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                CASE
+                    WHEN INSTR(path, '/') > 0 THEN SUBSTR(path, 1, INSTR(path, '/') - 1)
+                    ELSE path
+                END AS library_name,
+                COUNT(*) AS cnt
+            FROM files
+            WHERE zone = 'library'
+            GROUP BY library_name
+            ORDER BY library_name"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+
+        let mut library_file_counts = Vec::new();
+        for row in rows {
+            library_file_counts.push(row?);
+        }
+
+        Ok(crate::corpus::db::types::DeployStatus {
+            needs_action,
+            library_file_counts,
+        })
     }
 }
 

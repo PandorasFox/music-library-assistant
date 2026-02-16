@@ -29,6 +29,7 @@ use crate::ui::filter_popup::FilterCondition;
 
 pub use actions::TreeBrowserAction;
 pub use config::CorpusBrowserConfig;
+pub use entry::TreeEntry;
 pub use navigator::{EntryFilter, TreeNavigator};
 pub use variants::{BrowserVariant, CorpusBrowserVariant};
 

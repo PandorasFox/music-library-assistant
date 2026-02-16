@@ -98,6 +98,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | MoveToStash | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Move to stash directory; discovers inode before move |
 | UpdateTrackPath | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Update path in index |
 | Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode to new format |
+| InboxToCorpus | (via dirty inodes) | — | MutableOnly scope signals for inode | Move inbox file to corpus; updates zone from inbox→corpus, migrates inbox_tags→corpus_tags |
 
 ### Deployment Operations
 

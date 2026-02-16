@@ -3,10 +3,12 @@
 //! Handles aggregate inbox overview actions:
 //! - Enter on "Unindexed" bucket: launch inbox intake confirmation
 //! - Enter on "Corpus matches" bucket: launch inbox corpus match resolution
+//! - Enter on "Organize" bucket: launch inbox organize workflow
 
 use crate::meta::signals::data::InboxTagCanonicitySignal;
 use crate::ui::active_view::ActiveView;
 use crate::ui::inbox_corpus_match_modal;
+use crate::ui::inbox_organize;
 use crate::ui::startup;
 use crate::ui::{tag_canonicity_v2, CanonicitySignalKind, TagCanonicityClusters};
 use super::witness;
@@ -52,6 +54,9 @@ impl App {
             }
             InboxAction::LaunchInboxTagCanonicity => {
                 self.start_inbox_tag_canonicity_resolution();
+            }
+            InboxAction::LaunchOrganize => {
+                self.start_inbox_organize();
             }
         }
     }
@@ -183,6 +188,46 @@ impl App {
             }
             inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::Cancel => {
                 self.cancel_and_return_to_insights("Inbox corpus match resolution cancelled");
+            }
+        }
+    }
+
+    /// Start the inbox organize workflow.
+    fn start_inbox_organize(&mut self) {
+        let state = self.witch.as_mut().and_then(|w| {
+            let read_db = w.read_db();
+            inbox_organize::InboxOrganizeState::load_from_read_db(&read_db, &self.config)
+        });
+
+        match state {
+            Some(state) => {
+                self.view = ActiveView::InboxOrganize(state);
+            }
+            None => {
+                self.status_message = Some("No organizable inbox files".to_string());
+            }
+        }
+    }
+
+    /// Handle inbox organize workflow actions.
+    pub(super) fn handle_inbox_organize_action(
+        &mut self,
+        action: inbox_organize::InboxOrganizeAction,
+        witness: Option<&witness::DecisionWitness>,
+    ) {
+        match action {
+            inbox_organize::InboxOrganizeAction::None => {}
+            inbox_organize::InboxOrganizeAction::Complete(mutations) => {
+                let Some(w) = witness else { return };
+                if !mutations.is_empty() {
+                    self.stage_mutations_with_transaction(mutations, "Organize inbox into corpus", w);
+                    self.start_transaction_review();
+                } else {
+                    self.cancel_and_return_to_insights("No mutations generated");
+                }
+            }
+            inbox_organize::InboxOrganizeAction::Cancel => {
+                self.cancel_and_return_to_insights("Inbox organize cancelled");
             }
         }
     }

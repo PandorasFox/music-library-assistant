@@ -65,6 +65,9 @@ pub struct TreeNavigator {
     /// Absolute paths of configured deployment source directories.
     /// Directories equal to or under these paths are flagged as configured for deploy.
     deploy_source_paths: Vec<PathBuf>,
+    /// When true, prepend a synthetic "[+ new directory]" entry as the first
+    /// child of each expanded directory.
+    pub show_new_dir_entry: bool,
 }
 
 impl TreeNavigator {
@@ -84,6 +87,7 @@ impl TreeNavigator {
             show_root,
             active_path_filter: None,
             deploy_source_paths,
+            show_new_dir_entry: false,
         };
         nav.load_initial();
         nav
@@ -335,8 +339,16 @@ impl TreeNavigator {
             }
         }
 
-        // Return directories first, then files
-        dirs.into_iter().chain(files).collect()
+        // Optionally prepend synthetic "[+ new directory]" entry
+        let mut result = Vec::new();
+        if self.show_new_dir_entry {
+            result.push(TreeEntry::new_directory_prompt(parent.to_path_buf(), depth));
+        }
+
+        // Directories first, then files
+        result.extend(dirs);
+        result.extend(files);
+        result
     }
 
     /// Check if a path has children (subdirs or, if filter allows, audio files).

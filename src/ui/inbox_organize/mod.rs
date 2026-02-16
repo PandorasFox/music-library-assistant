@@ -1,0 +1,449 @@
+//! Inbox Organize Module
+//!
+//! Guided workflow for moving healthy inbox files into the corpus.
+//! Walks through inbox directories containing organizable files,
+//! presents a corpus directory browser for destination selection,
+//! and generates InboxToCorpus mutations.
+//!
+//! ## Controls (Corpus Browsing Phase)
+//!
+//! - Up/Down/j/k: Navigate corpus tree
+//! - Left/Right/h/l: Collapse/expand directories
+//! - Enter: Select directory (opens emplace popup), or create new directory
+//! - S: Skip current directory
+//! - Escape: Cancel entire workflow
+//!
+//! ## Controls (Emplace Popup)
+//!
+//! - Left/Right: Cycle options (Emplace Dir / Emplace Files / Skip / Cancel)
+//! - Enter: Confirm selection
+//! - Escape: Return to browsing
+
+pub mod render;
+
+use std::path::PathBuf;
+
+use crossterm::event::{KeyCode, KeyEvent};
+
+use crate::config::{InboxOrganizeGranularity, Config};
+use crate::corpus::db::ReadOnlyDb;
+use crate::meta::mutations::{Mutation, file_ops::InboxToCorpusMutation};
+use crate::ui::tree_browser::{EntryFilter, TreeNavigator};
+use crate::ui::widgets::TextInputState;
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/// A directory of inbox files to organize.
+#[derive(Debug)]
+pub struct InboxDirectory {
+    /// Display name for this directory group
+    pub dir_name: String,
+    /// Absolute path to the inbox directory
+    pub dir_path: PathBuf,
+    /// Files within this directory
+    pub files: Vec<InboxOrganizeFile>,
+}
+
+/// A single organizable inbox file.
+#[derive(Debug)]
+pub struct InboxOrganizeFile {
+    pub inode: i64,
+    /// Absolute path to the file
+    pub path: PathBuf,
+    /// Just the filename (for display)
+    pub filename: String,
+}
+
+/// Current phase within the organize workflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrganizePhase {
+    /// Browsing corpus tree to pick destination
+    BrowsingCorpus,
+    /// Text input for new directory name
+    NewDirectoryInput,
+    /// Confirmation popup: emplace dir / emplace files / skip / cancel
+    EmplacePopup,
+}
+
+/// Options in the emplace popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmplaceOption {
+    EmplaceDirectory,
+    EmplaceFiles,
+    Skip,
+    Cancel,
+}
+
+impl EmplaceOption {
+    fn next(self) -> Self {
+        match self {
+            Self::EmplaceDirectory => Self::EmplaceFiles,
+            Self::EmplaceFiles => Self::Skip,
+            Self::Skip => Self::Cancel,
+            Self::Cancel => Self::EmplaceDirectory,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::EmplaceDirectory => Self::Cancel,
+            Self::EmplaceFiles => Self::EmplaceDirectory,
+            Self::Skip => Self::EmplaceFiles,
+            Self::Cancel => Self::Skip,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::EmplaceDirectory => "Emplace dir",
+            Self::EmplaceFiles => "Emplace files",
+            Self::Skip => "Skip",
+            Self::Cancel => "Cancel",
+        }
+    }
+}
+
+/// Action returned from input handling.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InboxOrganizeAction {
+    /// No action needed
+    None,
+    /// Workflow complete — accumulated mutations ready for review
+    Complete(Vec<Mutation>),
+    /// Workflow cancelled
+    Cancel,
+}
+
+// ============================================================================
+// State
+// ============================================================================
+
+/// State for the inbox organize workflow.
+#[derive(Debug)]
+pub struct InboxOrganizeState {
+    /// Inbox directories to process (ordered)
+    pub directories: Vec<InboxDirectory>,
+    /// Index into `directories` for the current directory
+    pub current_dir_idx: usize,
+    /// Corpus tree navigator for destination selection
+    pub corpus_navigator: TreeNavigator,
+    /// Current phase of the workflow
+    pub phase: OrganizePhase,
+    /// Selected option in the emplace popup
+    pub popup_selection: EmplaceOption,
+    /// Text input state for new directory name
+    pub new_dir_input: TextInputState,
+    /// The selected corpus destination path (set when transitioning to popup)
+    pub selected_dest: PathBuf,
+    /// Mutations accumulated across all directories
+    pub accumulated_mutations: Vec<Mutation>,
+}
+
+impl InboxOrganizeState {
+    /// Load organizable files and create the workflow state from a ReadOnlyDb.
+    ///
+    /// Returns None if there are no organizable files.
+    pub fn load_from_read_db(read_db: &ReadOnlyDb<'_>, config: &Config) -> Option<Self> {
+        let files = read_db.get_organizable_inbox_files().ok()?;
+        if files.is_empty() {
+            return None;
+        }
+
+        let inbox_dir = config.inbox_dir();
+        let corpus_dir = config.corpus_dir();
+        let granularity = config.opinions.inbox_organize.directory_granularity;
+
+        // Group files into directories based on granularity
+        let directories = group_into_directories(&files, &inbox_dir, granularity);
+        if directories.is_empty() {
+            return None;
+        }
+
+        // Create corpus navigator (directories only, show root, with synthetic entry)
+        let mut corpus_navigator = TreeNavigator::new(
+            corpus_dir,
+            EntryFilter::directories_only(),
+            true,
+            Vec::new(), // no deploy source paths needed for selection
+        );
+        corpus_navigator.show_new_dir_entry = true;
+
+        Some(Self {
+            directories,
+            current_dir_idx: 0,
+            corpus_navigator,
+            phase: OrganizePhase::BrowsingCorpus,
+            popup_selection: EmplaceOption::EmplaceDirectory,
+            new_dir_input: TextInputState::default(),
+            selected_dest: PathBuf::new(),
+            accumulated_mutations: Vec::new(),
+        })
+    }
+
+    /// Get the current inbox directory being processed.
+    pub fn current_dir(&self) -> Option<&InboxDirectory> {
+        self.directories.get(self.current_dir_idx)
+    }
+
+    /// Progress indicator: "1/N"
+    pub fn progress_label(&self) -> String {
+        format!("{}/{}", self.current_dir_idx + 1, self.directories.len())
+    }
+
+    /// Handle a key event.
+    pub fn handle_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
+        match self.phase {
+            OrganizePhase::BrowsingCorpus => self.handle_browsing_key(key),
+            OrganizePhase::NewDirectoryInput => self.handle_new_dir_input_key(key),
+            OrganizePhase::EmplacePopup => self.handle_emplace_key(key),
+        }
+    }
+
+    // =========================================================================
+    // Phase: Browsing Corpus
+    // =========================================================================
+
+    fn handle_browsing_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
+        match key.code {
+            KeyCode::Esc => InboxOrganizeAction::Cancel,
+
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.corpus_navigator.move_up();
+                InboxOrganizeAction::None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.corpus_navigator.move_down();
+                InboxOrganizeAction::None
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.corpus_navigator.expand_current();
+                InboxOrganizeAction::None
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.corpus_navigator.collapse_or_parent();
+                InboxOrganizeAction::None
+            }
+
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                self.advance_to_next_dir()
+            }
+
+            KeyCode::Enter => {
+                if let Some(entry) = self.corpus_navigator.current_entry().cloned() {
+                    if entry.is_synthetic {
+                        // "[+ new directory]" — switch to text input
+                        self.new_dir_input.clear();
+                        // The synthetic entry's path is the parent directory
+                        self.selected_dest = entry.path.clone();
+                        self.phase = OrganizePhase::NewDirectoryInput;
+                    } else if entry.is_directory {
+                        // Select this directory as destination
+                        self.selected_dest = entry.path.clone();
+                        self.popup_selection = EmplaceOption::EmplaceDirectory;
+                        self.phase = OrganizePhase::EmplacePopup;
+                    }
+                }
+                InboxOrganizeAction::None
+            }
+
+            _ => InboxOrganizeAction::None,
+        }
+    }
+
+    // =========================================================================
+    // Phase: New Directory Input
+    // =========================================================================
+
+    fn handle_new_dir_input_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
+        match key.code {
+            KeyCode::Esc => {
+                self.phase = OrganizePhase::BrowsingCorpus;
+                InboxOrganizeAction::None
+            }
+            KeyCode::Enter => {
+                let name = self.new_dir_input.value().to_string();
+                if name.is_empty() {
+                    self.phase = OrganizePhase::BrowsingCorpus;
+                } else {
+                    // Compute new dir path = selected parent + input name
+                    self.selected_dest = self.selected_dest.join(&name);
+                    self.popup_selection = EmplaceOption::EmplaceDirectory;
+                    self.phase = OrganizePhase::EmplacePopup;
+                }
+                InboxOrganizeAction::None
+            }
+            _ => {
+                self.new_dir_input.handle_key(key);
+                InboxOrganizeAction::None
+            }
+        }
+    }
+
+    // =========================================================================
+    // Phase: Emplace Popup
+    // =========================================================================
+
+    fn handle_emplace_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
+        match key.code {
+            KeyCode::Esc => {
+                self.phase = OrganizePhase::BrowsingCorpus;
+                InboxOrganizeAction::None
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.popup_selection = self.popup_selection.prev();
+                InboxOrganizeAction::None
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.popup_selection = self.popup_selection.next();
+                InboxOrganizeAction::None
+            }
+            KeyCode::Enter => {
+                match self.popup_selection {
+                    EmplaceOption::EmplaceDirectory => {
+                        self.generate_emplace_directory_mutations();
+                        self.advance_to_next_dir()
+                    }
+                    EmplaceOption::EmplaceFiles => {
+                        self.generate_emplace_files_mutations();
+                        self.advance_to_next_dir()
+                    }
+                    EmplaceOption::Skip => {
+                        self.advance_to_next_dir()
+                    }
+                    EmplaceOption::Cancel => {
+                        self.phase = OrganizePhase::BrowsingCorpus;
+                        InboxOrganizeAction::None
+                    }
+                }
+            }
+            _ => InboxOrganizeAction::None,
+        }
+    }
+
+    // =========================================================================
+    // Mutation Generation
+    // =========================================================================
+
+    /// Emplace directory: move `inbox/DirName/` → `corpus/Dest/DirName/`
+    fn generate_emplace_directory_mutations(&mut self) {
+        let Some(current_dir) = self.directories.get(self.current_dir_idx) else { return };
+        let dest_base = self.selected_dest.join(&current_dir.dir_name);
+
+        for file in &current_dir.files {
+            self.accumulated_mutations.push(Mutation::InboxToCorpus(InboxToCorpusMutation {
+                inode: file.inode,
+                inbox_path: file.path.clone(),
+                corpus_path: dest_base.join(&file.filename),
+            }));
+        }
+    }
+
+    /// Emplace files: move individual files → `corpus/Dest/` (flat)
+    fn generate_emplace_files_mutations(&mut self) {
+        let Some(current_dir) = self.directories.get(self.current_dir_idx) else { return };
+
+        for file in &current_dir.files {
+            self.accumulated_mutations.push(Mutation::InboxToCorpus(InboxToCorpusMutation {
+                inode: file.inode,
+                inbox_path: file.path.clone(),
+                corpus_path: self.selected_dest.join(&file.filename),
+            }));
+        }
+    }
+
+    // =========================================================================
+    // Navigation
+    // =========================================================================
+
+    /// Advance to the next directory. If all done, return Complete with mutations.
+    fn advance_to_next_dir(&mut self) -> InboxOrganizeAction {
+        self.current_dir_idx += 1;
+        self.phase = OrganizePhase::BrowsingCorpus;
+
+        if self.current_dir_idx >= self.directories.len() {
+            // All directories processed
+            let mutations = std::mem::take(&mut self.accumulated_mutations);
+            if mutations.is_empty() {
+                InboxOrganizeAction::Cancel
+            } else {
+                InboxOrganizeAction::Complete(mutations)
+            }
+        } else {
+            InboxOrganizeAction::None
+        }
+    }
+}
+
+// ============================================================================
+// Directory Grouping
+// ============================================================================
+
+/// Group organizable files into InboxDirectory structs based on granularity.
+fn group_into_directories(
+    files: &[(i64, String)],
+    inbox_dir: &std::path::Path,
+    granularity: InboxOrganizeGranularity,
+) -> Vec<InboxDirectory> {
+    use std::collections::BTreeMap;
+    use crate::corpus::paths;
+
+    let resolver = paths::get_resolver();
+
+    // Convert relative paths to absolute, group by parent directory
+    let mut dir_groups: BTreeMap<PathBuf, Vec<InboxOrganizeFile>> = BTreeMap::new();
+
+    for (inode, rel_path) in files {
+        let abs_path = resolver.resolve(std::path::Path::new(rel_path));
+
+        let parent = match abs_path.parent() {
+            Some(p) => p.to_path_buf(),
+            None => continue,
+        };
+        let filename = abs_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        dir_groups.entry(parent).or_default().push(InboxOrganizeFile {
+            inode: *inode,
+            path: abs_path,
+            filename,
+        });
+    }
+
+    match granularity {
+        InboxOrganizeGranularity::Leaf => {
+            // Use directories as-is (deepest dirs containing files)
+            dir_groups.into_iter().map(|(dir_path, files)| {
+                let dir_name = dir_path.strip_prefix(inbox_dir)
+                    .unwrap_or(&dir_path)
+                    .to_string_lossy()
+                    .to_string();
+                InboxDirectory { dir_name, dir_path, files }
+            }).collect()
+        }
+        InboxOrganizeGranularity::TopLevel => {
+            // Group by top-level child of inbox/
+            let mut top_groups: BTreeMap<PathBuf, Vec<InboxOrganizeFile>> = BTreeMap::new();
+
+            for (dir_path, files) in dir_groups {
+                // Find the top-level directory under inbox/
+                let rel = dir_path.strip_prefix(inbox_dir).unwrap_or(&dir_path);
+                let top_component = rel.components().next()
+                    .map(|c| inbox_dir.join(c.as_os_str()))
+                    .unwrap_or_else(|| dir_path.clone());
+
+                top_groups.entry(top_component).or_default().extend(files);
+            }
+
+            top_groups.into_iter().map(|(dir_path, files)| {
+                let dir_name = dir_path.strip_prefix(inbox_dir)
+                    .unwrap_or(&dir_path)
+                    .to_string_lossy()
+                    .to_string();
+                InboxDirectory { dir_name, dir_path, files }
+            }).collect()
+        }
+    }
+}

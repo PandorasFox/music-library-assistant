@@ -610,6 +610,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_inbox_corpus_match_entries(bitrate_fuzz_percent)
     }
 
+    /// Get inbox files eligible for organizing into the corpus.
+    pub fn get_organizable_inbox_files(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_organizable_inbox_files()
+    }
+
     /// Get embeddable album art signals with deserialized data.
     pub fn get_embeddable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::EmbeddableAlbumArtSignal>> {
         self.db.get_embeddable_album_art_signals()

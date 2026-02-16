@@ -38,6 +38,7 @@ pub struct Opinions {
     pub performance: PerformanceOpinions,
     pub tag_splitting: TagSplittingOpinions,
     pub duplicate_analysis: DuplicateAnalysisOpinions,
+    pub inbox_organize: InboxOrganizeOpinions,
 }
 
 
@@ -276,6 +277,31 @@ impl Default for DuplicateAnalysisOpinions {
             cross_directory_max_keys: 2,
             within_directory_min_keys: 3,
             elide_variant_titles: true,
+        }
+    }
+}
+
+/// Directory granularity for inbox organize workflow.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum InboxOrganizeGranularity {
+    /// Walk to deepest directories containing audio files (default).
+    #[default]
+    Leaf,
+    /// Iterate only direct children of inbox/.
+    TopLevel,
+}
+
+/// Opinions for inbox organize workflow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxOrganizeOpinions {
+    /// How to group inbox directories for the organize workflow.
+    pub directory_granularity: InboxOrganizeGranularity,
+}
+
+impl Default for InboxOrganizeOpinions {
+    fn default() -> Self {
+        Self {
+            directory_granularity: InboxOrganizeGranularity::default(),
         }
     }
 }
@@ -891,6 +917,28 @@ fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut Duplica
     }
 }
 
+/// Parse inbox-organize opinions from KDL node
+fn parse_inbox_organize_opinions(node: &kdl::KdlNode, opinions: &mut InboxOrganizeOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "directory-granularity" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            match val {
+                                "leaf" => opinions.directory_granularity = InboxOrganizeGranularity::Leaf,
+                                "top-level" => opinions.directory_granularity = InboxOrganizeGranularity::TopLevel,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 fn parse_kdl_config(content: &str) -> Result<Config> {
     let doc: kdl::KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
@@ -992,6 +1040,9 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "duplicate-analysis" => {
                                 parse_duplicate_analysis_opinions(child, &mut config.opinions.duplicate_analysis);
+                            }
+                            "inbox-organize" => {
+                                parse_inbox_organize_opinions(child, &mut config.opinions.inbox_organize);
                             }
                             _ => {}
                         }

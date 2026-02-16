@@ -6,32 +6,18 @@
 //! - Files in inbox (gray) — total file count
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
 
-use crate::ui::widgets::{LateralView, UnifiedTitleBar};
-
 use super::{InboxInsightAction, InboxViewState};
 
-/// Render the full inbox view.
+/// Render the full inbox view (titlebar is rendered by render_app).
 pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &InboxViewState) {
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(UnifiedTitleBar::height()),
-            Constraint::Min(5),
-        ])
-        .split(area);
-
-    // Render unified title bar
-    let titlebar = UnifiedTitleBar::new(LateralView::Inbox);
-    titlebar.render(f, main_chunks[0]);
-
-    render_inbox_content(f, main_chunks[1], state);
+    render_inbox_content(f, area, state);
 }
 
 fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
@@ -66,6 +52,7 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
                 InboxInsightAction::LaunchIntake
                 | InboxInsightAction::LaunchCorpusMatchResolution
                 | InboxInsightAction::LaunchInboxTagCanonicity => " \u{23CE}",
+                InboxInsightAction::LaunchOrganize => " \u{23CE}",
                 InboxInsightAction::Informational => "",
             };
 

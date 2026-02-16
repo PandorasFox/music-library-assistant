@@ -55,6 +55,17 @@ pub struct LibraryMoveMutation {
     pub destination: PathBuf,
 }
 
+/// Move an inbox file into the corpus.
+///
+/// Combines a filesystem move with a zone change (inbox → corpus) and
+/// tag migration (inbox_tags → corpus_tags). Used by the inbox organize workflow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InboxToCorpusMutation {
+    pub inode: i64,
+    pub inbox_path: PathBuf,
+    pub corpus_path: PathBuf,
+}
+
 // ============================================================================
 // MutationExecutor Implementations
 // ============================================================================
@@ -225,6 +236,50 @@ impl MutationExecutor for LibraryMoveMutation {
             }
         }
         Vec::new()
+    }
+}
+
+impl MutationExecutor for InboxToCorpusMutation {
+    fn label(&self) -> &'static str { "Inbox → Corpus" }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+
+        // Step 1: Move file on disk
+        let result = execute_move(&self.inbox_path, &self.corpus_path)
+            .and_then(|()| {
+                // Step 2: Update DB path + zone (inbox → corpus, migrates tags)
+                super::indexing::execute_update_file_path(
+                    ctx.read_db,
+                    "inbox",
+                    self.inode,
+                    &self.corpus_path,
+                    Some("corpus"),
+                    ctx.witness,
+                )
+            });
+
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::InboxToCorpus(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+
+    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        vec![self.inbox_path.clone(), self.corpus_path.clone()]
     }
 }
 

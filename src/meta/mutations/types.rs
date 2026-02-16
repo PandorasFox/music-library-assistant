@@ -14,7 +14,7 @@ use crate::meta::computations::Computation;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::tags::TagSet;
 
-use super::file_ops::{MoveMutation, MoveToStashMutation, HardLinkMutation, LibraryMoveMutation};
+use super::file_ops::{MoveMutation, MoveToStashMutation, HardLinkMutation, LibraryMoveMutation, InboxToCorpusMutation};
 use super::indexing::{
     IndexFileFromPathMutation, UpdateFilePathMutation, DropFromIndexMutation,
     DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
@@ -228,6 +228,9 @@ pub enum Mutation {
     /// Move a file within a library (e.g., stale file to correct location).
     LibraryMove(LibraryMoveMutation),
 
+    /// Move an inbox file into the corpus (zone change + tag migration).
+    InboxToCorpus(InboxToCorpusMutation),
+
     // ========================================================================
     // Database Migration Operations
     // ========================================================================
@@ -300,6 +303,7 @@ impl Mutation {
             Mutation::Transcode(m) => Some(m),
             Mutation::HardLink(m) => Some(m),
             Mutation::LibraryMove(m) => Some(m),
+            Mutation::InboxToCorpus(m) => Some(m),
             Mutation::UpdateFilePath(m) => Some(m),
             Mutation::DropFromIndex(m) => Some(m),
             Mutation::DropDirectoryFromIndex(m) => Some(m),
@@ -340,6 +344,7 @@ impl Mutation {
                 | Mutation::EmitExpectedDuplicate(_)
                 | Mutation::EmitExpectedMissingTag(_)
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
+            // Note: InboxToCorpus moves files + updates DB, so NOT db-only
         )
     }
 
@@ -356,6 +361,7 @@ impl Mutation {
     pub fn affected_inode(&self) -> Option<i64> {
         match self {
             Mutation::Transcode(ref m) => Some(m.inode),
+            Mutation::InboxToCorpus(ref m) => Some(m.inode),
             Mutation::ApplyDbTagsToDisk(ref m) => Some(m.inode),
             Mutation::FlushTagsToDisk(ref m) => Some(m.inode),
             Mutation::AssimilateDiskTagsToDb(ref m) => Some(m.inode),
@@ -412,6 +418,16 @@ impl Mutation {
             // Indexing operations affect the file's directory
             Mutation::IndexFileFromPath(m) => {
                 if let Some(parent) = m.path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+
+            // Inbox-to-corpus: affects both source and destination directories
+            Mutation::InboxToCorpus(m) => {
+                if let Some(parent) = m.inbox_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+                if let Some(parent) = m.corpus_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }

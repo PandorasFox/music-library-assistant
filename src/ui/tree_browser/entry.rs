@@ -26,6 +26,8 @@ pub struct TreeEntry {
     pub item_count: usize,
     /// Whether this directory is under a configured deployment source
     pub configured_for_deploy: bool,
+    /// Whether this is a synthetic UI-only entry (e.g., "[+ new directory]")
+    pub is_synthetic: bool,
 }
 
 impl TreeEntry {
@@ -46,6 +48,7 @@ impl TreeEntry {
             has_children,
             item_count,
             configured_for_deploy: false,
+            is_synthetic: false,
         }
     }
 
@@ -60,6 +63,22 @@ impl TreeEntry {
             has_children: false,
             item_count: 0,
             configured_for_deploy: false,
+            is_synthetic: false,
+        }
+    }
+
+    /// Create a synthetic "[+ new directory]" entry.
+    pub fn new_directory_prompt(parent_path: PathBuf, depth: usize) -> Self {
+        Self {
+            path: parent_path,
+            name: "[+ new directory]".to_string(),
+            depth,
+            is_directory: true,
+            is_expanded: false,
+            has_children: false,
+            item_count: 0,
+            configured_for_deploy: false,
+            is_synthetic: true,
         }
     }
 }

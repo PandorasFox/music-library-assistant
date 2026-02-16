@@ -267,6 +267,8 @@ pub struct InboxOverviewData {
     pub unindexed: usize,
     /// Inbox tag values differing from corpus canonical spellings
     pub tag_canonicity: usize,
+    /// Healthy inbox files eligible for organizing into corpus
+    pub organizable: usize,
 }
 
 // ============================================================================
@@ -476,6 +478,16 @@ pub struct InboxCorpusMatchEntry {
     pub inbox_quality: String,
     pub corpus_matches: Vec<CorpusMatchDetail>,
     pub classification: MatchClassification,
+}
+
+/// Deploy status for the Deploy view and titlebar indicator.
+/// Computed at cache refresh time, never in render.
+#[derive(Debug, Clone, Default)]
+pub struct DeployStatus {
+    /// Whether there is actionable deploy work (deploy_ready, stale, or leftover signals exist).
+    pub needs_action: bool,
+    /// Per-library file counts: (library_name, file_count).
+    pub library_file_counts: Vec<(String, usize)>,
 }
 
 /// A file with a MovedFile signal (same inode, different path).

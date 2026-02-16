@@ -41,6 +41,8 @@ pub enum InboxAction {
     LaunchCorpusMatchResolution,
     /// Launch inbox tag canonicity view
     LaunchInboxTagCanonicity,
+    /// Launch inbox organize workflow
+    LaunchOrganize,
 }
 
 /// What action an inbox bucket entry triggers on Enter.
@@ -52,6 +54,8 @@ pub enum InboxInsightAction {
     LaunchCorpusMatchResolution,
     /// Launch inbox tag canonicity view
     LaunchInboxTagCanonicity,
+    /// Launch inbox organize workflow
+    LaunchOrganize,
     /// Informational only, no action
     Informational,
 }
@@ -106,6 +110,15 @@ impl InboxViewState {
             });
         }
 
+        if data.organizable > 0 {
+            entries.push(InboxBucketEntry {
+                label: "Organize into corpus".to_string(),
+                count: data.organizable,
+                color: Color::Green,
+                action: InboxInsightAction::LaunchOrganize,
+            });
+        }
+
         if data.unindexed > 0 {
             entries.push(InboxBucketEntry {
                 label: "Unindexed".to_string(),
@@ -149,6 +162,7 @@ impl InboxViewState {
                         InboxInsightAction::LaunchIntake => InboxAction::LaunchIntake,
                         InboxInsightAction::LaunchCorpusMatchResolution => InboxAction::LaunchCorpusMatchResolution,
                         InboxInsightAction::LaunchInboxTagCanonicity => InboxAction::LaunchInboxTagCanonicity,
+                        InboxInsightAction::LaunchOrganize => InboxAction::LaunchOrganize,
                         InboxInsightAction::Informational => InboxAction::None,
                     }
                 } else {

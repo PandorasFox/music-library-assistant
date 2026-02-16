@@ -693,11 +693,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_file_in_inbox_inodes()
     }
 
-    /// Get inbox signal counts (unindexed, healthy).
-    pub fn get_inbox_signal_counts(&self) -> Result<(usize, usize)> {
-        self.db.get_inbox_signal_counts()
-    }
-
     /// Get all inbox healthy files as (inode, path) pairs.
     pub fn get_inbox_healthy_files(&self) -> Result<Vec<(i64, String)>> {
         self.db.get_inbox_healthy_files()
@@ -706,6 +701,11 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get all inbox unindexed files as (inode, path) pairs.
     pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
         self.db.get_inbox_unindexed_files()
+    }
+
+    /// Get all inbox corpus match signals (inbox files matching corpus fingerprints).
+    pub fn get_inbox_corpus_match_files(&self) -> Result<Vec<(i64, String, crate::meta::signals::data::InboxCorpusMatchData)>> {
+        self.db.get_inbox_corpus_match_files()
     }
 
     /// Check whether an audio file has embedded pictures.

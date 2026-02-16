@@ -408,6 +408,19 @@ impl MigrationRegistry {
             },
         });
 
+        // v12→v13: Create inbox_corpus_match signal table
+        registry.register(Migration {
+            from_version: 12,
+            to_version: 13,
+            description: "Create signal_inbox_corpus_match table for inbox duplicate detection",
+            apply: |db| {
+                use crate::meta::signals::store::CorpusSignalStore;
+                use crate::meta::signals::data::InboxCorpusMatchSignal;
+                db.conn().execute_batch(InboxCorpusMatchSignal::TABLE_SQL)?;
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -505,9 +518,10 @@ mod tests {
         // v9→v10: rename files.source to files.zone
         // v10→v11: inbox signal tables
         // v11→v12: zone columns in signal_moved_file
-        assert_eq!(registry.latest_version(), 12);
-        assert_eq!(registry.pending_migrations(1).len(), 11);
-        assert_eq!(registry.pending_migrations(11).len(), 1);
-        assert!(registry.pending_migrations(12).is_empty());
+        // v12→v13: inbox corpus match signal table
+        assert_eq!(registry.latest_version(), 13);
+        assert_eq!(registry.pending_migrations(1).len(), 12);
+        assert_eq!(registry.pending_migrations(12).len(), 1);
+        assert!(registry.pending_migrations(13).is_empty());
     }
 }

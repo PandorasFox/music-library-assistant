@@ -532,7 +532,7 @@ fn subpar_reason_between(inferior: &QualityTier, superior: &QualityTier) -> Subp
 ///
 /// Chromaprint fingerprints are Vec<u32> where each u32 encodes 32 bits of spectral features.
 /// We use XOR + popcount to count differing bits, then compute similarity.
-fn fingerprint_similarity(fp1: &[u32], fp2: &[u32]) -> f64 {
+pub fn fingerprint_similarity(fp1: &[u32], fp2: &[u32]) -> f64 {
     if fp1.is_empty() || fp2.is_empty() {
         return 0.0;
     }

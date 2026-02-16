@@ -12,7 +12,7 @@ All computation code lives in `src/meta/computations/`:
 - **Stats**: `stats.rs` (thread-local stats + read-only DB connections)
 - **Asleep phase**: `asleep/mod.rs`, `asleep/executors.rs`
 - **Awakening phase**: `awakening/mod.rs`, `awakening/executors.rs`
-- **Awake phase**: `awake/mod.rs`, `awake/schedule.rs`, `awake/duplicates.rs`, `awake/tags.rs`, `awake/deploy.rs`, `awake/formats.rs`
+- **Awake phase**: `awake/mod.rs`, `awake/schedule.rs`, `awake/duplicates.rs`, `awake/tags.rs`, `awake/deploy.rs`, `awake/formats.rs`, `awake/inbox_matches.rs`
 
 ## Phase Overview
 
@@ -67,6 +67,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectCompoundTagsForInode | Per-inode: walks the priority-ordered `SplitRule` chain from `TagSplittingOpinions` (separator and collaboration keyword rules). First matching rule wins per tag value. Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc) |
 | DetectEmbeddableAlbumArt | Find directories with sidecar album art images alongside audio files lacking embedded pictures |
+| DetectInboxCorpusMatches | Find inbox files matching corpus by fingerprint+duration similarity |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality tier partitioning |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
 | DetectDeployConflicts | Detect path collisions in deployment |
@@ -117,6 +118,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectShitFormats | — | ShitFormat | ShitFormat (all, then recreate) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate, RedundantDuplicate | SubparDuplicate (all, then recreate), RedundantDuplicate (all, then recreate). Uses enum-based equivalence-class partitioning (QualityTier = FormatClass + metric). Best tier with >1 file → RedundantDuplicate; lower tiers → SubparDuplicate with reason (SubparFormat, SubparBitrate, SubparSampleRate). Re-release elision: album checked before ISRC when catalog numbers absent. Skips fingerprint groups with an ExpectedDuplicate signal (operator whitelist) |
 | DetectEmbeddableAlbumArt | — | EmbeddableAlbumArt | EmbeddableAlbumArt (stale, via set reconciliation) |
+| DetectInboxCorpusMatches | — | InboxCorpusMatch | InboxCorpusMatch (all, then recreate). For each inbox file with fingerprint, finds corpus files within duration tolerance with similarity above threshold. Data stored as bincode BLOB |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (all, then recreate). Skips source pairs with an ExpectedOverlap signal (operator whitelist) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (all, then recreate). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale. Masks stale-conflicts: if a stale file's expected path is already occupied by a different inode, no stale signal is emitted (the LibraryMove would always fail). |

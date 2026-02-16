@@ -21,6 +21,9 @@
 //! - `DetectMetadataDuplicates` - Find tracks with identical tag sets
 //! - `DetectTagCanonicalizations` - Find tag canonicalization opportunities
 //!
+//! Inbox:
+//! - `DetectInboxCorpusMatches` - Find inbox files matching corpus by fingerprint
+//!
 //! Deploy Health:
 //! - `DetectDeployConflicts` - Bulk detection of deploy path collisions
 //! - `DeriveDeployHealthSignals` - Derive library health signals from scan data
@@ -35,6 +38,7 @@ mod tags;
 mod deploy;
 mod formats;
 mod album_art;
+mod inbox_matches;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -45,6 +49,7 @@ pub use tags::*;
 pub use deploy::*;
 pub use formats::*;
 pub use album_art::*;
+pub use inbox_matches::*;
 
 // ============================================================================
 // Awake Computation Enum
@@ -151,6 +156,12 @@ pub enum Computation {
     /// Scans directories for image files (cover.jpg, folder.png, etc.) and probes
     /// audio files for embedded pictures. Emits EmbeddableAlbumArt signals.
     DetectEmbeddableAlbumArt,
+
+    /// Detect inbox files that match corpus files by fingerprint+duration.
+    ///
+    /// For each inbox file with a fingerprint, finds corpus files with similar
+    /// fingerprints within duration tolerance. Emits InboxCorpusMatchSignal.
+    DetectInboxCorpusMatches,
 }
 
 impl Computation {
@@ -173,6 +184,7 @@ impl Computation {
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
             Computation::DetectEmbeddableAlbumArt => "Detecting embeddable album art",
+            Computation::DetectInboxCorpusMatches => "Detecting inbox-corpus matches",
         }
     }
 
@@ -226,6 +238,9 @@ impl Computation {
             }
             Computation::DetectEmbeddableAlbumArt => {
                 execute_detect_embeddable_album_art(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectInboxCorpusMatches => {
+                execute_detect_inbox_corpus_matches(ctx.read_db, ctx.witness, ctx.start)
             }
         }
     }

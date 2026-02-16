@@ -4,17 +4,20 @@
 //! Part of the lateral view ring - can cycle to adjacent views with Tab/Shift-Tab.
 //!
 //! Inbox files are grouped by signal type:
+//! - Corpus Match: files matching existing corpus by fingerprint (stash candidates)
 //! - Unindexed: files on disk not yet in audio_info
 //! - Healthy: files indexed and ready for operations
 //!
-//! Navigation:
-//! - Up/Down: Navigate within file list
-//! - Tab/Shift-Tab: Cycle to adjacent view
-//! - Esc: Return to main menu
+//! Actions:
+//! - Enter on matched file: stage stash + drop, open transaction review
+//! - Enter/T on healthy file: open tag editor via view stack push
+//! - T on any file: open tag editor via view stack push
 
 mod render;
 
 use crossterm::event::{KeyCode, KeyEvent};
+
+use crate::meta::signals::data::InboxCorpusMatchData;
 
 pub use render::render_inbox_view;
 
@@ -29,6 +32,10 @@ pub enum InboxAction {
     CycleNext,
     /// Cycle to previous view in ring
     CyclePrev,
+    /// Enter pressed on selected entry
+    LaunchSelected,
+    /// T pressed — open tag editor for selected entry
+    EditTags,
 }
 
 /// An entry in the inbox file list.
@@ -40,8 +47,10 @@ pub struct InboxEntry {
 }
 
 /// Status of an inbox entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum InboxEntryStatus {
+    /// Inbox file has fingerprint match against corpus file(s)
+    CorpusMatch(InboxCorpusMatchData),
     /// File not yet indexed
     Unindexed,
     /// File indexed and ready
@@ -51,7 +60,7 @@ pub enum InboxEntryStatus {
 /// State for the inbox view.
 #[derive(Debug)]
 pub struct InboxViewState {
-    /// Combined list of inbox entries
+    /// Combined list of inbox entries, ordered: matched → unindexed → healthy
     pub entries: Vec<InboxEntry>,
     /// Currently selected index
     pub selected: usize,
@@ -72,7 +81,18 @@ impl InboxViewState {
     pub fn refresh(&mut self, db: &crate::corpus::db::ReadOnlyDb<'_>) {
         let mut entries = Vec::new();
 
-        // Unindexed files first
+        // Corpus matches first (most actionable)
+        if let Ok(matches) = db.get_inbox_corpus_match_files() {
+            for (inode, path, data) in matches {
+                entries.push(InboxEntry {
+                    inode,
+                    path,
+                    status: InboxEntryStatus::CorpusMatch(data),
+                });
+            }
+        }
+
+        // Unindexed files
         if let Ok(unindexed) = db.get_inbox_unindexed_files() {
             for (inode, path) in unindexed {
                 entries.push(InboxEntry {
@@ -86,11 +106,15 @@ impl InboxViewState {
         // Healthy files
         if let Ok(healthy) = db.get_inbox_healthy_files() {
             for (inode, path) in healthy {
-                entries.push(InboxEntry {
-                    inode,
-                    path,
-                    status: InboxEntryStatus::Healthy,
-                });
+                // Skip entries that already have a corpus match signal
+                let already_matched = entries.iter().any(|e| e.inode == inode);
+                if !already_matched {
+                    entries.push(InboxEntry {
+                        inode,
+                        path,
+                        status: InboxEntryStatus::Healthy,
+                    });
+                }
             }
         }
 
@@ -101,12 +125,32 @@ impl InboxViewState {
         }
     }
 
+    /// Get the currently selected entry, if any.
+    pub fn selected_entry(&self) -> Option<&InboxEntry> {
+        self.entries.get(self.selected)
+    }
+
     /// Handle a key event and return the resulting action.
     pub fn handle_key(&mut self, key: KeyEvent) -> InboxAction {
         match key.code {
             KeyCode::Esc => InboxAction::RequestQuit,
             KeyCode::Tab => InboxAction::CycleNext,
             KeyCode::BackTab => InboxAction::CyclePrev,
+
+            KeyCode::Enter => {
+                if self.selected_entry().is_some() {
+                    InboxAction::LaunchSelected
+                } else {
+                    InboxAction::None
+                }
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if self.selected_entry().is_some() {
+                    InboxAction::EditTags
+                } else {
+                    InboxAction::None
+                }
+            }
 
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {

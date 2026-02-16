@@ -134,11 +134,6 @@ pub fn is_stash_path(rel: &Path) -> bool {
     rel.starts_with("stash")
 }
 
-/// Check if a root-relative path is an inbox path.
-pub fn is_inbox_path(rel: &Path) -> bool {
-    rel.starts_with("inbox")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -286,23 +286,6 @@ impl Database {
         Ok(result)
     }
 
-    /// Get inbox signal counts for the inbox view.
-    ///
-    /// Returns (unindexed_count, healthy_count).
-    pub fn get_inbox_signal_counts(&self) -> Result<(usize, usize)> {
-        let unindexed: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_inbox_unindexed",
-            params![],
-            |row| row.get(0),
-        )?;
-        let healthy: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_inbox_healthy",
-            params![],
-            |row| row.get(0),
-        )?;
-        Ok((unindexed as usize, healthy as usize))
-    }
-
     /// Get all inbox healthy files as (inode, path) pairs.
     pub fn get_inbox_healthy_files(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
@@ -321,6 +304,22 @@ impl Database {
         )?;
         let rows = stmt.query_map(params![], |row| {
             Ok((row.get(0)?, row.get(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Get all inbox corpus match signals (inbox files that match corpus fingerprints).
+    pub fn get_inbox_corpus_match_files(&self) -> Result<Vec<(i64, String, crate::meta::signals::data::InboxCorpusMatchData)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path, data FROM signal_inbox_corpus_match ORDER BY path"
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            let data: crate::meta::signals::data::InboxCorpusMatchData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Blob, Box::new(e)))?;
+            Ok((inode, path, data))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
@@ -607,6 +606,10 @@ impl Database {
             "embeddable_album_art" => EmbeddableAlbumArtSignal::count(&self.conn)?,
             "missing_album_single" => MissingAlbumSingleSignal::count(&self.conn)?,
             "expected_missing_tag" => ExpectedMissingTagSignal::count(&self.conn)?,
+            "inbox_unindexed" => InboxUnindexedSignal::count(&self.conn)?,
+            "inbox_healthy" => InboxHealthySignal::count(&self.conn)?,
+            "inbox_corpus_match" => InboxCorpusMatchSignal::count(&self.conn)?,
+            "file_in_inbox" => FileInInboxSignal::count(&self.conn)?,
             _ => 0,
         };
         Ok(count)

@@ -67,6 +67,31 @@ pub struct InboxHealthySignal {
     pub path: String,
 }
 
+/// Inbox file has fingerprint+duration match against corpus file(s).
+/// Likely a duplicate — operator can stash the inbox copy.
+#[derive(Debug, Clone)]
+pub struct InboxCorpusMatchSignal {
+    pub inode: i64,
+    pub path: String,
+    /// Serialized as bincode BLOB.
+    pub data: InboxCorpusMatchData,
+}
+
+/// Match details for an inbox file that overlaps with corpus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxCorpusMatchData {
+    /// Corpus inodes that match this inbox file.
+    pub corpus_matches: Vec<InboxCorpusMatch>,
+}
+
+/// A single corpus file matching an inbox file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxCorpusMatch {
+    pub corpus_inode: i64,
+    pub corpus_path: String,
+    pub similarity: f64,
+}
+
 // ============================================================================
 // Corpus health signals (inode-keyed)
 // ============================================================================
@@ -526,6 +551,7 @@ pub enum TypedSignalWrite {
     FileInInbox(FileInInboxSignal),
     InboxUnindexed(InboxUnindexedSignal),
     InboxHealthy(InboxHealthySignal),
+    InboxCorpusMatch(InboxCorpusMatchSignal),
     CorruptFile(CorruptFileSignal),
     MtimeOnlyMismatch(MtimeOnlyMismatchSignal),
     MissingDirectory(MissingDirectorySignal),
@@ -569,6 +595,7 @@ impl TypedSignalWrite {
             Self::FileInInbox(s) => s.insert(conn),
             Self::InboxUnindexed(s) => s.insert(conn),
             Self::InboxHealthy(s) => s.insert(conn),
+            Self::InboxCorpusMatch(s) => s.insert(conn),
             Self::CorruptFile(s) => s.insert(conn),
             Self::MtimeOnlyMismatch(s) => s.insert(conn),
             Self::MissingDirectory(s) => s.insert(conn),
@@ -611,6 +638,7 @@ impl TypedSignalWrite {
             Self::FileInInbox(s) => FileInInboxSignal::exists(conn, s.inode),
             Self::InboxUnindexed(s) => InboxUnindexedSignal::exists(conn, s.inode),
             Self::InboxHealthy(s) => InboxHealthySignal::exists(conn, s.inode),
+            Self::InboxCorpusMatch(s) => InboxCorpusMatchSignal::exists(conn, s.inode),
             Self::CorruptFile(s) => CorruptFileSignal::exists(conn, s.inode),
             Self::MtimeOnlyMismatch(s) => MtimeOnlyMismatchSignal::exists(conn, s.inode),
             Self::MissingDirectory(s) => MissingDirectorySignal::exists(conn, s.inode),

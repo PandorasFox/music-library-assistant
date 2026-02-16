@@ -49,6 +49,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | FileInInbox | ScanCorpusDirectory (zone=inbox) | ClearExistingObservationState | File discovered on disk in inbox/ |
 | InboxUnindexed | DeriveInboxSignals | DeriveInboxSignals | On disk in inbox but not in index |
 | InboxHealthy | DeriveInboxSignals | DeriveInboxSignals | In inbox, indexed, ready for operations |
+| InboxCorpusMatch | DetectInboxCorpusMatches | DetectInboxCorpusMatches | Inbox file has fingerprint+duration match against corpus file(s). Data (bincode BLOB): `corpus_matches[]` with `corpus_inode`, `corpus_path`, `similarity` |
 
 ---
 

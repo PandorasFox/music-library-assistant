@@ -1,6 +1,7 @@
 //! Inbox View Rendering
 //!
 //! Renders the inbox view as a file list grouped by status:
+//! - Corpus Match (red/magenta) — fingerprint match against corpus, stash candidate
 //! - Unindexed files (yellow) — pending indexing
 //! - Healthy files (green) — indexed, ready for operations
 
@@ -24,6 +25,7 @@ pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &mut InboxViewState) 
         .constraints([
             Constraint::Length(UnifiedTitleBar::height()),
             Constraint::Min(5),
+            Constraint::Length(1), // Controls hint
         ])
         .split(area);
 
@@ -32,12 +34,35 @@ pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &mut InboxViewState) 
     titlebar.render(f, main_chunks[0]);
 
     render_inbox_content(f, main_chunks[1], state);
+    render_controls_hint(f, main_chunks[2], state);
 }
 
 fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
+    // Compute status counts from entries
+    let mut n_match = 0usize;
+    let mut n_unindexed = 0usize;
+    let mut n_ready = 0usize;
+    for entry in &state.entries {
+        match entry.status {
+            InboxEntryStatus::CorpusMatch(_) => n_match += 1,
+            InboxEntryStatus::Unindexed => n_unindexed += 1,
+            InboxEntryStatus::Healthy => n_ready += 1,
+        }
+    }
+
+    let title = if state.entries.is_empty() {
+        " Inbox Files ".to_string()
+    } else {
+        let mut parts = Vec::new();
+        if n_match > 0 { parts.push(format!("{} matched", n_match)); }
+        if n_unindexed > 0 { parts.push(format!("{} unindexed", n_unindexed)); }
+        if n_ready > 0 { parts.push(format!("{} ready", n_ready)); }
+        format!(" Inbox Files — {} ", parts.join(", "))
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Inbox Files ");
+        .title(title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -64,9 +89,19 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
         .skip(state.scroll)
         .take(visible_height)
         .map(|(i, entry)| {
-            let (status_label, status_color) = match entry.status {
-                InboxEntryStatus::Unindexed => ("UNINDEXED", Color::Yellow),
-                InboxEntryStatus::Healthy => ("READY", Color::Green),
+            let (status_label, status_color) = match &entry.status {
+                InboxEntryStatus::CorpusMatch(data) => {
+                    let n = data.corpus_matches.len();
+                    let best_sim = data.corpus_matches.iter()
+                        .map(|m| m.similarity)
+                        .fold(0.0_f64, f64::max);
+                    (
+                        format!("MATCH({}) {:.0}%", n, best_sim),
+                        Color::Magenta,
+                    )
+                }
+                InboxEntryStatus::Unindexed => ("UNINDEXED".to_string(), Color::Yellow),
+                InboxEntryStatus::Healthy => ("READY".to_string(), Color::Green),
             };
 
             let is_selected = i == state.selected;
@@ -82,7 +117,7 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
 
             let line = Line::from(vec![
                 Span::styled(
-                    format!(" {:>9} ", status_label),
+                    format!(" {:>14} ", status_label),
                     Style::default().fg(status_color),
                 ),
                 Span::styled(display_path, style),
@@ -94,4 +129,37 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
 
     let list = List::new(items);
     f.render_widget(list, inner);
+}
+
+fn render_controls_hint(f: &mut Frame, area: Rect, state: &InboxViewState) {
+    let hints = match state.selected_entry().map(|e| &e.status) {
+        Some(InboxEntryStatus::CorpusMatch(_)) => {
+            vec![
+                Span::styled(" Enter", Style::default().fg(Color::Cyan)),
+                Span::styled(" Stash  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("T", Style::default().fg(Color::Cyan)),
+                Span::styled(" Tags  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Tab", Style::default().fg(Color::Cyan)),
+                Span::styled(" Cycle View", Style::default().fg(Color::DarkGray)),
+            ]
+        }
+        Some(InboxEntryStatus::Healthy) => {
+            vec![
+                Span::styled(" Enter/T", Style::default().fg(Color::Cyan)),
+                Span::styled(" Tags  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Tab", Style::default().fg(Color::Cyan)),
+                Span::styled(" Cycle View", Style::default().fg(Color::DarkGray)),
+            ]
+        }
+        Some(InboxEntryStatus::Unindexed) | None => {
+            vec![
+                Span::styled(" Tab", Style::default().fg(Color::Cyan)),
+                Span::styled(" Cycle View", Style::default().fg(Color::DarkGray)),
+            ]
+        }
+    };
+
+    let line = Line::from(hints);
+    let paragraph = Paragraph::new(line);
+    f.render_widget(paragraph, area);
 }

@@ -32,6 +32,7 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectDeployConflicts,
         Computation::DeriveCorpusDeployStatus,
         Computation::DetectEmbeddableAlbumArt,
+        Computation::DetectInboxCorpusMatches,
     ];
 
     // Also spawn DeriveDeployHealthSignals for each configured library

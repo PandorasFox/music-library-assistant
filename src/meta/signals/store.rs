@@ -334,6 +334,39 @@ impl CorpusSignalStore for InboxHealthySignal {
     }
 }
 
+impl CorpusSignalStore for InboxCorpusMatchSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inbox_corpus_match (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        data BLOB NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_inbox_corpus_match";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_inbox_corpus_match (inode, path, data) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.inode, self.path, data],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_inbox_corpus_match WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_inbox_corpus_match WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
 // ============================================================================
 // Corpus health signal stores
 // ============================================================================

@@ -59,6 +59,8 @@ pub struct TagCanonicalityModalDataV2 {
     pub inodes: Vec<i64>,
     /// Per-file tag info with cached tag values
     pub files: Vec<FileTagInfo>,
+    /// Override for the default canonical suggestion (e.g. top corpus variant for inbox canonicity)
+    pub default_canonical_override: Option<String>,
 }
 
 impl TagCanonicalityModalDataV2 {
@@ -87,6 +89,7 @@ impl TagCanonicalityModalDataV2 {
             variants,
             inodes,
             files,
+            default_canonical_override: None,
         })
     }
 
@@ -119,6 +122,7 @@ impl TagCanonicalityModalDataV2 {
             variants,
             inodes,
             files,
+            default_canonical_override: None,
         })
     }
 
@@ -158,12 +162,20 @@ impl TagCanonicalityModalDataV2 {
         let inodes = signal.data.inbox_inodes.clone();
         let files = Self::load_file_info_for_zone(&inodes, read_db, Zone::Inbox);
 
+        // Pre-fill with the top corpus variant (sorted DESC by count), not the inbox variant
+        let default_canonical_override = signal
+            .data
+            .corpus_variants
+            .first()
+            .map(|(v, _)| v.clone());
+
         Some(Self {
             tag_name,
             context_label,
             variants,
             inodes,
             files,
+            default_canonical_override,
         })
     }
 
@@ -216,6 +228,9 @@ impl TagCanonicalityModalDataV2 {
     /// Returns the most common value. For ties, uses alphabetical order.
     /// Returns empty string if no variants.
     pub fn default_canonical(&self) -> String {
+        if let Some(ref override_val) = self.default_canonical_override {
+            return override_val.clone();
+        }
         self.variants
             .first()
             .map(|v| v.value.clone())

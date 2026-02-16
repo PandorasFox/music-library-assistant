@@ -34,6 +34,7 @@ pub mod manual_review_modal;
 pub mod filter_popup;
 pub mod helpers;
 pub mod inbox_corpus_match_modal;
+pub mod inbox_organize;
 pub mod inbox_view;
 pub mod insights_view;
 pub mod missing_album_modal;
@@ -213,7 +214,7 @@ impl App {
                 ViewAction::IntakeConfirmation(state.handle_key(key, visible_height))
             }
             ActiveView::UnifiedTagEditor(s) => ViewAction::UnifiedTagEditor(s.handle_key(key)),
-            ActiveView::DeploymentPreview(s) => ViewAction::DeploymentPreview(s.handle_key(key)),
+            ActiveView::Deploy(s) => ViewAction::Deploy(s.handle_key(key)),
             ActiveView::MissingFileResolution(s) => ViewAction::MissingFileResolution(s.handle_key(key)),
             ActiveView::MissingDirectoryResolution(s) => ViewAction::MissingDirectoryResolution(s.handle_key(key)),
             ActiveView::CorruptFileResolution(s) => ViewAction::CorruptFileResolution(s.handle_key(key)),
@@ -221,6 +222,7 @@ impl App {
             ActiveView::EmbedAlbumArtResolution(s) => ViewAction::EmbedAlbumArtResolution(s.handle_key(key)),
             ActiveView::SubparDuplicateResolution(s) => ViewAction::SubparDuplicateResolution(s.handle_key(key)),
             ActiveView::InboxCorpusMatchResolution(s) => ViewAction::InboxCorpusMatchResolution(s.handle_key(key)),
+            ActiveView::InboxOrganize(s) => ViewAction::InboxOrganize(s.handle_key(key)),
             ActiveView::DirectoryClusterResolution(s) => ViewAction::DirectoryClusterResolution(s.handle_key(key)),
             ActiveView::MovedFileAcknowledge(s) => ViewAction::MovedFileAcknowledge(s.handle_key(key)),
             ActiveView::OobSyncResolution(s) => ViewAction::OobSyncResolution(s.handle_key(key)),
@@ -317,6 +319,38 @@ impl App {
             widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
             widgets::LateralView::Insights => self.start_insights_view(),
             widgets::LateralView::Inbox => self.start_inbox_view(),
+            widgets::LateralView::Deploy => self.start_deploy_view(),
+        }
+    }
+
+    /// Start the deploy lateral view.
+    ///
+    /// If there's work to do (deploy signals present), loads full deploy data
+    /// and shows the preview. Otherwise shows the "up to date" modal with
+    /// per-library file counts.
+    pub(super) fn start_deploy_view(&mut self) {
+        let deploy_status = self.witch.as_ref()
+            .and_then(|w| w.ui_read_cache().deploy_status());
+
+        let needs_action = deploy_status.as_ref().map_or(false, |s| s.needs_action);
+
+        if needs_action {
+            let config = crate::config::load_config().ok();
+            let data = self.witch.as_mut()
+                .and_then(|w| {
+                    let read_db = w.read_db();
+                    deploy_modal::DeployModalData::load(&read_db, config.as_ref()).ok()
+                })
+                .unwrap_or_default();
+            let preview = deploy_modal::DeploymentPreviewState::new(data);
+            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::Preview(preview));
+        } else {
+            let counts = deploy_status
+                .map(|s| s.library_file_counts)
+                .unwrap_or_default();
+            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {
+                library_file_counts: counts,
+            });
         }
     }
 
@@ -516,8 +550,17 @@ fn run_app<B: ratatui::backend::Backend>(
             app.tick_progressive_worker();
         }
 
+        // Update deploy UpToDate with fresh counts each frame
+        if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
+            if let Some(status) = app.witch.as_ref().and_then(|w| w.ui_read_cache().deploy_status()) {
+                *library_file_counts = status.library_file_counts;
+            }
+        }
+
         // Flag demand for cached UI data
         if let Some(ref the_witch) = app.witch {
+            // Always want deploy status — titlebar needs it for purple indicator
+            the_witch.ui_read_cache().want_deploy_status();
             if matches!(app.view, ActiveView::Insights(_)) {
                 the_witch.ui_read_cache().want_insights_data();
             }

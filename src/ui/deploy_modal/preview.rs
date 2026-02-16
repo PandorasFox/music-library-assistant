@@ -7,7 +7,6 @@
 //! - Enter stages mutations and goes directly to TransactionReview
 //! - Escape returns to Insights view
 
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -18,17 +17,6 @@ use ratatui::{
 
 use super::types::DeployModalData;
 use crate::ui::widgets::{DeployTab, SignalInfo, SignalInfoPane, TabbedSignalList};
-
-/// Actions returned from the deployment preview.
-#[derive(Debug, Clone)]
-pub enum DeploymentPreviewAction {
-    /// No action needed.
-    None,
-    /// User confirmed deployment - generate mutations.
-    Confirm,
-    /// Cancel and return to Insights view.
-    Cancel,
-}
 
 /// State for the deployment preview modal.
 #[derive(Debug)]
@@ -70,53 +58,9 @@ impl DeploymentPreviewState {
         }
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> DeploymentPreviewAction {
-        match key.code {
-            // Tab navigation (arrows and Tab/Shift-Tab)
-            KeyCode::Left | KeyCode::BackTab => {
-                self.active_tab = self.active_tab.prev();
-                DeploymentPreviewAction::None
-            }
-            KeyCode::Right | KeyCode::Tab => {
-                self.active_tab = self.active_tab.next();
-                DeploymentPreviewAction::None
-            }
-
-            // Scroll within tab
-            KeyCode::Up => {
-                let idx = self.active_tab.index();
-                self.tab_scroll[idx] = self.tab_scroll[idx].saturating_sub(1);
-                DeploymentPreviewAction::None
-            }
-            KeyCode::Down => {
-                let idx = self.active_tab.index();
-                let max_scroll = self.max_scroll_for_tab();
-                if self.tab_scroll[idx] < max_scroll {
-                    self.tab_scroll[idx] += 1;
-                }
-                DeploymentPreviewAction::None
-            }
-            KeyCode::PageUp => {
-                let idx = self.active_tab.index();
-                self.tab_scroll[idx] = self.tab_scroll[idx].saturating_sub(10);
-                DeploymentPreviewAction::None
-            }
-            KeyCode::PageDown => {
-                let idx = self.active_tab.index();
-                let max_scroll = self.max_scroll_for_tab();
-                self.tab_scroll[idx] = (self.tab_scroll[idx] + 10).min(max_scroll);
-                DeploymentPreviewAction::None
-            }
-
-            // Stage & review directly
-            KeyCode::Enter => DeploymentPreviewAction::Confirm,
-
-            // Cancel and return to Insights
-            KeyCode::Esc => DeploymentPreviewAction::Cancel,
-
-            _ => DeploymentPreviewAction::None,
-        }
+    /// Max scroll position for the currently active tab (used by DeployViewState).
+    pub fn max_scroll_for_current_tab(&self) -> usize {
+        self.max_scroll_for_tab()
     }
 
     fn max_scroll_for_tab(&self) -> usize {

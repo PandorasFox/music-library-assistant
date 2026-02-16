@@ -1,10 +1,9 @@
 //! Insights View Rendering
 //!
-//! Renders the insights view with four buckets:
+//! Renders the insights view with three buckets:
 //! 1. Corpus Files - OOB changes (top), indexed/unindexed/missing counts
-//! 2. Placeholder - Reserved (displays `:)`)
-//! 3. Library/Deploy - Stale, leftover, ready-to-deploy, deployed healthy
-//! 4. Other Signals - Remaining signals sorted by count
+//! 2. Tag & Duplicate Issues - Canonicity, compound splits, duplicates
+//! 3. Other Signals - Remaining signals sorted by count
 //!
 //! Dims content when the Witch is busy.
 
@@ -17,30 +16,16 @@ use ratatui::{
 };
 
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 use super::{BucketEntry, FocusedBucket, InsightType, InsightsViewState};
 
-/// Render the full insights view
+/// Render the full insights view (titlebar is rendered by render_app).
 pub fn render_insights_view(f: &mut Frame, area: Rect, state: &mut InsightsViewState) {
-    // Layout: Title bar at top, content below
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(UnifiedTitleBar::height()), // Title bar with borders
-            Constraint::Min(5),                             // Content
-        ])
-        .split(area);
-
-    // Render unified title bar
-    let titlebar = UnifiedTitleBar::new(LateralView::Insights);
-    titlebar.render(f, main_chunks[0]);
-
     // Layout: Main list on left (65%), details on right (35%)
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(main_chunks[1]);
+        .split(area);
 
     render_insights_list(f, content_chunks[0], state);
     render_insight_details(f, content_chunks[1], &*state);
@@ -91,19 +76,6 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &mut InsightsViewState
     );
     items.extend(placeholder_items);
     y = placeholder_y;
-
-    let (library_items, library_y) = bucket_items_with_targets(
-        "Library / Deploy",
-        &state.cached_entries.library,
-        FocusedBucket::Library,
-        &state.focused_bucket,
-        &state.bucket_selections,
-        busy,
-        y,
-        &mut state.click_targets,
-    );
-    items.extend(library_items);
-    y = library_y;
 
     let (other_items, _) = bucket_items_other_with_targets(
         "Other Signals",
@@ -181,7 +153,7 @@ fn bucket_items_with_targets(
     entries: &[BucketEntry],
     bucket: FocusedBucket,
     focused_bucket: &FocusedBucket,
-    bucket_selections: &[BucketSelection; 4],
+    bucket_selections: &[BucketSelection; 3],
     busy: bool,
     start_y: u16,
     click_targets: &mut InsightsClickTargets,
@@ -216,7 +188,7 @@ fn bucket_items_other_with_targets(
     title: &str,
     entries: &[BucketEntry],
     focused_bucket: &FocusedBucket,
-    bucket_selections: &[BucketSelection; 4],
+    bucket_selections: &[BucketSelection; 3],
     busy: bool,
     start_y: u16,
     click_targets: &mut InsightsClickTargets,
@@ -670,72 +642,6 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             lines.push(Line::from(Span::styled(
                 "Press Enter to review.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Yellow }),
-            )));
-        }
-
-        // Library bucket entries
-        InsightType::LibraryStale => {
-            lines.push(Line::from(Span::styled(
-                "Library Stale",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Library links pointing to outdated",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "corpus paths. Re-deploy to fix.",
-                Style::default().fg(text_color),
-            )));
-        }
-        InsightType::LibraryLeftover => {
-            lines.push(Line::from(Span::styled(
-                "Library Leftover",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Files in library not linked to",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "any corpus file. Orphaned links.",
-                Style::default().fg(text_color),
-            )));
-        }
-        InsightType::LibraryDeployReady => {
-            lines.push(Line::from(Span::styled(
-                "Ready to Deploy",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Healthy corpus files not yet",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "present in any library.",
-                Style::default().fg(text_color),
-            )));
-        }
-        InsightType::LibraryDeployedHealthy => {
-            lines.push(Line::from(Span::styled(
-                "Deployed Healthy",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Corpus files successfully",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "deployed to library at correct",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "paths.",
-                Style::default().fg(text_color),
             )));
         }
 

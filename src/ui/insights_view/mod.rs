@@ -3,13 +3,14 @@
 //! A full-screen view displaying computed insights over health signals.
 //! Part of the lateral view ring - can cycle to adjacent views with Tab/Shift-Tab.
 //!
-//! ## Four-Bucket Structure
+//! ## Three-Bucket Structure
 //!
-//! Insights are organized into four buckets with distinct purposes:
+//! Insights are organized into three buckets with distinct purposes:
 //! 1. **Corpus Files** - OOB changes (top priority), indexed/unindexed/missing counts
-//! 2. **Placeholder** - Reserved for future use (displays `:)`)
-//! 3. **Library/Deploy** - Stale, leftover, ready-to-deploy, deployed healthy
-//! 4. **Other Signals** - Remaining signals sorted by count
+//! 2. **Tag & Duplicate Issues** - Tag canonicity, compound splits, duplicates
+//! 3. **Other Signals** - Remaining signals sorted by count
+//!
+//! Library/Deploy was removed — deploy is now a lateral view tab.
 //!
 //! ## Navigation
 //!
@@ -29,7 +30,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, LibraryDeployBucket, TagSquashBucket, OtherSignalsBucket};
+use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, TagSquashBucket, OtherSignalsBucket};
 use crate::ui::widgets::ListClickTargets;
 use crate::witch::DaemonStatus;
 
@@ -67,18 +68,16 @@ pub enum FocusedBucket {
     #[default]
     Corpus,
     Placeholder,
-    Library,
     Other,
 }
 
 impl FocusedBucket {
-    /// Get the index of this bucket (0-3)
+    /// Get the index of this bucket (0-2)
     pub fn index(self) -> usize {
         match self {
             FocusedBucket::Corpus => 0,
             FocusedBucket::Placeholder => 1,
-            FocusedBucket::Library => 2,
-            FocusedBucket::Other => 3,
+            FocusedBucket::Other => 2,
         }
     }
 
@@ -86,8 +85,7 @@ impl FocusedBucket {
     fn next(self) -> Self {
         match self {
             FocusedBucket::Corpus => FocusedBucket::Placeholder,
-            FocusedBucket::Placeholder => FocusedBucket::Library,
-            FocusedBucket::Library => FocusedBucket::Other,
+            FocusedBucket::Placeholder => FocusedBucket::Other,
             FocusedBucket::Other => FocusedBucket::Other, // Stay at end
         }
     }
@@ -97,8 +95,7 @@ impl FocusedBucket {
         match self {
             FocusedBucket::Corpus => FocusedBucket::Corpus, // Stay at start
             FocusedBucket::Placeholder => FocusedBucket::Corpus,
-            FocusedBucket::Library => FocusedBucket::Placeholder,
-            FocusedBucket::Other => FocusedBucket::Library,
+            FocusedBucket::Other => FocusedBucket::Placeholder,
         }
     }
 }
@@ -142,11 +139,6 @@ pub enum InsightType {
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
     EmbeddableAlbumArt,
     MissingAlbumSingle,
-    // Library bucket entries
-    LibraryStale,
-    LibraryLeftover,
-    LibraryDeployReady,
-    LibraryDeployedHealthy,
     // Other bucket - dynamic entries identified by index
     OtherSignal { index: usize },
 }
@@ -154,8 +146,6 @@ pub enum InsightType {
 /// Actions that can be launched from specific insight types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsightAction {
-    /// Launch deployment preview modal
-    LaunchDeploymentPreview,
     /// Launch missing file resolution modal
     LaunchMissingFileResolution,
     /// Launch missing directory acknowledgment modal
@@ -231,18 +221,6 @@ impl BucketEntry {
             color,
             rank,
             action,
-        }
-    }
-
-    /// Create a library entry
-    fn library(insight_type: InsightType, label: &str, count: usize, color: Color) -> Self {
-        Self {
-            insight_type,
-            label: label.to_string(),
-            count: Some(count),
-            color,
-            rank: 0, // Library uses count for sorting, not rank
-            action: InsightAction::LaunchDeploymentPreview,
         }
     }
 
@@ -382,7 +360,6 @@ impl BucketEntry {
 pub struct CachedBucketEntries {
     pub corpus: Vec<BucketEntry>,
     pub placeholder: Vec<BucketEntry>,
-    pub library: Vec<BucketEntry>,
     pub other: Vec<BucketEntry>,
 }
 
@@ -392,7 +369,6 @@ impl CachedBucketEntries {
         Self {
             corpus: Self::build_corpus_entries(&data.bucket_corpus),
             placeholder: Self::build_placeholder_entries(&data.bucket_placeholder),
-            library: Self::build_library_entries(&data.bucket_library),
             other: Self::build_other_entries(&data.bucket_other),
         }
     }
@@ -496,39 +472,6 @@ impl CachedBucketEntries {
         entries
     }
 
-    fn build_library_entries(library: &LibraryDeployBucket) -> Vec<BucketEntry> {
-        let mut entries = vec![
-            BucketEntry::library(
-                InsightType::LibraryStale,
-                "Library stale",
-                library.library_stale,
-                if library.library_stale > 0 { Color::Yellow } else { Color::Green },
-            ),
-            BucketEntry::library(
-                InsightType::LibraryLeftover,
-                "Library leftover",
-                library.library_leftover,
-                if library.library_leftover > 0 { Color::Yellow } else { Color::Green },
-            ),
-            BucketEntry::library(
-                InsightType::LibraryDeployReady,
-                "Ready to deploy",
-                library.deploy_ready,
-                if library.deploy_ready > 0 { Color::Cyan } else { Color::Green },
-            ),
-            BucketEntry::library(
-                InsightType::LibraryDeployedHealthy,
-                "Deployed healthy",
-                library.deployed_healthy,
-                Color::Green,
-            ),
-        ];
-
-        // Sort by count descending
-        entries.sort_by(|a, b| b.count.unwrap_or(0).cmp(&a.count.unwrap_or(0)));
-        entries
-    }
-
     fn build_placeholder_entries(bucket: &TagSquashBucket) -> Vec<BucketEntry> {
         let mut entries = Vec::new();
 
@@ -594,7 +537,6 @@ impl CachedBucketEntries {
         match bucket {
             FocusedBucket::Corpus => &self.corpus,
             FocusedBucket::Placeholder => &self.placeholder,
-            FocusedBucket::Library => &self.library,
             FocusedBucket::Other => &self.other,
         }
     }
@@ -664,8 +606,7 @@ impl InsightsClickTargets {
         let bucket = match bucket_idx {
             0 => FocusedBucket::Corpus,
             1 => FocusedBucket::Placeholder,
-            2 => FocusedBucket::Library,
-            3 => FocusedBucket::Other,
+            2 => FocusedBucket::Other,
             _ => return None,
         };
 
@@ -680,7 +621,7 @@ pub struct InsightsViewState {
     /// Which bucket currently has navigation focus
     pub focused_bucket: FocusedBucket,
     /// Selection state for each bucket (indexed by FocusedBucket::index())
-    pub bucket_selections: [BucketSelection; 4],
+    pub bucket_selections: [BucketSelection; 3],
     /// Cached insights data from UiReadCache
     pub cached_data: Option<InsightsData>,
     /// Pre-computed sorted entries - rebuilt when cached_data changes
@@ -822,7 +763,7 @@ impl InsightsViewState {
     /// Navigate to the very last entry (last bucket, last item)
     fn navigate_to_end(&mut self) {
         // Find last non-empty bucket
-        for bucket in [FocusedBucket::Other, FocusedBucket::Library, FocusedBucket::Placeholder, FocusedBucket::Corpus] {
+        for bucket in [FocusedBucket::Other, FocusedBucket::Placeholder, FocusedBucket::Corpus] {
             let count = self.get_bucket_entry_count(bucket);
             if count > 0 {
                 self.focused_bucket = bucket;
@@ -928,12 +869,6 @@ mod tests {
                 embeddable_album_art: 0,
                 missing_album_single_count: 0,
             },
-            bucket_library: LibraryDeployBucket {
-                library_stale: 1,
-                library_leftover: 2,
-                deploy_ready: 10,
-                deployed_healthy: 80,
-            },
             bucket_other: OtherSignalsBucket {
                 entries: vec![],
             },
@@ -1029,7 +964,7 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 10);
 
-        // Navigate down should move to Placeholder bucket
+        // Navigate down should move to Placeholder bucket (no Library bucket between)
         state.navigate_down();
         assert_eq!(state.focused_bucket, FocusedBucket::Placeholder);
         assert_eq!(state.current_selection().selected, 0);
@@ -1045,18 +980,18 @@ mod tests {
         let mut state = state_with_data();
 
         // Move around a bit
-        state.focused_bucket = FocusedBucket::Library;
-        state.bucket_selections[FocusedBucket::Library.index()].selected = 2;
+        state.focused_bucket = FocusedBucket::Placeholder;
+        state.bucket_selections[FocusedBucket::Placeholder.index()].selected = 0;
 
         // Navigate to start
         state.navigate_to_start();
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 0);
 
-        // Navigate to end - with no Other entries, Library is last bucket (4 items, so last is index 3)
+        // Navigate to end - with no Other or Placeholder entries, Corpus is last non-empty bucket (11 items, so last is index 10)
         state.navigate_to_end();
-        assert_eq!(state.focused_bucket, FocusedBucket::Library);
-        assert_eq!(state.current_selection().selected, 3);
+        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
+        assert_eq!(state.current_selection().selected, 10);
     }
 
     #[test]
@@ -1070,13 +1005,13 @@ mod tests {
         // Y=0: Corpus header (not clickable)
         // Y=1: Corpus item 0
         // Y=2: Corpus item 1
-        // Y=3: Library header (not clickable)
-        // Y=4: Library item 0
+        // Y=3: Other header (not clickable)
+        // Y=4: Other item 0
         targets.add_header(FocusedBucket::Corpus, 0);
         targets.add_item(FocusedBucket::Corpus, 0, 1);
         targets.add_item(FocusedBucket::Corpus, 1, 2);
-        targets.add_header(FocusedBucket::Library, 3);
-        targets.add_item(FocusedBucket::Library, 0, 4);
+        targets.add_header(FocusedBucket::Other, 3);
+        targets.add_item(FocusedBucket::Other, 0, 4);
 
         // Click on header - should not hit
         assert!(targets.hit_test(10, 0).is_none());
@@ -1091,12 +1026,12 @@ mod tests {
         assert_eq!(hit.bucket, FocusedBucket::Corpus);
         assert_eq!(hit.item_index, 1);
 
-        // Click on Library header - should not hit
+        // Click on Other header - should not hit
         assert!(targets.hit_test(10, 3).is_none());
 
-        // Click on Library item 0
+        // Click on Other item 0
         let hit = targets.hit_test(10, 4).unwrap();
-        assert_eq!(hit.bucket, FocusedBucket::Library);
+        assert_eq!(hit.bucket, FocusedBucket::Other);
         assert_eq!(hit.item_index, 0);
 
         // Click outside the list area
@@ -1114,7 +1049,7 @@ mod tests {
         state.click_targets.set_list_area(Rect::new(0, 0, 100, 50));
         state.click_targets.add_item(FocusedBucket::Corpus, 0, 1);
         state.click_targets.add_item(FocusedBucket::Corpus, 1, 2);
-        state.click_targets.add_item(FocusedBucket::Library, 0, 5);
+        state.click_targets.add_item(FocusedBucket::Other, 0, 5);
 
         // Start at default (Corpus bucket, item 0)
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
@@ -1125,14 +1060,9 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.bucket_selections[FocusedBucket::Corpus.index()].selected, 1);
 
-        // Click on Library item 0 - should change bucket
-        assert!(state.handle_click(10, 5));
-        assert_eq!(state.focused_bucket, FocusedBucket::Library);
-        assert_eq!(state.bucket_selections[FocusedBucket::Library.index()].selected, 0);
-
-        // Click outside - should return false
+        // Click outside - should return false (Other bucket has no entries in mock data)
         assert!(!state.handle_click(200, 200));
         // Selection should not change
-        assert_eq!(state.focused_bucket, FocusedBucket::Library);
+        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
     }
 }

@@ -9,49 +9,43 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::widgets::{LateralView, UnifiedTitleBar, CURSOR_STYLE};
+use crate::ui::widgets::CURSOR_STYLE;
 
 use super::entry::TreeEntry;
 use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
 
-/// Render the tree browser.
+/// Render the tree browser (titlebar is rendered by render_app).
 pub fn render(
     f: &mut Frame,
     area: Rect,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
 ) {
-    // Currently only CorpusBrowser variant exists
     render_corpus_browser(f, area, nav, variant);
 }
 
-/// Render corpus browser layout (titlebar + filter bar + tree).
+/// Render corpus browser layout (filter bar + tree).
 fn render_corpus_browser(
     f: &mut Frame,
     area: Rect,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
 ) {
-    // Layout: Title bar | Filter bar | Tree (full width)
+    // Layout: Filter bar | Tree (full width)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(UnifiedTitleBar::height()), // Title bar (3 lines)
-            Constraint::Length(3),                          // Filter bar (3 lines: border + content + border)
-            Constraint::Min(5),                             // Tree browser
+            Constraint::Length(3), // Filter bar (3 lines: border + content + border)
+            Constraint::Min(5),   // Tree browser
         ])
         .split(area);
 
-    // Title bar (part of lateral ring)
-    let titlebar = UnifiedTitleBar::new(LateralView::CorpusBrowser);
-    titlebar.render(f, main_chunks[0]);
-
     // Filter bar - show filter status or hint
-    render_filter_bar(f, main_chunks[1], nav);
+    render_filter_bar(f, main_chunks[0], nav);
 
     // Tree pane at full width
-    render_tree_pane(f, main_chunks[2], nav);
+    render_tree_pane(f, main_chunks[1], nav);
 
     // Overlays (match selection modal)
     variant.render_overlays(f, area);

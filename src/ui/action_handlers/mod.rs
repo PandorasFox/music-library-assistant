@@ -52,7 +52,7 @@ impl App {
             ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
             ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
             ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
-            ViewAction::DeploymentPreview(a) => self.handle_deployment_preview_action(a, witness.as_ref()),
+            ViewAction::Deploy(a) => self.handle_deploy_action(a, witness.as_ref()),
             ViewAction::MissingFileResolution(a) => self.handle_missing_file_preview_action(a, witness.as_ref()),
             ViewAction::MissingDirectoryResolution(a) => self.handle_missing_directory_preview_action(a, witness.as_ref()),
             ViewAction::CorruptFileResolution(a) => self.handle_corrupt_file_preview_action(a, witness.as_ref()),
@@ -60,6 +60,7 @@ impl App {
             ViewAction::EmbedAlbumArtResolution(a) => self.handle_embed_album_art_preview_action(a, witness.as_ref()),
             ViewAction::SubparDuplicateResolution(a) => self.handle_subpar_duplicate_preview_action(a, witness.as_ref()),
             ViewAction::InboxCorpusMatchResolution(a) => self.handle_inbox_corpus_match_preview_action(a, witness.as_ref()),
+            ViewAction::InboxOrganize(a) => self.handle_inbox_organize_action(a, witness.as_ref()),
             ViewAction::DirectoryClusterResolution(a) => self.handle_directory_cluster_preview_action(a, witness.as_ref()),
             ViewAction::MovedFileAcknowledge(a) => self.handle_moved_file_action(a, witness.as_ref()),
             ViewAction::OobSyncResolution(a) => self.handle_oob_sync_action(a, witness.as_ref()),
@@ -171,9 +172,6 @@ impl App {
                     None
                 };
                 match selected {
-                    Some(insights_view::InsightAction::LaunchDeploymentPreview) => {
-                        self.start_deployment_preview_from_insights();
-                    }
                     Some(insights_view::InsightAction::LaunchMissingFileResolution) => {
                         self.start_missing_file_resolution();
                     }

@@ -13,6 +13,7 @@ use crate::ui::{
     eye::Eye,
     filter_popup,
     inbox_corpus_match_modal,
+    inbox_organize,
     inbox_view,
     insights_view,
     manual_review_modal,
@@ -46,6 +47,7 @@ pub(crate) enum ActiveView {
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
     Inbox(inbox_view::InboxViewState),
+    Deploy(deploy_modal::DeployViewState),
 
     // Progress (non-interactive, owns eye animation)
     Progress {
@@ -60,7 +62,6 @@ pub(crate) enum ActiveView {
 
     // Editors / previews
     UnifiedTagEditor(tag_editor::UnifiedTagEditorState),
-    DeploymentPreview(deploy_modal::DeploymentPreviewState),
 
     // Resolution flows (single state)
     MissingFileResolution(missing_file_modal::MissingFilePreviewState),
@@ -70,6 +71,7 @@ pub(crate) enum ActiveView {
     EmbedAlbumArtResolution(embed_album_art_modal::EmbedAlbumArtPreviewState),
     SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicatePreviewState),
     InboxCorpusMatchResolution(inbox_corpus_match_modal::InboxCorpusMatchPreviewState),
+    InboxOrganize(inbox_organize::InboxOrganizeState),
     DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewState),
     MovedFileAcknowledge(moved_file_modal::MovedFileState),
     OobSyncResolution(oob_sync_modal::OobSyncState),
@@ -104,12 +106,12 @@ impl ActiveView {
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
             Self::Inbox(_) => Some("Inbox"),
+            Self::Deploy(_) => Some("Deploy"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),
             Self::IntakeConfirmation(_) => Some("Intake Confirmation"),
             Self::UnifiedTagEditor(_) => Some("Tag Editor"),
-            Self::DeploymentPreview(_) => Some("Deployment Preview"),
             Self::MissingFileResolution(_) => Some("Missing File Resolution"),
             Self::MissingDirectoryResolution(_) => Some("Missing Directory Acknowledgment"),
             Self::CorruptFileResolution(_) => Some("Corrupt File Resolution"),
@@ -117,6 +119,7 @@ impl ActiveView {
             Self::EmbedAlbumArtResolution(_) => Some("Embed Album Art"),
             Self::SubparDuplicateResolution(_) => Some("Subpar Duplicate Resolution"),
             Self::InboxCorpusMatchResolution(_) => Some("Inbox Corpus Match Resolution"),
+            Self::InboxOrganize(_) => Some("Inbox Organize"),
             Self::DirectoryClusterResolution(_) => Some("Directory Overlap Resolution"),
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
             Self::OobSyncResolution(_) => Some("OOB Tag Sync"),
@@ -146,11 +149,12 @@ impl ActiveView {
             Self::EmbedAlbumArtResolution(s) => s.selected_path(),
             Self::SubparDuplicateResolution(s) => s.selected_path(),
             Self::InboxCorpusMatchResolution(s) => s.selected_path(),
+            Self::InboxOrganize(_) => None,
             Self::DirectoryClusterResolution(s) => s.selected_path(),
             Self::MovedFileAcknowledge(s) => s.selected_path(),
             Self::OobSyncResolution(s) => s.selected_path(),
             Self::OobConflictInspection(s) => s.selected_path(),
-            Self::DeploymentPreview(s) => s.selected_path(),
+            Self::Deploy(s) => s.selected_path(),
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(s) => s.selected_path(),
             Self::ManualReview(s) => s.selected_path(),
@@ -159,12 +163,17 @@ impl ActiveView {
         }
     }
 
-    /// Whether this view uses the unified lateral title bar (no header row).
-    pub(crate) fn uses_unified_titlebar(&self) -> bool {
-        matches!(
-            self,
-            Self::Insights(_) | Self::CorpusBrowser(_) | Self::TagSearch(_) | Self::Inbox(_)
-        )
+    /// Return the LateralView variant for this view, if it's a lateral view.
+    pub(crate) fn lateral_view(&self) -> Option<crate::ui::widgets::LateralView> {
+        use crate::ui::widgets::LateralView;
+        match self {
+            Self::TagSearch(_) => Some(LateralView::TagSearch),
+            Self::CorpusBrowser(_) => Some(LateralView::CorpusBrowser),
+            Self::Insights(_) => Some(LateralView::Insights),
+            Self::Inbox(_) => Some(LateralView::Inbox),
+            Self::Deploy(_) => Some(LateralView::Deploy),
+            _ => None,
+        }
     }
 }
 
@@ -198,10 +207,10 @@ pub(crate) enum ViewAction {
     CorpusBrowser(tree_browser::TreeBrowserAction),
     TagSearch(tag_search::TagSearchAction),
     Inbox(inbox_view::InboxAction),
+    Deploy(deploy_modal::DeployAction),
     ExitConfirm(ExitConfirmAction),
     IntakeConfirmation(startup::IntakeConfirmationAction),
     UnifiedTagEditor(tag_editor::UnifiedTagEditorAction),
-    DeploymentPreview(deploy_modal::DeploymentPreviewAction),
     MissingFileResolution(missing_file_modal::MissingFilePreviewAction),
     MissingDirectoryResolution(missing_directory_modal::MissingDirectoryPreviewAction),
     CorruptFileResolution(corrupt_file_modal::CorruptFilePreviewAction),
@@ -209,6 +218,7 @@ pub(crate) enum ViewAction {
     EmbedAlbumArtResolution(embed_album_art_modal::EmbedAlbumArtPreviewAction),
     SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicatePreviewAction),
     InboxCorpusMatchResolution(inbox_corpus_match_modal::InboxCorpusMatchPreviewAction),
+    InboxOrganize(inbox_organize::InboxOrganizeAction),
     DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewAction),
     MovedFileAcknowledge(moved_file_modal::MovedFileAction),
     OobSyncResolution(oob_sync_modal::OobSyncAction),

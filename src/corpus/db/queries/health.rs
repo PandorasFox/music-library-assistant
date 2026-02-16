@@ -390,7 +390,6 @@ impl Database {
         Ok(InsightsData {
             bucket_corpus: self.compute_corpus_files_bucket()?,
             bucket_placeholder: self.compute_tag_resolution_bucket()?,
-            bucket_library: self.compute_library_deploy_bucket()?,
             bucket_other: self.compute_other_signals_bucket()?,
         })
     }
@@ -435,22 +434,6 @@ impl Database {
             shit_format_files,
             file_type_breakdown,
             _directory_breakdown: directory_breakdown,
-        })
-    }
-
-    fn compute_library_deploy_bucket(&self) -> Result<crate::corpus::db::types::LibraryDeployBucket> {
-        use crate::corpus::db::types::*;
-
-        let library_stale = self.count_signal_type("library_stale")?;
-        let library_leftover = self.count_signal_type("library_leftover")?;
-        let deploy_ready = self.count_signal_type("deploy_ready")?;
-        let deployed_healthy = self.count_signal_type("deployed_healthy")?;
-
-        Ok(LibraryDeployBucket {
-            library_stale,
-            library_leftover,
-            deploy_ready,
-            deployed_healthy,
         })
     }
 

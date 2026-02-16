@@ -10,49 +10,42 @@ use super::witness;
 use super::super::App;
 
 impl App {
-    /// Start deployment preview from Insights view.
-    pub(in crate::ui) fn start_deployment_preview_from_insights(&mut self) {
-        let config = crate::config::load_config().ok();
-        let data = self.witch.as_mut()
-            .and_then(|w| {
-                let read_db = w.read_db();
-                deploy_modal::DeployModalData::load(&read_db, config.as_ref()).ok()
-            })
-            .unwrap_or_default();
+    /// Handle Deploy lateral view actions.
+    pub(super) fn handle_deploy_action(&mut self, action: deploy_modal::DeployAction, witness: Option<&witness::DecisionWitness>) {
+        use crate::ui::widgets;
 
-        let preview = deploy_modal::DeploymentPreviewState::new(data);
-        self.view = ActiveView::DeploymentPreview(preview);
-    }
-
-    /// Handle deployment preview actions.
-    pub(super) fn handle_deployment_preview_action(&mut self, action: deploy_modal::DeploymentPreviewAction, witness: Option<&witness::DecisionWitness>) {
         match action {
-            deploy_modal::DeploymentPreviewAction::None => {}
-            deploy_modal::DeploymentPreviewAction::Confirm => {
+            deploy_modal::DeployAction::None => {}
+            deploy_modal::DeployAction::CycleNext => {
+                self.start_lateral_view(widgets::LateralView::Deploy.next());
+            }
+            deploy_modal::DeployAction::CyclePrev => {
+                self.start_lateral_view(widgets::LateralView::Deploy.prev());
+            }
+            deploy_modal::DeployAction::Confirm => {
                 let Some(w) = witness else { return };
-                // Generate deploy mutations and stage for review
-                // Clone the cached data to avoid borrow issues
+                // Extract cached data from Preview state
                 let cached_data = match &self.view {
-                    ActiveView::DeploymentPreview(ref preview) => Some(preview.cached_data.clone()),
+                    ActiveView::Deploy(deploy_modal::DeployViewState::Preview(ref preview)) => {
+                        Some(preview.cached_data.clone())
+                    }
                     _ => None,
                 };
                 if let Some(data) = cached_data {
                     let mutation_count = self.stage_deploy_mutations(&data, w);
                     if mutation_count > 0 {
-                        // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                         self.start_transaction_review();
                     } else {
-                        // No mutations (edge case) - go directly to Insights
-                        self.start_insights_view();
                         self.status_message = Some("No deploy operations needed".to_string());
                     }
-                } else {
-                    self.start_insights_view();
                 }
             }
-            deploy_modal::DeploymentPreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Deployment preview cancelled");
-                self.status_message = Some("Deployment cancelled".to_string());
+            deploy_modal::DeployAction::RequestQuit => {
+                if self.has_pending_operations() {
+                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                } else {
+                    self.view = ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
+                }
             }
         }
     }

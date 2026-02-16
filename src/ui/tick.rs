@@ -99,6 +99,7 @@ impl App {
                     if let Some(ref witch) = self.witch {
                         witch.ui_read_cache().invalidate_insights_data();
                         witch.ui_read_cache().invalidate_inbox_overview();
+                        witch.ui_read_cache().invalidate_deploy_status();
                     }
                     // Transition to configured default view
                     self.start_default_view();

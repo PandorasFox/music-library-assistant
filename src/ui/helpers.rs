@@ -83,6 +83,34 @@ pub fn truncate_right(s: &str, max_chars: usize) -> String {
     format!("{}...", s.chars().take(take).collect::<String>())
 }
 
+/// Format a number with SI suffix, always 3 significant digits.
+///
+/// - `< 1000`: raw number ("847")
+/// - `1000..10000`: X.XXk ("2.54k")
+/// - `10000..100000`: XX.Xk ("25.4k")
+/// - `100000..1000000`: XXXk ("254k")
+/// - Same pattern for M, G, T...
+pub fn format_si(n: usize) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+
+    let suffixes = ['k', 'M', 'G', 'T', 'P'];
+    let mut value = n as f64;
+    for suffix in &suffixes {
+        value /= 1000.0;
+        if value < 10.0 {
+            return format!("{:.2}{}", value, suffix);
+        } else if value < 100.0 {
+            return format!("{:.1}{}", value, suffix);
+        } else if value < 1000.0 {
+            return format!("{:.0}{}", value, suffix);
+        }
+    }
+    // Fallback for astronomically large numbers
+    format!("{:.0}P", value)
+}
+
 // ============================================================================
 // Mutation Introspection
 // ============================================================================

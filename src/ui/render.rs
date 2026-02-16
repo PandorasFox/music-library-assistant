@@ -15,7 +15,7 @@ use ratatui::{
 
 use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
-use super::widgets::{status_bar, Modal, ModalButton, ModalStyle};
+use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
 use super::{
     compound_split_v2, filter_popup, inbox_view, insights_view, manual_review_modal,
     oob_conflict_modal, oob_sync_modal, progressive_worker, tag_canonicity_v2,
@@ -55,26 +55,35 @@ pub fn render_app(
         return;
     }
 
-    // Lateral views (Tag Search, Corpus Browser, Insights) have their own title bar
-    // and get the full header+content area
-    let uses_unified_titlebar = app.view.uses_unified_titlebar();
+    // Lateral views have a unified titlebar rendered centrally here
+    let lateral_view = app.view.lateral_view();
 
-    if uses_unified_titlebar {
-        // Two-part layout: content (with unified titlebar) + status bar
+    if let Some(lv) = lateral_view {
+        // Three-part layout: titlebar + content + status bar
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),   // Content with unified titlebar
-                Constraint::Length(2), // Status bar
+                Constraint::Length(UnifiedTitleBar::height()), // Titlebar
+                Constraint::Min(10),                           // Content
+                Constraint::Length(2),                         // Status bar
             ])
             .split(f.area());
 
+        // Read deploy_needs_action from UiCache for titlebar
+        let deploy_needs_action = app.witch.as_ref()
+            .and_then(|w| w.ui_read_cache().deploy_status())
+            .map_or(false, |s| s.needs_action);
+
+        let titlebar = UnifiedTitleBar::new(lv)
+            .with_deploy_needs_action(deploy_needs_action);
+        titlebar.render(f, chunks[0]);
+
         let start = Instant::now();
-        render_content(f, app, &transaction_review_decisions, chunks[0]);
+        render_content(f, app, &transaction_review_decisions, chunks[1]);
         let content_time = start.elapsed();
 
         let start = Instant::now();
-        render_status_bar(f, chunks[1], status_line_1.as_deref(), status_line_2.as_deref());
+        render_status_bar(f, chunks[2], status_line_1.as_deref(), status_line_2.as_deref());
         let footer_time = start.elapsed();
 
         if content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
@@ -154,9 +163,9 @@ fn render_content(
             vname = "progressive_work";
             progressive_worker::render(f, area, worker);
         }
-        ActiveView::DeploymentPreview(ref mut preview) => {
-            vname = "deployment_preview";
-            preview.render(f, area);
+        ActiveView::Deploy(ref state) => {
+            vname = "deploy";
+            state.render(f, area);
         }
         ActiveView::ExitConfirm(ref state) => {
             vname = "exit_confirm_modal";
@@ -237,6 +246,10 @@ fn render_content(
         ActiveView::InboxCorpusMatchResolution(ref preview) => {
             vname = "inbox_corpus_match_resolution";
             preview.render(f, area);
+        }
+        ActiveView::InboxOrganize(ref mut state) => {
+            vname = "inbox_organize";
+            super::inbox_organize::render::render(f, area, state);
         }
         ActiveView::DirectoryClusterResolution(ref preview) => {
             vname = "directory_cluster_resolution";
@@ -395,7 +408,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::ExitConfirm(_) => "exit_confirm",
         ActiveView::IntakeConfirmation(_) => "intake_confirmation",
         ActiveView::UnifiedTagEditor(_) => "unified_tag_editor",
-        ActiveView::DeploymentPreview(_) => "deployment_preview",
+        ActiveView::Deploy(_) => "deploy",
         ActiveView::MissingFileResolution(_) => "missing_file_resolution",
         ActiveView::MissingDirectoryResolution(_) => "missing_directory_resolution",
         ActiveView::CorruptFileResolution(_) => "corrupt_file_resolution",
@@ -403,6 +416,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::EmbedAlbumArtResolution(_) => "embed_album_art_resolution",
         ActiveView::SubparDuplicateResolution(_) => "subpar_duplicate_resolution",
         ActiveView::InboxCorpusMatchResolution(_) => "inbox_corpus_match_resolution",
+        ActiveView::InboxOrganize(_) => "inbox_organize",
         ActiveView::DirectoryClusterResolution(_) => "directory_cluster_resolution",
         ActiveView::MovedFileAcknowledge(_) => "moved_file_acknowledge",
         ActiveView::OobSyncResolution(_) => "oob_sync_resolution",

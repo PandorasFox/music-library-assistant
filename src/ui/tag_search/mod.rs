@@ -24,7 +24,6 @@ use crate::ui::helpers::render_pane;
 
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
-use crate::ui::widgets::{LateralView, UnifiedTitleBar};
 
 pub use state::TagSearchState;
 pub use types::{
@@ -194,25 +193,12 @@ impl TagSearchState {
         }
     }
 
-    /// Render the tag search view.
+    /// Render the tag search view (titlebar is rendered by render_app).
     pub fn render(&self, f: &mut Frame, area: Rect) {
-        // Layout: Title bar | Content
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(UnifiedTitleBar::height()),
-                Constraint::Min(5),
-            ])
-            .split(area);
-
-        // Title bar
-        let titlebar = UnifiedTitleBar::new(LateralView::TagSearch);
-        titlebar.render(f, chunks[0]);
-
         // Content based on mode
         match self.mode {
-            TagSearchMode::QueryBuilder => self.render_query_builder(f, chunks[1]),
-            TagSearchMode::Results => self.render_results(f, chunks[1]),
+            TagSearchMode::QueryBuilder => self.render_query_builder(f, area),
+            TagSearchMode::Results => self.render_results(f, area),
         }
 
         // Render modal overlay if active

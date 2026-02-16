@@ -135,7 +135,6 @@ pub struct AudioTag {
 pub struct InsightsData {
     pub bucket_corpus: CorpusFilesBucket,
     pub bucket_placeholder: PlaceholderBucket,
-    pub bucket_library: LibraryDeployBucket,
     pub bucket_other: OtherSignalsBucket,
 }
 
@@ -209,18 +208,7 @@ pub struct CompoundTagEntry {
 // Aliases for compatibility
 pub type PlaceholderBucket = TagSquashBucket;
 
-/// Bucket 3: Library/Deploy state
-#[derive(Debug, Clone, Default)]
-pub struct LibraryDeployBucket {
-    pub library_stale: usize,
-    pub library_leftover: usize,
-    /// Healthy files NOT in any library (DeployReady signals)
-    pub deploy_ready: usize,
-    /// Healthy files with correct library match (DeployedHealthy signals)
-    pub deployed_healthy: usize,
-}
-
-/// Bucket 4: Other signals (sorted by magnitude)
+/// Bucket 3: Other signals (sorted by magnitude)
 #[derive(Debug, Clone, Default)]
 pub struct OtherSignalsBucket {
     /// Sorted descending by count

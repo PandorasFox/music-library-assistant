@@ -9,9 +9,9 @@
 //! ## Layout
 //!
 //! ```text
-//! ┌─────────────────────────────────────┐┌──────────────┐
-//! │ Corpus Browser | Insights | Deploy  ││  mm beta 4  │
-//! └─────────────────────────────────────┘└──────────────┘
+//! ┌──────────────────────────────────────────────┐┌──────────────┐
+//! │ Tag Search | Corpus Browser | ... | Deploy   ││  mm beta 4  │
+//! └──────────────────────────────────────────────┘└──────────────┘
 //! ```
 
 use ratatui::{
@@ -26,16 +26,13 @@ use ratatui::{
 const TITLE_PANE_WIDTH: u16 = 16;
 
 /// Views available in the lateral view ring.
-///
-/// Note: Deploy was removed from the lateral ring - it's now accessed via
-/// the Insights view by pressing Enter on deploy-related insights.
-/// FormatStandardization was also removed - handled by ShitFormat signal resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LateralView {
     TagSearch,
     CorpusBrowser,
     Insights,
     Inbox,
+    Deploy,
 }
 
 impl LateralView {
@@ -46,6 +43,7 @@ impl LateralView {
             LateralView::CorpusBrowser => "Corpus Browser",
             LateralView::Insights => "Insights & Operations",
             LateralView::Inbox => "Inbox",
+            LateralView::Deploy => "Deploy",
         }
     }
 
@@ -55,23 +53,25 @@ impl LateralView {
             LateralView::TagSearch => LateralView::CorpusBrowser,
             LateralView::CorpusBrowser => LateralView::Insights,
             LateralView::Insights => LateralView::Inbox,
-            LateralView::Inbox => LateralView::TagSearch,
+            LateralView::Inbox => LateralView::Deploy,
+            LateralView::Deploy => LateralView::TagSearch,
         }
     }
 
     /// Get the previous view in the ring (Shift-Tab)
     pub fn prev(&self) -> Self {
         match self {
-            LateralView::TagSearch => LateralView::Inbox,
+            LateralView::TagSearch => LateralView::Deploy,
             LateralView::CorpusBrowser => LateralView::TagSearch,
             LateralView::Insights => LateralView::CorpusBrowser,
             LateralView::Inbox => LateralView::Insights,
+            LateralView::Deploy => LateralView::Inbox,
         }
     }
 
     /// All views in order
     pub fn all() -> &'static [LateralView] {
-        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::Inbox]
+        &[LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::Inbox, LateralView::Deploy]
     }
 }
 
@@ -82,12 +82,20 @@ impl LateralView {
 /// - Right: App title "mm beta 4" (16 chars wide)
 pub struct UnifiedTitleBar {
     current_view: LateralView,
+    /// When true and Deploy tab is not active, render Deploy label in Magenta.
+    deploy_needs_action: bool,
 }
 
 impl UnifiedTitleBar {
     /// Create a new unified title bar
     pub fn new(current_view: LateralView) -> Self {
-        Self { current_view }
+        Self { current_view, deploy_needs_action: false }
+    }
+
+    /// Set whether the Deploy tab should be highlighted (purple) when not active.
+    pub fn with_deploy_needs_action(mut self, needs_action: bool) -> Self {
+        self.deploy_needs_action = needs_action;
+        self
     }
 
     /// Get the height needed for this widget (3 for borders)
@@ -130,6 +138,9 @@ impl UnifiedTitleBar {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
+            } else if *view == LateralView::Deploy && self.deploy_needs_action {
+                // Purple highlight for Deploy when there's work to do
+                Style::default().fg(Color::Magenta)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
@@ -159,18 +170,19 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling: TagSearch → CorpusBrowser → Insights → Inbox → TagSearch
+        // Test forward cycling: TagSearch → CorpusBrowser → Insights → Inbox → Deploy → TagSearch
         let view = LateralView::TagSearch;
         assert_eq!(view.next(), LateralView::CorpusBrowser);
         assert_eq!(view.next().next(), LateralView::Insights);
         assert_eq!(view.next().next().next(), LateralView::Inbox);
-        assert_eq!(view.next().next().next().next(), LateralView::TagSearch);
+        assert_eq!(view.next().next().next().next(), LateralView::Deploy);
+        assert_eq!(view.next().next().next().next().next(), LateralView::TagSearch);
 
         // Test backward cycling from CorpusBrowser
         let view = LateralView::CorpusBrowser;
         assert_eq!(view.prev(), LateralView::TagSearch);
-        assert_eq!(view.prev().prev(), LateralView::Inbox);
-        assert_eq!(view.prev().prev().prev(), LateralView::Insights);
+        assert_eq!(view.prev().prev(), LateralView::Deploy);
+        assert_eq!(view.prev().prev().prev(), LateralView::Inbox);
     }
 
     #[test]
@@ -178,6 +190,7 @@ mod tests {
         assert_eq!(LateralView::TagSearch.label(), "Tag Search");
         assert_eq!(LateralView::CorpusBrowser.label(), "Corpus Browser");
         assert_eq!(LateralView::Insights.label(), "Insights & Operations");
+        assert_eq!(LateralView::Deploy.label(), "Deploy");
     }
 
     #[test]

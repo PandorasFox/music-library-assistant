@@ -27,7 +27,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::corpus::db::types::{InsightsData, InboxOverviewData};
+use crate::corpus::db::types::{DeployStatus, InsightsData, InboxOverviewData};
 use crate::corpus::db::Database;
 
 // ============================================================================
@@ -265,6 +265,7 @@ impl<T> Drop for CacheWriter<T> {
 pub struct UiReadCache {
     insights_data: CacheEntry<InsightsData>,
     inbox_overview: CacheEntry<InboxOverviewData>,
+    deploy_status: CacheEntry<DeployStatus>,
 }
 
 impl UiReadCache {
@@ -272,12 +273,15 @@ impl UiReadCache {
     const INSIGHTS_THROTTLE: Duration = Duration::from_secs(30);
     /// Inbox overview throttle (15 seconds - lightweight signal counts).
     const INBOX_OVERVIEW_THROTTLE: Duration = Duration::from_secs(15);
+    /// Deploy status throttle (15 seconds - lightweight signal existence checks).
+    const DEPLOY_STATUS_THROTTLE: Duration = Duration::from_secs(15);
 
     /// Create a new UI read cache with default throttle settings.
     pub fn new() -> Self {
         Self {
             insights_data: CacheEntry::new(Self::INSIGHTS_THROTTLE),
             inbox_overview: CacheEntry::new(Self::INBOX_OVERVIEW_THROTTLE),
+            deploy_status: CacheEntry::new(Self::DEPLOY_STATUS_THROTTLE),
         }
     }
 
@@ -327,6 +331,25 @@ impl UiReadCache {
     }
 
     // -------------------------------------------------------------------------
+    // Deploy Status
+    // -------------------------------------------------------------------------
+
+    /// UI calls this when it wants deploy status data.
+    pub fn want_deploy_status(&self) {
+        self.deploy_status.want();
+    }
+
+    /// Read the latest cached deploy status.
+    pub fn deploy_status(&self) -> Option<DeployStatus> {
+        self.deploy_status.get()
+    }
+
+    /// Invalidate deploy status cache, forcing refresh on next want().
+    pub fn invalidate_deploy_status(&self) {
+        self.deploy_status.invalidate();
+    }
+
+    // -------------------------------------------------------------------------
     // Witch Integration
     // -------------------------------------------------------------------------
 
@@ -367,6 +390,24 @@ impl UiReadCache {
                 if let Ok(db_path) = config::get_db_path() {
                     if let Ok(db) = Database::open_read_only(&db_path) {
                         if let Ok(data) = db.get_inbox_overview_data() {
+                            writer.complete(data);
+                            IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
+                            return;
+                        }
+                    }
+                }
+                writer.abort();
+                IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
+            });
+        }
+
+        // Deploy status refresh
+        if let Some(writer) = self.deploy_status.take_refresh() {
+            IN_FLIGHT_REFRESHES.fetch_add(1, Ordering::Release);
+            rayon::spawn(move || {
+                if let Ok(db_path) = config::get_db_path() {
+                    if let Ok(db) = Database::open_read_only(&db_path) {
+                        if let Ok(data) = db.get_deploy_status() {
                             writer.complete(data);
                             IN_FLIGHT_REFRESHES.fetch_sub(1, Ordering::Release);
                             return;

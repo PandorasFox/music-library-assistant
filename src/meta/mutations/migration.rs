@@ -60,6 +60,31 @@ pub fn seed_dirty_inodes_for(db: &Database, computation_type: &str) -> Result<()
     Ok(())
 }
 
+/// Idempotently add a column to a table if it doesn't already exist.
+fn add_column_if_missing(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    column_def: &str,
+) -> Result<()> {
+    let has_column: bool = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('{}') WHERE name = '{}'",
+            table, column
+        ),
+        [],
+        |row| row.get(0),
+    )?;
+
+    if !has_column {
+        conn.execute(
+            &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, column_def),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 /// A single database migration.
 pub struct Migration {
     /// Version number this migration starts from.
@@ -434,6 +459,48 @@ impl MigrationRegistry {
             },
         });
 
+        // v14→v15: Add BLOB data hashes, observation generations, and shit_format dirty inodes
+        registry.register(Migration {
+            from_version: 14,
+            to_version: 15,
+            description: "Add data_hash columns for hash-based reconciliation, observation generation columns, and shit_format dirty inode seeding",
+            apply: |db| {
+                let conn = db.conn();
+
+                // Fix 2: data_hash columns on BLOB signal tables
+                for table in &[
+                    "signal_fingerprint_overlap",
+                    "signal_metadata_duplicate",
+                    "signal_duplicate_inode",
+                    "signal_missing_tag",
+                    "signal_missing_album_single",
+                    "signal_tag_canonicity",
+                    "signal_inconsistent_album_artist",
+                    "signal_cross_source_overlap",
+                    "signal_redundant_duplicate",
+                    "signal_embeddable_album_art",
+                    "signal_deploy_conflict",
+                    "signal_inbox_tag_canonicity",
+                    "signal_subpar_duplicate",
+                    "signal_compound_tag",
+                    "signal_oob_tag_sync",
+                    "signal_oob_tag_conflict",
+                    "signal_inbox_corpus_match",
+                ] {
+                    add_column_if_missing(conn, table, "data_hash", "INTEGER NOT NULL DEFAULT 0")?;
+                }
+
+                // Fix 4: observation generation columns
+                add_column_if_missing(conn, "signal_file_in_corpus", "generation", "INTEGER NOT NULL DEFAULT 0")?;
+                add_column_if_missing(conn, "signal_file_in_inbox", "generation", "INTEGER NOT NULL DEFAULT 0")?;
+
+                // Fix 3: seed dirty inodes for shit_format initial population
+                seed_dirty_inodes_for(db, "shit_format")?;
+
+                Ok(())
+            },
+        });
+
         registry
     }
 
@@ -533,9 +600,10 @@ mod tests {
         // v11→v12: zone columns in signal_moved_file
         // v12→v13: inbox corpus match signal table
         // v13→v14: inbox tag canonicity signal table
-        assert_eq!(registry.latest_version(), 14);
-        assert_eq!(registry.pending_migrations(1).len(), 13);
-        assert_eq!(registry.pending_migrations(13).len(), 1);
-        assert!(registry.pending_migrations(14).is_empty());
+        // v14→v15: data_hash columns, observation generations, shit_format dirty inodes
+        assert_eq!(registry.latest_version(), 15);
+        assert_eq!(registry.pending_migrations(1).len(), 14);
+        assert_eq!(registry.pending_migrations(14).len(), 1);
+        assert!(registry.pending_migrations(15).is_empty());
     }
 }

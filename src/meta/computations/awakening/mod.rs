@@ -23,9 +23,29 @@
 mod executors;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub use executors::*;
+
+// ============================================================================
+// Library File Observation
+// ============================================================================
+
+/// A library file observed on disk during ScanLibraryDirectory.
+///
+/// Accumulated by the Witch and passed to ReconcileLibraryFiles for
+/// set reconciliation against the DB, replacing the old pattern of
+/// unconditional DELETE + INSERT OR REPLACE.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservedLibraryFile {
+    /// Stored path: "library_name/relative/path"
+    pub stored_path: String,
+    pub inode: i64,
+    pub mtime_secs: i64,
+    pub mtime_nanos: i64,
+    pub file_size: i64,
+}
 
 // ============================================================================
 // Awakening Computation Enum
@@ -44,19 +64,26 @@ pub enum Computation {
 
     /// Derive inbox signals via global inode set comparison.
     ///
-    /// Compares disk inodes (FileInInbox signals) vs inbox-indexed inodes:
+    /// Compares observed disk inodes vs inbox-indexed inodes:
     /// - disk_only (disk - indexed) → InboxUnindexed signals
     /// - both (disk ∩ indexed) → InboxHealthy signals
-    DeriveInboxSignals,
+    DeriveInboxSignals {
+        /// Inbox inodes observed on disk during the Asleep phase (inode → relative path).
+        /// Accumulated by the Witch from ScanCorpusDirectory results.
+        observed_inodes: HashMap<i64, String>,
+    },
 
     /// Derive corpus signals via global inode set comparison.
     ///
-    /// Replaces per-directory derivation with a single-pass
-    /// global comparison of disk inodes (FileInCorpus signals) vs indexed inodes:
+    /// Single-pass global comparison of observed disk inodes vs indexed inodes:
     /// - disk_only (disk - indexed) → UnindexedFile signals
     /// - index_only (indexed - disk) → MissingFile signals
     /// - both (disk ∩ indexed) → check OOB, emit HealthyFile or spawn verification
-    DeriveCorpusSignals,
+    DeriveCorpusSignals {
+        /// Corpus inodes observed on disk during the Asleep phase (inode → relative path).
+        /// Accumulated by the Witch from ScanCorpusDirectory results.
+        observed_inodes: HashMap<i64, String>,
+    },
 
     /// Update corpus signals for a single file after mutation.
     ///
@@ -92,6 +119,14 @@ pub enum Computation {
         corpus_path_prefixes: Vec<PathBuf>,
     },
 
+    /// Reconcile observed library files against the DB.
+    ///
+    /// Performs set reconciliation: new files are upserted, stale files are deleted,
+    /// unchanged files are skipped. Replaces the old DELETE-all + INSERT-all pattern.
+    ReconcileLibraryFiles {
+        observed_files: Vec<ObservedLibraryFile>,
+    },
+
     /// Update deploy signals after a HardLink mutation.
     ///
     /// Clears DeployReady, ensures DeployedHealthy, clears library leftovers.
@@ -108,12 +143,13 @@ impl Computation {
     pub fn label(&self) -> &'static str {
         match self {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
-            Computation::DeriveInboxSignals => "Deriving inbox signals",
-            Computation::DeriveCorpusSignals => "Deriving corpus signals",
+            Computation::DeriveInboxSignals { .. } => "Deriving inbox signals",
+            Computation::DeriveCorpusSignals { .. } => "Deriving corpus signals",
             Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
             Computation::WalkLibrary { .. } => "Walking library",
             Computation::ScanLibraryDirectory { .. } => "Scanning library directory",
+            Computation::ReconcileLibraryFiles { .. } => "Reconciling library files",
             Computation::UpdateDeploySignals { .. } => "Updating deploy signals",
         }
     }
@@ -124,11 +160,11 @@ impl Computation {
             Computation::ScheduleSecondLevelDerivations => {
                 execute_schedule_second_level_derivations(ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::DeriveInboxSignals => {
-                execute_derive_inbox_signals(ctx.read_db, ctx.witness, ctx.start)
+            Computation::DeriveInboxSignals { observed_inodes } => {
+                execute_derive_inbox_signals(ctx.read_db, observed_inodes.clone(), ctx.witness, ctx.start)
             }
-            Computation::DeriveCorpusSignals => {
-                execute_derive_corpus_signals(ctx.read_db, ctx.witness, ctx.start)
+            Computation::DeriveCorpusSignals { observed_inodes } => {
+                execute_derive_corpus_signals(ctx.read_db, observed_inodes.clone(), ctx.witness, ctx.start)
             }
             Computation::UpdateCorpusFileSignals { path } => {
                 execute_update_corpus_file_signals(ctx.read_db, path, ctx.witness, ctx.start)
@@ -141,6 +177,9 @@ impl Computation {
             }
             Computation::ScanLibraryDirectory { directory, library_name, library_root, corpus_path_prefixes } => {
                 execute_scan_library_directory(ctx.read_db, directory, library_name, library_root, corpus_path_prefixes, ctx.witness, ctx.start)
+            }
+            Computation::ReconcileLibraryFiles { observed_files } => {
+                execute_reconcile_library_files(ctx.read_db, observed_files, ctx.witness, ctx.start)
             }
             Computation::UpdateDeploySignals { corpus_path, library_path } => {
                 execute_update_deploy_signals(ctx.read_db, corpus_path, library_path, ctx.witness, ctx.start)
@@ -165,6 +204,9 @@ pub struct Result {
     pub duration_ms: u64,
     /// Follow-up computations - ONLY Awakening computations allowed.
     pub spawn: Vec<Computation>,
+    /// Library files observed on disk during ScanLibraryDirectory.
+    /// Accumulated by the Witch and consumed by ReconcileLibraryFiles.
+    pub observed_library_files: Vec<ObservedLibraryFile>,
 }
 
 impl Result {
@@ -175,6 +217,23 @@ impl Result {
             error: None,
             duration_ms,
             spawn,
+            observed_library_files: Vec::new(),
+        }
+    }
+
+    pub fn success_with_library_files(
+        computation: Computation,
+        duration_ms: u64,
+        spawn: Vec<Computation>,
+        observed_library_files: Vec<ObservedLibraryFile>,
+    ) -> Self {
+        Self {
+            _computation: computation,
+            success: true,
+            error: None,
+            duration_ms,
+            spawn,
+            observed_library_files,
         }
     }
 
@@ -185,6 +244,7 @@ impl Result {
             error: Some(error),
             duration_ms,
             spawn: Vec::new(),
+            observed_library_files: Vec::new(),
         }
     }
 }

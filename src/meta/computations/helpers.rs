@@ -3,9 +3,10 @@
 //! These helpers are used across multiple computation modules for common tasks
 //! like file type detection, path parsing, signal emission, and configuration access.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
@@ -158,6 +159,17 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 }
 
 // ============================================================================
+// Observation Generation Counter (vestigial — kept for UpdateCorpusFileSignals)
+// ============================================================================
+
+static OBSERVATION_GENERATION: AtomicU8 = AtomicU8::new(0);
+
+/// Get the current observation generation (vestigial — used by UpdateCorpusFileSignals).
+pub(crate) fn current_observation_generation() -> u8 {
+    OBSERVATION_GENERATION.load(Ordering::SeqCst) % 13
+}
+
+// ============================================================================
 // Signal Emission Helpers (Native Inode Column)
 // ============================================================================
 // These helpers use the native `inode` column in the signals table for
@@ -204,48 +216,170 @@ pub(crate) fn drop_stale_corpus_signal<S: CorpusSignalStore>(
 
 /// A computed aggregate signal ready for reconciliation.
 ///
-/// Contains the key and typed data for the signal write.
+/// Contains the key, typed data, and content hash for change detection.
 pub(super) struct ComputedAggregateSignal {
     pub key: String,
     pub typed_data: TypedSignalWrite,
+    pub content_hash: i64,
 }
 
-/// Reconcile computed signals against existing DB signals.
+impl ComputedAggregateSignal {
+    /// Create a new computed signal, auto-computing the content hash.
+    pub fn new(key: String, typed_data: TypedSignalWrite) -> Self {
+        let content_hash = typed_data.content_hash() as i64;
+        Self { key, typed_data, content_hash }
+    }
+}
+
+/// A computed corpus signal ready for reconciliation.
 ///
-/// Computes set differences and queues appropriate operations:
+/// Contains the inode, typed data, and content hash for change detection.
+pub(super) struct ComputedCorpusSignal {
+    pub inode: i64,
+    pub typed_data: TypedSignalWrite,
+    pub content_hash: i64,
+}
+
+impl ComputedCorpusSignal {
+    /// Create a new computed corpus signal, auto-computing the content hash.
+    pub fn new(inode: i64, typed_data: TypedSignalWrite) -> Self {
+        let content_hash = typed_data.content_hash() as i64;
+        Self { inode, typed_data, content_hash }
+    }
+}
+
+/// Reconcile computed aggregate signals against existing DB signals.
+///
+/// Uses hash-based change detection to skip unchanged signals:
 /// - Stale signals (exist in DB but not computed): cleared
-/// - New + existing signals: always written (INSERT OR REPLACE)
+/// - New signals (computed but not in DB): written
+/// - Changed signals (key exists but hash differs): written
+/// - Unchanged signals (key exists and hash matches): skipped
 ///
-/// Returns (cleared_count, written_count, 0, 0).
+/// Returns (cleared, new, updated, unchanged).
 pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     computed: Vec<ComputedAggregateSignal>,
     witness: &ComputationWitness,
 ) -> (usize, usize, usize, usize) {
-    let existing_keys: HashSet<String> = read_only_db
-        .aggregate_signal_keys::<S>()
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    let existing_hashes: HashMap<String, i64> = read_only_db
+        .aggregate_signal_key_hashes::<S>()
+        .unwrap_or_default();
 
     let computed_keys: HashSet<&str> = computed.iter().map(|s| s.key.as_str()).collect();
-    let existing_key_refs: HashSet<&str> = existing_keys.iter().map(|s| s.as_str()).collect();
 
     let mut cleared = 0;
-    let mut written = 0;
+    let mut new = 0;
+    let mut updated = 0;
+    let mut unchanged = 0;
 
     // Stale: exist in DB but not computed -> clear
-    for key in existing_key_refs.difference(&computed_keys) {
-        sender.clear_aggregate_signal::<S>(key, witness);
-        cleared += 1;
+    for key in existing_hashes.keys() {
+        if !computed_keys.contains(key.as_str()) {
+            sender.clear_aggregate_signal::<S>(key, witness);
+            cleared += 1;
+        }
     }
 
-    // New + existing: always write (INSERT OR REPLACE)
+    // For each computed signal: check hash to decide write vs skip
     for signal in &computed {
-        sender.write_typed_signal(signal.typed_data.clone(), witness);
-        written += 1;
+        match existing_hashes.get(&signal.key) {
+            Some(&existing_hash) if existing_hash == signal.content_hash => {
+                // Hash matches — skip write
+                unchanged += 1;
+            }
+            Some(_) => {
+                // Key exists but hash differs — update
+                sender.write_typed_signal(signal.typed_data.clone(), witness);
+                updated += 1;
+            }
+            None => {
+                // New signal
+                sender.write_typed_signal(signal.typed_data.clone(), witness);
+                new += 1;
+            }
+        }
     }
 
-    (cleared, written, 0, 0)
+    (cleared, new, updated, unchanged)
+}
+
+/// Reconcile computed corpus signals against existing DB signals.
+///
+/// Uses hash-based change detection for BLOB signal types.
+/// For scalar-only signal types (which return empty hash maps), falls back
+/// to inode existence checks.
+///
+/// Returns (cleared, new, updated, unchanged).
+pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &db_thread::SignalWriteSender,
+    computed: Vec<ComputedCorpusSignal>,
+    witness: &ComputationWitness,
+) -> (usize, usize, usize, usize) {
+    let existing_hashes: HashMap<i64, i64> = read_only_db
+        .corpus_signal_inode_hashes::<S>()
+        .unwrap_or_default();
+
+    // Scalar-only types return an empty hash map from query_inode_hashes.
+    // Detect this by also fetching the inode list. If there are inodes but
+    // no hashes, we're dealing with a scalar type.
+    let existing_inodes_vec: Vec<i64> = if existing_hashes.is_empty() {
+        read_only_db.corpus_signal_all_inodes::<S>().unwrap_or_default()
+    } else {
+        Vec::new() // not needed when we have hashes
+    };
+
+    let use_hashes = !existing_hashes.is_empty() || existing_inodes_vec.is_empty();
+
+    let existing_inodes: HashSet<i64> = if use_hashes {
+        existing_hashes.keys().copied().collect()
+    } else {
+        existing_inodes_vec.into_iter().collect()
+    };
+
+    let computed_inodes: HashSet<i64> = computed.iter().map(|s| s.inode).collect();
+
+    let mut cleared = 0;
+    let mut new = 0;
+    let mut updated = 0;
+    let mut unchanged = 0;
+
+    // Stale: exist in DB but not computed -> clear
+    for &inode in &existing_inodes {
+        if !computed_inodes.contains(&inode) {
+            sender.clear_corpus_signal::<S>(inode, witness);
+            cleared += 1;
+        }
+    }
+
+    // For each computed signal: check hash or existence to decide write vs skip
+    for signal in &computed {
+        if use_hashes {
+            match existing_hashes.get(&signal.inode) {
+                Some(&existing_hash) if existing_hash == signal.content_hash => {
+                    unchanged += 1;
+                }
+                Some(_) => {
+                    sender.write_typed_signal(signal.typed_data.clone(), witness);
+                    updated += 1;
+                }
+                None => {
+                    sender.write_typed_signal(signal.typed_data.clone(), witness);
+                    new += 1;
+                }
+            }
+        } else {
+            // Scalar-only: existence check
+            if existing_inodes.contains(&signal.inode) {
+                unchanged += 1;
+            } else {
+                sender.write_typed_signal(signal.typed_data.clone(), witness);
+                new += 1;
+            }
+        }
+    }
+
+    (cleared, new, updated, unchanged)
 }

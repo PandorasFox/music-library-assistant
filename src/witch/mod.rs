@@ -172,6 +172,27 @@ pub struct Witch {
     /// UI calls want_*() methods, the Witch spawns refresh tasks in tick().
     ui_read_cache: UiReadCache,
 
+    /// Corpus inodes observed on disk during the current observation cycle.
+    /// Accumulated from ScanCorpusDirectory results in tick().
+    /// Consumed by queue_awakening_computations() via std::mem::take().
+    observed_corpus_inodes: HashMap<i64, String>,
+    /// Inbox inodes observed on disk during the current observation cycle.
+    /// Accumulated from ScanCorpusDirectory results in tick().
+    /// Consumed by queue_awakening_computations() via std::mem::take().
+    observed_inbox_inodes: HashMap<i64, String>,
+
+    /// Library files observed on disk during the current awakening cycle.
+    /// Accumulated from ScanLibraryDirectory results in tick().
+    /// Consumed by transition_to_completed() when awakening first drains,
+    /// which queues ReconcileLibraryFiles with this data.
+    observed_library_files: Vec<awakening::ObservedLibraryFile>,
+
+    /// Whether library reconciliation has completed in the current awakening cycle.
+    /// Used for two-stage awakening transition:
+    ///   - First drain (false): queue ReconcileLibraryFiles, stay in Awakening
+    ///   - Second drain (true): transition to Awake normally
+    library_reconciliation_done: bool,
+
     /// Handle to the dedicated logging thread for shutdown coordination.
     log_thread_handle: Option<crate::logging::LogThreadHandle>,
 
@@ -242,6 +263,10 @@ impl Witch {
             db_thread_handle: None,  // Spawned later via spawn_db_thread()
             worker_stats_shared,
             ui_read_cache: UiReadCache::new(),
+            observed_corpus_inodes: HashMap::new(),
+            observed_inbox_inodes: HashMap::new(),
+            observed_library_files: Vec::new(),
+            library_reconciliation_done: false,
             log_thread_handle,
             shared_config: None,
         };
@@ -374,11 +399,11 @@ impl Witch {
         let resolver = crate::corpus::paths::get_resolver();
         let force_check = self.force_check_all_files_at_startup;
 
-        // Clear stale observation state first - ensures deleted files get MissingFile signals
-        self.queue_computation_with_label(
-            Computation::Asleep(asleep::Computation::ClearExistingObservationState),
-            Some("Clearing observation state".to_string()),
-        );
+        // Clear accumulated observation state before fresh scan
+        self.observed_corpus_inodes.clear();
+        self.observed_inbox_inodes.clear();
+        self.observed_library_files.clear();
+        self.library_reconciliation_done = false;
 
         // Queue corpus walk
         self.queue_computation_with_label(
@@ -503,6 +528,13 @@ impl Witch {
                 self.update_shared_config(new_config);
             }
 
+            // Accumulate observed inodes from ScanCorpusDirectory results
+            self.observed_corpus_inodes.extend(result.observed_corpus_inodes);
+            self.observed_inbox_inodes.extend(result.observed_inbox_inodes);
+
+            // Accumulate observed library files from ScanLibraryDirectory results
+            self.observed_library_files.extend(result.observed_library_files);
+
             // Collect spawned follow-up computations and mutations
             spawned_computations.extend(result.spawn);
             spawned_mutations.extend(result.spawn_mutations);
@@ -580,6 +612,9 @@ impl Witch {
         let mut queue_content_analysis_after_reset = false;
         // Flag to queue re-observation (WalkCorpus) after mutations complete
         let mut queue_reobservation_after_reset = false;
+        // Flag to queue ReconcileLibraryFiles after awakening stage 1
+        let mut queue_reconcile_library_after_reset = false;
+        let mut reconcile_library_observed: Option<Vec<awakening::ObservedLibraryFile>> = None;
 
         self.completed_at = Some(Instant::now());
         self.state = TaskExecutionState::Completed;
@@ -621,22 +656,38 @@ impl Witch {
                 queue_awakening_after_reset = true;
             }
 
-            // Awakening completed: transition to Awake and queue content analysis
+            // Awakening completed: two-stage transition
+            // Stage 1: Queue ReconcileLibraryFiles, stay in Awakening
+            // Stage 2: Transition to Awake and queue content analysis
             (false, EyeState::Awakening) => {
-                crate::logging::log_general(format!(
-                    "[STATE] Awakening complete. Transitioning Awakening -> Awake. \
-                     Processed {} tasks.",
-                    self.total_processed
-                ));
-                self.eye_state = EyeState::Awake;
+                if !self.library_reconciliation_done {
+                    // Stage 1: Library reconciliation not yet done
+                    self.library_reconciliation_done = true;
+                    let observed = std::mem::take(&mut self.observed_library_files);
+                    crate::logging::log_general(format!(
+                        "[STATE] Awakening stage 1 complete. Queueing ReconcileLibraryFiles ({} observed files). \
+                         Staying in Awakening. Processed {} tasks.",
+                        observed.len(), self.total_processed
+                    ));
+                    queue_reconcile_library_after_reset = true;
+                    reconcile_library_observed = Some(observed);
+                } else {
+                    // Stage 2: Library reconciliation done, NOW transition to Awake
+                    self.library_reconciliation_done = false;
+                    crate::logging::log_general(format!(
+                        "[STATE] Awakening stage 2 complete. Transitioning Awakening -> Awake. \
+                         Processed {} tasks.",
+                        self.total_processed
+                    ));
+                    self.eye_state = EyeState::Awake;
 
-                if !self.read_only_mode {
-                    crate::logging::log_general("[STATE] Mutations now enabled (read-write mode).");
+                    if !self.read_only_mode {
+                        crate::logging::log_general("[STATE] Mutations now enabled (read-write mode).");
+                    }
+
+                    // Queue content analysis after full awakening
+                    queue_content_analysis_after_reset = true;
                 }
-
-                // Always queue content analysis after awakening (both initial and re-awakening)
-                queue_content_analysis_after_reset = true;
-
             }
 
             // Normal operation: work completed while Awake
@@ -691,7 +742,7 @@ impl Witch {
         // writes. Without this barrier, the next phase's computations could read stale
         // data (e.g., DeriveDeployHealthSignals reading library files written by
         // ScanLibraryDirectory, or Awake-phase computations reading Awakening signals).
-        if queue_awakening_after_reset || queue_content_analysis_after_reset || queue_reobservation_after_reset {
+        if queue_awakening_after_reset || queue_content_analysis_after_reset || queue_reobservation_after_reset || queue_reconcile_library_after_reset {
             db_thread::wait_for_queue_drain();
         }
 
@@ -703,6 +754,16 @@ impl Witch {
         if queue_awakening_after_reset {
             self.queue_awakening_computations();
         }
+        if queue_reconcile_library_after_reset {
+            if let Some(observed) = reconcile_library_observed {
+                self.queue_computation_with_label(
+                    Computation::Awakening(awakening::Computation::ReconcileLibraryFiles {
+                        observed_files: observed,
+                    }),
+                    Some("Reconciling library files".to_string()),
+                );
+            }
+        }
         if queue_content_analysis_after_reset {
             // Create witness here - this is the ONLY valid call site
             let witness = ContentAnalysisWitness::new();
@@ -710,16 +771,35 @@ impl Witch {
         }
     }
 
-    /// Queue second-level signal computations during Awakening.
+    /// Queue Awakening-phase computations.
     ///
-    /// This queues `ScheduleSecondLevelDerivations` which will spawn per-directory
-    /// computations to derive signals like UnindexedFile, MissingFile, etc.
+    /// Takes the accumulated observed inode maps and queues DeriveCorpusSignals
+    /// and DeriveInboxSignals directly with the data. Also queues
+    /// ScheduleSecondLevelDerivations for directory checks and library walks.
     fn queue_awakening_computations(&mut self) {
-        crate::logging::log_general(
-            "[STATE] Queueing ScheduleSecondLevelDerivations for Awakening"
+        let observed_corpus = std::mem::take(&mut self.observed_corpus_inodes);
+        let observed_inbox = std::mem::take(&mut self.observed_inbox_inodes);
+
+        crate::logging::log_general(format!(
+            "[STATE] Queueing Awakening: DeriveCorpusSignals ({} inodes), DeriveInboxSignals ({} inodes), ScheduleSecondLevelDerivations",
+            observed_corpus.len(), observed_inbox.len()
+        ));
+
+        self.queue_computation_with_label(
+            Computation::Awakening(awakening::Computation::DeriveCorpusSignals {
+                observed_inodes: observed_corpus,
+            }),
+            Some("Deriving corpus signals".to_string()),
         );
 
-        // Queue the orchestrator computation that will spawn per-directory derivations
+        self.queue_computation_with_label(
+            Computation::Awakening(awakening::Computation::DeriveInboxSignals {
+                observed_inodes: observed_inbox,
+            }),
+            Some("Deriving inbox signals".to_string()),
+        );
+
+        // Directory checks + library walks
         self.queue_computation_with_label(
             Computation::Awakening(awakening::Computation::ScheduleSecondLevelDerivations),
             Some("Computing directory signals".to_string()),
@@ -738,11 +818,11 @@ impl Witch {
             "[STATE] Queueing re-observation computations for post-mutation re-awakening"
         );
 
-        // Clear stale observation state first - ensures deleted files get MissingFile signals
-        self.queue_computation_with_label(
-            Computation::Asleep(asleep::Computation::ClearExistingObservationState),
-            Some("Clearing observation state".to_string()),
-        );
+        // Clear accumulated observation state before fresh scan
+        self.observed_corpus_inodes.clear();
+        self.observed_inbox_inodes.clear();
+        self.observed_library_files.clear();
+        self.library_reconciliation_done = false;
 
         // Re-walk corpus (mtime-optimized)
         self.queue_computation_with_label(
@@ -846,6 +926,9 @@ impl Witch {
                         queue_wait_ms: 0,
                         thread_stats: None,
                         config_update: None,
+                        observed_corpus_inodes: HashMap::new(),
+                        observed_inbox_inodes: HashMap::new(),
+                        observed_library_files: Vec::new(),
                     }
                 }
             };

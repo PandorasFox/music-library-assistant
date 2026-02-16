@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::helpers::{ComputedAggregateSignal, reconcile_aggregate_signals};
 use crate::meta::signals::data::{
     TypedSignalWrite, TagCanonicitySignal, TagCanonicityData,
     InconsistentAlbumArtistSignal, InconsistentAlbumArtistData,
@@ -77,9 +78,7 @@ pub fn execute_detect_missing_tags(
         HashSet::new()
     };
 
-    // Clear all existing MissingTag and MissingAlbumSingle signals (routes through db_thread)
-    sender.clear_all_of_aggregate_type::<MissingTagSignal>(witness);
-    sender.clear_all_of_aggregate_type::<MissingAlbumSingleSignal>(witness);
+    // Build computed signals and reconcile (hash-based skip for unchanged signals)
 
     let tracks_with_tags = match read_only_db.get_audio_files_with_tag_presence() {
         Ok(rows) => rows,
@@ -176,39 +175,34 @@ pub fn execute_detect_missing_tags(
         entry.1.push(inode);
     }
 
-    let mut total_groups = 0;
-
+    let mut computed_missing: Vec<ComputedAggregateSignal> = Vec::new();
     for (key, (missing_tags, inodes)) in groups {
-        total_groups += 1;
-
         let mut missing_list: Vec<String> = missing_tags.into_iter().collect();
         missing_list.sort();
-
-        sender.write_typed_signal(TypedSignalWrite::MissingTag(MissingTagSignal {
+        let signal = TypedSignalWrite::MissingTag(MissingTagSignal {
             key: key.clone(),
-            data: MissingTagData {
-                missing_tags: missing_list,
-                inodes,
-            },
-        }), witness);
+            data: MissingTagData { missing_tags: missing_list, inodes },
+        });
+        computed_missing.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    // Emit MissingAlbumSingle signals per artist group
-    let mut album_single_count = 0;
+    let mut computed_album_single: Vec<ComputedAggregateSignal> = Vec::new();
     for (key, (artist, tracks)) in album_single_groups {
-        album_single_count += 1;
-        sender.write_typed_signal(TypedSignalWrite::MissingAlbumSingle(MissingAlbumSingleSignal {
-            key,
-            data: MissingAlbumSingleData {
-                artist,
-                tracks,
-            },
-        }), witness);
+        let signal = TypedSignalWrite::MissingAlbumSingle(MissingAlbumSingleSignal {
+            key: key.clone(),
+            data: MissingAlbumSingleData { artist, tracks },
+        });
+        computed_album_single.push(ComputedAggregateSignal::new(key, signal));
     }
+
+    let (mt_cleared, mt_new, mt_updated, mt_unchanged) =
+        reconcile_aggregate_signals::<MissingTagSignal>(read_only_db, &sender, computed_missing, witness);
+    let (mas_cleared, mas_new, mas_updated, mas_unchanged) =
+        reconcile_aggregate_signals::<MissingAlbumSingleSignal>(read_only_db, &sender, computed_album_single, witness);
 
     log_general(format!(
-        "[COMPUTE] DetectMissingTags: {} groups with missing tags, {} album-single groups",
-        total_groups, album_single_count
+        "[COMPUTE] DetectMissingTags: missing_tag(cleared={}, new={}, updated={}, unchanged={}), album_single(cleared={}, new={}, updated={}, unchanged={})",
+        mt_cleared, mt_new, mt_updated, mt_unchanged, mas_cleared, mas_new, mas_updated, mas_unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -259,16 +253,10 @@ pub fn execute_detect_tag_canonicalizations(
 
     let strip_format_suffixes = config.opinions.canonicalization.strip_album_format_suffixes;
 
-    // Clear stale TagCanonicity signals before re-detecting
-    sender.clear_all_of_aggregate_type::<TagCanonicitySignal>(witness);
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
-    let mut signal_count = 0;
-
-    // Helper to emit signals for a set of collisions
-    let emit_collision_signals = |collisions: Vec<crate::corpus::health::collision::TagCollision>,
-                                   sender: &crate::db_thread::SignalWriteSender,
-                                   witness: &ComputationWitness,
-                                   count: &mut usize| {
+    // Helper to collect signals for a set of collisions
+    let mut collect_collision_signals = |collisions: Vec<crate::corpus::health::collision::TagCollision>| {
         for collision in collisions {
             // Skip groups where any variant has a CanonicalTag signal
             let any_canonical = collision.variants.iter().any(|v| {
@@ -291,39 +279,35 @@ pub fn execute_detect_tag_canonicalizations(
                 .collect();
             variants.sort_by(|a, b| b.1.cmp(&a.1));
 
-            // Signal key: "{tag_name}:{normalized_key}"
             let key = format!("{}:{}", collision.tag_name, collision.normalized_key);
-
-            sender.write_typed_signal(TypedSignalWrite::TagCanonicity(TagCanonicitySignal {
-                key,
+            let signal = TypedSignalWrite::TagCanonicity(TagCanonicitySignal {
+                key: key.clone(),
                 tag_name: collision.tag_name,
                 data: TagCanonicityData { variants, inodes },
-            }), witness);
-
-            *count += 1;
+            });
+            computed.push(ComputedAggregateSignal::new(key, signal));
         }
     };
 
-    // Detect and emit signals for each tag type
     if let Ok(collisions) = get_artist_collisions(read_only_db) {
-        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
+        collect_collision_signals(collisions);
     }
-
     if let Ok(collisions) = get_album_artist_collisions(read_only_db) {
-        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
+        collect_collision_signals(collisions);
     }
-
     if let Ok(collisions) = get_album_collisions(read_only_db, strip_format_suffixes) {
-        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
+        collect_collision_signals(collisions);
+    }
+    if let Ok(collisions) = get_genre_collisions(read_only_db) {
+        collect_collision_signals(collisions);
     }
 
-    if let Ok(collisions) = get_genre_collisions(read_only_db) {
-        emit_collision_signals(collisions, &sender, witness, &mut signal_count);
-    }
+    let (cleared, new, updated, unchanged) =
+        reconcile_aggregate_signals::<TagCanonicitySignal>(read_only_db, &sender, computed, witness);
 
     log_general(format!(
-        "[COMPUTE] DetectTagCanonicalizations: emitted {} TagCanonicity signals",
-        signal_count
+        "[COMPUTE] DetectTagCanonicalizations: cleared={}, new={}, updated={}, unchanged={}",
+        cleared, new, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -624,9 +608,6 @@ pub fn execute_detect_inconsistent_album_artist(
         }
     };
 
-    // Clear stale InconsistentAlbumArtist signals before re-detecting
-    sender.clear_all_of_aggregate_type::<InconsistentAlbumArtistSignal>(witness);
-
     let issues = match detect_inconsistent_album_artist(read_only_db) {
         Ok(i) => i,
         Err(e) => {
@@ -638,38 +619,34 @@ pub fn execute_detect_inconsistent_album_artist(
         }
     };
 
-    let mut signal_count = 0;
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
     for issue in issues {
-        // Convert HashMaps to sorted Vec<(String, usize)> tuples
-        let mut artist_variants: Vec<(String, usize)> = issue
-            .artist_variants
-            .into_iter()
-            .collect();
+        let mut artist_variants: Vec<(String, usize)> = issue.artist_variants.into_iter().collect();
         artist_variants.sort_by(|a, b| b.1.cmp(&a.1));
 
-        let mut album_artist_variants: Vec<(String, usize)> = issue
-            .album_artist_variants
-            .into_iter()
-            .collect();
+        let mut album_artist_variants: Vec<(String, usize)> = issue.album_artist_variants.into_iter().collect();
         album_artist_variants.sort_by(|a, b| b.1.cmp(&a.1));
 
-        sender.write_typed_signal(TypedSignalWrite::InconsistentAlbumArtist(InconsistentAlbumArtistSignal {
-            key: issue.normalized_album,
+        let key = issue.normalized_album;
+        let signal = TypedSignalWrite::InconsistentAlbumArtist(InconsistentAlbumArtistSignal {
+            key: key.clone(),
             data: InconsistentAlbumArtistData {
                 album: issue.album,
                 artist_variants,
                 album_artist_variants,
                 inodes: issue.inodes,
             },
-        }), witness);
-
-        signal_count += 1;
+        });
+        computed.push(ComputedAggregateSignal::new(key, signal));
     }
 
+    let (cleared, new, updated, unchanged) =
+        reconcile_aggregate_signals::<InconsistentAlbumArtistSignal>(read_only_db, &sender, computed, witness);
+
     log_general(format!(
-        "[COMPUTE] DetectInconsistentAlbumArtist: emitted {} signals",
-        signal_count
+        "[COMPUTE] DetectInconsistentAlbumArtist: cleared={}, new={}, updated={}, unchanged={}",
+        cleared, new, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

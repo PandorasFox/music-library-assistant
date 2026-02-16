@@ -11,8 +11,8 @@ use mm_utils::tag_names::find_tag_in_map;
 
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    parse_inodes_csv, reconcile_aggregate_signals,
-    ComputedAggregateSignal,
+    parse_inodes_csv, reconcile_aggregate_signals, reconcile_corpus_signals,
+    ComputedAggregateSignal, ComputedCorpusSignal,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::Zone;
@@ -231,13 +231,13 @@ pub fn execute_detect_fingerprint_overlaps(
             .collect();
         total_tracks += inodes.len();
 
-        computed.push(ComputedAggregateSignal {
-            key: fingerprint_text.clone(),
-            typed_data: TypedSignalWrite::FingerprintOverlap(FingerprintOverlapSignal {
+        computed.push(ComputedAggregateSignal::new(
+            fingerprint_text.clone(),
+            TypedSignalWrite::FingerprintOverlap(FingerprintOverlapSignal {
                 key: fingerprint_text,
                 inodes,
             }),
-        });
+        ));
     }
 
     // Reconcile with existing signals (handles stale/new/changed/unchanged)
@@ -310,14 +310,14 @@ pub fn execute_detect_duplicate_inodes(
     for (inode, inodes_str) in duplicate_groups {
         let inodes = parse_inodes_csv(&inodes_str);
 
-        computed.push(ComputedAggregateSignal {
-            key: inode.to_string(),
-            typed_data: TypedSignalWrite::DuplicateInode(DuplicateInodeSignal {
+        computed.push(ComputedAggregateSignal::new(
+            inode.to_string(),
+            TypedSignalWrite::DuplicateInode(DuplicateInodeSignal {
                 key: inode.to_string(),
                 inode,
                 inodes,
             }),
-        });
+        ));
     }
 
     // Reconcile with existing signals (handles stale/new/changed/unchanged)
@@ -359,9 +359,6 @@ pub fn execute_detect_metadata_duplicates(
             );
         }
     };
-
-    // Clear all MetadataDuplicate signals (routes through db_thread)
-    sender.clear_all_of_aggregate_type::<MetadataDuplicateSignal>(witness);
 
     let all_tags = match read_only_db.get_all_tags_ordered() {
         Ok(rows) => rows,
@@ -411,29 +408,39 @@ pub fn execute_detect_metadata_duplicates(
             .push(inode);
     }
 
-    let mut total_groups = 0;
+    let mut computed = Vec::new();
 
     for (signature, inodes) in sig_to_inodes {
         if inodes.len() < 2 {
             continue;
         }
 
-        total_groups += 1;
-
         let key_hash = format!("{:x}", md5_hash(&signature));
 
-        sender.write_typed_signal(TypedSignalWrite::MetadataDuplicate(MetadataDuplicateSignal {
-            key: key_hash,
-            data: MetadataDuplicateData {
-                tag_signature: signature,
-                inodes,
-            },
-        }), witness);
+        computed.push(ComputedAggregateSignal::new(
+            key_hash.clone(),
+            TypedSignalWrite::MetadataDuplicate(MetadataDuplicateSignal {
+                key: key_hash,
+                data: MetadataDuplicateData {
+                    tag_signature: signature,
+                    inodes,
+                },
+            }),
+        ));
     }
 
+    let (cleared, new_count, updated, unchanged) =
+        reconcile_aggregate_signals::<MetadataDuplicateSignal>(
+            read_only_db,
+            &sender,
+            computed,
+            witness,
+        );
+
+    let total_groups = new_count + updated + unchanged;
     log_general(format!(
-        "[COMPUTE] DetectMetadataDuplicates: {} duplicate metadata groups",
-        total_groups
+        "[COMPUTE] DetectMetadataDuplicates: {} duplicate metadata groups, cleared={}, new={}, updated={}, unchanged={}",
+        total_groups, cleared, new_count, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -751,10 +758,6 @@ pub fn execute_analyze_fingerprint_overlaps(
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
     let elide_variant_titles = config.opinions.duplicate_analysis.elide_variant_titles;
 
-    // Clear all existing SubparDuplicate and RedundantDuplicate signals
-    sender.clear_all_of_corpus_type::<SubparDuplicateSignal>(witness);
-    sender.clear_all_of_aggregate_type::<RedundantDuplicateSignal>(witness);
-
     // Get all FingerprintOverlap signals
     let fp_dup_signals = read_only_db
         .get_fingerprint_overlap_signals()
@@ -762,14 +765,27 @@ pub fn execute_analyze_fingerprint_overlaps(
 
     if fp_dup_signals.is_empty() {
         log_general("[COMPUTE] AnalyzeFingerprintOverlaps: no fingerprint overlap signals to analyze");
+        // Reconcile with empty sets to clear any stale signals
+        let (subpar_cleared, _, _, _) =
+            reconcile_corpus_signals::<SubparDuplicateSignal>(read_only_db, &sender, Vec::new(), witness);
+        let (redundant_cleared, _, _, _) =
+            reconcile_aggregate_signals::<RedundantDuplicateSignal>(read_only_db, &sender, Vec::new(), witness);
+        if subpar_cleared > 0 || redundant_cleared > 0 {
+            log_general(format!(
+                "[COMPUTE] AnalyzeFingerprintOverlaps: cleared {} stale SubparDuplicate + {} stale RedundantDuplicate",
+                subpar_cleared, redundant_cleared
+            ));
+        }
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
     let mut total_groups = 0;
-    let mut subpar_count = 0;
-    let mut redundant_count = 0;
     let mut variant_skipped = 0;
     let mut expected_skipped = 0;
+
+    // Collect all computed signals for reconciliation
+    let mut computed_subpar: Vec<ComputedCorpusSignal> = Vec::new();
+    let mut computed_redundant: Vec<ComputedAggregateSignal> = Vec::new();
 
     for signal in &fp_dup_signals {
         let inodes = signal.inodes.clone();
@@ -871,7 +887,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                 }
             }
 
-            // For each true duplicate group, partition into quality tiers and emit signals
+            // For each true duplicate group, partition into quality tiers and collect signals
             for group in true_duplicate_groups {
                 // Build quality tiers for each file in the group
                 let mut tiered: Vec<(usize, QualityTier)> = group
@@ -903,24 +919,26 @@ pub fn execute_analyze_fingerprint_overlaps(
                     .copied()
                     .collect();
 
-                // Best-tier files with >1 member → RedundantDuplicate
+                // Best-tier files with >1 member -> RedundantDuplicate
                 if best_indices.len() > 1 {
                     let inodes: Vec<i64> = best_indices.iter().map(|&idx| cluster[idx].inode()).collect();
                     let paths: Vec<String> = best_indices.iter().map(|&idx| cluster[idx].path().to_string()).collect();
                     let file_type = cluster[best_indices[0]].audio.file_type.clone();
 
-                    sender.write_typed_signal(TypedSignalWrite::RedundantDuplicate(RedundantDuplicateSignal {
-                        key: signal.key.clone(),
-                        data: RedundantDuplicateData {
-                            file_type,
-                            inodes,
-                            paths,
-                        },
-                    }), witness);
-                    redundant_count += 1;
+                    computed_redundant.push(ComputedAggregateSignal::new(
+                        signal.key.clone(),
+                        TypedSignalWrite::RedundantDuplicate(RedundantDuplicateSignal {
+                            key: signal.key.clone(),
+                            data: RedundantDuplicateData {
+                                file_type,
+                                inodes,
+                                paths,
+                            },
+                        }),
+                    ));
                 }
 
-                // Lower-tier files → SubparDuplicate (reference: first best-tier file)
+                // Lower-tier files -> SubparDuplicate (reference: first best-tier file)
                 if !lower.is_empty() {
                     let superior_idx = best_indices[0];
                     let superior_identity = &identities[superior_idx];
@@ -936,28 +954,43 @@ pub fn execute_analyze_fingerprint_overlaps(
                             _ => 0.0,
                         };
 
-                        sender.write_typed_signal(TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
-                            inode: audio_file.inode(),
-                            path: audio_file.path().to_string(),
-                            data: SubparDuplicateData {
-                                reason: reason.as_str().to_string(),
-                                superior_inode: superior_identity.inode,
-                                superior_path: superior_identity.path.clone(),
-                                dupe_group_fingerprint: signal.key.clone(),
-                                similarity_score,
-                            },
-                        }), witness);
-
-                        subpar_count += 1;
+                        let inode = audio_file.inode();
+                        computed_subpar.push(ComputedCorpusSignal::new(
+                            inode,
+                            TypedSignalWrite::SubparDuplicate(SubparDuplicateSignal {
+                                inode,
+                                path: audio_file.path().to_string(),
+                                data: SubparDuplicateData {
+                                    reason: reason.as_str().to_string(),
+                                    superior_inode: superior_identity.inode,
+                                    superior_path: superior_identity.path.clone(),
+                                    dupe_group_fingerprint: signal.key.clone(),
+                                    similarity_score,
+                                },
+                            }),
+                        ));
                     }
                 }
             }
         }
     }
 
+    // Reconcile SubparDuplicate (corpus signals, keyed by inode)
+    let (subpar_cleared, subpar_new, subpar_updated, subpar_unchanged) =
+        reconcile_corpus_signals::<SubparDuplicateSignal>(read_only_db, &sender, computed_subpar, witness);
+
+    // Reconcile RedundantDuplicate (aggregate signals, keyed by fingerprint key)
+    let (redundant_cleared, redundant_new, redundant_updated, redundant_unchanged) =
+        reconcile_aggregate_signals::<RedundantDuplicateSignal>(read_only_db, &sender, computed_redundant, witness);
+
+    let subpar_total = subpar_new + subpar_updated + subpar_unchanged;
+    let redundant_total = redundant_new + redundant_updated + redundant_unchanged;
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, emitted {} SubparDuplicate + {} RedundantDuplicate signals, skipped {} variants, {} expected",
-        total_groups, subpar_count, redundant_count, variant_skipped, expected_skipped
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate (cleared={}, new={}, updated={}, unchanged={}) + {} RedundantDuplicate (cleared={}, new={}, updated={}, unchanged={}), skipped {} variants, {} expected",
+        total_groups,
+        subpar_total, subpar_cleared, subpar_new, subpar_updated, subpar_unchanged,
+        redundant_total, redundant_cleared, redundant_new, redundant_updated, redundant_unchanged,
+        variant_skipped, expected_skipped
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -1049,9 +1082,6 @@ pub fn execute_detect_cross_source_overlaps(
         }
     };
 
-    // Clear all existing CrossSourceOverlap signals
-    sender.clear_all_of_aggregate_type::<CrossSourceOverlapSignal>(witness);
-
     // Get all FingerprintOverlap signals
     let fp_overlap_signals = read_only_db
         .get_fingerprint_overlap_signals()
@@ -1059,6 +1089,15 @@ pub fn execute_detect_cross_source_overlaps(
 
     if fp_overlap_signals.is_empty() {
         log_general("[COMPUTE] DetectCrossSourceOverlaps: no fingerprint overlap signals to analyze");
+        // Reconcile with empty set to clear any stale signals
+        let (cleared, _, _, _) =
+            reconcile_aggregate_signals::<CrossSourceOverlapSignal>(read_only_db, &sender, Vec::new(), witness);
+        if cleared > 0 {
+            log_general(format!(
+                "[COMPUTE] DetectCrossSourceOverlaps: cleared {} stale signals",
+                cleared
+            ));
+        }
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
@@ -1197,9 +1236,9 @@ pub fn execute_detect_cross_source_overlaps(
     }
 
     // =========================================================================
-    // Pass 2: Emit CrossSourceOverlap signals
+    // Pass 2: Build computed CrossSourceOverlap signals for reconciliation
     // =========================================================================
-    let mut emitted_count = 0;
+    let mut computed = Vec::new();
 
     for (pair_key, overlap) in source_pair_overlaps {
         if overlap.track_pairs.is_empty() {
@@ -1210,26 +1249,32 @@ pub fn execute_detect_cross_source_overlaps(
         let source_a_config = config.get_source_for_relative_path(Path::new(&overlap.source_a));
         let source_b_config = config.get_source_for_relative_path(Path::new(&overlap.source_b));
 
-        sender.write_typed_signal(TypedSignalWrite::CrossSourceOverlap(CrossSourceOverlapSignal {
-            key: pair_key,
-            data: CrossSourceOverlapData {
-                source_a: overlap.source_a,
-                source_b: overlap.source_b,
-                source_a_can_stash: source_a_config.map(|s| s.can_stash_dupes).unwrap_or(true),
-                source_b_can_stash: source_b_config.map(|s| s.can_stash_dupes).unwrap_or(true),
-                overlap_count: overlap.track_pairs.len(),
-                fingerprint_count: overlap.fingerprint_keys.len(),
-                fingerprint_keys: overlap.fingerprint_keys,
-                track_pairs: overlap.track_pairs,
-            },
-        }), witness);
-
-        emitted_count += 1;
+        computed.push(ComputedAggregateSignal::new(
+            pair_key.clone(),
+            TypedSignalWrite::CrossSourceOverlap(CrossSourceOverlapSignal {
+                key: pair_key,
+                data: CrossSourceOverlapData {
+                    source_a: overlap.source_a,
+                    source_b: overlap.source_b,
+                    source_a_can_stash: source_a_config.map(|s| s.can_stash_dupes).unwrap_or(true),
+                    source_b_can_stash: source_b_config.map(|s| s.can_stash_dupes).unwrap_or(true),
+                    overlap_count: overlap.track_pairs.len(),
+                    fingerprint_count: overlap.fingerprint_keys.len(),
+                    fingerprint_keys: overlap.fingerprint_keys,
+                    track_pairs: overlap.track_pairs,
+                },
+            }),
+        ));
     }
 
+    let (cleared, new_count, updated, unchanged) =
+        reconcile_aggregate_signals::<CrossSourceOverlapSignal>(read_only_db, &sender, computed, witness);
+
+    let emitted_count = new_count + updated + unchanged;
     log_general(format!(
-        "[COMPUTE] DetectCrossSourceOverlaps: {} cross-source pairs ({} fingerprint overlaps, {} within-source skipped, {} expected skipped)",
-        emitted_count, total_overlaps, within_source_skipped, expected_skipped
+        "[COMPUTE] DetectCrossSourceOverlaps: {} cross-source pairs ({} fingerprint overlaps, {} within-source skipped, {} expected skipped), cleared={}, new={}, updated={}, unchanged={}",
+        emitted_count, total_overlaps, within_source_skipped, expected_skipped,
+        cleared, new_count, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::helpers::{ComputedAggregateSignal, ComputedCorpusSignal, reconcile_aggregate_signals, reconcile_corpus_signals};
 use crate::meta::signals::data::{
     TypedSignalWrite, DeployConflictSignal, DeployReadySignal, DeployedHealthySignal,
     LibraryLeftoverSignal, LibraryStaleSignal,
@@ -41,9 +42,6 @@ pub fn execute_detect_deploy_conflicts(
         }
     };
 
-    // Clear all existing DeployConflict signals (routes through db_thread)
-    sender.clear_all_of_aggregate_type::<DeployConflictSignal>(witness);
-
     let healthy_signals = read_only_db
         .get_healthy_file_signals()
         .unwrap_or_default();
@@ -67,25 +65,34 @@ pub fn execute_detect_deploy_conflicts(
             .push(signal.inode);
     }
 
-    let mut conflict_count = 0;
-    for (deploy_path, inodes) in deploy_path_to_tracks {
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
+    for (deploy_path, inodes) in &deploy_path_to_tracks {
         if inodes.len() > 1 {
-            conflict_count += 1;
-            sender.write_typed_signal(
-                TypedSignalWrite::DeployConflict(DeployConflictSignal {
-                    key: deploy_path.clone(),
-                    deploy_path: deploy_path.clone(),
-                    inodes: inodes.clone(),
-                }),
-                witness,
-            );
+            let signal = TypedSignalWrite::DeployConflict(DeployConflictSignal {
+                key: deploy_path.clone(),
+                deploy_path: deploy_path.clone(),
+                inodes: inodes.clone(),
+            });
+            computed.push(ComputedAggregateSignal::new(deploy_path.clone(), signal));
         }
     }
 
+    let conflict_count = computed.len();
+    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<DeployConflictSignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+    );
+
     log_general(format!(
-        "[COMPUTE] DetectDeployConflicts: {} conflicts among {} healthy files",
+        "[COMPUTE] DetectDeployConflicts: {} conflicts among {} healthy files (reconcile: {} cleared, {} new, {} updated, {} unchanged)",
         conflict_count,
-        healthy_signals.len()
+        healthy_signals.len(),
+        cleared,
+        new,
+        updated,
+        unchanged,
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -319,12 +326,6 @@ pub fn execute_derive_corpus_deploy_status(
         }
     };
 
-    // Bulk clear all existing deploy status signals before recomputing.
-    // This prevents stale signals from prior runs (with outdated metadata)
-    // from persisting and inflating counts.
-    sender.clear_all_of_corpus_type::<DeployReadySignal>(witness);
-    sender.clear_all_of_corpus_type::<DeployedHealthySignal>(witness);
-
     // Get all HealthyFile signals
     let healthy_signals = read_only_db
         .get_healthy_file_signals()
@@ -413,9 +414,9 @@ pub fn execute_derive_corpus_deploy_status(
         .map(|(path, _)| path.as_str())
         .collect();
 
-    // Phase 3: Emit signals, skipping conflict losers from DeployReady.
-    let mut deploy_ready_count = 0usize;
-    let mut deployed_healthy_count = 0usize;
+    // Phase 3: Build computed signal sets for reconciliation.
+    let mut computed_deploy_ready: Vec<ComputedCorpusSignal> = Vec::new();
+    let mut computed_deployed_healthy: Vec<ComputedCorpusSignal> = Vec::new();
     let mut deployed_stale_count = 0usize;
     let mut conflict_skipped_count = 0usize;
 
@@ -437,15 +438,12 @@ pub fn execute_derive_corpus_deploy_status(
 
             if let Some(lib_path) = matching_path {
                 // Correctly deployed
-                deployed_healthy_count += 1;
-                sender.write_typed_signal(
-                    TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
-                        inode: file.inode,
-                        path: file.corpus_path.clone(),
-                        library_path: lib_path.to_string_lossy().to_string(),
-                    }),
-                    witness,
-                );
+                let signal = TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
+                    inode: file.inode,
+                    path: file.corpus_path.clone(),
+                    library_path: lib_path.to_string_lossy().to_string(),
+                });
+                computed_deployed_healthy.push(ComputedCorpusSignal::new(file.inode, signal));
             } else {
                 // Deployed but at wrong path — stale. DeriveDeployHealthSignals
                 // already emits LibraryStale for these; don't also emit DeployReady.
@@ -456,17 +454,30 @@ pub fn execute_derive_corpus_deploy_status(
             conflict_skipped_count += 1;
         } else {
             // Not deployed at all — deploy-ready
-            deploy_ready_count += 1;
-            sender.write_typed_signal(
-                TypedSignalWrite::DeployReady(DeployReadySignal {
-                    inode: file.inode,
-                    path: file.corpus_path.clone(),
-                    deploy_path: file.deploy_path.clone(),
-                }),
-                witness,
-            );
+            let signal = TypedSignalWrite::DeployReady(DeployReadySignal {
+                inode: file.inode,
+                path: file.corpus_path.clone(),
+                deploy_path: file.deploy_path.clone(),
+            });
+            computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
         }
     }
+
+    let deploy_ready_count = computed_deploy_ready.len();
+    let deployed_healthy_count = computed_deployed_healthy.len();
+
+    let (dr_cleared, dr_new, dr_updated, dr_unchanged) = reconcile_corpus_signals::<DeployReadySignal>(
+        read_only_db,
+        &sender,
+        computed_deploy_ready,
+        witness,
+    );
+    let (dh_cleared, dh_new, dh_updated, dh_unchanged) = reconcile_corpus_signals::<DeployedHealthySignal>(
+        read_only_db,
+        &sender,
+        computed_deployed_healthy,
+        witness,
+    );
 
     log_general(format!(
         "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} not configured",
@@ -476,6 +487,11 @@ pub fn execute_derive_corpus_deploy_status(
         deployed_stale_count,
         conflict_skipped_count,
         skipped_not_configured,
+    ));
+    log_general(format!(
+        "[COMPUTE] DeriveCorpusDeployStatus reconcile: DeployReady({} cleared, {} new, {} updated, {} unchanged) DeployedHealthy({} cleared, {} new, {} updated, {} unchanged)",
+        dr_cleared, dr_new, dr_updated, dr_unchanged,
+        dh_cleared, dh_new, dh_updated, dh_unchanged,
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

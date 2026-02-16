@@ -2,7 +2,7 @@
 //!
 //! These functions implement the actual logic for Asleep computations.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -21,45 +21,6 @@ use crate::corpus::paths;
 use crate::db_thread;
 
 use super::{Computation, Result};
-
-// ============================================================================
-// Phase 0: Clear Existing Observation State
-// ============================================================================
-
-/// Phase 0: Clear all observation signals (FileInCorpus, FileInInbox) before a fresh scan.
-///
-/// This ensures deleted files don't retain stale signals that would cause them
-/// to appear as "healthy" instead of "missing" in DeriveCorpusSignals.
-pub fn execute_clear_existing_observation_state(
-    _read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
-    start: Instant,
-) -> Result {
-    log_general("[COMPUTE] ClearExistingObservationState: clearing observation signals");
-
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                Computation::ClearExistingObservationState,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
-
-    // Clear all observation signals - they'll be rebuilt during the corpus/inbox walks
-    sender.clear_all_of_corpus_type::<FileInCorpusSignal>(witness);
-    sender.clear_all_of_corpus_type::<FileInInboxSignal>(witness);
-
-    log_general("[COMPUTE] ClearExistingObservationState: complete");
-
-    Result::success(
-        Computation::ClearExistingObservationState,
-        start.elapsed().as_millis() as u64,
-        Vec::new(), // No spawn - WalkCorpus is queued separately
-    )
-}
 
 // ============================================================================
 // Phase 1: Walk Corpus
@@ -163,7 +124,7 @@ pub fn execute_scan_corpus_directory(
     let file_zone = Zone::from_str(zone).unwrap_or(Zone::Corpus);
 
     // Index this directory in the files table
-    index_directory(&sender, directory, zone, resolver, witness);
+    index_directory(read_only_db, &sender, directory, zone, resolver, witness);
 
     // Collect disk state for files DIRECTLY in this directory (not recursive)
     let disk_state = collect_directory_files(directory);
@@ -188,6 +149,8 @@ pub fn execute_scan_corpus_directory(
     let indexed_paths = read_only_db.get_file_paths_batch(file_zone, &inode_vec).unwrap_or_default();
 
     let mut spawn: Vec<Computation> = Vec::new();
+    let mut observed_corpus_inodes: HashMap<i64, String> = HashMap::new();
+    let mut observed_inbox_inodes: HashMap<i64, String> = HashMap::new();
 
     // Process each file found on disk
     for (inode, path, disk_mtime_s, disk_mtime_ns) in &disk_state {
@@ -201,14 +164,36 @@ pub fn execute_scan_corpus_directory(
         };
         let relative_path_str = relative_path.to_string_lossy().to_string();
 
-        // Emit zone-appropriate observation signal (keyed by inode, path in metadata)
-        // (ClearExistingObservationState cleared all stale signals at start of observation)
+        // Track this inode as observed on disk (accumulated by the Witch for
+        // reconciliation in DeriveCorpusSignals / DeriveInboxSignals). Also
+        // write the DB signal if it doesn't already exist (existence check
+        // avoids redundant writes).
         match file_zone {
             Zone::Corpus => {
-                ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInCorpus(FileInCorpusSignal { inode: *inode, path: relative_path_str.clone() }), witness);
+                observed_corpus_inodes.insert(*inode, relative_path_str.clone());
+                ensure_typed_signal(
+                    read_only_db,
+                    &sender,
+                    TypedSignalWrite::FileInCorpus(FileInCorpusSignal {
+                        inode: *inode,
+                        path: relative_path_str.clone(),
+                        generation: 0,
+                    }),
+                    witness,
+                );
             }
             Zone::Inbox => {
-                ensure_typed_signal(read_only_db, &sender, TypedSignalWrite::FileInInbox(FileInInboxSignal { inode: *inode, path: relative_path_str.clone() }), witness);
+                observed_inbox_inodes.insert(*inode, relative_path_str.clone());
+                ensure_typed_signal(
+                    read_only_db,
+                    &sender,
+                    TypedSignalWrite::FileInInbox(FileInInboxSignal {
+                        inode: *inode,
+                        path: relative_path_str.clone(),
+                        generation: 0,
+                    }),
+                    witness,
+                );
             }
             _ => {}
         }
@@ -316,10 +301,12 @@ pub fn execute_scan_corpus_directory(
         }
     }
 
-    Result::success(
+    Result::success_with_observations(
         computation,
         start.elapsed().as_millis() as u64,
         spawn,
+        observed_corpus_inodes,
+        observed_inbox_inodes,
     )
 }
 
@@ -356,7 +343,10 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
 /// Index the current directory in the files table.
 ///
 /// This is called during corpus scanning to track directory entries.
+/// Uses a read guard to skip writes when the directory entry already
+/// matches (same zone, inode, mtime), eliminating ~D NOP writes per cycle.
 fn index_directory(
+    read_only_db: &ReadOnlyDb<'_>,
     sender: &db_thread::SignalWriteSender,
     directory: &Path,
     zone: &str,
@@ -371,6 +361,11 @@ fn index_directory(
 
     let dir_inode = dir_metadata.ino() as i64;
     let (mtime_secs, mtime_nanos) = extract_mtime(&dir_metadata);
+
+    // Read guard: skip write if entry already matches
+    if read_only_db.directory_entry_fresh(zone, dir_inode, mtime_secs, mtime_nanos) {
+        return;
+    }
 
     // Convert to relative path for DB storage
     let relative_dir = match resolver.to_relative(directory) {

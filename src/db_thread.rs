@@ -22,7 +22,6 @@
 //! enqueue writes, even though the actual DB operation happens asynchronously.
 //! Both `ComputationWitness` and `MutationExecutionWitness` implement `SignalWitness`.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, OnceLock};
@@ -183,34 +182,25 @@ enum SignalWriteOp {
     },
 
     // =========================================================================
-    // Library File Operations (Awakening phase)
+    // Library File Operations (Awakening phase - reconciliation)
     // =========================================================================
 
-    /// Clear all files for a library before re-scanning.
-    ClearLibraryFiles {
-        library_name: String,
-    },
-    /// Record a file discovered during library scanning.
-    RecordLibraryFile {
-        library_name: String,
-        library_root: PathBuf,
-        file_path: PathBuf,
+    /// Upsert a library file during reconciliation (new or changed).
+    UpsertLibraryFile {
+        stored_path: String,
         inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
         file_size: i64,
-        scanned_at: i64,
+    },
+    /// Delete a stale library file during reconciliation.
+    DeleteLibraryFile {
+        stored_path: String,
     },
 
     // =========================================================================
     // Bulk Operations (Awake phase content analysis)
     // =========================================================================
-
-    /// Clear all signals of a type (function pointer resolved at send time).
-    ClearAllOfSignalType {
-        clear_fn: fn(&rusqlite::Connection) -> rusqlite::Result<()>,
-        label: &'static str,
-    },
 
     /// Write a typed signal directly to its per-signal table.
     ///
@@ -615,75 +605,44 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
-    // Library File Operations (Awakening phase)
+    // Library File Operations (Awakening phase - reconciliation)
     // =========================================================================
 
-    /// Clear all files for a library before re-scanning.
-    pub fn clear_library_files(&self, library_name: &str, _witness: &ComputationWitness) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearLibraryFiles {
-            library_name: library_name.to_string(),
-        });
-    }
-
-    /// Record a file discovered during library scanning.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_library_file(
+    /// Upsert a library file during reconciliation (new or changed).
+    pub fn upsert_library_file(
         &self,
-        library_name: &str,
-        library_root: &std::path::Path,
-        file_path: &std::path::Path,
+        stored_path: &str,
         inode: i64,
         mtime_secs: i64,
         mtime_nanos: i64,
         file_size: i64,
-        scanned_at: i64,
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::RecordLibraryFile {
-            library_name: library_name.to_string(),
-            library_root: library_root.to_path_buf(),
-            file_path: file_path.to_path_buf(),
+        let _ = self.tx.send(SignalWriteOp::UpsertLibraryFile {
+            stored_path: stored_path.to_string(),
             inode,
             mtime_secs,
             mtime_nanos,
             file_size,
-            scanned_at,
+        });
+    }
+
+    /// Delete a stale library file during reconciliation.
+    pub fn delete_library_file(
+        &self,
+        stored_path: &str,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(SignalWriteOp::DeleteLibraryFile {
+            stored_path: stored_path.to_string(),
         });
     }
 
     // =========================================================================
     // Bulk Operations (Awake phase content analysis)
     // =========================================================================
-
-    /// Clear all signals of a corpus type (for bulk re-computation).
-    ///
-    /// The type parameter resolves to a concrete `clear_all` function pointer.
-    pub fn clear_all_of_corpus_type<S: crate::meta::signals::store::CorpusSignalStore>(
-        &self,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAllOfSignalType {
-            clear_fn: S::clear_all,
-            label: S::TABLE_NAME,
-        });
-    }
-
-    /// Clear all signals of an aggregate type (for bulk re-computation).
-    ///
-    /// The type parameter resolves to a concrete `clear_all` function pointer.
-    pub fn clear_all_of_aggregate_type<S: crate::meta::signals::store::AggregateSignalStore>(
-        &self,
-        _witness: &ComputationWitness,
-    ) {
-        self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAllOfSignalType {
-            clear_fn: S::clear_all,
-            label: S::TABLE_NAME,
-        });
-    }
 
     /// Update file mtime in files table (after OOB verification).
     /// Uses (zone, inode) as the unique key for reliable updates.
@@ -1233,46 +1192,24 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             }
         }
 
-        // Library file operations (Awakening phase)
-        SignalWriteOp::ClearLibraryFiles { library_name } => {
-            with_retry("clear_library_files", library_name, || {
-                db.clear_library_files(library_name, &witness).map(|_| ())
-            });
-        }
-        SignalWriteOp::RecordLibraryFile {
-            library_name,
-            library_root,
-            file_path,
+        // Library file operations (Awakening phase - reconciliation)
+        SignalWriteOp::UpsertLibraryFile {
+            stored_path,
             inode,
             mtime_secs,
             mtime_nanos,
             file_size,
-            scanned_at,
         } => {
-            let ctx = file_path.display().to_string();
-            with_retry("record_library_file", &ctx, || {
-                db.record_library_file(
-                    library_name,
-                    library_root,
-                    file_path,
-                    *inode,
-                    *mtime_secs,
-                    *mtime_nanos,
-                    *file_size,
-                    *scanned_at,
-                    &witness,
-                )
+            with_retry("upsert_library_file", stored_path, || {
+                execute_upsert_library_file(db, stored_path, *inode, *mtime_secs, *mtime_nanos, *file_size)
+            });
+        }
+        SignalWriteOp::DeleteLibraryFile { stored_path } => {
+            with_retry("delete_library_file", stored_path, || {
+                execute_delete_library_file(db, stored_path)
             });
         }
 
-        // Bulk clear (function-pointer dispatch)
-        SignalWriteOp::ClearAllOfSignalType { clear_fn, label } => {
-            if let Err(e) = clear_fn(db.conn()) {
-                crate::logging::log_error(format!(
-                    "[DB_THREAD] clear_all {} failed: {}", label, e
-                ));
-            }
-        }
         SignalWriteOp::WriteTypedSignal { signal } => {
             if let Err(e) = signal.clone().insert(db.conn()) {
                 crate::logging::log_error(format!(
@@ -1431,7 +1368,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
 
 /// Computation types that use per-inode spawning and need dirty tracking.
 /// Other computations use bulk SQL queries and don't need this optimization.
-const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag"];
+const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag", "shit_format"];
 
 /// Mark an inode as dirty for all per-inode computations.
 /// Called whenever tags change for a corpus file.
@@ -2122,6 +2059,48 @@ fn execute_clear_dirty_inode(db: &Database, inode: i64, computation_type: &str) 
     db.conn().execute(
         "DELETE FROM dirty_inodes WHERE inode = ?1 AND computation_type = ?2",
         params![inode, computation_type],
+    )?;
+
+    Ok(())
+}
+
+/// Execute UpsertLibraryFile: insert or update a library file in the files table.
+fn execute_upsert_library_file(
+    db: &Database,
+    stored_path: &str,
+    inode: i64,
+    mtime_secs: i64,
+    mtime_nanos: i64,
+    file_size: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let scanned_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    db.conn().execute(
+        "INSERT OR REPLACE INTO files
+         (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+         VALUES (?1, 'library', ?2, 0, ?3, ?4, ?5, ?6)",
+        params![inode, stored_path, mtime_secs, mtime_nanos, file_size, scanned_at],
+    )?;
+
+    Ok(())
+}
+
+/// Execute DeleteLibraryFile: remove a stale library file from the files table.
+fn execute_delete_library_file(
+    db: &Database,
+    stored_path: &str,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        "DELETE FROM files WHERE zone = 'library' AND path = ?1",
+        params![stored_path],
     )?;
 
     Ok(())

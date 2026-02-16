@@ -7,6 +7,7 @@
 use std::time::Instant;
 
 use crate::logging::log_general;
+use crate::meta::computations::helpers::{ComputedCorpusSignal, reconcile_corpus_signals};
 use crate::meta::computations::types::ComputationWitness;
 use crate::corpus::db::types::Zone;
 use crate::meta::signals::data::{
@@ -76,8 +77,15 @@ pub fn execute_detect_inbox_corpus_matches(
 
     if inbox_fingerprinted.is_empty() {
         log_general("[COMPUTE] DetectInboxCorpusMatches: no fingerprinted inbox files");
-        // Clear any stale inbox corpus match signals
-        sender.clear_all_of_corpus_type::<InboxCorpusMatchSignal>(witness);
+        // Reconcile with empty set to clear any stale signals
+        let (cleared, _, _, _) =
+            reconcile_corpus_signals::<InboxCorpusMatchSignal>(read_only_db, &sender, Vec::new(), witness);
+        if cleared > 0 {
+            log_general(format!(
+                "[COMPUTE] DetectInboxCorpusMatches: cleared {} stale signals",
+                cleared
+            ));
+        }
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
@@ -100,7 +108,14 @@ pub fn execute_detect_inbox_corpus_matches(
 
     if corpus_fingerprinted.is_empty() {
         log_general("[COMPUTE] DetectInboxCorpusMatches: no fingerprinted corpus files");
-        sender.clear_all_of_corpus_type::<InboxCorpusMatchSignal>(witness);
+        let (cleared, _, _, _) =
+            reconcile_corpus_signals::<InboxCorpusMatchSignal>(read_only_db, &sender, Vec::new(), witness);
+        if cleared > 0 {
+            log_general(format!(
+                "[COMPUTE] DetectInboxCorpusMatches: cleared {} stale signals",
+                cleared
+            ));
+        }
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
@@ -114,10 +129,7 @@ pub fn execute_detect_inbox_corpus_matches(
     let mut corpus_sorted: Vec<_> = corpus_fingerprinted.iter().collect();
     corpus_sorted.sort_by_key(|af| af.audio.duration_ms.unwrap_or(0));
 
-    // Clear existing InboxCorpusMatch signals (full recompute)
-    sender.clear_all_of_corpus_type::<InboxCorpusMatchSignal>(witness);
-
-    let mut match_count = 0;
+    let mut computed: Vec<ComputedCorpusSignal> = Vec::new();
 
     // For each inbox file, find corpus files within duration tolerance
     for inbox_file in &inbox_fingerprinted {
@@ -153,22 +165,25 @@ pub fn execute_detect_inbox_corpus_matches(
         }
 
         if !corpus_matches.is_empty() {
-            match_count += 1;
-
-            sender.write_typed_signal(
+            let inode = inbox_file.inode();
+            computed.push(ComputedCorpusSignal::new(
+                inode,
                 TypedSignalWrite::InboxCorpusMatch(InboxCorpusMatchSignal {
-                    inode: inbox_file.inode(),
+                    inode,
                     path: inbox_file.path().to_string(),
                     data: InboxCorpusMatchData { corpus_matches },
                 }),
-                witness,
-            );
+            ));
         }
     }
 
+    let match_count = computed.len();
+    let (cleared, new_count, updated, unchanged) =
+        reconcile_corpus_signals::<InboxCorpusMatchSignal>(read_only_db, &sender, computed, witness);
+
     log_general(format!(
-        "[COMPUTE] DetectInboxCorpusMatches: {} inbox files matched corpus",
-        match_count
+        "[COMPUTE] DetectInboxCorpusMatches: {} inbox files matched corpus (cleared={}, new={}, updated={}, unchanged={})",
+        match_count, cleared, new_count, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

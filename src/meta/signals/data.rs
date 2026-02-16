@@ -11,6 +11,7 @@
 //! - Corpus file signals are keyed by `inode INTEGER PRIMARY KEY`.
 //! - Aggregate signals are keyed by `key TEXT PRIMARY KEY`.
 
+use std::hash::{Hash, Hasher};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -25,6 +26,8 @@ use serde::{Deserialize, Serialize};
 pub struct FileInCorpusSignal {
     pub inode: i64,
     pub path: String,
+    /// Observation generation for stale signal cleanup.
+    pub generation: u8,
 }
 
 /// File in corpus but not in index (needs indexing).
@@ -51,6 +54,8 @@ pub struct HealthyFileSignal {
 pub struct FileInInboxSignal {
     pub inode: i64,
     pub path: String,
+    /// Observation generation for stale signal cleanup.
+    pub generation: u8,
 }
 
 /// File in inbox but not in index (needs indexing).
@@ -694,5 +699,156 @@ impl TypedSignalWrite {
             Self::InboxTagCanonicity(s) => InboxTagCanonicitySignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
+    }
+
+    /// Compute a content hash for change detection.
+    ///
+    /// For BLOB variants: bincode-serializes the data and hashes the bytes.
+    /// For scalar-only variants: hashes the non-PK fields.
+    /// Includes the enum discriminant for type safety.
+    pub fn content_hash(&self) -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        // Hash the discriminant
+        std::mem::discriminant(self).hash(&mut hasher);
+        match self {
+            // BLOB corpus signals — hash serialized data
+            Self::InboxCorpusMatch(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::OutOfBandTagSync(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.mismatches) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::OutOfBandTagConflict(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.mismatches) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::SubparDuplicate(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::CompoundTag(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.compounds) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            // BLOB aggregate signals — hash serialized data
+            Self::FingerprintOverlap(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.inodes) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::MetadataDuplicate(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::DuplicateInode(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.inodes) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::MissingTag(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::MissingAlbumSingle(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::DeployConflict(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.inodes) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::TagCanonicity(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::InconsistentAlbumArtist(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::CrossSourceOverlap(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::RedundantDuplicate(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::EmbeddableAlbumArt(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::InboxTagCanonicity(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            // Scalar corpus signals — hash non-PK fields
+            Self::FileInCorpus(s) => s.path.hash(&mut hasher),
+            Self::UnindexedFile(s) => s.path.hash(&mut hasher),
+            Self::HealthyFile(s) => s.path.hash(&mut hasher),
+            Self::FileInInbox(s) => s.path.hash(&mut hasher),
+            Self::InboxUnindexed(s) => s.path.hash(&mut hasher),
+            Self::InboxHealthy(s) => s.path.hash(&mut hasher),
+            Self::CorruptFile(s) => s.path.hash(&mut hasher),
+            Self::MtimeOnlyMismatch(s) => s.path.hash(&mut hasher),
+            Self::MissingDirectory(s) => s.path.hash(&mut hasher),
+            Self::MissingFile(s) => {
+                s.path.hash(&mut hasher);
+                s.replaced_by_inode.hash(&mut hasher);
+            }
+            Self::MovedFile(s) => {
+                s.path.hash(&mut hasher);
+                s.old_path.hash(&mut hasher);
+                s.old_zone.hash(&mut hasher);
+                s.new_zone.hash(&mut hasher);
+            }
+            Self::ShitFormat(s) => {
+                s.path.hash(&mut hasher);
+                s.file_type.hash(&mut hasher);
+            }
+            Self::DeployReady(s) => {
+                s.path.hash(&mut hasher);
+                s.deploy_path.hash(&mut hasher);
+            }
+            Self::DeployedHealthy(s) => {
+                s.path.hash(&mut hasher);
+                s.library_path.hash(&mut hasher);
+            }
+            Self::ExpectedMissingTag(_) => {} // inode-only, no extra fields
+            // Scalar aggregate signals — hash non-PK fields
+            Self::CanonicalTag(s) => {
+                s.tag_name.hash(&mut hasher);
+                s.canonical_value.hash(&mut hasher);
+            }
+            Self::LibraryLeftover(_) => {} // key-only, no extra fields
+            Self::LibraryStale(s) => {
+                s.library_path.hash(&mut hasher);
+                s.expected_path.hash(&mut hasher);
+                s.corpus_path.hash(&mut hasher);
+                s.inode.hash(&mut hasher);
+            }
+            Self::ExpectedOverlap(s) => {
+                s.source_a.hash(&mut hasher);
+                s.source_b.hash(&mut hasher);
+            }
+            Self::ExpectedDuplicate(_) => {} // key + created_at only
+        }
+        hasher.finish()
     }
 }

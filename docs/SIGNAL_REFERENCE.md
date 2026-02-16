@@ -25,7 +25,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
-| FileInCorpus | ScanCorpusDirectory | ClearExistingObservationState | File discovered on disk |
+| FileInCorpus | ScanCorpusDirectory | DeriveCorpusSignals (stale reconciliation) | File discovered on disk |
 | UnindexedFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | On disk but not in index |
 | MissingFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In index but not on disk |
 | MissingDirectory | ScheduleSecondLevelDerivations | ScheduleSecondLevelDerivations, DropDirectoryFromIndex | Indexed directory no longer on disk |
@@ -46,7 +46,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
-| FileInInbox | ScanCorpusDirectory (zone=inbox) | ClearExistingObservationState, DropInboxFileState | File discovered on disk in inbox/. **Authority signal for inbox file presence**: when absent (file gone from disk), DeriveInboxSignals cascade-drops all inbox state for the inode via DropInboxFileState |
+| FileInInbox | ScanCorpusDirectory (zone=inbox) | DeriveInboxSignals (stale reconciliation), DropInboxFileState | File discovered on disk in inbox/. **Authority signal for inbox file presence**: when absent (file gone from disk), DeriveInboxSignals cascade-drops all inbox state for the inode via DropInboxFileState |
 | InboxUnindexed | DeriveInboxSignals | DeriveInboxSignals, DropInboxFileState | On disk in inbox but not in index |
 | InboxHealthy | DeriveInboxSignals | DeriveInboxSignals, DropInboxFileState, InboxToCorpus (MutableOnly scope) | In inbox, indexed, ready for operations |
 | InboxCorpusMatch | DetectInboxCorpusMatches | DetectInboxCorpusMatches, DropInboxFileState | Inbox file has fingerprint+duration match against corpus file(s). Data (bincode BLOB): `corpus_matches[]` with `corpus_inode`, `corpus_path`, `similarity` |
@@ -125,14 +125,16 @@ clear_file_signal_if_present(db, sender, signal_type, key, witness)
   └─ Queues DELETE if signal exists
 ```
 
-### Aggregate Reconciliation
+### Aggregate & Corpus Reconciliation
 ```
 reconcile_aggregate_signals(db, sender, signal_type, computed, witness)
-  └─ Compares computed vs. stored
+reconcile_corpus_signals(db, sender, signal_type, computed, witness)
+  └─ Compares computed vs. stored (via data_hash for BLOB types, inode existence for scalar)
   └─ Clears stale (in DB, not computed)
   └─ Creates new (computed, not in DB)
-  └─ Updates changed (both, but different track_ids)
-  └─ Skips unchanged (both, same track_ids)
+  └─ Updates changed (both, but hash differs)
+  └─ Skips unchanged (both, same hash)
+  └─ Returns (cleared, new, updated, unchanged) counts
 ```
 
 ---

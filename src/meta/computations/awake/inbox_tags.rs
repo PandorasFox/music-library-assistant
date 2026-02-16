@@ -17,6 +17,7 @@ use crate::corpus::health::normalization::{
 };
 use crate::db_thread;
 use crate::logging::log_general;
+use crate::meta::computations::helpers::{ComputedAggregateSignal, reconcile_aggregate_signals};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     InboxTagCanonicityData, InboxTagCanonicitySignal, TypedSignalWrite,
@@ -65,10 +66,7 @@ pub fn execute_detect_inbox_tag_canonicity(
 
     let strip_format_suffixes = config.opinions.canonicalization.strip_album_format_suffixes;
 
-    // Clear all stale inbox tag canonicity signals (full recompute)
-    sender.clear_all_of_aggregate_type::<InboxTagCanonicitySignal>(witness);
-
-    let mut signal_count = 0;
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
     let tag_fields: Vec<(&str, Box<dyn Fn(&str) -> String>)> = vec![
         ("artist", Box::new(|s: &str| normalize_artist(s))),
@@ -156,7 +154,7 @@ pub fn execute_detect_inbox_tag_canonicity(
                 .push((inbox_value.clone(), *inbox_count));
         }
 
-        // Emit signals for each normalized group with mismatches
+        // Build computed signals for each normalized group with mismatches
         for (norm_key, inbox_variants) in inbox_mismatches {
             let corpus_variants = match corpus_by_norm.get(&norm_key) {
                 Some(v) => {
@@ -176,7 +174,8 @@ pub fn execute_detect_inbox_tag_canonicity(
 
             let key = format!("{}:{}", tag_name, norm_key);
 
-            sender.write_typed_signal(
+            computed.push(ComputedAggregateSignal::new(
+                key.clone(),
                 TypedSignalWrite::InboxTagCanonicity(InboxTagCanonicitySignal {
                     key,
                     tag_name: tag_name.to_string(),
@@ -186,16 +185,21 @@ pub fn execute_detect_inbox_tag_canonicity(
                         corpus_variants,
                     },
                 }),
-                witness,
-            );
-
-            signal_count += 1;
+            ));
         }
     }
 
+    let (cleared, new_count, updated, unchanged) =
+        reconcile_aggregate_signals::<InboxTagCanonicitySignal>(
+            read_only_db,
+            &sender,
+            computed,
+            witness,
+        );
+
     log_general(format!(
-        "[COMPUTE] DetectInboxTagCanonicity: emitted {} InboxTagCanonicity signals",
-        signal_count
+        "[COMPUTE] DetectInboxTagCanonicity: {} signals (cleared={}, new={}, updated={}, unchanged={})",
+        new_count + updated + unchanged, cleared, new_count, updated, unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

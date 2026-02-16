@@ -49,6 +49,7 @@ pub use types::ComputationWitness;
 pub use stats::{close_thread_local_connection, get_thread_stats, with_read_only_db, ThreadStats};
 
 // Internal imports for execute functions
+use std::collections::HashMap;
 use crate::config;
 use stats::{ensure_thread_id, record_task_stats};
 
@@ -98,6 +99,12 @@ pub struct ComputationResult {
     pub spawn_awakening: Vec<awakening::Computation>,
     /// Awake computations to spawn
     pub spawn_awake: Vec<awake::Computation>,
+    /// Corpus inodes observed on disk during this computation (inode → relative path).
+    pub observed_corpus_inodes: HashMap<i64, String>,
+    /// Inbox inodes observed on disk during this computation (inode → relative path).
+    pub observed_inbox_inodes: HashMap<i64, String>,
+    /// Library files observed on disk during ScanLibraryDirectory.
+    pub observed_library_files: Vec<awakening::ObservedLibraryFile>,
 }
 
 impl ComputationResult {
@@ -109,6 +116,9 @@ impl ComputationResult {
             spawn_asleep: result.spawn,
             spawn_awakening: Vec::new(),
             spawn_awake: Vec::new(),
+            observed_corpus_inodes: result.observed_corpus_inodes,
+            observed_inbox_inodes: result.observed_inbox_inodes,
+            observed_library_files: Vec::new(),
         }
     }
 
@@ -120,6 +130,9 @@ impl ComputationResult {
             spawn_asleep: Vec::new(),
             spawn_awakening: result.spawn,
             spawn_awake: Vec::new(),
+            observed_corpus_inodes: HashMap::new(),
+            observed_inbox_inodes: HashMap::new(),
+            observed_library_files: result.observed_library_files,
         }
     }
 
@@ -131,6 +144,9 @@ impl ComputationResult {
             spawn_asleep: Vec::new(),
             spawn_awakening: Vec::new(),
             spawn_awake: result.spawn,
+            observed_corpus_inodes: HashMap::new(),
+            observed_inbox_inodes: HashMap::new(),
+            observed_library_files: Vec::new(),
         }
     }
 
@@ -208,6 +224,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             spawn_asleep: Vec::new(),
             spawn_awakening: Vec::new(),
             spawn_awake: Vec::new(),
+            observed_corpus_inodes: HashMap::new(),
+            observed_inbox_inodes: HashMap::new(),
+            observed_library_files: Vec::new(),
         },
     };
 

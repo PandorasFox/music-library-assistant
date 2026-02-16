@@ -2,7 +2,7 @@
 //!
 //! These functions implement the actual logic for Awakening computations.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -93,17 +93,15 @@ pub fn execute_schedule_second_level_derivations(
     ));
 
     // ========================================================================
-    // Schedule Global Corpus Signal Derivation
+    // Schedule Library Walks
     // ========================================================================
-    // Single global DeriveCorpusSignals replaces per-directory derivation
-    log_general("[COMPUTE] ScheduleSecondLevelDerivations: spawning global DeriveCorpusSignals");
+    // DeriveCorpusSignals and DeriveInboxSignals are now queued directly by
+    // the Witch with accumulated observation data. This computation handles
+    // directory checks (above) and library walks (below).
 
-    let mut spawn: Vec<Computation> = vec![
-        Computation::DeriveCorpusSignals,
-        Computation::DeriveInboxSignals,
-    ];
+    let mut spawn: Vec<Computation> = Vec::new();
 
-    // Also spawn library health computations for each configured library
+    // Spawn library health computations for each configured library
     if let Ok(config) = crate::config::load_config() {
         let library_names = get_configured_library_names(&config);
         log_general(format!(
@@ -141,6 +139,7 @@ pub fn execute_schedule_second_level_derivations(
 /// - both = disk ∩ indexed → check OOB, emit HealthyFile
 pub fn execute_derive_corpus_signals(
     read_only_db: &ReadOnlyDb<'_>,
+    observed_inodes: HashMap<i64, String>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -151,31 +150,64 @@ pub fn execute_derive_corpus_signals(
         Some(s) => s.clone(),
         None => {
             return Result::failure(
-                Computation::DeriveCorpusSignals,
+                Computation::DeriveCorpusSignals {
+                    observed_inodes: HashMap::new(),
+                },
                 start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
     };
 
-    // Get disk state: FileInCorpus signals (inode -> path)
-    let disk_inodes = match read_only_db.get_file_in_corpus_inodes() {
-        Ok(inodes) => inodes,
-        Err(e) => {
-            return Result::failure(
-                Computation::DeriveCorpusSignals,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to get FileInCorpus inodes: {}", e),
+    // Reconcile FileInCorpus signals against observed disk state:
+    // - Observed but no signal → write new FileInCorpus
+    // - Signal exists but not observed → stale, clear it
+    // - Both → already up to date
+    let existing_fic = read_only_db.get_file_in_corpus_inodes().unwrap_or_default();
+    let mut fic_new = 0usize;
+    let mut fic_stale = 0usize;
+
+    for (inode, path) in &observed_inodes {
+        if !existing_fic.contains_key(inode) {
+            // New file on disk with no FileInCorpus signal — write it
+            sender.write_typed_signal(
+                TypedSignalWrite::FileInCorpus(FileInCorpusSignal {
+                    inode: *inode,
+                    path: path.clone(),
+                    generation: 0,
+                }),
+                witness,
             );
+            fic_new += 1;
         }
-    };
+    }
+
+    for inode in existing_fic.keys() {
+        if !observed_inodes.contains_key(inode) {
+            // Stale FileInCorpus signal — file no longer on disk
+            sender.clear_corpus_signal::<FileInCorpusSignal>(*inode, witness);
+            fic_stale += 1;
+        }
+    }
+
+    if fic_new > 0 || fic_stale > 0 {
+        log_general(format!(
+            "[COMPUTE] DeriveCorpusSignals: FileInCorpus reconciled: {} new, {} stale cleared",
+            fic_new, fic_stale
+        ));
+    }
+
+    // Use observed inodes as the definitive disk state
+    let disk_inodes = observed_inodes;
 
     // Get indexed state: files table (inode -> path)
     let indexed_inodes = match read_only_db.get_all_corpus_inodes() {
         Ok(inodes) => inodes,
         Err(e) => {
             return Result::failure(
-                Computation::DeriveCorpusSignals,
+                Computation::DeriveCorpusSignals {
+                    observed_inodes: HashMap::new(),
+                },
                 start.elapsed().as_millis() as u64,
                 format!("Failed to get indexed inodes: {}", e),
             );
@@ -305,7 +337,9 @@ pub fn execute_derive_corpus_signals(
     log_general("[COMPUTE] DeriveCorpusSignals: complete");
 
     Result::success(
-        Computation::DeriveCorpusSignals,
+        Computation::DeriveCorpusSignals {
+            observed_inodes: HashMap::new(),
+        },
         start.elapsed().as_millis() as u64,
         Vec::new(),
     )
@@ -323,6 +357,7 @@ pub fn execute_derive_corpus_signals(
 /// Inbox files don't produce MissingFile — missing inbox files are simply gone.
 pub fn execute_derive_inbox_signals(
     read_only_db: &ReadOnlyDb<'_>,
+    observed_inodes: HashMap<i64, String>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
@@ -332,24 +367,53 @@ pub fn execute_derive_inbox_signals(
         Some(s) => s.clone(),
         None => {
             return Result::failure(
-                Computation::DeriveInboxSignals,
+                Computation::DeriveInboxSignals {
+                    observed_inodes: HashMap::new(),
+                },
                 start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
     };
 
-    // Get disk state: FileInInbox signals (inode -> path)
-    let disk_inodes = match read_only_db.get_file_in_inbox_inodes() {
-        Ok(inodes) => inodes,
-        Err(e) => {
-            return Result::failure(
-                Computation::DeriveInboxSignals,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to get FileInInbox inodes: {}", e),
+    // Reconcile FileInInbox signals against observed disk state:
+    // - Observed but no signal → write new FileInInbox
+    // - Signal exists but not observed → stale, clear it
+    // - Both → already up to date
+    let existing_fii = read_only_db.get_file_in_inbox_inodes().unwrap_or_default();
+    let mut fii_new = 0usize;
+    let mut fii_stale = 0usize;
+
+    for (inode, path) in &observed_inodes {
+        if !existing_fii.contains_key(inode) {
+            sender.write_typed_signal(
+                TypedSignalWrite::FileInInbox(FileInInboxSignal {
+                    inode: *inode,
+                    path: path.clone(),
+                    generation: 0,
+                }),
+                witness,
             );
+            fii_new += 1;
         }
-    };
+    }
+
+    for inode in existing_fii.keys() {
+        if !observed_inodes.contains_key(inode) {
+            sender.clear_corpus_signal::<FileInInboxSignal>(*inode, witness);
+            fii_stale += 1;
+        }
+    }
+
+    if fii_new > 0 || fii_stale > 0 {
+        log_general(format!(
+            "[COMPUTE] DeriveInboxSignals: FileInInbox reconciled: {} new, {} stale cleared",
+            fii_new, fii_stale
+        ));
+    }
+
+    // Use observed inodes as the definitive disk state
+    let disk_inodes = observed_inodes;
 
     // No inbox files observed — cascade-drop any stale indexed inbox state, then GC
     if disk_inodes.is_empty() {
@@ -375,7 +439,9 @@ pub fn execute_derive_inbox_signals(
             ));
         }
         return Result::success(
-            Computation::DeriveInboxSignals,
+            Computation::DeriveInboxSignals {
+                observed_inodes: HashMap::new(),
+            },
             start.elapsed().as_millis() as u64,
             Vec::new(),
         );
@@ -386,7 +452,9 @@ pub fn execute_derive_inbox_signals(
         Ok(inodes) => inodes,
         Err(e) => {
             return Result::failure(
-                Computation::DeriveInboxSignals,
+                Computation::DeriveInboxSignals {
+                    observed_inodes: HashMap::new(),
+                },
                 start.elapsed().as_millis() as u64,
                 format!("Failed to get indexed inbox inodes: {}", e),
             );
@@ -481,7 +549,9 @@ pub fn execute_derive_inbox_signals(
     log_general("[COMPUTE] DeriveInboxSignals: complete");
 
     Result::success(
-        Computation::DeriveInboxSignals,
+        Computation::DeriveInboxSignals {
+            observed_inodes: HashMap::new(),
+        },
         start.elapsed().as_millis() as u64,
         Vec::new(),
     )
@@ -610,13 +680,14 @@ pub fn execute_update_corpus_file_signals(
     if file_exists {
         let inode = disk_inode.expect("file exists but no inode");
 
-        // FileInCorpus: keyed by inode
+        // FileInCorpus: keyed by inode (use current observation generation)
         ensure_typed_signal(
             read_only_db,
             &sender,
             TypedSignalWrite::FileInCorpus(FileInCorpusSignal {
                 inode,
                 path: path_str.clone(),
+                generation: crate::meta::computations::helpers::current_observation_generation(),
             }),
             witness,
         );
@@ -770,30 +841,21 @@ pub fn execute_update_library_file_signals(
 // ============================================================================
 
 /// Walk a library directory tree and spawn per-directory scans.
+///
+/// No longer clears library files from the DB — reconciliation is deferred to
+/// ReconcileLibraryFiles after all ScanLibraryDirectory results are accumulated.
 pub fn execute_walk_library(
     _read_only_db: &ReadOnlyDb<'_>,
     library_root: &Path,
     library_name: &str,
     corpus_path_prefixes: &[PathBuf],
-    witness: &ComputationWitness,
+    _witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = Computation::WalkLibrary {
         library_root: library_root.to_path_buf(),
         library_name: library_name.to_string(),
         corpus_path_prefixes: corpus_path_prefixes.to_vec(),
-    };
-
-    // Get signal sender for async writes (library scan state is written via db_thread)
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
     };
 
     if !library_root.exists() {
@@ -807,10 +869,6 @@ pub fn execute_walk_library(
             Vec::new(),
         );
     }
-
-    // Clear previous files for this library before re-scanning
-    // Routes through db_thread which has write access
-    sender.clear_library_files(library_name, witness);
 
     let (directories, _symlink_count) = enumerate_all_directories(library_root);
 
@@ -834,17 +892,18 @@ pub fn execute_walk_library(
     Result::success(computation, start.elapsed().as_millis() as u64, spawn)
 }
 
-/// Scan a single library directory and store results in files table.
+/// Scan a single library directory and return observed files.
 ///
-/// The actual deploy health derivation (comparing against corpus) happens in
-/// the Awake phase via DeriveDeployHealthSignals.
+/// Instead of writing directly to the DB, returns observed library files via
+/// the Result. The Witch accumulates these and passes them to
+/// ReconcileLibraryFiles for set reconciliation.
 pub fn execute_scan_library_directory(
     _read_only_db: &ReadOnlyDb<'_>,
     directory: &Path,
     library_name: &str,
     library_root: &Path,
     corpus_path_prefixes: &[PathBuf],
-    witness: &ComputationWitness,
+    _witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = Computation::ScanLibraryDirectory {
@@ -854,28 +913,8 @@ pub fn execute_scan_library_directory(
         corpus_path_prefixes: corpus_path_prefixes.to_vec(),
     };
 
-    // Get signal sender for async writes (library scan state is written via db_thread)
-    let sender = match db_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
-
     // Collect audio files in this directory (non-recursive)
-    // Capture: path, inode, mtime, file_size for new files table schema
-    struct LibraryFileInfo {
-        path: PathBuf,
-        inode: i64,
-        mtime_secs: i64,
-        mtime_nanos: i64,
-        file_size: i64,
-    }
-    let mut library_files: Vec<LibraryFileInfo> = Vec::new();
+    let mut observed_files: Vec<super::ObservedLibraryFile> = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(directory) {
         for entry in entries.flatten() {
@@ -888,8 +927,13 @@ pub fn execute_scan_library_directory(
                     let (mtime_secs, mtime_nanos) = mtime
                         .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
                         .unwrap_or((0, 0));
-                    library_files.push(LibraryFileInfo {
-                        path,
+
+                    // Compute stored_path: strip library_root prefix, prepend library_name
+                    let library_relative = path.strip_prefix(library_root).unwrap_or(&path);
+                    let stored_path = format!("{}/{}", library_name, library_relative.display());
+
+                    observed_files.push(super::ObservedLibraryFile {
+                        stored_path,
                         inode: metadata.ino() as i64,
                         mtime_secs,
                         mtime_nanos,
@@ -901,50 +945,118 @@ pub fn execute_scan_library_directory(
     }
 
     // Log per-directory scan results (only non-empty directories to avoid noise)
-    if !library_files.is_empty() {
+    if !observed_files.is_empty() {
         log_general(format!(
             "[COMPUTE] ScanLibraryDirectory '{}': {} audio files in {:?}",
-            library_name, library_files.len(), directory,
+            library_name, observed_files.len(), directory,
         ));
     }
 
-    // Store library scan results via db_thread for Awake phase to process
-    if !library_files.is_empty() {
-        let resolver = paths::get_resolver();
-        let scanned_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+    let _ = corpus_path_prefixes; // Suppress unused warning - needed for logging/future use
 
-        // Convert library_root to relative (relative to archive root)
-        let relative_library_root = resolver
-            .to_relative(library_root)
-            .unwrap_or_else(|| library_root.to_path_buf());
+    Result::success_with_library_files(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        observed_files,
+    )
+}
 
-        for info in &library_files {
-            // Convert file_path to relative (relative to archive root)
-            let relative_file_path = resolver
-                .to_relative(&info.path)
-                .unwrap_or_else(|| info.path.clone());
+// ============================================================================
+// Library File Reconciliation
+// ============================================================================
 
-            // Routes through db_thread which has write access
-            sender.record_library_file(
-                library_name,
-                &relative_library_root,
-                &relative_file_path,
-                info.inode,
-                info.mtime_secs,
-                info.mtime_nanos,
-                info.file_size,
-                scanned_at,
+/// Reconcile observed library files against the DB.
+///
+/// Performs set reconciliation:
+/// - Stale (in DB, not observed) → delete
+/// - New (observed, not in DB) → upsert
+/// - Changed (both, data differs) → upsert
+/// - Unchanged (both, data matches) → skip
+pub fn execute_reconcile_library_files(
+    read_only_db: &ReadOnlyDb<'_>,
+    observed_files: &[super::ObservedLibraryFile],
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = Computation::ReconcileLibraryFiles {
+        observed_files: observed_files.to_vec(),
+    };
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Get existing library files from DB
+    let existing = read_only_db.get_library_file_metadata().unwrap_or_default();
+
+    // Build observed map: stored_path → ObservedLibraryFile
+    let mut observed_map: std::collections::HashMap<&str, &super::ObservedLibraryFile> =
+        std::collections::HashMap::with_capacity(observed_files.len());
+    for file in observed_files {
+        observed_map.insert(&file.stored_path, file);
+    }
+
+    let mut new_count = 0usize;
+    let mut updated_count = 0usize;
+    let mut stale_count = 0usize;
+    let mut unchanged_count = 0usize;
+
+    // Check observed files against DB
+    for file in observed_files {
+        if let Some(&(db_inode, db_mtime_s, db_mtime_ns, db_size)) = existing.get(&file.stored_path) {
+            // Exists in DB - check if data matches
+            if db_inode == file.inode
+                && db_mtime_s == file.mtime_secs
+                && db_mtime_ns == file.mtime_nanos
+                && db_size == file.file_size
+            {
+                unchanged_count += 1;
+            } else {
+                // Data changed - upsert
+                sender.upsert_library_file(
+                    &file.stored_path,
+                    file.inode,
+                    file.mtime_secs,
+                    file.mtime_nanos,
+                    file.file_size,
+                    witness,
+                );
+                updated_count += 1;
+            }
+        } else {
+            // New file - upsert
+            sender.upsert_library_file(
+                &file.stored_path,
+                file.inode,
+                file.mtime_secs,
+                file.mtime_nanos,
+                file.file_size,
                 witness,
             );
+            new_count += 1;
         }
     }
 
-    // No spawn - DeriveDeployHealthSignals runs from ScheduleContentAnalysis in Awake phase
-    // corpus_path_prefixes stored with entries for later use by DeriveDeployHealthSignals
-    let _ = corpus_path_prefixes; // Suppress unused warning - needed for logging/future use
+    // Check for stale files (in DB but not observed)
+    for db_path in existing.keys() {
+        if !observed_map.contains_key(db_path.as_str()) {
+            sender.delete_library_file(db_path, witness);
+            stale_count += 1;
+        }
+    }
+
+    log_general(format!(
+        "[COMPUTE] ReconcileLibraryFiles: {} new, {} updated, {} stale, {} unchanged",
+        new_count, updated_count, stale_count, unchanged_count
+    ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

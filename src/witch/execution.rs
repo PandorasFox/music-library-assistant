@@ -21,6 +21,7 @@
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
 //! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
 
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::time::Instant;
 
@@ -62,6 +63,9 @@ fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> R
                 queue_wait_ms,
                 thread_stats: None,
                 config_update: None,
+                observed_corpus_inodes: HashMap::new(),
+                observed_inbox_inodes: HashMap::new(),
+                observed_library_files: Vec::new(),
             })
         }
     }
@@ -144,6 +148,9 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 queue_wait_ms,
                 thread_stats: None,
                 config_update: None,
+                observed_corpus_inodes: HashMap::new(),
+                observed_inbox_inodes: HashMap::new(),
+                observed_library_files: Vec::new(),
             };
         }
     };
@@ -217,6 +224,9 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         queue_wait_ms,
         thread_stats: None, // Mutations don't use thread-local stats
         config_update,
+        observed_corpus_inodes: HashMap::new(),
+        observed_inbox_inodes: HashMap::new(),
+        observed_library_files: Vec::new(),
     }
 }
 
@@ -242,6 +252,9 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
         queue_wait_ms,
         thread_stats,
         config_update: None,
+        observed_corpus_inodes: result.observed_corpus_inodes,
+        observed_inbox_inodes: result.observed_inbox_inodes,
+        observed_library_files: result.observed_library_files,
     }
 }
 
@@ -279,6 +292,9 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
         queue_wait_ms,
         thread_stats: None, // Migrations don't use thread-local stats
         config_update: None,
+        observed_corpus_inodes: HashMap::new(),
+        observed_inbox_inodes: HashMap::new(),
+        observed_library_files: Vec::new(),
     }
 }
 

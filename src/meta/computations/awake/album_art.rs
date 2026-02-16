@@ -167,9 +167,9 @@ pub fn execute_detect_embeddable_album_art(
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| dir.to_string_lossy().to_string());
 
-        computed.push(ComputedAggregateSignal {
-            key: key.clone(),
-            typed_data: TypedSignalWrite::EmbeddableAlbumArt(EmbeddableAlbumArtSignal {
+        computed.push(ComputedAggregateSignal::new(
+            key.clone(),
+            TypedSignalWrite::EmbeddableAlbumArt(EmbeddableAlbumArtSignal {
                 key,
                 data: EmbeddableAlbumArtData {
                     image_path: sidecar.to_string_lossy().to_string(),
@@ -178,7 +178,7 @@ pub fn execute_detect_embeddable_album_art(
                     artless_paths,
                 },
             }),
-        });
+        ));
     }
 
     let (cleared, written, _, _) = reconcile_aggregate_signals::<EmbeddableAlbumArtSignal>(

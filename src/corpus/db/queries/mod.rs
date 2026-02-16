@@ -518,6 +518,18 @@ impl<'a> ReadOnlyDb<'a> {
             .map_err(|e| anyhow::anyhow!("Failed to query signal keys for {}: {}", S::TABLE_NAME, e))
     }
 
+    /// Query key→data_hash map for an aggregate BLOB signal type.
+    pub fn aggregate_signal_key_hashes<S: crate::meta::signals::store::AggregateSignalStore>(&self) -> Result<std::collections::HashMap<String, i64>> {
+        S::query_key_hashes(self.db.conn())
+            .map_err(|e| anyhow::anyhow!("Failed to query signal key hashes for {}: {}", S::TABLE_NAME, e))
+    }
+
+    /// Query inode→data_hash map for a corpus BLOB signal type.
+    pub fn corpus_signal_inode_hashes<S: crate::meta::signals::store::CorpusSignalStore>(&self) -> Result<std::collections::HashMap<i64, i64>> {
+        S::query_inode_hashes(self.db.conn())
+            .map_err(|e| anyhow::anyhow!("Failed to query signal inode hashes for {}: {}", S::TABLE_NAME, e))
+    }
+
     /// Check if a TypedSignalWrite already exists in its typed table.
     pub fn signal_exists(&self, signal: &crate::meta::signals::data::TypedSignalWrite) -> bool {
         signal.exists(self.db.conn())
@@ -830,5 +842,33 @@ impl<'a> ReadOnlyDb<'a> {
     /// only the inodes that need reprocessing instead of the entire corpus.
     pub fn get_dirty_inodes(&self, computation_type: &str) -> Result<Vec<i64>> {
         self.db.get_dirty_inodes(computation_type)
+    }
+
+    // =========================================================================
+    // Directory Entry Freshness Check
+    // =========================================================================
+
+    /// Check if a directory entry already matches the given metadata.
+    ///
+    /// Used by `index_directory()` to skip unconditional writes.
+    pub fn directory_entry_fresh(
+        &self,
+        zone: &str,
+        inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+    ) -> bool {
+        self.db.directory_entry_fresh(zone, inode, mtime_secs, mtime_nanos)
+    }
+
+    // =========================================================================
+    // Library File Metadata (for reconciliation)
+    // =========================================================================
+
+    /// Get all library file metadata for reconciliation.
+    ///
+    /// Returns a map of stored_path → (inode, mtime_secs, mtime_nanos, file_size).
+    pub fn get_library_file_metadata(&self) -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>> {
+        self.db.get_library_file_metadata()
     }
 }

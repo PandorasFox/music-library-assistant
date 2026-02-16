@@ -476,6 +476,12 @@ pub(super) struct TaskResult {
     pub thread_stats: Option<crate::meta::computations::ThreadStats>,
     /// Updated config from ApplyConfigEdits mutation (applied to SharedConfig in tick()).
     pub config_update: Option<crate::config::Config>,
+    /// Corpus inodes observed on disk during this computation (inode → relative path).
+    pub observed_corpus_inodes: HashMap<i64, String>,
+    /// Inbox inodes observed on disk during this computation (inode → relative path).
+    pub observed_inbox_inodes: HashMap<i64, String>,
+    /// Library files observed on disk during ScanLibraryDirectory.
+    pub observed_library_files: Vec<crate::meta::computations::awakening::ObservedLibraryFile>,
 }
 
 // ============================================================================

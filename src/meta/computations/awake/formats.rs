@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::helpers::drop_stale_corpus_signal;
 use crate::corpus::db::types::Zone;
 use crate::meta::signals::data::{ShitFormatSignal, TypedSignalWrite};
 use crate::corpus::db::ReadOnlyDb;
@@ -17,10 +18,17 @@ use super::{Computation, Result};
 // Shit Format Detection
 // ============================================================================
 
+/// File types that should trigger ShitFormat signal (non-Vorbis containers).
+/// Includes lossy formats with poor metadata and lossless needing remux.
+const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
+
+const SHIT_FORMAT_COMPUTATION: &str = "shit_format";
+
 /// Execute DetectShitFormats - detect files with non-Vorbis container formats.
 ///
-/// Queries all tracks and emits ShitFormat signals for those with file types
-/// that have poor metadata support or inefficient containers (MP3, M4A, WAV, etc).
+/// Uses dirty inode tracking: only checks recently (re)indexed inodes instead
+/// of scanning the entire corpus. Format is immutable after indexing, so only
+/// newly-indexed files need checking.
 pub fn execute_detect_shit_formats(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -39,46 +47,58 @@ pub fn execute_detect_shit_formats(
         }
     };
 
-    /// File types that should trigger ShitFormat signal (non-Vorbis containers)
-    /// Includes lossy formats with poor metadata and lossless needing remux
-    const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
-
-    // Clear all existing ShitFormat signals and rebuild
-    sender.clear_all_of_corpus_type::<ShitFormatSignal>(witness);
-
-    // Query all audio files and filter for shit formats
-    let audio_files = match read_only_db.get_all_audio_files(Zone::Corpus) {
-        Ok(f) => f,
+    let dirty_inodes = match read_only_db.get_dirty_inodes(SHIT_FORMAT_COMPUTATION) {
+        Ok(inodes) => inodes,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query audio files: {}", e),
+                format!("Failed to query dirty inodes: {}", e),
             );
         }
     };
 
-    let mut signal_count = 0;
+    if dirty_inodes.is_empty() {
+        log_general("[COMPUTE] DetectShitFormats: no dirty inodes, skipping");
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+    }
 
-    for audio_file in audio_files {
-        let file_type_lower = audio_file.audio.file_type.to_lowercase();
-        if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
-            sender.write_typed_signal(
-                TypedSignalWrite::ShitFormat(ShitFormatSignal {
-                    inode: audio_file.inode(),
-                    path: audio_file.path().to_string(),
-                    file_type: audio_file.audio.file_type.clone(),
-                }),
-                witness,
-            );
+    let mut emitted = 0;
+    let mut cleared = 0;
 
-            signal_count += 1;
+    for inode in &dirty_inodes {
+        match read_only_db.get_audio_file_by_inode(*inode, Zone::Corpus) {
+            Ok(Some(audio_file)) => {
+                let file_type_lower = audio_file.audio.file_type.to_lowercase();
+                if SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str()) {
+                    sender.write_typed_signal(
+                        TypedSignalWrite::ShitFormat(ShitFormatSignal {
+                            inode: *inode,
+                            path: audio_file.path().to_string(),
+                            file_type: audio_file.audio.file_type.clone(),
+                        }),
+                        witness,
+                    );
+                    emitted += 1;
+                } else {
+                    // Not a shit format — clear any stale signal
+                    drop_stale_corpus_signal::<ShitFormatSignal>(read_only_db, &sender, *inode, witness);
+                    cleared += 1;
+                }
+            }
+            _ => {
+                // File gone from corpus — clear any stale signal
+                drop_stale_corpus_signal::<ShitFormatSignal>(read_only_db, &sender, *inode, witness);
+                cleared += 1;
+            }
         }
+
+        sender.clear_dirty_inode(*inode, SHIT_FORMAT_COMPUTATION, witness);
     }
 
     log_general(format!(
-        "[COMPUTE] DetectShitFormats: emitted {} ShitFormat signals",
-        signal_count
+        "[COMPUTE] DetectShitFormats: {} dirty inodes, emitted={}, cleared={}",
+        dirty_inodes.len(), emitted, cleared
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

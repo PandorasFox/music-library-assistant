@@ -12,7 +12,6 @@
 //!
 //! ## Computations
 //!
-//! - `ClearExistingObservationState` - Clear stale FileInCorpus signals before fresh scan
 //! - `WalkCorpus` - Enumerate directories, spawn per-directory scans
 //! - `ScanCorpusDirectory` - Scan single directory, emit FileInCorpus signals
 //! - `VerifyMtime` - Check file modification time
@@ -22,6 +21,7 @@
 mod executors;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub use executors::*;
@@ -36,13 +36,6 @@ pub use executors::*;
 /// spawn other Asleep computations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Computation {
-    /// Phase 0: Clear existing observation state before fresh scan.
-    ///
-    /// Clears all FileInCorpus signals so they can be rebuilt from scratch
-    /// during the corpus walk. This ensures deleted files don't retain stale
-    /// signals that would cause them to appear as "healthy" instead of "missing".
-    ClearExistingObservationState,
-
     /// Phase 1: Walk corpus directory tree to collect file state.
     ///
     /// Enumerates top-level directories under root and spawns per-directory scans.
@@ -98,7 +91,6 @@ impl Computation {
     /// Get a human-readable label for this computation.
     pub fn label(&self) -> &'static str {
         match self {
-            Computation::ClearExistingObservationState => "Clearing observation state",
             Computation::WalkCorpus { .. } => "Observing",
             Computation::ScanCorpusDirectory { .. } => "Scanning directory",
             Computation::VerifyMtime { .. } => "Verifying mtime",
@@ -110,9 +102,6 @@ impl Computation {
     /// Execute this computation.
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
-            Computation::ClearExistingObservationState => {
-                execute_clear_existing_observation_state(ctx.read_db, ctx.witness, ctx.start)
-            }
             Computation::WalkCorpus { root, zone, force_check } => {
                 execute_walk_corpus(ctx.read_db, root, zone, *force_check, ctx.start)
             }
@@ -148,6 +137,10 @@ pub struct Result {
     pub duration_ms: u64,
     /// Follow-up computations - ONLY Asleep computations allowed.
     pub spawn: Vec<Computation>,
+    /// Corpus inodes observed on disk during this computation (inode → relative path).
+    pub observed_corpus_inodes: HashMap<i64, String>,
+    /// Inbox inodes observed on disk during this computation (inode → relative path).
+    pub observed_inbox_inodes: HashMap<i64, String>,
 }
 
 impl Result {
@@ -158,6 +151,26 @@ impl Result {
             error: None,
             duration_ms,
             spawn,
+            observed_corpus_inodes: HashMap::new(),
+            observed_inbox_inodes: HashMap::new(),
+        }
+    }
+
+    pub fn success_with_observations(
+        computation: Computation,
+        duration_ms: u64,
+        spawn: Vec<Computation>,
+        observed_corpus_inodes: HashMap<i64, String>,
+        observed_inbox_inodes: HashMap<i64, String>,
+    ) -> Self {
+        Self {
+            _computation: computation,
+            success: true,
+            error: None,
+            duration_ms,
+            spawn,
+            observed_corpus_inodes,
+            observed_inbox_inodes,
         }
     }
 
@@ -168,6 +181,8 @@ impl Result {
             error: Some(error),
             duration_ms,
             spawn: Vec::new(),
+            observed_corpus_inodes: HashMap::new(),
+            observed_inbox_inodes: HashMap::new(),
         }
     }
 }

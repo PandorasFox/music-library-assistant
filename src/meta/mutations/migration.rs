@@ -421,6 +421,19 @@ impl MigrationRegistry {
             },
         });
 
+        // v13→v14: Create inbox_tag_canonicity signal table
+        registry.register(Migration {
+            from_version: 13,
+            to_version: 14,
+            description: "Create signal_inbox_tag_canonicity table for inbox tag canonicity detection",
+            apply: |db| {
+                use crate::meta::signals::store::AggregateSignalStore;
+                use crate::meta::signals::data::InboxTagCanonicitySignal;
+                db.conn().execute_batch(InboxTagCanonicitySignal::TABLE_SQL)?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

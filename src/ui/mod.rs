@@ -264,6 +264,16 @@ impl App {
         self.view = ActiveView::Insights(insights_view::InsightsViewState::new());
     }
 
+    /// Start the configured default view (post-startup landing screen).
+    pub(super) fn start_default_view(&mut self) {
+        match self.config.opinions.startup.default_view {
+            crate::config::StartupView::Insights => self.start_insights_view(),
+            crate::config::StartupView::Search => self.start_tag_search(),
+            crate::config::StartupView::Browser => self.start_corpus_browser(),
+            crate::config::StartupView::Inbox => self.start_inbox_view(),
+        }
+    }
+
     /// Abort current operation and return to insights view with a status message.
     pub(super) fn abort_to_insights(&mut self, message: String) {
         self.status_message = Some(message);

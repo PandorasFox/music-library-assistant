@@ -85,12 +85,12 @@ impl App {
                             };
                         } else {
                             crate::logging::log_general(format!(
-                                "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to Insights",
+                                "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to default view",
                                 check_duration.as_millis()
                             ));
                             // No unindexed files, no mutations - skip content analysis entirely
                             // Corpus is unchanged from last session, signals are still valid
-                            self.start_insights_view();
+                            self.start_default_view();
                         }
                     }
                 }
@@ -100,8 +100,8 @@ impl App {
                         witch.ui_read_cache().invalidate_insights_data();
                         witch.ui_read_cache().invalidate_inbox_overview();
                     }
-                    // Transition to Insights view
-                    self.start_insights_view();
+                    // Transition to configured default view
+                    self.start_default_view();
                 }
             }
         } else {

@@ -102,6 +102,16 @@ impl Default for CanonicalizationOpinions {
     }
 }
 
+/// Which view to land on after startup progress completes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum StartupView {
+    #[default]
+    Insights,
+    Search,
+    Browser,
+    Inbox,
+}
+
 /// Opinions for startup behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupOpinions {
@@ -112,6 +122,8 @@ pub struct StartupOpinions {
     /// Free-page ratio threshold for prompting DB compaction (default: 0.1 = 10%).
     /// Set to 0.0 to disable.
     pub vacuum_threshold: f64,
+    /// Which view to open after startup progress completes (default: Insights).
+    pub default_view: StartupView,
 }
 
 impl Default for StartupOpinions {
@@ -119,6 +131,7 @@ impl Default for StartupOpinions {
         Self {
             force_check_all_files_at_startup: false,
             vacuum_threshold: 0.1,
+            default_view: StartupView::default(),
         }
     }
 }
@@ -650,6 +663,19 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                         }
                     }
                 }
+                "default-view" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            match val {
+                                "insights" => opinions.default_view = StartupView::Insights,
+                                "search" => opinions.default_view = StartupView::Search,
+                                "browser" => opinions.default_view = StartupView::Browser,
+                                "inbox" => opinions.default_view = StartupView::Inbox,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1163,5 +1189,35 @@ dir "web/releases/steam" {
         assert!(!config.is_path_in_source(std::path::Path::new(
             "corpus/web/releases/bandcamp-extra/Artist/track.flac"
         )));
+    }
+
+    #[test]
+    fn test_startup_default_view_parsing() {
+        // Default is Insights when not specified
+        let kdl = r#"root "/archive""#;
+        let config = parse_kdl_config(kdl).unwrap();
+        assert_eq!(config.opinions.startup.default_view, StartupView::Insights);
+
+        // Explicit values
+        for (value, expected) in [
+            ("insights", StartupView::Insights),
+            ("search", StartupView::Search),
+            ("browser", StartupView::Browser),
+            ("inbox", StartupView::Inbox),
+        ] {
+            let kdl = format!(
+                r#"root "/archive"
+opinions {{
+    startup {{
+        default-view "{value}"
+    }}
+}}"#
+            );
+            let config = parse_kdl_config(&kdl).unwrap();
+            assert_eq!(
+                config.opinions.startup.default_view, expected,
+                "default-view \"{value}\" should parse to {expected:?}"
+            );
+        }
     }
 }

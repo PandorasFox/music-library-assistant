@@ -24,7 +24,6 @@ pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &InboxViewState) {
         .constraints([
             Constraint::Length(UnifiedTitleBar::height()),
             Constraint::Min(5),
-            Constraint::Length(1), // Controls hint
         ])
         .split(area);
 
@@ -33,7 +32,6 @@ pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &InboxViewState) {
     titlebar.render(f, main_chunks[0]);
 
     render_inbox_content(f, main_chunks[1], state);
-    render_controls_hint(f, main_chunks[2], state);
 }
 
 fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
@@ -95,20 +93,3 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
     f.render_widget(list, inner);
 }
 
-fn render_controls_hint(f: &mut Frame, area: Rect, state: &InboxViewState) {
-    let has_action = state.selected_entry()
-        .map(|e| e.action != InboxInsightAction::Informational)
-        .unwrap_or(false);
-
-    let mut hints = Vec::new();
-    if has_action {
-        hints.push(Span::styled(" Enter", Style::default().fg(Color::Cyan)));
-        hints.push(Span::styled(" Action  ", Style::default().fg(Color::DarkGray)));
-    }
-    hints.push(Span::styled("Tab", Style::default().fg(Color::Cyan)));
-    hints.push(Span::styled(" Cycle View", Style::default().fg(Color::DarkGray)));
-
-    let line = Line::from(hints);
-    let paragraph = Paragraph::new(line);
-    f.render_widget(paragraph, area);
-}

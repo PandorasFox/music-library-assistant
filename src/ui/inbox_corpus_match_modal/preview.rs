@@ -21,7 +21,7 @@ use ratatui::{
 
 use crate::corpus::db::types::MatchClassification;
 use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::CURSOR_STYLE;
+use crate::ui::widgets::{ConfirmationButton, render_button_row, CURSOR_STYLE};
 
 use super::types::{InboxCorpusMatchModalData, SelectedButton};
 
@@ -338,52 +338,39 @@ impl InboxCorpusMatchPreviewState {
         let has_entries = total > 0;
         let buttons_focused = self.focus_pane == FocusPane::Buttons;
 
-        let mut buttons = Vec::new();
+        let block = Block::default().borders(Borders::TOP).border_style(
+            Style::default().fg(if buttons_focused { Color::Cyan } else { Color::DarkGray })
+        );
+        let inner = block.inner(area);
+        f.render_widget(block, area);
 
-        // Stash equivalents+subpar button
-        let stash_label = format!(" Stash {} equiv+subpar ", stashable);
-        let stash_style = if !has_stashable {
-            Style::default().fg(Color::DarkGray)
-        } else if buttons_focused && self.selected_button == SelectedButton::StashEquivalents {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Cyan)
-        };
-        buttons.push(Span::styled(stash_label, stash_style));
-        buttons.push(Span::raw("  "));
+        let inner_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Buttons
+                Constraint::Length(1), // Hint
+            ])
+            .split(inner);
 
-        // Stash ALL button
-        let stash_all_label = format!(" Stash all {} ", total);
-        let stash_all_style = if !has_entries {
-            Style::default().fg(Color::DarkGray)
-        } else if buttons_focused && self.selected_button == SelectedButton::StashAll {
-            Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Yellow)
-        };
-        buttons.push(Span::styled(stash_all_label, stash_all_style));
-        buttons.push(Span::raw("  "));
+        // Buttons via standard widget
+        let stash_color = if has_stashable { Color::Cyan } else { Color::DarkGray };
+        let stash_all_color = if has_entries { Color::Yellow } else { Color::DarkGray };
+        let stash_selected = has_stashable && buttons_focused && self.selected_button == SelectedButton::StashEquivalents;
+        let stash_all_selected = has_entries && buttons_focused && self.selected_button == SelectedButton::StashAll;
+        let cancel_selected = buttons_focused && self.selected_button == SelectedButton::Cancel;
 
-        // Cancel button
-        let cancel_style = if buttons_focused && self.selected_button == SelectedButton::Cancel {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        buttons.push(Span::styled(" Cancel ", cancel_style));
+        let buttons = vec![
+            ConfirmationButton::new(format!("Stash {} equiv+subpar", stashable), stash_color).selected(stash_selected),
+            ConfirmationButton::new(format!("Stash all {}", total), stash_all_color).selected(stash_all_selected),
+            ConfirmationButton::new("Cancel", Color::White).selected(cancel_selected),
+        ];
+        render_button_row(f, inner_chunks[0], &buttons);
 
         // Hint
-        buttons.push(Span::raw("    "));
-        buttons.push(Span::styled(
-            "[Shift+\u{2191}\u{2193} focus] [\u{2190}\u{2192} select] [Enter confirm]",
+        let hint = Paragraph::new(Line::from(Span::styled(
+            "Shift+\u{2191}\u{2193} focus  \u{2190}\u{2192} select  Enter confirm",
             Style::default().fg(Color::DarkGray),
-        ));
-
-        let controls = Paragraph::new(Line::from(buttons))
-            .block(Block::default().borders(Borders::TOP).border_style(
-                Style::default().fg(if buttons_focused { Color::Cyan } else { Color::DarkGray })
-            ));
-
-        f.render_widget(controls, area);
+        ))).alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(hint, inner_chunks[1]);
     }
 }

@@ -108,7 +108,8 @@ impl App {
         let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
 
         let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
-        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups, is_album_artist);
+        let zone = Self::zone_for_kind(kind);
+        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups, is_album_artist, zone);
         self.view = ActiveView::TagCanonicityResolution { state, clusters };
     }
 
@@ -123,12 +124,21 @@ impl App {
                 self.advance_to_next_cluster();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Cancelled => {
+                let is_inbox = matches!(
+                    &self.view,
+                    ActiveView::TagCanonicityResolution { clusters, .. }
+                        if clusters.kind == CanonicitySignalKind::InboxTagCanonicity
+                );
                 // Discard transaction if active via sealed operator decision handler
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::super::operator_decisions::discard_transaction(witch);
                 }
                 crate::logging::log_general("Tag canonicity resolution cancelled");
-                self.start_insights_view();
+                if is_inbox {
+                    self.start_inbox_view();
+                } else {
+                    self.start_insights_view();
+                }
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Navigate { forward } => {
                 // User navigated to next/prev cluster - do NOT stage decision
@@ -164,14 +174,14 @@ impl App {
     /// to match the health modal's current file selection.
     fn launch_tag_editor_from_canonicity(&mut self, mode: tag_editor::TagEditorMode) {
         // Extract data from current view
-        let (inodes, decision_index, decision_label, file_cursor_inode) =
+        let (inodes, decision_index, decision_label, file_cursor_inode, zone) =
             if let ActiveView::TagCanonicityResolution { ref state, ref clusters } = self.view {
                 let inodes: Vec<i64> = state.data.inodes.clone();
                 let decision_index = clusters.current_index;
                 let label = format!("Tag edit: {} canonicity", state.data.tag_name);
                 let cursor_inode = state.data.files.get(state.file_cursor)
                     .map(|f| f.inode);
-                (inodes, decision_index, label, cursor_inode)
+                (inodes, decision_index, label, cursor_inode, state.zone)
             } else {
                 return;
             };
@@ -182,7 +192,7 @@ impl App {
                 Some(w) => w.read_db(),
                 None => return,
             };
-            read_db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
+            read_db.get_audio_files_by_inodes(&inodes, zone)
                 .unwrap_or_default()
         };
 
@@ -319,7 +329,7 @@ impl App {
                     return;
                 }
 
-                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus })];
+                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: state.zone })];
                 (mutations, clusters.current_index)
             }
             _ => return,
@@ -403,9 +413,10 @@ impl App {
             }
         };
 
-        let pre_fill = kind == CanonicitySignalKind::TagCanonicity;
+        let pre_fill = matches!(kind, CanonicitySignalKind::TagCanonicity | CanonicitySignalKind::InboxTagCanonicity);
         let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
-        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist);
+        let zone = Self::zone_for_kind(kind);
+        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist, zone);
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
@@ -450,7 +461,8 @@ impl App {
 
         let pre_fill = clusters.pre_fill();
         let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
-        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist);
+        let zone = Self::zone_for_kind(kind);
+        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist, zone);
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
@@ -479,6 +491,19 @@ impl App {
                 let signal = read_db.get_inconsistent_album_artist_signal(key).ok()??;
                 tag_canonicity_v2::TagCanonicalityModalDataV2::from_inconsistent_album_artist(&signal, read_db)
             }
+            CanonicitySignalKind::InboxTagCanonicity => {
+                let signal = read_db.get_inbox_tag_canonicity_signal(key).ok()??;
+                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, read_db)
+            }
+        }
+    }
+
+    /// Map signal kind to zone for mutations and file queries.
+    fn zone_for_kind(kind: CanonicitySignalKind) -> Zone {
+        match kind {
+            CanonicitySignalKind::TagCanonicity
+            | CanonicitySignalKind::InconsistentAlbumArtist => Zone::Corpus,
+            CanonicitySignalKind::InboxTagCanonicity => Zone::Inbox,
         }
     }
 }

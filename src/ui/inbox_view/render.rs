@@ -66,7 +66,8 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
 
             let action_indicator = match entry.action {
                 InboxInsightAction::LaunchIntake
-                | InboxInsightAction::LaunchCorpusMatchResolution => " \u{23CE}",
+                | InboxInsightAction::LaunchCorpusMatchResolution
+                | InboxInsightAction::LaunchInboxTagCanonicity => " \u{23CE}",
                 InboxInsightAction::Informational => "",
             };
 

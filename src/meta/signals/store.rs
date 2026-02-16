@@ -1436,6 +1436,56 @@ impl CrossSourceOverlapSignal {
     }
 }
 
+impl AggregateSignalStore for InboxTagCanonicitySignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inbox_tag_canonicity (
+        key TEXT PRIMARY KEY,
+        tag_name TEXT NOT NULL,
+        data BLOB NOT NULL,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_inbox_tag_canonicity";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_inbox_tag_canonicity (key, tag_name, data) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, self.tag_name, data],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_inbox_tag_canonicity WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_inbox_tag_canonicity WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl InboxTagCanonicitySignal {
+    pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT key, tag_name, data FROM signal_inbox_tag_canonicity WHERE key = ?1",
+            rusqlite::params![key],
+            |row| {
+                let blob: Vec<u8> = row.get(2)?;
+                let data: InboxTagCanonicityData = bincode::deserialize(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                Ok(Self { key: row.get(0)?, tag_name: row.get(1)?, data })
+            },
+        ).optional()
+    }
+
+}
+
 // ============================================================================
 // Table Creation Helper
 // ============================================================================
@@ -1482,6 +1532,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(RedundantDuplicateSignal::TABLE_SQL)?;
     conn.execute_batch(EmbeddableAlbumArtSignal::TABLE_SQL)?;
     conn.execute_batch(MissingAlbumSingleSignal::TABLE_SQL)?;
+    conn.execute_batch(InboxTagCanonicitySignal::TABLE_SQL)?;
 
     Ok(())
 }

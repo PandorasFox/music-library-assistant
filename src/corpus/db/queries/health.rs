@@ -107,6 +107,11 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Failed to query missing album single signals: {}", e))
     }
 
+    pub fn get_inbox_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
+        crate::meta::signals::data::InboxTagCanonicitySignal::query_by_key(&self.conn, key)
+            .map_err(|e| anyhow::anyhow!("Failed to query inbox tag canonicity signal: {}", e))
+    }
+
     /// Get compound tag signal groups aggregated by (tag_name, compound_value).
     ///
     /// Instead of returning one key per inode, groups all inodes sharing the same
@@ -310,6 +315,7 @@ impl Database {
             file_in_inbox: self.count_signal_type("file_in_inbox")?,
             corpus_match: self.count_signal_type("inbox_corpus_match")?,
             unindexed: self.count_signal_type("inbox_unindexed")?,
+            tag_canonicity: self.count_signal_type("inbox_tag_canonicity")?,
         })
     }
 
@@ -599,6 +605,7 @@ impl Database {
             "inbox_healthy" => InboxHealthySignal::count(&self.conn)?,
             "inbox_corpus_match" => InboxCorpusMatchSignal::count(&self.conn)?,
             "file_in_inbox" => FileInInboxSignal::count(&self.conn)?,
+            "inbox_tag_canonicity" => InboxTagCanonicitySignal::count(&self.conn)?,
             _ => 0,
         };
         Ok(count)

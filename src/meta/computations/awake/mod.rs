@@ -23,6 +23,7 @@
 //!
 //! Inbox:
 //! - `DetectInboxCorpusMatches` - Find inbox files matching corpus by fingerprint
+//! - `DetectInboxTagCanonicity` - Find inbox tag values differing from corpus canonical spellings
 //!
 //! Deploy Health:
 //! - `DetectDeployConflicts` - Bulk detection of deploy path collisions
@@ -39,6 +40,7 @@ mod deploy;
 mod formats;
 mod album_art;
 mod inbox_matches;
+mod inbox_tags;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -50,6 +52,7 @@ pub use deploy::*;
 pub use formats::*;
 pub use album_art::*;
 pub use inbox_matches::*;
+pub use inbox_tags::*;
 
 // ============================================================================
 // Awake Computation Enum
@@ -162,6 +165,13 @@ pub enum Computation {
     /// For each inbox file with a fingerprint, finds corpus files with similar
     /// fingerprints within duration tolerance. Emits InboxCorpusMatchSignal.
     DetectInboxCorpusMatches,
+
+    /// Detect inbox tag values that differ from corpus canonical spellings.
+    ///
+    /// Compares inbox tag values against corpus vocabulary. Emits
+    /// InboxTagCanonicitySignal for values whose normalized form matches
+    /// corpus values but whose exact spelling differs.
+    DetectInboxTagCanonicity,
 }
 
 impl Computation {
@@ -185,6 +195,7 @@ impl Computation {
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
             Computation::DetectEmbeddableAlbumArt => "Detecting embeddable album art",
             Computation::DetectInboxCorpusMatches => "Detecting inbox-corpus matches",
+            Computation::DetectInboxTagCanonicity => "Detecting inbox tag canonicity",
         }
     }
 
@@ -241,6 +252,9 @@ impl Computation {
             }
             Computation::DetectInboxCorpusMatches => {
                 execute_detect_inbox_corpus_matches(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectInboxTagCanonicity => {
+                execute_detect_inbox_tag_canonicity(ctx.read_db, ctx.witness, ctx.start)
             }
         }
     }

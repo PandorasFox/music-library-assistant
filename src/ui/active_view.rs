@@ -277,6 +277,8 @@ pub(crate) enum CanonicitySignalKind {
     TagCanonicity,
     /// `signal_inconsistent_album_artist` table (no pre-fill)
     InconsistentAlbumArtist,
+    /// `signal_inbox_tag_canonicity` table (pre-fill enabled, inbox zone)
+    InboxTagCanonicity,
 }
 
 /// Tracks the list of signals for Tab/Shift-Tab navigation in tag canonicity modal.
@@ -297,7 +299,7 @@ impl TagCanonicityClusters {
 
     /// Whether the canonical value text field should be pre-filled.
     pub fn pre_fill(&self) -> bool {
-        self.kind == CanonicitySignalKind::TagCanonicity
+        matches!(self.kind, CanonicitySignalKind::TagCanonicity | CanonicitySignalKind::InboxTagCanonicity)
     }
 
     pub fn current_signal_key(&self) -> Option<&str> {

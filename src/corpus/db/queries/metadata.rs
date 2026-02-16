@@ -100,6 +100,65 @@ impl Database {
     }
 
     // ========================================================================
+    // Inbox Tag Queries (for inbox tag canonicity detection)
+    // ========================================================================
+
+    /// Query distinct tag values with file counts from inbox_tags table.
+    /// Only considers inbox files.
+    /// Returns Vec of (tag_value, file_count).
+    pub fn get_distinct_inbox_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT it.tag_value, COUNT(DISTINCT it.inode) as file_count
+               FROM inbox_tags it
+               INNER JOIN files f ON it.inode = f.inode AND f.zone = 'inbox'
+               WHERE UPPER(it.tag_name) = UPPER(?1) AND it.tag_value IS NOT NULL AND it.tag_value != ''
+               GROUP BY it.tag_value
+               ORDER BY file_count DESC"#,
+        )?;
+
+        let rows = stmt.query_map(params![tag_name], |row| {
+            let value: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((value, count as usize))
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Get inbox inodes that have any of the given tag values for a specific tag name.
+    pub fn get_inbox_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
+        let sql = format!(
+            r#"SELECT DISTINCT it.inode FROM inbox_tags it
+               INNER JOIN files f ON it.inode = f.inode AND f.zone = 'inbox'
+               WHERE UPPER(it.tag_name) = UPPER(?1) AND it.tag_value IN ({})"#,
+            placeholders.join(",")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 1);
+        params.push(&tag_name);
+        for v in values {
+            params.push(v);
+        }
+
+        let ids = stmt
+            .query_map(params.as_slice(), |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?;
+
+        Ok(ids)
+    }
+
+    // ========================================================================
     // OOB Tag Resolution Queries
     // ========================================================================
 

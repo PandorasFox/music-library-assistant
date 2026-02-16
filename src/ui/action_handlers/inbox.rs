@@ -4,9 +4,11 @@
 //! - Enter on "Unindexed" bucket: launch inbox intake confirmation
 //! - Enter on "Corpus matches" bucket: launch inbox corpus match resolution
 
+use crate::meta::signals::data::InboxTagCanonicitySignal;
 use crate::ui::active_view::ActiveView;
 use crate::ui::inbox_corpus_match_modal;
 use crate::ui::startup;
+use crate::ui::{tag_canonicity_v2, CanonicitySignalKind, TagCanonicityClusters};
 use super::witness;
 use super::App;
 
@@ -48,7 +50,78 @@ impl App {
             InboxAction::LaunchCorpusMatchResolution => {
                 self.start_inbox_corpus_match_resolution();
             }
+            InboxAction::LaunchInboxTagCanonicity => {
+                self.start_inbox_tag_canonicity_resolution();
+            }
         }
+    }
+
+    /// Start inbox tag canonicity resolution using the shared tag canonicity modal.
+    ///
+    /// Gathers all inbox tag canonicity signal keys, creates clusters with
+    /// `InboxTagCanonicity` kind, and launches the standard canonicity modal.
+    fn start_inbox_tag_canonicity_resolution(&mut self) {
+        let signal_keys = {
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => {
+                    self.status_message = Some("Database not available".to_string());
+                    return;
+                }
+            };
+            read_db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
+                .unwrap_or_default()
+        };
+
+        if signal_keys.is_empty() {
+            self.status_message = Some("No inbox tag canonicity signals to resolve".to_string());
+            return;
+        }
+
+        let kind = CanonicitySignalKind::InboxTagCanonicity;
+        let clusters = TagCanonicityClusters::new(signal_keys, kind);
+
+        // Start transaction for the modal
+        if let Some(ref mut witch) = self.witch {
+            let _ = witch.start_transaction("Inbox tag canonicalization");
+        }
+
+        // Load the first signal
+        let first_key = clusters.signal_keys[0].clone();
+        let data = {
+            let read_db = match self.witch.as_mut() {
+                Some(w) => w.read_db(),
+                None => {
+                    self.status_message = Some("Database not available".to_string());
+                    return;
+                }
+            };
+            read_db.get_inbox_tag_canonicity_signal(&first_key)
+                .ok()
+                .flatten()
+                .and_then(|signal| {
+                    tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, &read_db)
+                })
+        };
+
+        let data = match data {
+            Some(d) => d,
+            None => {
+                self.status_message = Some("Failed to load inbox tag canonicity data".to_string());
+                if let Some(ref mut witch) = self.witch {
+                    let _ = super::super::operator_decisions::discard_transaction(witch);
+                }
+                return;
+            }
+        };
+
+        let pre_fill = clusters.pre_fill();
+        let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
+        let zone = crate::corpus::db::types::Zone::Inbox;
+        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(
+            data, pre_fill, group_index, total_groups, false, zone,
+        );
+        self.view = ActiveView::TagCanonicityResolution { state, clusters };
     }
 
     /// Start inbox corpus match resolution modal.

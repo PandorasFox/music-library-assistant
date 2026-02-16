@@ -523,6 +523,27 @@ pub struct SingleTrackInfo {
     pub path: String,
 }
 
+/// Inbox tag values that differ from corpus canonical spellings.
+/// Aggregate signal keyed by "{tag_name}:{normalized_key}".
+#[derive(Debug, Clone)]
+pub struct InboxTagCanonicitySignal {
+    pub key: String,       // "artist:beyonce"
+    pub tag_name: String,  // "artist"
+    /// Serialized as bincode BLOB.
+    pub data: InboxTagCanonicityData,
+}
+
+/// Bincode-serialized payload for InboxTagCanonicity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxTagCanonicityData {
+    /// Inbox variants not matching any corpus value: (value, count)
+    pub inbox_variants: Vec<(String, usize)>,
+    /// All inbox inodes affected
+    pub inbox_inodes: Vec<i64>,
+    /// Corpus variants for this normalized key: (value, count) sorted DESC
+    pub corpus_variants: Vec<(String, usize)>,
+}
+
 /// A pair of tracks from different sources that share a fingerprint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossSourceTrackPair {
@@ -582,6 +603,7 @@ pub enum TypedSignalWrite {
     ExpectedDuplicate(ExpectedDuplicateSignal),
     MissingAlbumSingle(MissingAlbumSingleSignal),
     ExpectedMissingTag(ExpectedMissingTagSignal),
+    InboxTagCanonicity(InboxTagCanonicitySignal),
 }
 
 impl TypedSignalWrite {
@@ -625,6 +647,7 @@ impl TypedSignalWrite {
             Self::ExpectedDuplicate(s) => s.insert(conn),
             Self::MissingAlbumSingle(s) => s.insert(conn),
             Self::ExpectedMissingTag(s) => s.insert(conn),
+            Self::InboxTagCanonicity(s) => s.insert(conn),
         }
     }
 
@@ -668,6 +691,7 @@ impl TypedSignalWrite {
             Self::ExpectedDuplicate(s) => ExpectedDuplicateSignal::exists(conn, &s.key),
             Self::MissingAlbumSingle(s) => MissingAlbumSingleSignal::exists(conn, &s.key),
             Self::ExpectedMissingTag(s) => ExpectedMissingTagSignal::exists(conn, s.inode),
+            Self::InboxTagCanonicity(s) => InboxTagCanonicitySignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::corpus::db::types::Zone;
 use crate::meta::signals::data::{
-    InconsistentAlbumArtistSignal, TagCanonicitySignal,
+    InconsistentAlbumArtistSignal, InboxTagCanonicitySignal, TagCanonicitySignal,
 };
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
@@ -122,14 +122,64 @@ impl TagCanonicalityModalDataV2 {
         })
     }
 
+    /// Create from an `InboxTagCanonicitySignal`.
+    ///
+    /// Shows inbox variants (the mismatches) as the values to squash,
+    /// pre-fills with the most common corpus variant. Files are loaded
+    /// from inbox zone.
+    pub fn from_inbox_tag_canonicity(
+        signal: &InboxTagCanonicitySignal,
+        read_db: &ReadOnlyDb,
+    ) -> Option<Self> {
+        let tag_name = signal.tag_name.clone();
+
+        // The variants to show are the inbox variants — these are what get squashed
+        let mut variants: Vec<TagVariantEntry> = signal
+            .data
+            .inbox_variants
+            .iter()
+            .map(|(value, count)| TagVariantEntry {
+                value: value.clone(),
+                count: *count,
+            })
+            .collect();
+
+        variants.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+
+        // Context label shows what the corpus has
+        let corpus_display: Vec<String> = signal
+            .data
+            .corpus_variants
+            .iter()
+            .map(|(v, c)| format!("{} ({})", v, c))
+            .collect();
+        let context_label = Some(format!("Corpus: {}", corpus_display.join(", ")));
+
+        let inodes = signal.data.inbox_inodes.clone();
+        let files = Self::load_file_info_for_zone(&inodes, read_db, Zone::Inbox);
+
+        Some(Self {
+            tag_name,
+            context_label,
+            variants,
+            inodes,
+            files,
+        })
+    }
+
     /// Load file info (filename, path, tags) for a set of inodes.
     fn load_file_info(inodes: &[i64], read_db: &ReadOnlyDb) -> Vec<FileTagInfo> {
+        Self::load_file_info_for_zone(inodes, read_db, Zone::Corpus)
+    }
+
+    /// Load file info for a specific zone.
+    fn load_file_info_for_zone(inodes: &[i64], read_db: &ReadOnlyDb, zone: Zone) -> Vec<FileTagInfo> {
         let resolver = paths::get_resolver();
         let mut files = Vec::new();
 
         for &inode in inodes {
             if let Ok(Some(audio_file)) =
-                read_db.get_audio_file_by_inode(inode, Zone::Corpus)
+                read_db.get_audio_file_by_inode(inode, zone)
             {
                 let path = audio_file.path();
                 let filename = Path::new(path)
@@ -216,6 +266,8 @@ pub struct TagCanonicalityStateV2 {
     pub is_album_artist_mode: bool,
     /// Whether the flag confirmation popup is showing
     pub flag_confirmation_pending: bool,
+    /// Zone for mutations (Corpus for normal canonicity, Inbox for inbox canonicity)
+    pub zone: Zone,
 }
 
 impl TagCanonicalityStateV2 {
@@ -236,6 +288,7 @@ impl TagCanonicalityStateV2 {
         group_index: usize,
         total_groups: usize,
         is_album_artist_mode: bool,
+        zone: Zone,
     ) -> Self {
         let canonical_value = if pre_fill {
             data.default_canonical()
@@ -266,6 +319,7 @@ impl TagCanonicalityStateV2 {
             pending_tag_edits: None,
             is_album_artist_mode,
             flag_confirmation_pending: false,
+            zone,
         }
     }
 
@@ -478,7 +532,7 @@ impl TagCanonicalityStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus })]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: self.zone })]
         }
     }
 }

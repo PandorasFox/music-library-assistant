@@ -498,6 +498,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_missing_album_single_signals()
     }
 
+    pub fn get_inbox_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
+        self.db.get_inbox_tag_canonicity_signal(key)
+    }
+
     /// Check if an inode-keyed corpus signal exists (generic, type-safe).
     pub fn corpus_signal_exists<S: crate::meta::signals::store::CorpusSignalStore>(&self, inode: i64) -> bool {
         S::exists(self.db.conn(), inode).unwrap_or(false)
@@ -741,6 +745,16 @@ impl<'a> ReadOnlyDb<'a> {
     /// Query distinct tag values with file counts from corpus_tags table.
     pub fn get_distinct_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
         self.db.get_distinct_tag_values(tag_name)
+    }
+
+    /// Query distinct tag values with file counts from inbox_tags table.
+    pub fn get_distinct_inbox_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
+        self.db.get_distinct_inbox_tag_values(tag_name)
+    }
+
+    /// Get inbox inodes that have any of the given tag values for a specific tag name.
+    pub fn get_inbox_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
+        self.db.get_inbox_inodes_for_tag_values(tag_name, values)
     }
 
     /// Query album data with artist context for collision detection.

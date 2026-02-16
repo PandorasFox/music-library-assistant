@@ -265,6 +265,8 @@ pub struct InboxOverviewData {
     pub corpus_match: usize,
     /// Files not yet indexed
     pub unindexed: usize,
+    /// Inbox tag values differing from corpus canonical spellings
+    pub tag_canonicity: usize,
 }
 
 // ============================================================================

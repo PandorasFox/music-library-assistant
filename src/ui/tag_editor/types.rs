@@ -3,6 +3,7 @@
 //! Core type definitions for the tag editor workflow.
 
 use crate::corpus::db::types::AudioFile;
+use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::Mutation;
 
 // ============================================================================
@@ -28,9 +29,9 @@ pub enum TagEditorLaunchMode {
     /// Normal standalone mode — tag editor owns the transaction lifecycle.
     Standalone,
     /// Embedded within a health modal — parent owns the transaction.
-    /// Changes are collected and staged as a single decision at the parent's decision index.
+    /// Changes are collected and staged as a single decision at the parent's decision key.
     Embedded {
-        decision_index: usize,
+        decision_key: DecisionKey,
         decision_label: String,
     },
 }
@@ -102,9 +103,9 @@ pub enum UnifiedTagEditorAction {
     /// No action
     None,
     /// Stage decision AND navigate (confirmation modal approved staging)
-    StageDecisionAndNavigate { index: usize, mutations: Vec<Mutation>, direction: NavigationDirection },
+    StageDecisionAndNavigate { key: DecisionKey, mutations: Vec<Mutation>, direction: NavigationDirection },
     /// Stage decision AND show transaction review (for aggregated mode or single-item contexts)
-    StageDecisionAndReview { index: usize, mutations: Vec<Mutation> },
+    StageDecisionAndReview { key: DecisionKey, mutations: Vec<Mutation> },
     /// Discard all staged decisions and exit
     DiscardTransaction,
     /// Navigate to next item (within current transaction)
@@ -122,9 +123,9 @@ pub enum UnifiedTagEditorAction {
     RequestTransactionReview,
     /// Close embedded tag editor without staging (Esc from embedded mode)
     CloseEmbedded,
-    /// Stage collected mutations at parent's decision index and close embedded editor
+    /// Stage collected mutations at parent's decision key and close embedded editor
     StageAndCloseEmbedded {
-        decision_index: usize,
+        decision_key: DecisionKey,
         decision_label: String,
         mutations: Vec<Mutation>,
     },

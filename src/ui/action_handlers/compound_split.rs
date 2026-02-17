@@ -4,6 +4,7 @@
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
 use crate::corpus::db::types::Zone;
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
 use crate::ui::suspended_views::SuspendTarget;
 use super::witness;
@@ -122,10 +123,10 @@ impl App {
     /// to match the health modal's current file selection.
     fn launch_tag_editor_from_compound_split(&mut self, mode: tag_editor::TagEditorMode) {
         // Extract data from current view
-        let (inodes, decision_index, decision_label, file_cursor_inode) =
+        let (inodes, decision_key, decision_label, file_cursor_inode) =
             if let ActiveView::CompoundTagSplit { ref state, ref clusters, .. } = self.view {
                 let inodes: Vec<i64> = state.data.files.iter().map(|f| f.inode).collect();
-                let decision_index = clusters.current_index();
+                let decision_key = DecisionKey::new(DecisionSource::CompoundSplit, clusters.current_index().to_string());
                 let label = format!(
                     "Tag edit: {} \"{}\"",
                     state.data.compound.tag_name,
@@ -133,7 +134,7 @@ impl App {
                 );
                 let cursor_inode = state.data.files.get(state.file_cursor)
                     .map(|f| f.inode);
-                (inodes, decision_index, label, cursor_inode)
+                (inodes, decision_key, label, cursor_inode)
             } else {
                 return;
             };
@@ -154,7 +155,7 @@ impl App {
         }
 
         // Open embedded tag editor (suspends current view on stack)
-        self.open_embedded_tag_editor(mode, audio_files, decision_index, decision_label);
+        self.open_embedded_tag_editor(mode, audio_files, decision_key, decision_label);
 
         // Position editor cursor on the file matching the health modal's selection
         if let Some(target_inode) = file_cursor_inode {
@@ -259,8 +260,8 @@ impl App {
     /// Collect (tag_name, canonical_value) pairs from staged EmitCanonicalTag decisions.
     fn staged_canonical_values(&self) -> Vec<(String, String)> {
         let Some(ref witch) = self.witch else { return Vec::new() };
-        witch.decision_indices().iter().filter_map(|&idx| {
-            let decision = witch.get_decision(idx)?;
+        witch.decision_keys().iter().filter_map(|key| {
+            let decision = witch.get_decision(key)?;
             decision.mutations.iter().find_map(|m| {
                 if let crate::meta::mutations::Mutation::EmitCanonicalTag(ref ct) = m {
                     Some((ct.tag_name.clone(), ct.canonical_value.clone()))
@@ -297,7 +298,7 @@ impl App {
 
         // Stage the decision via operator_decisions
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, cluster_idx, &description, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations);
         }
     }
 
@@ -318,7 +319,7 @@ impl App {
 
         // Stage the decision via operator_decisions
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, cluster_idx, &description, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations);
         }
     }
 
@@ -389,7 +390,7 @@ impl App {
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(group_index) {
+            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
                 state.restore_from_mutations(&decision.mutations);
                 state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }
@@ -442,7 +443,7 @@ impl App {
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(group_index) {
+            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
                 state.restore_from_mutations(&decision.mutations);
                 state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }

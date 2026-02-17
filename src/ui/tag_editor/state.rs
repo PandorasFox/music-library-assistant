@@ -252,8 +252,8 @@ impl UnifiedTagEditorState {
     }
 
     /// Builder method to set embedded mode (called after construction).
-    pub fn with_embedded_mode(mut self, decision_index: usize, decision_label: String) -> Self {
-        self.launch_mode = TagEditorLaunchMode::Embedded { decision_index, decision_label };
+    pub fn with_embedded_mode(mut self, decision_key: crate::meta::decisions::DecisionKey, decision_label: String) -> Self {
+        self.launch_mode = TagEditorLaunchMode::Embedded { decision_key, decision_label };
         self
     }
 

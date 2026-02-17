@@ -4,6 +4,7 @@
 //! tag editor launch, group navigation, and transaction management.
 
 use crate::corpus::db::types::Zone;
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{manual_review_modal, tag_editor, ActiveView};
 use crate::ui::manual_review_modal::types;
 use super::witness;
@@ -115,7 +116,7 @@ impl App {
             let label = format!("Stash {}", corpus_path);
             let _ = super::super::operator_decisions::stage_decision(
                 witch,
-                group_idx,
+                DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
                 &label,
                 mutations,
             );
@@ -147,7 +148,7 @@ impl App {
             let label = format!("Mark expected duplicate: {}", group_label);
             let _ = super::super::operator_decisions::stage_decision(
                 witch,
-                group_idx,
+                DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
                 &label,
                 vec![mutation],
             );
@@ -180,7 +181,7 @@ impl App {
 
     /// Open the embedded tag editor from within the manual review modal.
     fn open_manual_review_tag_editor(&mut self, aggregated: bool) {
-        let (inodes, decision_index, decision_label) = {
+        let (inodes, decision_key, decision_label) = {
             let ActiveView::ManualReview(ref state) = self.view else { return };
             if !state.kind.supports_tag_edit() { return; }
 
@@ -203,7 +204,7 @@ impl App {
                 .map(|g| g.label.clone())
                 .unwrap_or_else(|| "Manual review".to_string());
 
-            (inodes, state.current_group, label)
+            (inodes, DecisionKey::new(DecisionSource::ManualReview, state.current_group.to_string()), label)
         };
 
         // Load audio files from database
@@ -232,7 +233,7 @@ impl App {
         self.open_embedded_tag_editor(
             mode,
             audio_files,
-            decision_index,
+            decision_key,
             decision_label,
         );
     }

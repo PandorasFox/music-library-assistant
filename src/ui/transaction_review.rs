@@ -236,10 +236,10 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
 /// Fetch decision summaries from the Witch's active transaction.
 pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
     witch
-        .decision_indices()
+        .decision_keys()
         .iter()
-        .filter_map(|&idx| {
-            witch.get_decision(idx).map(|d| {
+        .filter_map(|key| {
+            witch.get_decision(key).map(|d| {
                 let diff_entries = d.mutations.iter()
                     .flat_map(|m| match m.as_executor() {
                         Some(e) => e.diff_entries(),

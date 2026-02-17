@@ -6,6 +6,7 @@
 use std::time::{Duration, Instant};
 use crossterm::event;
 
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{
     compound_split_v2,
     progress_screen::{ProgressPhase, ProgressScreen},
@@ -271,7 +272,7 @@ impl App {
         );
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, idx, &description, mutations);
+            let _ = super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, idx.to_string()), &description, mutations);
             worker.mutations_generated += 1;
         } else {
             worker.nops_elided += 1;

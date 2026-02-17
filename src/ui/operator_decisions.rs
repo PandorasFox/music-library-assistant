@@ -37,7 +37,7 @@
 //! The result: a clear, auditable boundary between "user confirmed the operation"
 //! and "mutations were queued for execution".
 
-use crate::meta::decisions::{DiscardSummary, TransactionError};
+use crate::meta::decisions::{DecisionKey, DiscardSummary, TransactionError};
 use crate::meta::mutations::Mutation;
 use crate::witch::Witch;
 
@@ -58,12 +58,12 @@ use crate::witch::Witch;
 /// - Tag canonicity: when user confirms a cluster resolution
 pub fn stage_decision(
     witch: &mut Witch,
-    index: usize,
+    key: DecisionKey,
     label: &str,
     mutations: Vec<Mutation>,
 ) -> Result<(), TransactionError> {
     witch.with_operator_decision(|scope| {
-        scope.add_decision(index, label, mutations)
+        scope.add_decision(key, label, mutations)
     })
 }
 
@@ -92,5 +92,31 @@ pub fn commit_transaction(witch: &mut Witch) -> Result<(), TransactionError> {
 pub fn discard_transaction(witch: &mut Witch) -> Result<DiscardSummary, TransactionError> {
     witch.with_operator_decision(|scope| {
         scope.discard_transaction()
+    })
+}
+
+/// Remove an entire decision from the active transaction.
+///
+/// Called when user removes a decision from transaction review.
+pub fn remove_decision(
+    witch: &mut Witch,
+    key: &DecisionKey,
+) -> Result<(), TransactionError> {
+    witch.with_operator_decision(|scope| {
+        scope.remove_decision(key)
+    })
+}
+
+/// Remove a single mutation from a decision in the active transaction.
+/// Auto-removes the decision if no mutations remain.
+///
+/// Called when user removes a specific mutation from transaction review.
+pub fn remove_mutation(
+    witch: &mut Witch,
+    key: &DecisionKey,
+    mutation_idx: usize,
+) -> Result<(), TransactionError> {
+    witch.with_operator_decision(|scope| {
+        scope.remove_mutation(key, mutation_idx)
     })
 }

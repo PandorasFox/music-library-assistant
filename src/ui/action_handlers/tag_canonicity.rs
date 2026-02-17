@@ -4,6 +4,7 @@
 //! clusters, staging canonicalization decisions.
 
 use crate::corpus::db::types::Zone;
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{
     helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView,
     CanonicitySignalKind, TagCanonicityClusters,
@@ -174,14 +175,14 @@ impl App {
     /// to match the health modal's current file selection.
     fn launch_tag_editor_from_canonicity(&mut self, mode: tag_editor::TagEditorMode) {
         // Extract data from current view
-        let (inodes, decision_index, decision_label, file_cursor_inode, zone) =
+        let (inodes, decision_key, decision_label, file_cursor_inode, zone) =
             if let ActiveView::TagCanonicityResolution { ref state, ref clusters } = self.view {
                 let inodes: Vec<i64> = state.data.inodes.clone();
-                let decision_index = clusters.current_index;
+                let decision_key = DecisionKey::new(DecisionSource::TagCanonicity, clusters.current_index.to_string());
                 let label = format!("Tag edit: {} canonicity", state.data.tag_name);
                 let cursor_inode = state.data.files.get(state.file_cursor)
                     .map(|f| f.inode);
-                (inodes, decision_index, label, cursor_inode, state.zone)
+                (inodes, decision_key, label, cursor_inode, state.zone)
             } else {
                 return;
             };
@@ -202,7 +203,7 @@ impl App {
         }
 
         // Open embedded tag editor (suspends current view on stack)
-        self.open_embedded_tag_editor(mode, audio_files, decision_index, decision_label);
+        self.open_embedded_tag_editor(mode, audio_files, decision_key, decision_label);
 
         // Position editor cursor on the file matching the health modal's selection
         if let Some(target_inode) = file_cursor_inode {
@@ -307,7 +308,7 @@ impl App {
 
         // Add decision to existing transaction via sealed operator decision handler
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, cluster_idx, &label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()), &label, mutations);
         }
     }
 
@@ -338,7 +339,7 @@ impl App {
         if let Some(ref mut witch) = self.witch {
             let _ = super::super::operator_decisions::stage_decision(
                 witch,
-                cluster_idx,
+                DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
                 "Flag non-compilation",
                 mutations,
             );
@@ -374,7 +375,7 @@ impl App {
         if let Some(ref mut witch) = self.witch {
             let _ = super::super::operator_decisions::stage_decision(
                 witch,
-                cluster_idx,
+                DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
                 "Flag canonical",
                 mutations,
             );
@@ -420,7 +421,7 @@ impl App {
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(current_index) {
+            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
                 state.restore_from_mutations(&decision.mutations);
                 state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }
@@ -466,7 +467,7 @@ impl App {
 
         // Back-fill UI state from staged decision if one exists for this cluster
         if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(current_index) {
+            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
                 state.restore_from_mutations(&decision.mutations);
                 state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
             }

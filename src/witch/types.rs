@@ -250,16 +250,34 @@ impl<'a> DecisionScope<'a> {
 
     /// Add a witnessed decision to the active transaction.
     ///
-    /// - `idx`: UI-provided index (may have gaps, largely sequential)
+    /// - `key`: Semantic key identifying the decision source and item
     /// - `label`: Human-readable description
     /// - `mutations`: The mutations this decision represents
     pub fn add_decision(
         &mut self,
-        idx: usize,
+        key: DecisionKey,
         label: impl Into<String>,
         mutations: Vec<Mutation>,
     ) -> Result<(), TransactionError> {
-        self.witch.add_decision(idx, &self.witness, label, mutations)
+        self.witch.add_decision(key, &self.witness, label, mutations)
+    }
+
+    /// Remove an entire decision from the active transaction.
+    pub fn remove_decision(
+        &mut self,
+        key: &DecisionKey,
+    ) -> Result<(), TransactionError> {
+        self.witch.remove_decision(key, &self.witness)
+    }
+
+    /// Remove a single mutation from a decision in the active transaction.
+    /// Auto-removes the decision if no mutations remain.
+    pub fn remove_mutation(
+        &mut self,
+        key: &DecisionKey,
+        mutation_idx: usize,
+    ) -> Result<(), TransactionError> {
+        self.witch.remove_mutation_from_decision(key, mutation_idx, &self.witness)
     }
 
     /// Confirm the transaction - queue all mutations for execution.
@@ -376,7 +394,7 @@ impl From<TaskExecutionState> for TaskExecutionStateSnapshot {
 // ============================================================================
 
 pub use crate::meta::decisions::{
-    DiscardSummary, PendingTransaction, TransactionError,
+    DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
 };
 
 // ============================================================================

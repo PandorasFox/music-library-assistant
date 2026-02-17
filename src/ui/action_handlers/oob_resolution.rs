@@ -3,6 +3,7 @@
 //! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement modals.
 
 use crate::corpus::paths;
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{filter_popup, moved_file_modal, oob_sync_modal, oob_conflict_modal, ActiveView, FilterOverlay, FilterPopupContext};
 use super::witness;
 use super::super::App;
@@ -130,7 +131,7 @@ impl App {
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, 0, label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobSync), label, mutations);
         }
     }
 
@@ -312,7 +313,7 @@ impl App {
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, 0, label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobConflict), label, mutations);
         }
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
@@ -364,7 +365,7 @@ impl App {
         if let Some(ref mut witch) = self.witch {
             let _ = super::super::operator_decisions::stage_decision(
                 witch,
-                0,
+                DecisionKey::single(DecisionSource::MtimeAck),
                 "Acknowledge mtime changes",
                 mutations,
             );
@@ -466,7 +467,7 @@ impl App {
 
         // Stage the UpdateFilePath mutations
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, 0, &label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::MovedFile), &label, mutations);
         }
     }
 }

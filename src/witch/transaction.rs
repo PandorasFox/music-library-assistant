@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use crate::meta::decisions::{
-    DiscardSummary, PendingTransaction, TransactionError, WitnessedDecision,
+    DecisionKey, DiscardSummary, PendingTransaction, TransactionError, WitnessedDecision,
 };
 use super::types::DecisionWitness;
 use crate::corpus::db::types::Zone;
@@ -132,16 +132,16 @@ impl super::Witch {
 
     /// Add a witnessed decision to the transaction.
     ///
-    /// - `idx`: UI-provided index (may have gaps, largely sequential)
+    /// - `key`: Semantic key identifying the decision source and item
     /// - `witness`: Proof of operator confirmation
     /// - `label`: Human-readable description
     /// - `mutations`: The mutations this decision represents
     ///
-    /// Overwrites any existing decision at the same index.
+    /// Overwrites any existing decision at the same key.
     /// Returns Err if no transaction is active.
     pub fn add_decision(
         &mut self,
-        idx: usize,
+        key: DecisionKey,
         _witness: &DecisionWitness,
         label: impl Into<String>,
         mutations: Vec<Mutation>,
@@ -150,15 +150,15 @@ impl super::Witch {
         let mutation_count = mutations.len();
 
         self.require_active_transaction(&format!(
-            "add_decision(idx={}, label={:?}, mutations={})",
-            idx, label_str, mutation_count
+            "add_decision(key={}, label={:?}, mutations={})",
+            key, label_str, mutation_count
         ))?;
 
         let txn = self.pending_transaction.as_mut().unwrap();
 
         crate::logging::log_mutation(format!(
-            "[TRANSACTION] add_decision(idx={}, label={:?}, mutations={}) OK - txn now has {} decisions",
-            idx, label_str, mutation_count, txn.decision_count() + 1
+            "[TRANSACTION] add_decision(key={}, label={:?}, mutations={}) OK - txn now has {} decisions",
+            key, label_str, mutation_count, txn.decision_count() + 1
         ));
 
         // Log each mutation for debugging
@@ -170,7 +170,7 @@ impl super::Witch {
         }
 
         txn.decisions.insert(
-            idx,
+            key,
             WitnessedDecision {
                 label: label_str,
                 mutations,
@@ -180,21 +180,61 @@ impl super::Witch {
         Ok(())
     }
 
-    /// Fetch a decision by index.
+    /// Fetch a decision by key.
     ///
-    /// Returns None if no decision stored at that index.
-    pub fn get_decision(&self, idx: usize) -> Option<&WitnessedDecision> {
+    /// Returns None if no decision stored at that key.
+    pub fn get_decision(&self, key: &DecisionKey) -> Option<&WitnessedDecision> {
         self.pending_transaction
             .as_ref()
-            .and_then(|txn| txn.decisions.get(&idx))
+            .and_then(|txn| txn.decisions.get(key))
     }
 
-    /// List all decision indices in the current transaction.
-    pub fn decision_indices(&self) -> Vec<usize> {
+    /// List all decision keys in the current transaction.
+    pub fn decision_keys(&self) -> Vec<DecisionKey> {
         self.pending_transaction
             .as_ref()
-            .map(|txn| txn.indices())
+            .map(|txn| txn.keys())
             .unwrap_or_default()
+    }
+
+    /// Remove an entire decision from the active transaction.
+    pub fn remove_decision(
+        &mut self,
+        key: &DecisionKey,
+        _witness: &DecisionWitness,
+    ) -> Result<(), TransactionError> {
+        self.require_active_transaction(&format!("remove_decision(key={})", key))?;
+
+        let txn = self.pending_transaction.as_mut().unwrap();
+        if txn.remove_decision(key).is_some() {
+            crate::logging::log_mutation(format!(
+                "[TRANSACTION] remove_decision(key={}) OK - txn now has {} decisions",
+                key, txn.decision_count()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Remove a single mutation from a decision in the active transaction.
+    /// Auto-removes the decision if no mutations remain.
+    pub fn remove_mutation_from_decision(
+        &mut self,
+        key: &DecisionKey,
+        mutation_idx: usize,
+        _witness: &DecisionWitness,
+    ) -> Result<(), TransactionError> {
+        self.require_active_transaction(&format!(
+            "remove_mutation(key={}, idx={})", key, mutation_idx
+        ))?;
+
+        let txn = self.pending_transaction.as_mut().unwrap();
+        if txn.remove_mutation(key, mutation_idx) {
+            crate::logging::log_mutation(format!(
+                "[TRANSACTION] remove_mutation(key={}, idx={}) OK - txn now has {} decisions",
+                key, mutation_idx, txn.decision_count()
+            ));
+        }
+        Ok(())
     }
 
     /// Confirm the transaction - queue all mutations for execution.

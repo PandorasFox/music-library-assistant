@@ -20,6 +20,7 @@ mod simple_resolutions;
 mod tag_canonicity;
 mod witness;
 
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
 use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, ViewAction};
 use crate::ui::suspended_views::SuspendTarget;
@@ -79,14 +80,14 @@ impl App {
     // =========================================================================
 
     /// Stage a tag editor decision to the Witch's transaction and update editor state.
-    fn stage_tag_editor_decision(&mut self, index: usize, mutations: Vec<crate::meta::mutations::Mutation>, _witness: &witness::DecisionWitness) {
+    fn stage_tag_editor_decision(&mut self, key: DecisionKey, mutations: Vec<crate::meta::mutations::Mutation>, _witness: &witness::DecisionWitness) {
         if let Some(the_witch) = self.witch.as_mut() {
             let label = if let ActiveView::UnifiedTagEditor(ref editor) = self.view {
                 editor.current_item_label()
             } else {
                 "Tag edit".to_string()
             };
-            let _ = super::operator_decisions::stage_decision(the_witch, index, &label, mutations.clone());
+            let _ = super::operator_decisions::stage_decision(the_witch, key, &label, mutations.clone());
         }
         if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
             editor.set_staged_mutations(mutations);
@@ -100,10 +101,10 @@ impl App {
     /// Starts a transaction with the given label, stages the mutations as a
     /// single decision. Used by simple resolution modals that have a straightforward
     /// "collect mutations → review → commit" pattern.
-    fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, _witness: &witness::DecisionWitness) {
+    fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, key: DecisionKey, _witness: &witness::DecisionWitness) {
         let Some(ref mut witch) = self.witch else { return };
         let _ = witch.start_transaction(label);
-        let _ = super::operator_decisions::stage_decision(witch, 0, label, mutations);
+        let _ = super::operator_decisions::stage_decision(witch, key, label, mutations);
     }
 
     /// Cancel the current modal: discard any active transaction and return to Insights.
@@ -178,7 +179,7 @@ impl App {
                     if let Some(ref mut witch) = self.witch {
                         let _ = witch.start_transaction("Config update");
                         let _ = super::operator_decisions::stage_decision(
-                            witch, 0, "Apply config changes", vec![mutation],
+                            witch, DecisionKey::single(DecisionSource::ConfigEdit), "Apply config changes", vec![mutation],
                         );
                     }
 
@@ -479,7 +480,7 @@ impl App {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
-                                    witch, group_idx, "Tag as singles", vec![mutation],
+                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag as singles", vec![mutation],
                                 );
                             }
                         }
@@ -497,7 +498,7 @@ impl App {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
-                                    witch, group_idx, "Tag all as Singles", vec![mutation],
+                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag all as Singles", vec![mutation],
                                 );
                             }
                         }
@@ -512,7 +513,7 @@ impl App {
                             let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
-                                    witch, group_idx, "Suppress missing album", vec![mutation],
+                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Suppress missing album", vec![mutation],
                                 );
                             }
                         }
@@ -554,16 +555,16 @@ impl App {
             }
 
             MissingAlbumAction::EditTracks => {
-                let (inodes, decision_index, label) = {
+                let (inodes, decision_key, label) = {
                     let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
                     let group = match state.current_group_data() {
                         Some(g) => g,
                         None => return,
                     };
-                    // Offset decision index to avoid colliding with resolution decisions
-                    let idx = state.data.groups.len() + state.current_group;
+                    // Use a distinct key to avoid colliding with resolution decisions
+                    let key = DecisionKey::new(DecisionSource::TagEdit, format!("missing_album_{}", state.current_group));
                     let label = format!("Manual tag edits: {}", group.artist);
-                    (state.current_group_inodes(), idx, label)
+                    (state.current_group_inodes(), key, label)
                 };
                 if inodes.is_empty() {
                     return;
@@ -577,22 +578,22 @@ impl App {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Individual,
                         audio_files,
-                        decision_index,
+                        decision_key,
                         label,
                     );
                 }
             }
 
             MissingAlbumAction::EditTracksAggregated => {
-                let (inodes, decision_index, label) = {
+                let (inodes, decision_key, label) = {
                     let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
                     let group = match state.current_group_data() {
                         Some(g) => g,
                         None => return,
                     };
-                    let idx = state.data.groups.len() + state.current_group;
+                    let key = DecisionKey::new(DecisionSource::TagEdit, format!("missing_album_{}", state.current_group));
                     let label = format!("Manual tag edits: {}", group.artist);
-                    (state.current_group_inodes(), idx, label)
+                    (state.current_group_inodes(), key, label)
                 };
                 if inodes.is_empty() {
                     return;
@@ -606,7 +607,7 @@ impl App {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Aggregated,
                         audio_files,
-                        decision_index,
+                        decision_key,
                         label,
                     );
                 }
@@ -684,7 +685,7 @@ impl App {
                         let _ = the_witch.start_transaction("Intake indexing");
                         let _ = operator_decisions::stage_decision(
                             the_witch,
-                            0,
+                            DecisionKey::single(DecisionSource::IntakeIndex),
                             "Index unindexed files",
                             mutations,
                         );
@@ -755,7 +756,7 @@ impl App {
             UnifiedTagEditorAction::None => {}
             UnifiedTagEditorAction::CloseModal => {}
 
-            UnifiedTagEditorAction::StageDecisionAndNavigate { index, mutations, direction } => {
+            UnifiedTagEditorAction::StageDecisionAndNavigate { key, mutations, direction } => {
                 use crate::ui::tag_editor::types::NavigationDirection;
                 let is_embedded = matches!(&self.view, ActiveView::UnifiedTagEditor(ref e) if e.is_embedded());
 
@@ -768,7 +769,7 @@ impl App {
                 } else {
                     // Standalone mode: stage to transaction (requires witness)
                     let Some(w) = witness else { return };
-                    self.stage_tag_editor_decision(index, mutations, w);
+                    self.stage_tag_editor_decision(key, mutations, w);
                 }
 
                 // Navigate in both modes
@@ -790,11 +791,11 @@ impl App {
                 }
             }
 
-            UnifiedTagEditorAction::StageDecisionAndReview { index, mutations } => {
+            UnifiedTagEditorAction::StageDecisionAndReview { key, mutations } => {
                 let Some(w) = witness else { return };
                 // Stage the decision AND immediately show transaction review
                 // Used for aggregated mode or single-item contexts
-                self.stage_tag_editor_decision(index, mutations, w);
+                self.stage_tag_editor_decision(key, mutations, w);
 
                 // Transition to standardized review modal
                 // Note: tag editor state is preserved on the view stack for Cancel return
@@ -870,12 +871,12 @@ impl App {
                 }
             }
 
-            UnifiedTagEditorAction::StageAndCloseEmbedded { decision_index, decision_label, mutations } => {
+            UnifiedTagEditorAction::StageAndCloseEmbedded { decision_key, decision_label, mutations } => {
                 let Some(_w) = witness else { return };
-                // Stage collected mutations at parent's decision index
+                // Stage collected mutations at parent's decision key
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::stage_decision(
-                        witch, decision_index, &decision_label, mutations,
+                        witch, decision_key, &decision_label, mutations,
                     );
                 }
                 // Return to parent health modal

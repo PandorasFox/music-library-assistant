@@ -4,6 +4,7 @@
 //! (leftovers, stale, new, conflicts), and the preview action handler.
 
 use crate::corpus::paths;
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, MoveToStashMutation};
 use crate::ui::{deploy_modal, ActiveView};
 use super::witness;
@@ -152,7 +153,7 @@ impl App {
         let _ = witch.start_transaction("Deploy");
         let _ = super::super::operator_decisions::stage_decision(
             witch,
-            0,
+            DecisionKey::single(DecisionSource::Deploy),
             "Deploy operations",
             mutations,
         );

@@ -294,7 +294,7 @@ impl App {
         &mut self,
         mode: tag_editor::TagEditorMode,
         audio_files: Vec<AudioFile>,
-        decision_index: usize,
+        decision_key: crate::meta::decisions::DecisionKey,
         decision_label: String,
     ) {
         let editor = tag_editor::UnifiedTagEditorState::new(
@@ -302,7 +302,7 @@ impl App {
             audio_files,
             tag_editor::TagEditorSource::HealthModal,
             None,
-        ).with_embedded_mode(decision_index, decision_label);
+        ).with_embedded_mode(decision_key, decision_label);
 
         drain_input_buffer();
 

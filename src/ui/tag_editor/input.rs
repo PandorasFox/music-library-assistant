@@ -6,6 +6,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::state::UnifiedTagEditorState;
+use crate::meta::decisions::{DecisionKey, DecisionSource};
 use super::types::{
     FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton,
     TagEditorLaunchMode, UnifiedTagEditorAction, UnifiedTagEditorFocus,
@@ -158,7 +159,7 @@ impl UnifiedTagEditorState {
                                 let mutations = self.generate_mutations_for_current_item();
                                 self.modal = None;
                                 UnifiedTagEditorAction::StageDecisionAndNavigate {
-                                    index: self.current_item_idx,
+                                    key: DecisionKey::new(DecisionSource::TagEdit, self.current_item_idx.to_string()),
                                     mutations,
                                     direction,
                                 }
@@ -381,9 +382,9 @@ impl UnifiedTagEditorState {
                             let mutations = self.collect_all_mutations();
                             if mutations.is_empty() {
                                 UnifiedTagEditorAction::CloseEmbedded
-                            } else if let TagEditorLaunchMode::Embedded { decision_index, ref decision_label } = self.launch_mode {
+                            } else if let TagEditorLaunchMode::Embedded { ref decision_key, ref decision_label } = self.launch_mode {
                                 UnifiedTagEditorAction::StageAndCloseEmbedded {
-                                    decision_index,
+                                    decision_key: decision_key.clone(),
                                     decision_label: decision_label.clone(),
                                     mutations,
                                 }
@@ -399,7 +400,7 @@ impl UnifiedTagEditorState {
                                 // Stage current file's changes, then open review
                                 let mutations = self.generate_mutations_for_current_item();
                                 UnifiedTagEditorAction::StageDecisionAndReview {
-                                    index: self.current_item_idx,
+                                    key: DecisionKey::new(DecisionSource::TagEdit, self.current_item_idx.to_string()),
                                     mutations,
                                 }
                             } else if has_anything {

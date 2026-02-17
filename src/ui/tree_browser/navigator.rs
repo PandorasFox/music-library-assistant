@@ -132,7 +132,7 @@ impl TreeNavigator {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| self.root_path.to_string_lossy().to_string());
 
-            let has_children = self.path_has_children(&self.root_path);
+            let has_children = self.path_has_children(&self.root_path) || self.show_new_dir_entry;
             let item_count = self.count_audio_files(&self.root_path);
 
             let root_configured = self.is_configured_for_deploy(&self.root_path);
@@ -328,7 +328,7 @@ impl TreeNavigator {
                 }
 
                 if path.is_dir() {
-                    let has_children = self.path_has_children(&path);
+                    let has_children = self.path_has_children(&path) || self.show_new_dir_entry;
                     let item_count = self.count_audio_files(&path);
                     let mut entry = TreeEntry::directory(path.clone(), name, depth, has_children, item_count);
                     entry.configured_for_deploy = self.is_configured_for_deploy(&path);

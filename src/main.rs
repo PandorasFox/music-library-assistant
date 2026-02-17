@@ -38,10 +38,15 @@ fn main() -> Result<()> {
     let config_dir = config::get_config_dir()?;
     std::fs::create_dir_all(&config_dir)?;
 
-    // Step 2: Load config (parse KDL)
+    // Step 2: First-time setup if no config exists
+    if !config::config_exists() {
+        ui::startup::run_first_time_setup()?;
+    }
+
+    // Step 3: Load config (parse KDL)
     let config = match config::load_config() {
         Ok(cfg) => {
-            // Step 3: Log successful parse and initialize performance globals
+            // Log successful parse and initialize performance globals
             logging::log_general("Config loaded successfully");
             config::init_performance_config(cfg.opinions.performance.clone());
             cfg
@@ -54,7 +59,7 @@ fn main() -> Result<()> {
         }
     };
 
-    // Step 4: Validate config (filesystem tests)
+    // Step 4: Validate config (filesystem tests - same-device check for hardlinks)
     if let Err(e) = config.validate() {
         eprintln!("ERROR: Config validation failed\n");
         eprintln!("{:#}", e);

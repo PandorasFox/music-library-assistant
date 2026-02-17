@@ -235,15 +235,25 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     true),
             ],
         },
-        // Group 10: Tag Splitting (read-only)
+        // Group 10: Tag Splitting
         ConfigGroup {
             name: "Tag Splitting",
-            collapsed: true,
+            collapsed: false,
             fields: vec![
-                field("Tag split rules", "Complex rules — edit directly in config.kdl",
-                    ConfigValue::String("(edit in config.kdl)".to_string()),
-                    ConfigValue::String("(edit in config.kdl)".to_string()),
-                    FieldSource::Default,
+                field("Collaboration keywords", "Keywords like feat, ft, vs for artist collabs",
+                    ConfigValue::StringSet(ops.tag_splitting.collaboration_keywords.iter().cloned().collect()),
+                    ConfigValue::StringSet(defaults.tag_splitting.collaboration_keywords.iter().cloned().collect()),
+                    source_for(ops.tag_splitting.collaboration_keywords == defaults.tag_splitting.collaboration_keywords, "collab"),
+                    false),
+                field("Canonicalization synonyms", "Substitutions during matching (e.g., and -> &)",
+                    ConfigValue::StringPairMap(ops.tag_splitting.canonicalization_synonyms.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                    ConfigValue::StringPairMap(defaults.tag_splitting.canonicalization_synonyms.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                    source_for(ops.tag_splitting.canonicalization_synonyms == defaults.tag_splitting.canonicalization_synonyms, "synonyms"),
+                    false),
+                field("Tag separators", "Per-tag separator strings",
+                    ConfigValue::StringListMap(ops.tag_splitting.tag_separators.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                    ConfigValue::StringListMap(defaults.tag_splitting.tag_separators.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                    source_for(ops.tag_splitting.tag_separators == defaults.tag_splitting.tag_separators, "tag-separators"),
                     false),
             ],
         },
@@ -345,7 +355,22 @@ fn apply_field(config: &mut Config, group_name: &str, field: &ConfigField) {
         ("Performance", "Timing instrumentation") => {
             if let ConfigValue::Bool(v) = &field.value { config.opinions.performance.timing_instrumentation = *v; }
         }
-        _ => {} // Tag Splitting and unknown fields are ignored
+        ("Tag Splitting", "Collaboration keywords") => {
+            if let ConfigValue::StringSet(v) = &field.value {
+                config.opinions.tag_splitting.collaboration_keywords = v.iter().cloned().collect();
+            }
+        }
+        ("Tag Splitting", "Canonicalization synonyms") => {
+            if let ConfigValue::StringPairMap(v) = &field.value {
+                config.opinions.tag_splitting.canonicalization_synonyms = v.iter().cloned().collect();
+            }
+        }
+        ("Tag Splitting", "Tag separators") => {
+            if let ConfigValue::StringListMap(v) = &field.value {
+                config.opinions.tag_splitting.tag_separators = v.iter().cloned().collect();
+            }
+        }
+        _ => {} // Unknown fields are ignored
     }
 }
 

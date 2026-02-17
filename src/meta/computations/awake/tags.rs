@@ -446,92 +446,67 @@ pub fn execute_detect_compound_tags_for_inode(
             return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
         }
     };
-    let tag_split_rules = &config.opinions.tag_splitting.tag_split_rules;
+    let tag_splitting = &config.opinions.tag_splitting;
 
-    // Cache of known tag values per tag name — used by SeparatorIfKnown during
-    // rule matching and by the matching_parts pass afterward.
+    // Cache of known tag values per tag name — used for matching_parts pass
     let mut tag_values_cache: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
 
     let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
 
+    // Convert collaboration_keywords HashSet to Vec for detect_featuring_pattern
+    let collab_keywords: Vec<String> = tag_splitting.collaboration_keywords.iter().cloned().collect();
+
     for tag in &tags {
         let tag_name_upper = tag.tag_name.to_uppercase();
+        let is_artist_tag = matches!(tag_name_upper.as_str(), "ARTIST" | "ALBUMARTIST");
 
         // Check if this value is whitelisted as canonical
         if read_only_db.is_canonical_tag(&tag.tag_name, &tag.tag_value).unwrap_or(false) {
             continue;
         }
 
-        // Walk the priority chain of split rules for this tag
-        if let Some(rules) = tag_split_rules.get(&tag_name_upper) {
-            for rule in rules {
-                let matched = match rule {
-                    crate::config::SplitRule::Separator(sep) => {
-                        if CompoundTagValue::is_compound(&tag.tag_value, sep) {
-                            let split_parts = CompoundTagValue::split_value(&tag.tag_value, sep);
-                            Some(TypedCompoundEntry {
-                                tag_name: tag.tag_name.clone(),
-                                compound_value: tag.tag_value.clone(),
-                                split_parts,
-                                separator: sep.clone(),
-                                matching_parts: Vec::new(),
-                            })
-                        } else {
-                            None
-                        }
+        let mut matched_entry: Option<TypedCompoundEntry> = None;
+
+        // 1. Collaboration keywords (artist tags only)
+        if is_artist_tag && !collab_keywords.is_empty() {
+            if let Some((main_part, secondary_parts)) =
+                detect_featuring_pattern(&tag.tag_value, &collab_keywords)
+            {
+                let mut split_parts = vec![main_part];
+                split_parts.extend(secondary_parts);
+                let separator = determine_collab_separator_label(&tag.tag_value, &collab_keywords);
+                matched_entry = Some(TypedCompoundEntry {
+                    tag_name: tag.tag_name.clone(),
+                    compound_value: tag.tag_value.clone(),
+                    split_parts,
+                    separator,
+                    matching_parts: Vec::new(),
+                });
+            }
+        }
+
+        // 2. Per-tag separators (if no collab match)
+        if matched_entry.is_none() {
+            if let Some(separators) = tag_splitting.tag_separators.get(&tag_name_upper) {
+                for sep in separators {
+                    if CompoundTagValue::is_compound(&tag.tag_value, sep) {
+                        let split_parts = CompoundTagValue::split_value(&tag.tag_value, sep);
+                        matched_entry = Some(TypedCompoundEntry {
+                            tag_name: tag.tag_name.clone(),
+                            compound_value: tag.tag_value.clone(),
+                            split_parts,
+                            separator: sep.clone(),
+                            matching_parts: Vec::new(),
+                        });
+                        break; // First matching separator wins
                     }
-                    crate::config::SplitRule::SeparatorIfKnown(sep) => {
-                        if CompoundTagValue::is_compound(&tag.tag_value, sep) {
-                            let split_parts = CompoundTagValue::split_value(&tag.tag_value, sep);
-                            // Only match if at least one part is already known
-                            let existing = tag_values_cache.entry(tag_name_upper.clone()).or_insert_with(|| {
-                                read_only_db
-                                    .get_distinct_tag_values(&tag_name_upper)
-                                    .unwrap_or_default()
-                                    .into_iter()
-                                    .map(|(value, _count)| value)
-                                    .collect()
-                            });
-                            if split_parts.iter().any(|part| existing.contains(part)) {
-                                Some(TypedCompoundEntry {
-                                    tag_name: tag.tag_name.clone(),
-                                    compound_value: tag.tag_value.clone(),
-                                    split_parts,
-                                    separator: sep.clone(),
-                                    matching_parts: Vec::new(),
-                                })
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    crate::config::SplitRule::CollaborationKeywords(keywords) => {
-                        if let Some((main_part, secondary_parts)) =
-                            detect_featuring_pattern(&tag.tag_value, keywords)
-                        {
-                            let mut split_parts = vec![main_part];
-                            split_parts.extend(secondary_parts);
-                            let separator = determine_collab_separator_label(&tag.tag_value, keywords);
-                            Some(TypedCompoundEntry {
-                                tag_name: tag.tag_name.clone(),
-                                compound_value: tag.tag_value.clone(),
-                                split_parts,
-                                separator,
-                                matching_parts: Vec::new(),
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                };
-                if let Some(entry) = matched {
-                    compounds.push(entry);
-                    break; // First matching rule wins
                 }
             }
+        }
+
+        if let Some(entry) = matched_entry {
+            compounds.push(entry);
         }
     }
 

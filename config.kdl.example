@@ -104,11 +104,17 @@ opinions {
     // -------------------------------------------------------------------------
     // Tag Splitting - Detect compound tag values
     // -------------------------------------------------------------------------
-    // Each child node is a tag name, with separator strings as entries.
-    // (defaults: genre splits on ";", ",", "/"; artist splits on " & ", ", ", "; ")
+    // - collab: keywords for detecting featuring patterns (artist tags only)
+    // - synonyms: substitutions during matching (e.g., "and" -> "&")
+    // - Other nodes: tag name with list of separator strings
+    //
     // tag-splitting {
-    //     genre ";" "," "/"
-    //     artist " & " ", " "; "
+    //     collab "feat" "featuring" "ft" "with" "vs"
+    //     synonyms {
+    //         "and" "&"
+    //     }
+    //     artist ";"
+    //     genre ";"
     // }
 
     // -------------------------------------------------------------------------

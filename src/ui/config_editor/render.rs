@@ -1,6 +1,8 @@
 //! Config Editor Rendering
 //!
 //! Full-screen layout with scrollable field list and Save/Discard buttons.
+//! Collection fields (StringSet, StringPairMap, StringListMap) render inline
+//! with expandable item lists when editing.
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -11,8 +13,8 @@ use ratatui::{
 };
 
 use crate::ui::widgets::control_colors;
-use super::state::{ConfigEditorState, EditorButton, EditorFocus};
-use super::types::FieldSource;
+use super::state::{ConfigEditorState, EditorButton, EditorFocus, CollectionPosition};
+use super::types::{ConfigField, ConfigValue, FieldSource};
 
 /// Render the config editor view into the given content area.
 pub fn render(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
@@ -36,8 +38,8 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
     let visible_height = area.height as usize;
     let inner_width = area.width as usize;
 
-    // Build flat list of renderable lines (group headers + fields)
-    let mut lines: Vec<(Line<'_>, bool)> = Vec::new(); // (line, is_cursor_row)
+    // Build flat list of renderable lines (group headers + fields + collection items)
+    let mut lines: Vec<(Line<'_>, bool)> = Vec::new(); // (line, is_scroll_target)
     let mut flat_idx: usize = 0;
 
     for group in &state.groups {
@@ -67,20 +69,31 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
             let is_cursor = flat_idx == state.cursor;
             flat_idx += 1;
 
+            // Check if this field is a collection being edited inline
+            let is_collection_expanded = is_cursor && state.collection_pos.is_some();
+
+            // Render field header line
             let line = render_field_line(field, is_cursor, inner_width, state);
-            lines.push((line, is_cursor));
+            // If collection is expanded, scroll target is the selected item, not the header
+            lines.push((line, is_cursor && !is_collection_expanded));
+
+            // If expanded collection, render items inline
+            if is_collection_expanded {
+                let collection_lines = render_collection_items(field, state, inner_width);
+                lines.extend(collection_lines);
+            }
         }
 
         // Blank separator between groups
         lines.push((Line::from(""), false));
     }
 
-    // Auto-scroll to keep cursor visible
-    let cursor_line_idx = lines.iter().position(|(_, is_cursor)| *is_cursor).unwrap_or(0);
-    let scroll = if cursor_line_idx < state.scroll_offset {
-        cursor_line_idx
-    } else if cursor_line_idx >= state.scroll_offset + visible_height {
-        cursor_line_idx.saturating_sub(visible_height) + 1
+    // Auto-scroll to keep target line visible
+    let target_line_idx = lines.iter().position(|(_, is_target)| *is_target).unwrap_or(0);
+    let scroll = if target_line_idx < state.scroll_offset {
+        target_line_idx
+    } else if target_line_idx >= state.scroll_offset + visible_height {
+        target_line_idx.saturating_sub(visible_height) + 1
     } else {
         state.scroll_offset
     };
@@ -153,6 +166,231 @@ fn render_field_line<'a>(
     ])
 }
 
+/// Render inline collection items when a collection field is expanded.
+fn render_collection_items<'a>(
+    field: &'a ConfigField,
+    state: &ConfigEditorState,
+    _width: usize,
+) -> Vec<(Line<'a>, bool)> {
+    let mut lines = Vec::new();
+    let pos = state.collection_pos;
+    let text_input = state.text_input.as_ref();
+    let pair_focus = state.pair_field_focus;
+
+    match &field.value {
+        ConfigValue::StringSet(items) => {
+            for (i, item) in items.iter().enumerate() {
+                let is_selected = pos == Some(CollectionPosition::Item(i));
+                let is_editing = is_selected && text_input.is_some();
+                let is_target = is_selected;
+
+                let cursor_char = if is_selected { "    > " } else { "      " };
+
+                let line = if is_editing {
+                    let input = text_input.unwrap();
+                    Line::from(vec![
+                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            format!("{}\u{2588}", input.value),
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                        ),
+                    ])
+                } else {
+                    let style = if is_selected {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    Line::from(vec![
+                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                        Span::styled(item.as_str(), style),
+                    ])
+                };
+                lines.push((line, is_target));
+            }
+            // Add new row
+            let is_add_new = pos == Some(CollectionPosition::AddNew);
+            let is_editing = is_add_new && text_input.is_some();
+            let cursor_char = if is_add_new { "    > " } else { "      " };
+
+            let line = if is_editing {
+                let input = text_input.unwrap();
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{}\u{2588}", input.value),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                    ),
+                ])
+            } else {
+                let style = if is_add_new {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled("[+] Add new...", style),
+                ])
+            };
+            lines.push((line, is_add_new));
+        }
+
+        ConfigValue::StringPairMap(items) => {
+            for (i, (key, value)) in items.iter().enumerate() {
+                let is_selected = pos == Some(CollectionPosition::Item(i));
+                let is_editing = is_selected && text_input.is_some();
+                let is_target = is_selected;
+
+                let cursor_char = if is_selected { "    > " } else { "      " };
+
+                let line = if is_editing {
+                    let input = text_input.unwrap();
+                    let (key_display, value_display) = if pair_focus == 0 {
+                        (format!("{}\u{2588}", input.value), value.clone())
+                    } else {
+                        (key.clone(), format!("{}\u{2588}", input.value))
+                    };
+                    let key_style = if pair_focus == 0 {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    let value_style = if pair_focus == 1 {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED)
+                    } else {
+                        Style::default().fg(Color::Cyan)
+                    };
+                    Line::from(vec![
+                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                        Span::styled(key_display, key_style),
+                        Span::styled(" \u{2192} ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(value_display, value_style),
+                    ])
+                } else {
+                    let key_style = if is_selected && pair_focus == 0 {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    let value_style = if is_selected && pair_focus == 1 {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Cyan)
+                    };
+                    Line::from(vec![
+                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                        Span::styled(key.as_str(), key_style),
+                        Span::styled(" \u{2192} ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(value.as_str(), value_style),
+                    ])
+                };
+                lines.push((line, is_target));
+            }
+            // Add new row
+            let is_add_new = pos == Some(CollectionPosition::AddNew);
+            let is_editing = is_add_new && text_input.is_some();
+            let cursor_char = if is_add_new { "    > " } else { "      " };
+
+            let line = if is_editing {
+                let input = text_input.unwrap();
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{}\u{2588}", input.value),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                    ),
+                    Span::styled(" \u{2192} ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("...", Style::default().fg(Color::DarkGray)),
+                ])
+            } else {
+                let style = if is_add_new {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled("[+] Add new...", style),
+                ])
+            };
+            lines.push((line, is_add_new));
+        }
+
+        ConfigValue::StringListMap(items) => {
+            for (i, (tag, separators)) in items.iter().enumerate() {
+                let is_selected = pos == Some(CollectionPosition::Item(i));
+                let is_editing = is_selected && text_input.is_some();
+                let is_target = is_selected;
+
+                let cursor_char = if is_selected { "    > " } else { "      " };
+                let seps_display = if separators.is_empty() {
+                    "(no separators)".to_string()
+                } else {
+                    separators.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ")
+                };
+
+                let line = if is_editing {
+                    let input = text_input.unwrap();
+                    Line::from(vec![
+                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                        Span::styled(tag.as_str(), Style::default().fg(Color::White)),
+                        Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("{}\u{2588}", input.value),
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                        ),
+                    ])
+                } else {
+                    let tag_style = if is_selected {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    Line::from(vec![
+                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                        Span::styled(tag.as_str(), tag_style),
+                        Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(seps_display, Style::default().fg(Color::Cyan)),
+                    ])
+                };
+                lines.push((line, is_target));
+            }
+            // Add new row
+            let is_add_new = pos == Some(CollectionPosition::AddNew);
+            let is_editing = is_add_new && text_input.is_some();
+            let cursor_char = if is_add_new { "    > " } else { "      " };
+
+            let line = if is_editing {
+                let input = text_input.unwrap();
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{}\u{2588}", input.value),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                    ),
+                    Span::styled(": (new tag)", Style::default().fg(Color::DarkGray)),
+                ])
+            } else {
+                let style = if is_add_new {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled("[+] Add new tag...", style),
+                ])
+            };
+            lines.push((line, is_add_new));
+        }
+
+        _ => {}
+    }
+
+    lines
+}
+
 /// Render the Save / Discard button row.
 fn render_buttons(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
     let in_buttons = state.focus == EditorFocus::Buttons;
@@ -201,6 +439,37 @@ fn render_hints(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
             control_colors::cancel("Esc"),
             control_colors::text(" back"),
         ])
+    } else if state.collection_pos.is_some() {
+        // Collection editing mode hints
+        let is_pair_map = state.cursor_to_group_field()
+            .map(|(gi, fi)| matches!(&state.groups[gi].fields[fi].value, ConfigValue::StringPairMap(_)))
+            .unwrap_or(false);
+
+        if is_pair_map {
+            Line::from(vec![
+                control_colors::nav("^v"),
+                control_colors::text(" nav  "),
+                control_colors::nav("</>"),
+                control_colors::text(" field  "),
+                control_colors::confirm("Enter"),
+                control_colors::text(" edit  "),
+                control_colors::cancel("x"),
+                control_colors::text(" del  "),
+                control_colors::cancel("Esc"),
+                control_colors::text(" back"),
+            ])
+        } else {
+            Line::from(vec![
+                control_colors::nav("^v"),
+                control_colors::text(" nav  "),
+                control_colors::confirm("Enter"),
+                control_colors::text(" edit  "),
+                control_colors::cancel("x"),
+                control_colors::text(" delete  "),
+                control_colors::cancel("Esc"),
+                control_colors::text(" back"),
+            ])
+        }
     } else {
         // Show field description if cursor is on a field
         let description = state.cursor_to_group_field()

@@ -41,6 +41,15 @@ pub enum CycleDirection {
     Prev,
 }
 
+/// Position within a collection field (for inline editing).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CollectionPosition {
+    /// On a specific item within the collection.
+    Item(usize),
+    /// On the "add new" row.
+    AddNew,
+}
+
 /// Full state for the config editor view.
 pub struct ConfigEditorState {
     pub groups: Vec<ConfigGroup>,
@@ -53,6 +62,10 @@ pub struct ConfigEditorState {
     pub scroll_offset: usize,
     /// Active text editing state (None = navigating).
     pub text_input: Option<TextInputState>,
+    /// Position within expanded collection field (None = not in collection).
+    pub collection_pos: Option<CollectionPosition>,
+    /// For StringPairMap: which field is focused (0=key, 1=value).
+    pub pair_field_focus: usize,
     /// Focus: Fields vs Buttons.
     pub focus: EditorFocus,
     pub selected_button: EditorButton,
@@ -72,6 +85,8 @@ impl ConfigEditorState {
             cursor: 0,
             scroll_offset: 0,
             text_input: None,
+            collection_pos: None,
+            pair_field_focus: 0,
             focus: EditorFocus::Fields,
             selected_button: EditorButton::Save,
             pending_cycle: None,
@@ -109,6 +124,17 @@ impl ConfigEditorState {
         self.cursor_to_group_field().map(|(gi, _)| gi)
     }
 
+    /// Get the item count for the current collection field.
+    fn current_collection_len(&self) -> usize {
+        let Some((gi, fi)) = self.cursor_to_group_field() else { return 0 };
+        match &self.groups[gi].fields[fi].value {
+            ConfigValue::StringSet(v) => v.len(),
+            ConfigValue::StringPairMap(v) => v.len(),
+            ConfigValue::StringListMap(v) => v.len(),
+            _ => 0,
+        }
+    }
+
     /// Handle a key event, producing an action for the dispatch layer.
     pub fn handle_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
         // Text input mode intercepts most keys
@@ -116,9 +142,197 @@ impl ConfigEditorState {
             return self.handle_text_input_key(key);
         }
 
+        // Collection editing mode
+        if self.collection_pos.is_some() {
+            return self.handle_collection_key(key);
+        }
+
         match self.focus {
             EditorFocus::Fields => self.handle_fields_key(key),
             EditorFocus::Buttons => self.handle_buttons_key(key),
+        }
+    }
+
+    /// Handle key events while editing within a collection field.
+    fn handle_collection_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
+        let item_count = self.current_collection_len();
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                match self.collection_pos {
+                    Some(CollectionPosition::Item(0)) => {
+                        // Exit collection mode, stay on field
+                        self.collection_pos = None;
+                    }
+                    Some(CollectionPosition::Item(n)) => {
+                        self.collection_pos = Some(CollectionPosition::Item(n - 1));
+                    }
+                    Some(CollectionPosition::AddNew) => {
+                        if item_count > 0 {
+                            self.collection_pos = Some(CollectionPosition::Item(item_count - 1));
+                        } else {
+                            self.collection_pos = None;
+                        }
+                    }
+                    None => {}
+                }
+                ConfigEditorAction::None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                match self.collection_pos {
+                    Some(CollectionPosition::Item(n)) => {
+                        if n + 1 < item_count {
+                            self.collection_pos = Some(CollectionPosition::Item(n + 1));
+                        } else {
+                            self.collection_pos = Some(CollectionPosition::AddNew);
+                        }
+                    }
+                    Some(CollectionPosition::AddNew) => {
+                        // Exit collection, move to next field
+                        self.collection_pos = None;
+                        let total = self.visible_field_count();
+                        if self.cursor + 1 < total {
+                            self.cursor += 1;
+                        }
+                    }
+                    None => {}
+                }
+                ConfigEditorAction::None
+            }
+            KeyCode::Left | KeyCode::Right => {
+                // For StringPairMap, switch between key and value
+                let Some((gi, fi)) = self.cursor_to_group_field() else {
+                    return ConfigEditorAction::None;
+                };
+                if matches!(self.groups[gi].fields[fi].value, ConfigValue::StringPairMap(_)) {
+                    self.pair_field_focus = if self.pair_field_focus == 0 { 1 } else { 0 };
+                }
+                ConfigEditorAction::None
+            }
+            KeyCode::Enter => {
+                self.activate_collection_item();
+                ConfigEditorAction::None
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                self.delete_collection_item();
+                ConfigEditorAction::None
+            }
+            KeyCode::Esc => {
+                self.collection_pos = None;
+                ConfigEditorAction::None
+            }
+            _ => ConfigEditorAction::None,
+        }
+    }
+
+    /// Activate (edit) the current collection item.
+    fn activate_collection_item(&mut self) {
+        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let field = &self.groups[gi].fields[fi];
+
+        match (&field.value, self.collection_pos) {
+            (ConfigValue::StringSet(items), Some(CollectionPosition::Item(idx))) => {
+                if idx < items.len() {
+                    let mut input = TextInputState::new();
+                    input.set_value(&items[idx]);
+                    input.focused = true;
+                    self.text_input = Some(input);
+                }
+            }
+            (ConfigValue::StringSet(_), Some(CollectionPosition::AddNew)) => {
+                let mut input = TextInputState::new();
+                input.focused = true;
+                self.text_input = Some(input);
+            }
+            (ConfigValue::StringPairMap(items), Some(CollectionPosition::Item(idx))) => {
+                if idx < items.len() {
+                    let mut input = TextInputState::new();
+                    let value = if self.pair_field_focus == 0 {
+                        &items[idx].0
+                    } else {
+                        &items[idx].1
+                    };
+                    input.set_value(value);
+                    input.focused = true;
+                    self.text_input = Some(input);
+                }
+            }
+            (ConfigValue::StringPairMap(_), Some(CollectionPosition::AddNew)) => {
+                let mut input = TextInputState::new();
+                input.focused = true;
+                self.pair_field_focus = 0; // Start with key
+                self.text_input = Some(input);
+            }
+            (ConfigValue::StringListMap(items), Some(CollectionPosition::Item(idx))) => {
+                if idx < items.len() {
+                    // Edit the separators as comma-separated
+                    let mut input = TextInputState::new();
+                    input.set_value(items[idx].1.join(", "));
+                    input.focused = true;
+                    self.text_input = Some(input);
+                }
+            }
+            (ConfigValue::StringListMap(_), Some(CollectionPosition::AddNew)) => {
+                // Add new tag - first enter tag name
+                let mut input = TextInputState::new();
+                input.focused = true;
+                self.text_input = Some(input);
+            }
+            _ => {}
+        }
+    }
+
+    /// Delete the current collection item.
+    fn delete_collection_item(&mut self) {
+        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let field = &mut self.groups[gi].fields[fi];
+
+        let deleted = match (&mut field.value, self.collection_pos) {
+            (ConfigValue::StringSet(ref mut items), Some(CollectionPosition::Item(idx))) => {
+                if idx < items.len() {
+                    items.remove(idx);
+                    // Adjust cursor
+                    if idx >= items.len() && !items.is_empty() {
+                        self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
+                    } else if items.is_empty() {
+                        self.collection_pos = Some(CollectionPosition::AddNew);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::StringPairMap(ref mut items), Some(CollectionPosition::Item(idx))) => {
+                if idx < items.len() {
+                    items.remove(idx);
+                    if idx >= items.len() && !items.is_empty() {
+                        self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
+                    } else if items.is_empty() {
+                        self.collection_pos = Some(CollectionPosition::AddNew);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::StringListMap(ref mut items), Some(CollectionPosition::Item(idx))) => {
+                if idx < items.len() {
+                    items.remove(idx);
+                    if idx >= items.len() && !items.is_empty() {
+                        self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
+                    } else if items.is_empty() {
+                        self.collection_pos = Some(CollectionPosition::AddNew);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+
+        if deleted {
+            Self::recompute_source(field);
         }
     }
 
@@ -269,25 +483,25 @@ impl ConfigEditorState {
         };
     }
 
-    /// Activate the current field (toggle bool, enter text edit, cycle enum).
+    /// Activate the current field (toggle bool, enter text edit, cycle enum, enter collection).
     fn activate_field(&mut self) {
         let Some((gi, fi)) = self.cursor_to_group_field() else { return };
 
-        // Tag Splitting group is read-only
-        if self.groups[gi].name == "Tag Splitting" {
-            return;
-        }
-
         let field = &mut self.groups[gi].fields[fi];
-        match &mut field.value {
-            ConfigValue::Bool(ref mut b) => {
-                *b = !*b;
-                Self::recompute_source(field);
+        match &field.value {
+            ConfigValue::Bool(_) => {
+                if let ConfigValue::Bool(ref mut b) = field.value {
+                    *b = !*b;
+                    Self::recompute_source(field);
+                }
             }
-            ConfigValue::Enum { ref mut selected, options } => {
+            ConfigValue::Enum { selected, options } => {
                 let len = options.len();
-                *selected = (*selected + 1) % len;
-                Self::recompute_source(field);
+                let new_selected = (*selected + 1) % len;
+                if let ConfigValue::Enum { selected: ref mut s, .. } = field.value {
+                    *s = new_selected;
+                    Self::recompute_source(field);
+                }
             }
             ConfigValue::Float(_) | ConfigValue::Uint(_) | ConfigValue::UintU32(_)
             | ConfigValue::SignedInt(_) | ConfigValue::OptionalUint(_) | ConfigValue::String(_) => {
@@ -302,6 +516,29 @@ impl ConfigEditorState {
                 input.focused = true;
                 self.text_input = Some(input);
             }
+            // Collection types: enter inline editing mode
+            ConfigValue::StringSet(items) => {
+                if items.is_empty() {
+                    self.collection_pos = Some(CollectionPosition::AddNew);
+                } else {
+                    self.collection_pos = Some(CollectionPosition::Item(0));
+                }
+            }
+            ConfigValue::StringPairMap(items) => {
+                self.pair_field_focus = 0;
+                if items.is_empty() {
+                    self.collection_pos = Some(CollectionPosition::AddNew);
+                } else {
+                    self.collection_pos = Some(CollectionPosition::Item(0));
+                }
+            }
+            ConfigValue::StringListMap(items) => {
+                if items.is_empty() {
+                    self.collection_pos = Some(CollectionPosition::AddNew);
+                } else {
+                    self.collection_pos = Some(CollectionPosition::Item(0));
+                }
+            }
         }
     }
 
@@ -312,6 +549,15 @@ impl ConfigEditorState {
 
         let field = &mut self.groups[gi].fields[fi];
         let text = input.value;
+
+        // Handle collection item commits
+        if let Some(pos) = self.collection_pos {
+            let ok = self.commit_collection_input(&text, gi, fi, pos);
+            if ok {
+                Self::recompute_source(&mut self.groups[gi].fields[fi]);
+            }
+            return;
+        }
 
         let ok = match &mut field.value {
             ConfigValue::Float(ref mut v) => {
@@ -365,7 +611,9 @@ impl ConfigEditorState {
                 *v = text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
                 true
             }
-            _ => false,
+            // Collection types handled above
+            ConfigValue::Bool(_) | ConfigValue::Enum { .. } |
+            ConfigValue::StringSet(_) | ConfigValue::StringPairMap(_) | ConfigValue::StringListMap(_) => false,
         };
 
         if ok {
@@ -373,10 +621,87 @@ impl ConfigEditorState {
         }
     }
 
+    /// Commit text input for a collection item.
+    fn commit_collection_input(&mut self, text: &str, gi: usize, fi: usize, pos: CollectionPosition) -> bool {
+        let field = &mut self.groups[gi].fields[fi];
+        let text = text.trim();
+
+        match (&mut field.value, pos) {
+            (ConfigValue::StringSet(ref mut items), CollectionPosition::Item(idx)) => {
+                if idx < items.len() && !text.is_empty() {
+                    items[idx] = text.to_string();
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::StringSet(ref mut items), CollectionPosition::AddNew) => {
+                if !text.is_empty() {
+                    items.push(text.to_string());
+                    // Move cursor to the new item
+                    self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::StringPairMap(ref mut items), CollectionPosition::Item(idx)) => {
+                if idx < items.len() {
+                    if self.pair_field_focus == 0 {
+                        if !text.is_empty() {
+                            items[idx].0 = text.to_string();
+                        }
+                    } else {
+                        items[idx].1 = text.to_string();
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::StringPairMap(ref mut items), CollectionPosition::AddNew) => {
+                if !text.is_empty() {
+                    // Adding new pair - this is the key
+                    items.push((text.to_string(), String::new()));
+                    // Move to the new item's value field
+                    self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
+                    self.pair_field_focus = 1;
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::StringListMap(ref mut items), CollectionPosition::Item(idx)) => {
+                if idx < items.len() {
+                    // Parse comma-separated separators
+                    let seps: Vec<String> = text.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    items[idx].1 = seps;
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::StringListMap(ref mut items), CollectionPosition::AddNew) => {
+                if !text.is_empty() {
+                    // Adding new tag with empty separators
+                    let tag = text.to_uppercase();
+                    items.push((tag, Vec::new()));
+                    self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Cycle enum left.
     fn cycle_enum_left(&mut self) {
         let Some((gi, fi)) = self.cursor_to_group_field() else { return };
-        if self.groups[gi].name == "Tag Splitting" { return; }
         let field = &mut self.groups[gi].fields[fi];
         if let ConfigValue::Enum { ref mut selected, options } = &mut field.value {
             let len = options.len();
@@ -388,7 +713,6 @@ impl ConfigEditorState {
     /// Cycle enum right.
     fn cycle_enum_right(&mut self) {
         let Some((gi, fi)) = self.cursor_to_group_field() else { return };
-        if self.groups[gi].name == "Tag Splitting" { return; }
         let field = &mut self.groups[gi].fields[fi];
         if let ConfigValue::Enum { ref mut selected, options } = &mut field.value {
             let len = options.len();
@@ -400,7 +724,6 @@ impl ConfigEditorState {
     /// Reset the current field to the value it had when the editor was opened.
     fn reset_current_field(&mut self) {
         let Some((gi, fi)) = self.cursor_to_group_field() else { return };
-        if self.groups[gi].name == "Tag Splitting" { return; }
         let field = &mut self.groups[gi].fields[fi];
         field.value = field.original_value.clone();
         field.source = field.original_source;

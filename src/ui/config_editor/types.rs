@@ -28,6 +28,12 @@ pub enum ConfigValue {
         selected: usize,
         options: Vec<&'static str>,
     },
+    /// Set of strings (opens StringSetEditor popup).
+    StringSet(Vec<String>),
+    /// Map of string pairs (opens StringPairMapEditor popup).
+    StringPairMap(Vec<(String, String)>),
+    /// Map of string to list of strings (opens StringListMapEditor popup).
+    StringListMap(Vec<(String, Vec<String>)>),
 }
 
 impl ConfigValue {
@@ -48,6 +54,27 @@ impl ConfigValue {
             ConfigValue::Enum { selected, options } => {
                 options.get(*selected).unwrap_or(&"?").to_string()
             }
+            ConfigValue::StringSet(v) => {
+                if v.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    format!("{} items", v.len())
+                }
+            }
+            ConfigValue::StringPairMap(v) => {
+                if v.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    format!("{} pairs", v.len())
+                }
+            }
+            ConfigValue::StringListMap(v) => {
+                if v.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    format!("{} tags", v.len())
+                }
+            }
         }
     }
 
@@ -63,6 +90,9 @@ impl ConfigValue {
             (ConfigValue::String(a), ConfigValue::String(b)) => a == b,
             (ConfigValue::StringList(a), ConfigValue::StringList(b)) => a == b,
             (ConfigValue::Enum { selected: a, .. }, ConfigValue::Enum { selected: b, .. }) => a == b,
+            (ConfigValue::StringSet(a), ConfigValue::StringSet(b)) => a == b,
+            (ConfigValue::StringPairMap(a), ConfigValue::StringPairMap(b)) => a == b,
+            (ConfigValue::StringListMap(a), ConfigValue::StringListMap(b)) => a == b,
             _ => false,
         }
     }

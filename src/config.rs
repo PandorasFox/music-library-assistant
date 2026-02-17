@@ -185,60 +185,49 @@ impl Default for PerformanceOpinions {
     }
 }
 
-/// A single rule in the compound tag splitting priority chain.
-///
-/// Rules are tried in order; the first match wins. This allows precise
-/// control over split priority (e.g., `";"` before `" & "` for artists).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SplitRule {
-    /// Split on a literal separator string.
-    Separator(String),
-    /// Split on a literal separator, but only if at least one resulting part
-    /// is already a known standalone value in the corpus. Prevents false
-    /// positives from duo/group names (e.g., "Above & Beyond" won't split
-    /// unless "Above" or "Beyond" already exists as a standalone artist).
-    SeparatorIfKnown(String),
-    /// Detect collaboration keywords (feat, ft, vs, etc.) with optional trailing dot.
-    CollaborationKeywords(Vec<String>),
-}
-
 /// Opinions for detecting and splitting compound tag values.
 ///
-/// Maps tag names to a priority-ordered chain of split rules. The first
-/// matching rule wins for each tag value.
+/// Simplified structure for easier editing via the config UI:
+/// - `collaboration_keywords`: Keywords like "feat", "ft", "vs" for artist collabs
+/// - `tag_separators`: Per-tag separator lists (e.g., ARTIST: [";"], GENRE: [";", ","])
+/// - `canonicalization_synonyms`: Substitutions during matching (e.g., "and" -> "&")
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagSplittingOpinions {
-    /// Map of tag_name -> ordered split rules.
-    pub tag_split_rules: std::collections::HashMap<String, Vec<SplitRule>>,
+    /// Collaboration keywords for artist tags (e.g., "feat", "ft", "featuring", "vs", "with").
+    /// Used to detect featuring patterns like "Artist A feat. Artist B".
+    pub collaboration_keywords: std::collections::HashSet<String>,
+
+    /// Per-tag separator strings. Key is uppercase tag name (e.g., "ARTIST", "GENRE").
+    /// Each tag has a list of separators to check in order (e.g., [";", ","]).
+    pub tag_separators: std::collections::HashMap<String, Vec<String>>,
+
+    /// Canonicalization synonyms: before checking for known values during
+    /// "separator-if-known" matching, these substitutions are applied.
+    /// e.g., "and" -> "&" allows "Simon and Garfunkel" to match "Simon & Garfunkel".
+    pub canonicalization_synonyms: std::collections::HashMap<String, String>,
 }
 
 impl Default for TagSplittingOpinions {
     fn default() -> Self {
-        let mut tag_split_rules = std::collections::HashMap::new();
-        tag_split_rules.insert(
-            "ARTIST".to_string(),
-            vec![
-                SplitRule::Separator(";".to_string()),
-                SplitRule::CollaborationKeywords(vec![
-                    "feat".to_string(),
-                    "featuring".to_string(),
-                    "ft".to_string(),
-                    "with".to_string(),
-                    "vs".to_string(),
-                ]),
-                SplitRule::Separator(",".to_string()),
-                SplitRule::SeparatorIfKnown(" & ".to_string()),
-            ],
-        );
-        tag_split_rules.insert(
-            "GENRE".to_string(),
-            vec![
-                SplitRule::Separator(";".to_string()),
-                SplitRule::Separator(",".to_string()),
-                SplitRule::Separator("/".to_string()),
-            ],
-        );
-        Self { tag_split_rules }
+        let mut collaboration_keywords = std::collections::HashSet::new();
+        collaboration_keywords.insert("feat".to_string());
+        collaboration_keywords.insert("featuring".to_string());
+        collaboration_keywords.insert("ft".to_string());
+        collaboration_keywords.insert("with".to_string());
+        collaboration_keywords.insert("vs".to_string());
+
+        let mut tag_separators = std::collections::HashMap::new();
+        tag_separators.insert("ARTIST".to_string(), vec![";".to_string()]);
+        tag_separators.insert("GENRE".to_string(), vec![";".to_string()]);
+
+        let mut canonicalization_synonyms = std::collections::HashMap::new();
+        canonicalization_synonyms.insert("and".to_string(), "&".to_string());
+
+        Self {
+            collaboration_keywords,
+            tag_separators,
+            canonicalization_synonyms,
+        }
     }
 }
 
@@ -741,6 +730,61 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         set_or_create_string_node(block, "directory-granularity", gran_str);
     }
 
+    // --- Tag Splitting ---
+    let old_ts = &old_config.opinions.tag_splitting;
+    let new_ts = &new_config.opinions.tag_splitting;
+    if new_ts.collaboration_keywords != old_ts.collaboration_keywords
+        || new_ts.tag_separators != old_ts.tag_separators
+        || new_ts.canonicalization_synonyms != old_ts.canonicalization_synonyms
+    {
+        let block = ensure_child_block(opinions_doc, "tag-splitting");
+
+        // Write collab keywords if changed
+        if new_ts.collaboration_keywords != old_ts.collaboration_keywords {
+            block.nodes_mut().retain(|n| n.name().value() != "collab");
+            let mut node = kdl::KdlNode::new("collab");
+            let mut keywords: Vec<&String> = new_ts.collaboration_keywords.iter().collect();
+            keywords.sort();
+            for kw in keywords {
+                node.push(kdl::KdlEntry::new(kdl::KdlValue::String(kw.clone())));
+            }
+            block.nodes_mut().push(node);
+        }
+
+        // Write synonyms if changed
+        if new_ts.canonicalization_synonyms != old_ts.canonicalization_synonyms {
+            block.nodes_mut().retain(|n| n.name().value() != "synonyms");
+            let mut synonyms_node = kdl::KdlNode::new("synonyms");
+            let synonyms_doc = synonyms_node.ensure_children();
+            let mut pairs: Vec<(&String, &String)> = new_ts.canonicalization_synonyms.iter().collect();
+            pairs.sort_by_key(|(k, _)| *k);
+            for (from, to) in pairs {
+                let mut syn_node = kdl::KdlNode::new(from.as_str());
+                syn_node.push(kdl::KdlEntry::new(kdl::KdlValue::String(to.clone())));
+                synonyms_doc.nodes_mut().push(syn_node);
+            }
+            block.nodes_mut().push(synonyms_node);
+        }
+
+        // Write tag separators if changed
+        if new_ts.tag_separators != old_ts.tag_separators {
+            // Remove old tag separator nodes (all non-collab, non-synonyms nodes)
+            block.nodes_mut().retain(|n| {
+                let name = n.name().value();
+                name == "collab" || name == "synonyms"
+            });
+            let mut tags: Vec<(&String, &Vec<String>)> = new_ts.tag_separators.iter().collect();
+            tags.sort_by_key(|(k, _)| *k);
+            for (tag_name, seps) in tags {
+                let mut tag_node = kdl::KdlNode::new(tag_name.to_lowercase().as_str());
+                for sep in seps {
+                    tag_node.push(kdl::KdlEntry::new(kdl::KdlValue::String(sep.clone())));
+                }
+                block.nodes_mut().push(tag_node);
+            }
+        }
+    }
+
     // --- Performance ---
     let old_p = &old_config.opinions.performance;
     let new_p = &new_config.opinions.performance;
@@ -1116,58 +1160,63 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
 /// Expected format:
 /// ```kdl
 /// tag-splitting {
-///     artist {
-///         sep ";"
-///         collab "feat" "featuring" "ft" "with" "vs"
-///         sep ","
-///         sep-if-known " & "
+///     collab "feat" "featuring" "ft" "with" "vs"
+///     synonyms {
+///         "and" "&"
 ///     }
-///     genre {
-///         sep ";"
-///         sep ","
-///         sep "/"
-///     }
+///     artist ";"
+///     genre ";" ","
 /// }
 /// ```
-/// Each child node is a tag name containing ordered `sep`, `sep-if-known`, and `collab` rules.
+///
+/// - `collab` node: list of collaboration keywords (replaces defaults if present)
+/// - `synonyms` node: key-value pairs for canonicalization substitutions
+/// - Other nodes: tag name with list of separator strings
 fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplittingOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            let tag_name = child.name().value().to_uppercase();
+            let node_name = child.name().value();
 
-            if let Some(rule_nodes) = child.children() {
-                let mut rules: Vec<SplitRule> = Vec::new();
-                for rule_node in rule_nodes.nodes() {
-                    match rule_node.name().value() {
-                        "sep" => {
-                            if let Some(entry) = rule_node.entries().first() {
-                                if let Some(s) = entry.value().as_string() {
-                                    rules.push(SplitRule::Separator(s.to_string()));
-                                }
-                            }
-                        }
-                        "sep-if-known" => {
-                            if let Some(entry) = rule_node.entries().first() {
-                                if let Some(s) = entry.value().as_string() {
-                                    rules.push(SplitRule::SeparatorIfKnown(s.to_string()));
-                                }
-                            }
-                        }
-                        "collab" => {
-                            let keywords: Vec<String> = rule_node
-                                .entries()
-                                .iter()
-                                .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
-                                .collect();
-                            if !keywords.is_empty() {
-                                rules.push(SplitRule::CollaborationKeywords(keywords));
-                            }
-                        }
-                        _ => {}
+            match node_name {
+                "collab" => {
+                    // Parse collaboration keywords
+                    let keywords: std::collections::HashSet<String> = child
+                        .entries()
+                        .iter()
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect();
+                    if !keywords.is_empty() {
+                        opinions.collaboration_keywords = keywords;
                     }
                 }
-                if !rules.is_empty() {
-                    opinions.tag_split_rules.insert(tag_name, rules);
+                "synonyms" => {
+                    // Parse synonyms block: each child node is "from" "to"
+                    if let Some(synonym_nodes) = child.children() {
+                        let mut synonyms = std::collections::HashMap::new();
+                        for synonym_node in synonym_nodes.nodes() {
+                            let from = synonym_node.name().value().to_string();
+                            if let Some(entry) = synonym_node.entries().first() {
+                                if let Some(to) = entry.value().as_string() {
+                                    synonyms.insert(from, to.to_string());
+                                }
+                            }
+                        }
+                        if !synonyms.is_empty() {
+                            opinions.canonicalization_synonyms = synonyms;
+                        }
+                    }
+                }
+                _ => {
+                    // Treat as tag name with separator list
+                    let tag_name = node_name.to_uppercase();
+                    let separators: Vec<String> = child
+                        .entries()
+                        .iter()
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect();
+                    if !separators.is_empty() {
+                        opinions.tag_separators.insert(tag_name, separators);
+                    }
                 }
             }
         }

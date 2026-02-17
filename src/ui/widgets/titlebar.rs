@@ -33,6 +33,7 @@ pub enum LateralView {
     CorpusBrowser,
     Insights,
     Inbox,
+    Transaction,
     Deploy,
 }
 
@@ -45,37 +46,55 @@ impl LateralView {
             LateralView::CorpusBrowser => "Corpus Browser",
             LateralView::Insights => "Insights & Operations",
             LateralView::Inbox => "Inbox",
+            LateralView::Transaction => "Transaction",
             LateralView::Deploy => "Deploy",
         }
     }
 
     /// Get the next view in the ring (Tab)
-    pub fn next(&self) -> Self {
+    pub fn next(&self, transactions_open: bool) -> Self {
         match self {
             LateralView::Config => LateralView::TagSearch,
             LateralView::TagSearch => LateralView::CorpusBrowser,
             LateralView::CorpusBrowser => LateralView::Insights,
             LateralView::Insights => LateralView::Inbox,
-            LateralView::Inbox => LateralView::Deploy,
+            LateralView::Inbox => {
+                if transactions_open { LateralView::Transaction } else { LateralView::Deploy }
+            }
+            LateralView::Transaction => LateralView::Deploy,
             LateralView::Deploy => LateralView::Config,
         }
     }
 
     /// Get the previous view in the ring (Shift-Tab)
-    pub fn prev(&self) -> Self {
+    pub fn prev(&self, transactions_open: bool) -> Self {
         match self {
             LateralView::Config => LateralView::Deploy,
             LateralView::TagSearch => LateralView::Config,
             LateralView::CorpusBrowser => LateralView::TagSearch,
             LateralView::Insights => LateralView::CorpusBrowser,
             LateralView::Inbox => LateralView::Insights,
-            LateralView::Deploy => LateralView::Inbox,
+            LateralView::Transaction => LateralView::Inbox,
+            LateralView::Deploy => {
+                if transactions_open { LateralView::Transaction } else { LateralView::Inbox }
+            }
         }
     }
 
     /// All views in order
-    pub fn all() -> &'static [LateralView] {
-        &[LateralView::Config, LateralView::TagSearch, LateralView::CorpusBrowser, LateralView::Insights, LateralView::Inbox, LateralView::Deploy]
+    pub fn all(transactions_open: bool) -> Vec<LateralView> {
+        let mut views = vec![
+            LateralView::Config,
+            LateralView::TagSearch,
+            LateralView::CorpusBrowser,
+            LateralView::Insights,
+            LateralView::Inbox,
+        ];
+        if transactions_open {
+            views.push(LateralView::Transaction);
+        }
+        views.push(LateralView::Deploy);
+        views
     }
 }
 
@@ -88,17 +107,38 @@ pub struct UnifiedTitleBar {
     current_view: LateralView,
     /// When true and Deploy tab is not active, render Deploy label in Magenta.
     deploy_needs_action: bool,
+    /// When true and Transaction tab is not active, render Transaction label in Magenta.
+    transaction_has_decisions: bool,
+    /// Whether the Transaction tab is visible in the ring.
+    transactions_open: bool,
 }
 
 impl UnifiedTitleBar {
     /// Create a new unified title bar
     pub fn new(current_view: LateralView) -> Self {
-        Self { current_view, deploy_needs_action: false }
+        Self {
+            current_view,
+            deploy_needs_action: false,
+            transaction_has_decisions: false,
+            transactions_open: false,
+        }
     }
 
     /// Set whether the Deploy tab should be highlighted (purple) when not active.
     pub fn with_deploy_needs_action(mut self, needs_action: bool) -> Self {
         self.deploy_needs_action = needs_action;
+        self
+    }
+
+    /// Set whether the Transaction tab should be highlighted (magenta) when not active.
+    pub fn with_transaction_has_decisions(mut self, has: bool) -> Self {
+        self.transaction_has_decisions = has;
+        self
+    }
+
+    /// Set whether the Transaction tab is visible in the ring.
+    pub fn with_transactions_open(mut self, open: bool) -> Self {
+        self.transactions_open = open;
         self
     }
 
@@ -131,8 +171,9 @@ impl UnifiedTitleBar {
 
     fn render_tab_switcher(&self, f: &mut Frame, area: Rect) {
         let mut spans = Vec::new();
+        let all_views = LateralView::all(self.transactions_open);
 
-        for (i, view) in LateralView::all().iter().enumerate() {
+        for (i, view) in all_views.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
             }
@@ -142,6 +183,8 @@ impl UnifiedTitleBar {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
+            } else if *view == LateralView::Transaction && self.transaction_has_decisions {
+                Style::default().fg(Color::Magenta)
             } else if *view == LateralView::Deploy && self.deploy_needs_action {
                 // Purple highlight for Deploy when there's work to do
                 Style::default().fg(Color::Magenta)
@@ -174,20 +217,28 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling: Config → TagSearch → CorpusBrowser → Insights → Inbox → Deploy → Config
+        // Test forward cycling without transactions: Config → TagSearch → CorpusBrowser → Insights → Inbox → Deploy → Config
         let view = LateralView::Config;
-        assert_eq!(view.next(), LateralView::TagSearch);
-        assert_eq!(view.next().next(), LateralView::CorpusBrowser);
-        assert_eq!(view.next().next().next(), LateralView::Insights);
-        assert_eq!(view.next().next().next().next(), LateralView::Inbox);
-        assert_eq!(view.next().next().next().next().next(), LateralView::Deploy);
-        assert_eq!(view.next().next().next().next().next().next(), LateralView::Config);
+        assert_eq!(view.next(false), LateralView::TagSearch);
+        assert_eq!(view.next(false).next(false), LateralView::CorpusBrowser);
+        assert_eq!(view.next(false).next(false).next(false), LateralView::Insights);
+        assert_eq!(view.next(false).next(false).next(false).next(false), LateralView::Inbox);
+        assert_eq!(view.next(false).next(false).next(false).next(false).next(false), LateralView::Deploy);
+        assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false), LateralView::Config);
 
         // Test backward cycling from TagSearch
         let view = LateralView::TagSearch;
-        assert_eq!(view.prev(), LateralView::Config);
-        assert_eq!(view.prev().prev(), LateralView::Deploy);
-        assert_eq!(view.prev().prev().prev(), LateralView::Inbox);
+        assert_eq!(view.prev(false), LateralView::Config);
+        assert_eq!(view.prev(false).prev(false), LateralView::Deploy);
+        assert_eq!(view.prev(false).prev(false).prev(false), LateralView::Inbox);
+
+        // Test forward cycling with transactions: Inbox → Transaction → Deploy
+        assert_eq!(LateralView::Inbox.next(true), LateralView::Transaction);
+        assert_eq!(LateralView::Transaction.next(true), LateralView::Deploy);
+
+        // Test backward cycling with transactions: Deploy → Transaction → Inbox
+        assert_eq!(LateralView::Deploy.prev(true), LateralView::Transaction);
+        assert_eq!(LateralView::Transaction.prev(true), LateralView::Inbox);
     }
 
     #[test]

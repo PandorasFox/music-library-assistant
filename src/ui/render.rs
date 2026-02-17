@@ -19,7 +19,7 @@ use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar
 use super::{
     compound_split_v2, config_editor, filter_popup, inbox_view, insights_view, manual_review_modal,
     oob_conflict_modal, oob_sync_modal, progressive_worker, tag_canonicity_v2,
-    transaction_review,
+    transaction_review, transaction_view,
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
@@ -74,8 +74,14 @@ pub fn render_app(
             .and_then(|w| w.ui_read_cache().deploy_status())
             .map_or(false, |s| s.needs_action);
 
+        let transactions_open = app.config().opinions.leave_transactions_open;
+        let transaction_has_decisions = app.witch.as_ref()
+            .is_some_and(|w| w.has_transaction() && w.transaction_summary().is_some_and(|(_, d, _)| d > 0));
+
         let titlebar = UnifiedTitleBar::new(lv)
-            .with_deploy_needs_action(deploy_needs_action);
+            .with_deploy_needs_action(deploy_needs_action)
+            .with_transactions_open(transactions_open)
+            .with_transaction_has_decisions(transaction_has_decisions);
         titlebar.render(f, chunks[0]);
 
         let start = Instant::now();
@@ -186,6 +192,15 @@ fn render_content(
         ActiveView::Inbox(ref state) => {
             vname = "inbox";
             inbox_view::render_inbox_view(f, area, state);
+        }
+        ActiveView::Transaction(ref state) => {
+            vname = "transaction";
+            let decisions = if let Some(ref witch) = app.witch {
+                transaction_review::fetch_decision_summaries(witch)
+            } else {
+                Vec::new()
+            };
+            transaction_view::render::render(f, area, state, &decisions);
         }
         ActiveView::TagSearch(ref state) => {
             vname = "tag_search";
@@ -406,6 +421,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::ConfigEditor(_) => "config_editor",
         ActiveView::Insights(_) => "insights",
         ActiveView::Inbox(_) => "inbox",
+        ActiveView::Transaction(_) => "transaction",
         ActiveView::CorpusBrowser(_) => "corpus_browser",
         ActiveView::TagSearch(_) => "tag_search",
         ActiveView::Progress { .. } => "progress",

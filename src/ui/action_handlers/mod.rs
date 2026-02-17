@@ -51,6 +51,7 @@ impl App {
             ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
             ViewAction::Inbox(a) => self.handle_inbox_action(a, witness.as_ref()),
+            ViewAction::Transaction(a) => self.handle_transaction_view_action(a),
             ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
             ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
             ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
@@ -193,10 +194,10 @@ impl App {
                 self.start_insights_view();
             }
             super::config_editor::ConfigEditorAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Config.next());
+                self.start_lateral_view(widgets::LateralView::Config.next(self.transactions_open()));
             }
             super::config_editor::ConfigEditorAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Config.prev());
+                self.start_lateral_view(widgets::LateralView::Config.prev(self.transactions_open()));
             }
         }
     }
@@ -214,10 +215,10 @@ impl App {
                 }
             }
             insights_view::InsightsAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Insights.next());
+                self.start_lateral_view(widgets::LateralView::Insights.next(self.transactions_open()));
             }
             insights_view::InsightsAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Insights.prev());
+                self.start_lateral_view(widgets::LateralView::Insights.prev(self.transactions_open()));
             }
             insights_view::InsightsAction::Launch => {
                 // Use selected_action() to dispatch to appropriate modal
@@ -624,10 +625,10 @@ impl App {
                 self.start_insights_view();
             }
             tag_search::TagSearchAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::TagSearch.next());
+                self.start_lateral_view(widgets::LateralView::TagSearch.next(self.transactions_open()));
             }
             tag_search::TagSearchAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::TagSearch.prev());
+                self.start_lateral_view(widgets::LateralView::TagSearch.prev(self.transactions_open()));
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search - access witch and view as disjoint fields
@@ -734,10 +735,10 @@ impl App {
                 self.start_tag_editor_for_path(&path, false);
             }
             tree_browser::TreeBrowserAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::CorpusBrowser.next());
+                self.start_lateral_view(widgets::LateralView::CorpusBrowser.next(self.transactions_open()));
             }
             tree_browser::TreeBrowserAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::CorpusBrowser.prev());
+                self.start_lateral_view(widgets::LateralView::CorpusBrowser.prev(self.transactions_open()));
             }
             tree_browser::TreeBrowserAction::OpenFilter => {
                 // Open filter popup for corpus browser
@@ -965,6 +966,54 @@ impl App {
                         self.status_message = Some(format!("Commit failed: {}", e));
                         self.start_insights_view();
                     }
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Transaction Tab View
+    // ========================================================================
+
+    /// Handle actions from the Transaction lateral tab view.
+    fn handle_transaction_view_action(&mut self, action: super::transaction_view::TransactionViewAction) {
+        use super::transaction_view::TransactionViewAction;
+        match action {
+            TransactionViewAction::None => {}
+            TransactionViewAction::CycleNext => {
+                self.start_lateral_view(widgets::LateralView::Transaction.next(self.transactions_open()));
+            }
+            TransactionViewAction::CyclePrev => {
+                self.start_lateral_view(widgets::LateralView::Transaction.prev(self.transactions_open()));
+            }
+            TransactionViewAction::Commit => {
+                if let Some(ref mut witch) = self.witch {
+                    let _ = super::operator_decisions::commit_transaction(witch);
+                }
+                // Re-open transaction immediately
+                if let Some(ref mut witch) = self.witch {
+                    let _ = witch.start_transaction("Open");
+                }
+                self.transition_to_progress_after_mutations(
+                    super::progress_screen::ProgressPhase::SignalRefresh,
+                );
+            }
+            TransactionViewAction::DiscardAll => {
+                if let Some(ref mut witch) = self.witch {
+                    let _ = super::operator_decisions::discard_transaction(witch);
+                    // Re-open transaction immediately
+                    let _ = witch.start_transaction("Open");
+                }
+                self.status_message = Some("Transaction discarded".into());
+            }
+            TransactionViewAction::RemoveDecision(key) => {
+                if let Some(ref mut witch) = self.witch {
+                    let _ = super::operator_decisions::remove_decision(witch, &key);
+                }
+            }
+            TransactionViewAction::RemoveMutation(key, idx) => {
+                if let Some(ref mut witch) = self.witch {
+                    let _ = super::operator_decisions::remove_mutation(witch, &key, idx);
                 }
             }
         }

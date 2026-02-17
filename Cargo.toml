@@ -53,6 +53,9 @@ indexmap = "2.6"
 anyhow = "1.0"
 thiserror = "1.0"
 
+# Duration parsing
+humantime = "2"
+
 # Regex
 regex = "1.10"
 

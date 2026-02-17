@@ -29,10 +29,10 @@ impl App {
                 }
             }
             InboxAction::CycleNext => {
-                self.start_lateral_view(crate::ui::widgets::LateralView::Inbox.next());
+                self.start_lateral_view(crate::ui::widgets::LateralView::Inbox.next(self.transactions_open()));
             }
             InboxAction::CyclePrev => {
-                self.start_lateral_view(crate::ui::widgets::LateralView::Inbox.prev());
+                self.start_lateral_view(crate::ui::widgets::LateralView::Inbox.prev(self.transactions_open()));
             }
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation

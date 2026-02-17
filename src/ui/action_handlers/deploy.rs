@@ -18,10 +18,10 @@ impl App {
         match action {
             deploy_modal::DeployAction::None => {}
             deploy_modal::DeployAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Deploy.next());
+                self.start_lateral_view(widgets::LateralView::Deploy.next(self.transactions_open()));
             }
             deploy_modal::DeployAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Deploy.prev());
+                self.start_lateral_view(widgets::LateralView::Deploy.prev(self.transactions_open()));
             }
             deploy_modal::DeployAction::Confirm => {
                 let Some(w) = witness else { return };

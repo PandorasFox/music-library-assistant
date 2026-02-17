@@ -33,6 +33,7 @@ use crate::ui::{
     tag_editor,
     tag_search,
     transaction_review,
+    transaction_view,
     tree_browser,
 };
 
@@ -49,6 +50,7 @@ pub(crate) enum ActiveView {
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
     Inbox(inbox_view::InboxViewState),
+    Transaction(transaction_view::TransactionViewState),
     Deploy(deploy_modal::DeployViewState),
 
     // Progress (non-interactive, owns eye animation)
@@ -109,6 +111,7 @@ impl ActiveView {
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
             Self::Inbox(_) => Some("Inbox"),
+            Self::Transaction(_) => Some("Transaction"),
             Self::Deploy(_) => Some("Deploy"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
@@ -175,6 +178,7 @@ impl ActiveView {
             Self::CorpusBrowser(_) => Some(LateralView::CorpusBrowser),
             Self::Insights(_) => Some(LateralView::Insights),
             Self::Inbox(_) => Some(LateralView::Inbox),
+            Self::Transaction(_) => Some(LateralView::Transaction),
             Self::Deploy(_) => Some(LateralView::Deploy),
             _ => None,
         }
@@ -212,6 +216,7 @@ pub(crate) enum ViewAction {
     CorpusBrowser(tree_browser::TreeBrowserAction),
     TagSearch(tag_search::TagSearchAction),
     Inbox(inbox_view::InboxAction),
+    Transaction(transaction_view::TransactionViewAction),
     Deploy(deploy_modal::DeployAction),
     ExitConfirm(ExitConfirmAction),
     IntakeConfirmation(startup::IntakeConfirmationAction),

@@ -149,7 +149,7 @@ impl PendingTransaction {
     /// Get all decision keys (sorted by Display representation for stable ordering).
     pub fn keys(&self) -> Vec<DecisionKey> {
         let mut keys: Vec<_> = self.decisions.keys().cloned().collect();
-        keys.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+        keys.sort_by_key(|a| a.to_string());
         keys
     }
 

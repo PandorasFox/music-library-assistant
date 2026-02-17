@@ -747,7 +747,9 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
 
     // --- Idle Rescan Interval ---
     if new_config.opinions.idle_rescan_interval_secs != old_config.opinions.idle_rescan_interval_secs {
-        set_or_create_int_node(opinions_doc, "idle-rescan-interval", new_config.opinions.idle_rescan_interval_secs as i64);
+        let dur = std::time::Duration::from_secs(new_config.opinions.idle_rescan_interval_secs);
+        let formatted = humantime::format_duration(dur).to_string();
+        set_or_create_string_node(opinions_doc, "idle-rescan-interval", &formatted);
     }
 
     // --- Leave Transactions Open ---
@@ -1468,7 +1470,12 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "idle-rescan-interval" => {
                                 if let Some(entry) = child.entries().first() {
-                                    if let Some(val) = entry.value().as_i64() {
+                                    if let Some(s) = entry.value().as_string() {
+                                        if let Ok(dur) = humantime::parse_duration(s) {
+                                            config.opinions.idle_rescan_interval_secs = dur.as_secs();
+                                        }
+                                    } else if let Some(val) = entry.value().as_i64() {
+                                        // Legacy: bare integer seconds
                                         config.opinions.idle_rescan_interval_secs = val.max(0) as u64;
                                     }
                                 }

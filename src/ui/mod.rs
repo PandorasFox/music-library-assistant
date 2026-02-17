@@ -22,6 +22,7 @@ mod types;
 
 pub mod operator_decisions;
 pub mod transaction_review;
+pub mod transaction_view;
 
 pub mod bulk_selection;
 pub mod config_editor;
@@ -126,6 +127,11 @@ impl App {
         crate::config::read_shared_config(&self.shared_config)
     }
 
+    /// Whether the Transaction tab should be visible in the lateral view ring.
+    fn transactions_open(&self) -> bool {
+        self.config().opinions.leave_transactions_open
+    }
+
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         // Filter popup intercepts keys when active
         if let Some(ref mut overlay) = self.filter_overlay {
@@ -196,6 +202,12 @@ impl App {
             ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_key(key)),
             ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_key(key)),
             ActiveView::Inbox(s) => ViewAction::Inbox(s.handle_key(key)),
+            ActiveView::Transaction(ref mut state) => {
+                let decision_count = self.witch.as_ref()
+                    .map(|w| w.transaction_summary().map_or(0, |(_, d, _)| d))
+                    .unwrap_or(0);
+                ViewAction::Transaction(state.handle_key(key, decision_count))
+            }
             ActiveView::ExitConfirm(state) => {
                 let a = match key.code {
                     KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
@@ -328,8 +340,14 @@ impl App {
             widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
             widgets::LateralView::Insights => self.start_insights_view(),
             widgets::LateralView::Inbox => self.start_inbox_view(),
+            widgets::LateralView::Transaction => self.start_transaction_view(),
             widgets::LateralView::Deploy => self.start_deploy_view(),
         }
+    }
+
+    /// Start the transaction tab view.
+    pub(super) fn start_transaction_view(&mut self) {
+        self.view = ActiveView::Transaction(transaction_view::TransactionViewState::new());
     }
 
     /// Start the config editor view.
@@ -553,6 +571,7 @@ fn run_app<B: ratatui::backend::Backend>(
             | ActiveView::CorpusBrowser(_)
             | ActiveView::TagSearch(_)
             | ActiveView::Inbox(_)
+            | ActiveView::Transaction(_)
         );
         if let Some(ref mut witch) = app.witch {
             witch.set_idle_rescan_eligible(idle_eligible);

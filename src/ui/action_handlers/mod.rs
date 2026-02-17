@@ -736,10 +736,12 @@ impl App {
                 // Unindexed signals remain for later handling
                 crate::logging::log_general("IntakeConfirmation: user skipped indexing");
 
-                // Discard any active transaction from review modal
-                if let Some(ref mut witch) = self.witch {
-                    if witch.has_transaction() {
-                        let _ = operator_decisions::discard_transaction(witch);
+                // Discard any active transaction from review modal (not in open-txn mode)
+                if !self.open_txn_mode() {
+                    if let Some(ref mut witch) = self.witch {
+                        if witch.has_transaction() {
+                            let _ = operator_decisions::discard_transaction(witch);
+                        }
                     }
                 }
 
@@ -836,9 +838,12 @@ impl App {
             }
 
             UnifiedTagEditorAction::DiscardTransaction => {
-                // Discard all staged decisions via sealed operator decision handler
-                if let Some(the_witch) = self.witch.as_mut() {
-                    let _ = super::operator_decisions::discard_transaction(the_witch);
+                // In closed-txn mode, discard the transaction.
+                // In open-txn mode, leave the persistent transaction intact.
+                if !self.open_txn_mode() {
+                    if let Some(the_witch) = self.witch.as_mut() {
+                        let _ = super::operator_decisions::discard_transaction(the_witch);
+                    }
                 }
                 // Return to the view that launched the tag editor (e.g., corpus browser)
                 if !self.pop_and_restore() {

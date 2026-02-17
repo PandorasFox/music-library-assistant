@@ -125,21 +125,7 @@ impl App {
                 self.advance_to_next_cluster();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Cancelled => {
-                let is_inbox = matches!(
-                    &self.view,
-                    ActiveView::TagCanonicityResolution { clusters, .. }
-                        if clusters.kind == CanonicitySignalKind::InboxTagCanonicity
-                );
-                // Discard transaction if active via sealed operator decision handler
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::super::operator_decisions::discard_transaction(witch);
-                }
-                crate::logging::log_general("Tag canonicity resolution cancelled");
-                if is_inbox {
-                    self.start_inbox_view();
-                } else {
-                    self.start_insights_view();
-                }
+                self.cancel_and_return_to_source("Tag canonicity resolution cancelled");
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Navigate { forward } => {
                 // User navigated to next/prev cluster - do NOT stage decision
@@ -285,7 +271,7 @@ impl App {
 
     /// Show the transaction review screen for tag canonicity.
     fn show_transaction_review_for_canonicity(&mut self) {
-        self.start_transaction_review();
+        self.after_staging_decisions();
     }
 
     /// Stage a decision for the current canonicity cluster (V2).

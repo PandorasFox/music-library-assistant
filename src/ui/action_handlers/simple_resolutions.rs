@@ -48,7 +48,7 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Restore missing files", DecisionKey::single(DecisionSource::MissingFile), w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to restore".to_string());
                 }
@@ -63,13 +63,13 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Drop missing files", DecisionKey::single(DecisionSource::MissingFile), w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to drop".to_string());
                 }
             }
             missing_file_modal::MissingFilePreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Missing file resolution cancelled");
+                self.cancel_and_return_to_source("Missing file resolution cancelled");
             }
         }
     }
@@ -112,13 +112,13 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Drop missing directories", DecisionKey::single(DecisionSource::MissingDirectory), w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No directories to drop".to_string());
                 }
             }
             missing_directory_modal::MissingDirectoryPreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Missing directory resolution cancelled");
+                self.cancel_and_return_to_source("Missing directory resolution cancelled");
             }
         }
     }
@@ -161,13 +161,13 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Stash corrupt files", DecisionKey::single(DecisionSource::CorruptFile), w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
                 }
             }
             corrupt_file_modal::CorruptFilePreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Corrupt file resolution cancelled");
+                self.cancel_and_return_to_source("Corrupt file resolution cancelled");
             }
         }
     }
@@ -212,7 +212,7 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Remux to FLAC", DecisionKey::single(DecisionSource::ShitFormat), w);
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No lossless files to remux".to_string());
                 }
@@ -228,7 +228,7 @@ impl App {
                 if !mutations.is_empty() {
                     let label = if lossy_to_flac { "Capture lossy to FLAC" } else { "Transcode to Opus" };
                     self.stage_mutations_with_transaction(mutations, label, DecisionKey::single(DecisionSource::ShitFormat), w);
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No lossy files to transcode".to_string());
                 }
@@ -244,13 +244,13 @@ impl App {
                 if !mutations.is_empty() {
                     let label = if lossy_to_flac { "Remux and capture all to FLAC" } else { "Convert all formats" };
                     self.stage_mutations_with_transaction(mutations, label, DecisionKey::single(DecisionSource::ShitFormat), w);
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to convert".to_string());
                 }
             }
             shit_format_modal::ShitFormatPreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Shit format resolution cancelled");
+                self.cancel_and_return_to_source("Shit format resolution cancelled");
             }
         }
     }
@@ -293,13 +293,13 @@ impl App {
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates", DecisionKey::single(DecisionSource::SubparDuplicate), w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
                 }
             }
             subpar_duplicate_modal::SubparDuplicatePreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Subpar duplicate resolution cancelled");
+                self.cancel_and_return_to_source("Subpar duplicate resolution cancelled");
             }
         }
     }
@@ -385,7 +385,7 @@ impl App {
                 };
                 if at_last {
                     // Last cluster - go to review
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 }
             }
             DirectoryClusterPreviewAction::MarkExpected => {
@@ -425,7 +425,7 @@ impl App {
                     true
                 };
                 if at_last {
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 }
             }
             DirectoryClusterPreviewAction::NavigateNext => {
@@ -440,10 +440,10 @@ impl App {
             }
             DirectoryClusterPreviewAction::ShowReview => {
                 // Jump directly to transaction review
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
             DirectoryClusterPreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Directory overlap cluster resolution cancelled");
+                self.cancel_and_return_to_source("Directory overlap cluster resolution cancelled");
             }
         }
     }
@@ -486,13 +486,13 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Embed album art", DecisionKey::single(DecisionSource::EmbedAlbumArt), w);
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No artless files to embed into".to_string());
                 }
             }
             embed_album_art_modal::EmbedAlbumArtPreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Embed album art cancelled");
+                self.cancel_and_return_to_source("Embed album art cancelled");
             }
         }
     }

@@ -869,7 +869,15 @@ impl Witch {
         if self.state != TaskExecutionState::Idle || self.eye_state != EyeState::Awake {
             return;
         }
-        if !self.idle_rescan_eligible || self.pending_transaction.is_some() {
+        if !self.idle_rescan_eligible {
+            return;
+        }
+        // In open-txn mode, idle rescans are always allowed (they're read-only observation).
+        // In closed-txn mode, block if a transaction is open (user is actively reviewing).
+        let open_txn_mode = self.shared_config.as_ref()
+            .map(|sc| sc.read().expect("SharedConfig lock poisoned").opinions.leave_transactions_open)
+            .unwrap_or(false);
+        if !open_txn_mode && self.pending_transaction.is_some() {
             return;
         }
 

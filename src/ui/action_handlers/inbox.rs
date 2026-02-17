@@ -167,7 +167,7 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Stash inbox corpus matches", DecisionKey::single(DecisionSource::InboxCorpusMatch), w);
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
                 }
@@ -182,13 +182,13 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Stash all inbox duplicates", DecisionKey::single(DecisionSource::InboxCorpusMatch), w);
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
                 }
             }
             inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Inbox corpus match resolution cancelled");
+                self.cancel_and_return_to_source("Inbox corpus match resolution cancelled");
             }
         }
     }
@@ -223,13 +223,13 @@ impl App {
                 let Some(w) = witness else { return };
                 if !mutations.is_empty() {
                     self.stage_mutations_with_transaction(mutations, "Organize inbox into corpus", DecisionKey::single(DecisionSource::InboxOrganize), w);
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
-                    self.cancel_and_return_to_insights("No mutations generated");
+                    self.cancel_and_return_to_source("No mutations generated");
                 }
             }
             inbox_organize::InboxOrganizeAction::Cancel => {
-                self.cancel_and_return_to_insights("Inbox organize cancelled");
+                self.cancel_and_return_to_source("Inbox organize cancelled");
             }
         }
     }

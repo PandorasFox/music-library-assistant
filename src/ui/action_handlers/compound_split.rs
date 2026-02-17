@@ -92,7 +92,7 @@ impl App {
             }
             compound_split_v2::CompoundSplitActionV2::Cancelled => {
                 // Discard transaction if active
-                self.cancel_and_return_to_insights("Compound tag split cancelled");
+                self.cancel_and_return_to_source("Compound tag split cancelled");
             }
             compound_split_v2::CompoundSplitActionV2::Navigate { forward } => {
                 // Navigate to next/prev signal without staging
@@ -274,7 +274,7 @@ impl App {
 
     /// Show the transaction review screen for compound tag splits.
     pub(in crate::ui) fn show_transaction_review_for_compound_split(&mut self) {
-        self.start_transaction_review();
+        self.after_staging_decisions();
     }
 
     /// Stage the current compound split decision (v2).

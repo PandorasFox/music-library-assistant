@@ -49,7 +49,7 @@ impl App {
             ManualReviewAction::None => {}
 
             ManualReviewAction::Cancel => {
-                self.cancel_and_return_to_insights("Manual review cancelled");
+                self.cancel_and_return_to_source("Manual review cancelled");
             }
 
             ManualReviewAction::RequestStash => {
@@ -77,7 +77,7 @@ impl App {
             }
 
             ManualReviewAction::ShowReview => {
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
 
             ManualReviewAction::OpenTagEditorIndividual => {
@@ -156,7 +156,7 @@ impl App {
 
         // Advance to next group or show review if at the end
         if is_last {
-            self.start_transaction_review();
+            self.after_staging_decisions();
         } else {
             self.advance_manual_review_group(true);
         }

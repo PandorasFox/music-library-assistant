@@ -35,7 +35,7 @@ impl App {
                 if let Some(data) = cached_data {
                     let mutation_count = self.stage_deploy_mutations(&data, w);
                     if mutation_count > 0 {
-                        self.start_transaction_review();
+                        self.after_staging_decisions();
                     } else {
                         self.status_message = Some("No deploy operations needed".to_string());
                     }
@@ -63,6 +63,7 @@ impl App {
     fn stage_deploy_mutations(&mut self, data: &deploy_modal::DeployModalData, _witness: &witness::DecisionWitness) -> usize {
         use crate::meta::mutations::Mutation;
 
+        let open_txn = self.open_txn_mode();
         let Some(ref mut witch) = self.witch else {
             return 0;
         };
@@ -150,7 +151,9 @@ impl App {
         }
 
         // Start transaction and stage the decision
-        let _ = witch.start_transaction("Deploy");
+        if !open_txn {
+            let _ = witch.start_transaction("Deploy");
+        }
         let _ = super::super::operator_decisions::stage_decision(
             witch,
             DecisionKey::single(DecisionSource::Deploy),

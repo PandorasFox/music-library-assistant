@@ -105,6 +105,9 @@ pub(crate) struct App {
 
     // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)
     pub(super) view_stack: Vec<SuspendedView>,
+
+    /// Last lateral view the user was on. Used for returning after modal flows.
+    pub(super) last_lateral_view: widgets::LateralView,
 }
 
 impl App {
@@ -119,6 +122,7 @@ impl App {
             log_rx: None,
             filter_overlay: None,
             view_stack: Vec::new(),
+            last_lateral_view: widgets::LateralView::Insights,
         }
     }
 
@@ -130,6 +134,16 @@ impl App {
     /// Whether the Transaction tab should be visible in the lateral view ring.
     fn transactions_open(&self) -> bool {
         self.config().opinions.leave_transactions_open
+    }
+
+    /// Whether leave-transactions-open mode is active (alias for readability in control flow).
+    fn open_txn_mode(&self) -> bool {
+        self.config().opinions.leave_transactions_open
+    }
+
+    /// Return to the last lateral view the user was on.
+    fn return_to_last_lateral_view(&mut self) {
+        self.start_lateral_view(self.last_lateral_view);
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -282,6 +296,7 @@ impl App {
     /// Start the insights view.
     pub(super) fn start_insights_view(&mut self) {
         self.clear_view_stack();
+        self.last_lateral_view = widgets::LateralView::Insights;
         self.view = ActiveView::Insights(insights_view::InsightsViewState::new());
     }
 
@@ -315,10 +330,12 @@ impl App {
     }
 
     pub(super) fn start_tag_search(&mut self) {
+        self.last_lateral_view = widgets::LateralView::TagSearch;
         self.view = ActiveView::TagSearch(tag_search::TagSearchState::new());
     }
 
     pub(super) fn start_inbox_view(&mut self) {
+        self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
         let intake_state = self.witch.as_mut().and_then(|w| {
             let read_db = w.read_db();
@@ -347,11 +364,13 @@ impl App {
 
     /// Start the transaction tab view.
     pub(super) fn start_transaction_view(&mut self) {
+        self.last_lateral_view = widgets::LateralView::Transaction;
         self.view = ActiveView::Transaction(transaction_view::TransactionViewState::new());
     }
 
     /// Start the config editor view.
     pub(super) fn start_config_editor(&mut self) {
+        self.last_lateral_view = widgets::LateralView::Config;
         let config = self.config().clone();
         let kdl_content = crate::config::get_config_dir()
             .ok()
@@ -368,6 +387,7 @@ impl App {
     /// and shows the preview. Otherwise shows the "up to date" modal with
     /// per-library file counts.
     pub(super) fn start_deploy_view(&mut self) {
+        self.last_lateral_view = widgets::LateralView::Deploy;
         let deploy_status = self.witch.as_ref()
             .and_then(|w| w.ui_read_cache().deploy_status());
 
@@ -394,6 +414,7 @@ impl App {
     }
 
     pub(super) fn start_corpus_browser(&mut self) {
+        self.last_lateral_view = widgets::LateralView::CorpusBrowser;
         let variant_config = tree_browser::CorpusBrowserConfig::default();
         let config = self.config();
         let corpus_dir = config.corpus_dir();
@@ -521,6 +542,13 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     let mut app = App::new_with_witch(shared_config, witch);
 
     app.witch().start_observing();
+
+    // If leave_transactions_open is enabled, open a persistent transaction at startup
+    if app.open_txn_mode() {
+        if let Some(ref mut witch) = app.witch {
+            let _ = witch.start_transaction("Open");
+        }
+    }
 
     app.view = ActiveView::Progress {
         screen: progress_screen::ProgressScreen::new_eyeballing(),

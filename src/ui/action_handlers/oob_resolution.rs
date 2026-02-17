@@ -46,16 +46,16 @@ impl App {
                 let Some(w) = witness else { return };
                 self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::DiskToIndex, w);
                 // Transition to review
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
             oob_sync_modal::OobSyncAction::AcceptDb => {
                 let Some(w) = witness else { return };
                 self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::IndexToDisk, w);
                 // Transition to review
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
             oob_sync_modal::OobSyncAction::Cancel => {
-                self.cancel_and_return_to_insights("OOB sync resolution cancelled");
+                self.cancel_and_return_to_source("OOB sync resolution cancelled");
             }
             oob_sync_modal::OobSyncAction::OpenFilter => {
                 // Open filter popup overlay
@@ -210,7 +210,7 @@ impl App {
                 self.stage_oob_mtime_acknowledgement(w);
             }
             oob_conflict_modal::OobConflictAction::Cancel => {
-                self.cancel_and_return_to_insights("OOB conflict inspection closed");
+                self.cancel_and_return_to_source("OOB conflict inspection closed");
             }
             oob_conflict_modal::OobConflictAction::OpenFilter => {
                 // Open filter popup overlay
@@ -317,7 +317,7 @@ impl App {
         }
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-        self.start_transaction_review();
+        self.after_staging_decisions();
     }
 
     /// Stage acknowledgement mutation for mtime-only files in MtimeOnly bucket.
@@ -372,7 +372,7 @@ impl App {
         }
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
-        self.start_transaction_review();
+        self.after_staging_decisions();
     }
 
     // ========================================================================
@@ -423,10 +423,10 @@ impl App {
                 let Some(w) = witness else { return };
                 self.stage_moved_file_acknowledge(w);
                 // Transition to review
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
             moved_file_modal::MovedFileAction::Cancel => {
-                self.cancel_and_return_to_insights("Moved file acknowledgement cancelled");
+                self.cancel_and_return_to_source("Moved file acknowledgement cancelled");
             }
         }
     }

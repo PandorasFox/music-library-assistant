@@ -159,7 +159,7 @@ Decision authority uses two concrete types:
    - `operator_decisions::stage_decision()` - add decision to active transaction
    - `operator_decisions::commit_transaction()` - commit all staged decisions
    - `operator_decisions::discard_transaction()` - discard all staged decisions
-   - `operator_decisions::remove_decision()` / `remove_mutation()` - edit active transaction
+   - `operator_decisions::remove_decision()` - remove a decision from the active transaction
 
 2. These functions are called ONLY from action handlers that receive a `&ConfirmationGesture`.
 
@@ -169,6 +169,10 @@ Decision authority uses two concrete types:
 - Add new functions to `operator_decisions.rs` without explicit human approval
 
 **Exception:** Database creation in `first_time_setup.rs` doesn't need a gesture - it's infrastructure setup, not a corpus mutation.
+
+### Meta Module Typing
+
+**Meta Module Typing:** Types from `meta/` (e.g., `DecisionKey`, `DecisionSource`) should be used as keys and discriminants in cross-module interop rather than strings. When a new enum variant is needed as a discriminant, create a fieldless mirror enum coupled via exhaustive `match` so the compiler enforces sync.
 
 ### Signal Design Principles
 

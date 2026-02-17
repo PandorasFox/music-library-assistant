@@ -204,28 +204,6 @@ impl super::Witch {
         Ok(())
     }
 
-    /// Remove a single mutation from a decision in the active transaction.
-    /// Auto-removes the decision if no mutations remain.
-    pub fn remove_mutation_from_decision(
-        &mut self,
-        key: &DecisionKey,
-        mutation_idx: usize,
-        _gesture: &ConfirmationGesture,
-    ) -> Result<(), TransactionError> {
-        self.require_active_transaction(&format!(
-            "remove_mutation(key={}, idx={})", key, mutation_idx
-        ))?;
-
-        let txn = self.pending_transaction.as_mut().unwrap();
-        if txn.remove_mutation(key, mutation_idx) {
-            crate::logging::log_mutation(format!(
-                "[TRANSACTION] remove_mutation(key={}, idx={}) OK - txn now has {} decisions",
-                key, mutation_idx, txn.decision_count()
-            ));
-        }
-        Ok(())
-    }
-
     /// Confirm the transaction - queue all mutations for execution.
     ///
     /// This is the primary way to add mutations to the execution queue.

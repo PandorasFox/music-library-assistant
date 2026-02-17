@@ -186,41 +186,11 @@ impl PendingTransaction {
         keys
     }
 
-    /// Get a decision by key.
-    pub fn get(&self, key: &DecisionKey) -> Option<&WitnessedDecision> {
-        self.decisions.get(key)
-    }
-
-    /// Get a mutable decision by key.
-    pub fn get_mut(&mut self, key: &DecisionKey) -> Option<&mut WitnessedDecision> {
-        self.decisions.get_mut(key)
-    }
-
     /// Remove an entire decision. Returns the removed decision if it existed.
     pub fn remove_decision(&mut self, key: &DecisionKey) -> Option<WitnessedDecision> {
         self.decisions.remove(key)
     }
 
-    /// Remove a single mutation from a decision by mutation index.
-    /// Auto-removes the decision if no mutations remain.
-    /// Returns true if the mutation was removed.
-    pub fn remove_mutation(&mut self, key: &DecisionKey, mutation_idx: usize) -> bool {
-        let should_remove_decision = if let Some(decision) = self.decisions.get_mut(key) {
-            if mutation_idx < decision.mutations.len() {
-                decision.mutations.remove(mutation_idx);
-                decision.mutations.is_empty()
-            } else {
-                return false;
-            }
-        } else {
-            return false;
-        };
-
-        if should_remove_decision {
-            self.decisions.remove(key);
-        }
-        true
-    }
 }
 
 /// Errors that can occur during transaction operations.

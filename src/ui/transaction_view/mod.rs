@@ -23,6 +23,8 @@ pub struct TransactionViewState {
     pub cursor: usize,
     pub scroll: usize,
     pub button_focus: TransactionButtonFocus,
+    /// When set, a confirmation popup is shown for removing this decision.
+    pub pending_removal: Option<DecisionKey>,
 }
 
 impl TransactionViewState {
@@ -31,6 +33,7 @@ impl TransactionViewState {
             cursor: 0,
             scroll: 0,
             button_focus: TransactionButtonFocus::Confirm,
+            pending_removal: None,
         }
     }
 
@@ -53,12 +56,29 @@ pub enum TransactionViewAction {
     CyclePrev,
     Commit,
     DiscardAll,
+    /// User pressed x on a decision — handler should resolve cursor to DecisionKey and set pending_removal
+    RequestRemoval,
+    /// User confirmed removal in the popup — handler should execute removal
     RemoveDecision(DecisionKey),
-    RemoveMutation(DecisionKey, usize),
 }
 
 impl TransactionViewState {
     pub fn handle_key(&mut self, key: KeyEvent, decision_count: usize) -> TransactionViewAction {
+        // Confirmation popup mode — intercept all keys
+        if self.pending_removal.is_some() {
+            return match key.code {
+                KeyCode::Enter => {
+                    let k = self.pending_removal.take().unwrap();
+                    TransactionViewAction::RemoveDecision(k)
+                }
+                KeyCode::Esc => {
+                    self.pending_removal = None;
+                    TransactionViewAction::None
+                }
+                _ => TransactionViewAction::None,
+            };
+        }
+
         match key.code {
             KeyCode::Tab => TransactionViewAction::CycleNext,
             KeyCode::BackTab => TransactionViewAction::CyclePrev,
@@ -92,6 +112,10 @@ impl TransactionViewState {
                     TransactionButtonFocus::Confirm => TransactionViewAction::Commit,
                     TransactionButtonFocus::Discard => TransactionViewAction::DiscardAll,
                 }
+            }
+            // x to remove selected decision
+            KeyCode::Char('x') if decision_count > 0 => {
+                TransactionViewAction::RequestRemoval
             }
             _ => TransactionViewAction::None,
         }

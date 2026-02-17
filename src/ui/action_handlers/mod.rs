@@ -1103,13 +1103,25 @@ impl App {
                 let _ = self.witch.start_transaction("Open");
                 self.status_message = Some("Transaction discarded".into());
             }
+            TransactionViewAction::RequestRemoval => {
+                if let ActiveView::Transaction(ref mut state) = self.view {
+                    let decisions = transaction_review::fetch_decision_summaries(&self.witch);
+                    if let Some(d) = decisions.get(state.cursor) {
+                        state.pending_removal = Some(d.key.clone());
+                    }
+                }
+            }
             TransactionViewAction::RemoveDecision(key) => {
                 let Some(g) = gesture else { return };
                 let _ = super::operator_decisions::remove_decision(&mut self.witch, &key, g);
-            }
-            TransactionViewAction::RemoveMutation(key, idx) => {
-                let Some(g) = gesture else { return };
-                let _ = super::operator_decisions::remove_mutation(&mut self.witch, &key, idx, g);
+                self.status_message = Some("Decision removed".into());
+                // Clamp cursor
+                if let ActiveView::Transaction(ref mut state) = self.view {
+                    let remaining = transaction_review::fetch_decision_summaries(&self.witch).len();
+                    if state.cursor >= remaining && remaining > 0 {
+                        state.cursor = remaining - 1;
+                    }
+                }
             }
         }
     }

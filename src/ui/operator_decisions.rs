@@ -81,15 +81,3 @@ pub fn remove_decision(
     witch.remove_decision(key, gesture)
 }
 
-/// Remove a single mutation from a decision in the active transaction.
-/// Auto-removes the decision if no mutations remain.
-///
-/// Called when user removes a specific mutation from transaction review.
-pub fn remove_mutation(
-    witch: &mut Witch,
-    key: &DecisionKey,
-    mutation_idx: usize,
-    gesture: &ConfirmationGesture,
-) -> Result<(), TransactionError> {
-    witch.remove_mutation_from_decision(key, mutation_idx, gesture)
-}

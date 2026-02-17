@@ -2,13 +2,13 @@
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use super::{TransactionButtonFocus, TransactionViewState};
 use crate::ui::transaction_review::DecisionSummary;
-use crate::ui::widgets::{ConfirmationButton, render_button_row};
+use crate::ui::widgets::{centered_rect_fixed, ConfirmationButton, render_button_row};
 
 /// Render the transaction view.
 pub fn render(
@@ -109,9 +109,61 @@ pub fn render(
             cc::nav("[Shift+<>]"),
             cc::text(" select  "),
             cc::confirm("[Enter]"),
-            cc::text(" activate"),
+            cc::text(" activate  "),
+            cc::cancel("[x]"),
+            cc::text(" remove"),
         ])
     };
     let hint_widget = Paragraph::new(hints).alignment(Alignment::Center);
     f.render_widget(hint_widget, chunks[2]);
+
+    // Confirmation popup overlay for decision removal
+    if let Some(ref key) = state.pending_removal {
+        let label = decisions.iter()
+            .find(|d| d.key == *key)
+            .map(|d| d.label.as_str())
+            .unwrap_or("this decision");
+
+        let popup_width = 50.min(area.width.saturating_sub(4));
+        let popup_area = centered_rect_fixed(popup_width, 7, area);
+        f.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .title(" Remove Decision ")
+            .title_alignment(Alignment::Center)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
+        let inner = block.inner(popup_area);
+        f.render_widget(block, popup_area);
+
+        let popup_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),    // Message
+                Constraint::Length(1), // Hint
+            ])
+            .split(inner);
+
+        let msg = Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Remove ", Style::default().fg(Color::White)),
+                Span::styled(
+                    crate::ui::helpers::truncate_right(label, 30),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled("?", Style::default().fg(Color::White)),
+            ]),
+        ])
+        .alignment(Alignment::Center);
+        f.render_widget(msg, popup_chunks[0]);
+
+        let hint = Paragraph::new(Line::from(vec![
+            cc::confirm("[Enter]"),
+            cc::text(" remove  "),
+            cc::cancel("[Esc]"),
+            cc::text(" cancel"),
+        ]))
+        .alignment(Alignment::Center);
+        f.render_widget(hint, popup_chunks[1]);
+    }
 }

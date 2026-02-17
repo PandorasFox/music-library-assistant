@@ -6,8 +6,9 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use super::TransactionViewState;
+use super::{TransactionButtonFocus, TransactionViewState};
 use crate::ui::transaction_review::DecisionSummary;
+use crate::ui::widgets::{ConfirmationButton, render_button_row};
 
 /// Render the transaction view.
 pub fn render(
@@ -20,7 +21,8 @@ pub fn render(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),     // Decision list
-            Constraint::Length(1),  // Status/hints
+            Constraint::Length(3),  // Buttons row
+            Constraint::Length(1),  // Hints
         ])
         .split(area);
 
@@ -75,6 +77,16 @@ pub fn render(
         f.render_widget(list, chunks[0]);
     }
 
+    // Buttons row (matches TransactionReview modal)
+    if !decisions.is_empty() {
+        render_button_row(f, chunks[1], &[
+            ConfirmationButton::new("Discard", Color::Red)
+                .selected(state.button_focus == TransactionButtonFocus::Discard),
+            ConfirmationButton::new("Confirm", Color::Green)
+                .selected(state.button_focus == TransactionButtonFocus::Confirm),
+        ]);
+    }
+
     // Hints bar
     use crate::ui::widgets::control_colors as cc;
     let total_mutations: usize = decisions.iter().map(|d| d.mutation_count).sum();
@@ -94,12 +106,12 @@ pub fn render(
         Line::from(vec![
             cc::text(&summary),
             cc::text("  "),
-            cc::confirm("[Y]"),
-            cc::text(" commit  "),
-            cc::cancel("[Ctrl+D]"),
-            cc::text(" discard"),
+            cc::nav("[Shift+<>]"),
+            cc::text(" select  "),
+            cc::confirm("[Enter]"),
+            cc::text(" activate"),
         ])
     };
     let hint_widget = Paragraph::new(hints).alignment(Alignment::Center);
-    f.render_widget(hint_widget, chunks[1]);
+    f.render_widget(hint_widget, chunks[2]);
 }

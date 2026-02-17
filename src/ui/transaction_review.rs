@@ -17,6 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::{DiffEntry, Mutation};
 use crate::ui::widgets::{centered_rect_fixed, ConfirmationButton, render_button_row};
 use crate::witch::Witch;
@@ -28,6 +29,7 @@ use crate::witch::Witch;
 /// Summary of a single decision for display.
 #[derive(Debug, Clone)]
 pub struct DecisionSummary {
+    pub key: DecisionKey,
     pub label: String,
     pub mutation_count: usize,
     pub track_count: usize,
@@ -47,7 +49,7 @@ pub enum ReviewButtonFocus {
 }
 
 /// Action returned from handling input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransactionReviewAction {
     None,
     /// Return to source modal (transaction remains active)
@@ -56,6 +58,10 @@ pub enum TransactionReviewAction {
     Discard,
     /// Commit transaction and proceed to Progress
     Confirm,
+    /// User pressed Backspace/Delete on a decision — handler should set pending_removal
+    RequestRemoval,
+    /// User confirmed removal in the popup — handler should execute removal
+    ConfirmRemoval(DecisionKey),
 }
 
 // ============================================================================
@@ -84,6 +90,8 @@ pub struct TransactionReviewState {
     pub scroll: usize,
     pub button_focus: ReviewButtonFocus,
     pub post_commit_phase: PostCommitPhase,
+    /// When set, a confirmation popup is shown for removing this decision.
+    pub pending_removal: Option<DecisionKey>,
 }
 
 impl TransactionReviewState {
@@ -93,6 +101,7 @@ impl TransactionReviewState {
             scroll: 0,
             button_focus: ReviewButtonFocus::Cancel, // Safe default
             post_commit_phase: PostCommitPhase::SignalRefresh,
+            pending_removal: None,
         }
     }
 
@@ -121,6 +130,23 @@ impl TransactionReviewState {
 
     /// Handle key input.
     pub fn handle_key(&mut self, key: KeyEvent) -> TransactionReviewAction {
+        // Confirmation popup mode — intercept all keys
+        if let Some(ref key_to_remove) = self.pending_removal {
+            return match key.code {
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    let k = key_to_remove.clone();
+                    self.pending_removal = None;
+                    TransactionReviewAction::ConfirmRemoval(k)
+                }
+                KeyCode::Esc | KeyCode::Backspace | KeyCode::Delete => {
+                    self.pending_removal = None;
+                    TransactionReviewAction::None
+                }
+                _ => TransactionReviewAction::None,
+            };
+        }
+
+        // Normal mode
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => {
                 self.focus_left();
@@ -140,6 +166,9 @@ impl TransactionReviewState {
                 // Cursor bounds checked at render time against actual decision count
                 self.cursor = self.cursor.saturating_add(1);
                 TransactionReviewAction::None
+            }
+            KeyCode::Backspace | KeyCode::Delete => {
+                TransactionReviewAction::RequestRemoval
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 match self.button_focus {
@@ -248,6 +277,7 @@ pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
                     .collect();
 
                 DecisionSummary {
+                    key: key.clone(),
                     label: d.label.clone(),
                     mutation_count: d.mutations.len(),
                     track_count: count_unique_files(&d.mutations),
@@ -270,6 +300,57 @@ pub fn render(f: &mut Frame, area: Rect, state: &TransactionReviewState, decisio
         render_fullscreen(f, area, state, decisions);
     } else {
         render_modal(f, area, state, decisions);
+    }
+
+    // Confirmation popup overlay for decision removal
+    if let Some(ref key) = state.pending_removal {
+        let label = decisions.iter()
+            .find(|d| d.key == *key)
+            .map(|d| d.label.as_str())
+            .unwrap_or("this decision");
+
+        let popup_width = 50.min(area.width.saturating_sub(4));
+        let popup_area = centered_rect_fixed(popup_width, 7, area);
+        f.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .title(" Remove Decision ")
+            .title_alignment(Alignment::Center)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
+        let inner = block.inner(popup_area);
+        f.render_widget(block, popup_area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),    // Message
+                Constraint::Length(1), // Hint
+            ])
+            .split(inner);
+
+        let msg = Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Remove ", Style::default().fg(Color::White)),
+                Span::styled(
+                    crate::ui::helpers::truncate_right(label, 30),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled("?", Style::default().fg(Color::White)),
+            ]),
+        ])
+        .alignment(Alignment::Center);
+        f.render_widget(msg, chunks[0]);
+
+        use crate::ui::widgets::control_colors as cc;
+        let hint = Paragraph::new(Line::from(vec![
+            cc::confirm("[Enter]"),
+            cc::text(" remove  "),
+            cc::cancel("[Esc]"),
+            cc::text(" cancel"),
+        ]))
+        .alignment(Alignment::Center);
+        f.render_widget(hint, chunks[1]);
     }
 }
 
@@ -406,6 +487,8 @@ fn render_buttons_and_hints(f: &mut Frame, button_area: Rect, hint_area: Rect, s
         cc::text(" confirm  "),
         cc::cancel("[Ctrl+D]"),
         cc::text(" discard  "),
+        cc::cancel("[Bksp]"),
+        cc::text(" remove  "),
         cc::cancel("[Esc]"),
         cc::text(" cancel"),
     ]);

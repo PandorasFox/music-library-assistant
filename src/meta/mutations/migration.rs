@@ -501,6 +501,19 @@ impl MigrationRegistry {
             },
         });
 
+        // v15→v16: Create signal_embedded_disc_number table
+        registry.register(Migration {
+            from_version: 15,
+            to_version: 16,
+            description: "Create signal_embedded_disc_number table for embedded disc number detection",
+            apply: |db| {
+                use crate::meta::signals::store::AggregateSignalStore;
+                use crate::meta::signals::data::EmbeddedDiscNumberSignal;
+                db.conn().execute_batch(EmbeddedDiscNumberSignal::TABLE_SQL)?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

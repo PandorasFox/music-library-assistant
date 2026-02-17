@@ -136,7 +136,7 @@ impl App {
     /// In open-txn mode: returns to the last lateral view with a status message.
     pub(in crate::ui) fn after_staging_decisions(&mut self) {
         if self.open_txn_mode() {
-            self.return_to_last_lateral_view();
+            self.start_transaction_view();
             self.status_message = Some("Decision staged".into());
         } else {
             self.start_transaction_review();
@@ -720,7 +720,7 @@ impl App {
                     }
 
                     if open_txn {
-                        self.return_to_last_lateral_view();
+                        self.start_transaction_view();
                         self.status_message = Some(format!("{} files staged for indexing", count));
                     } else {
                         // Note: IntakeConfirmation state is preserved inside the suspended view for Cancel return
@@ -1004,6 +1004,49 @@ impl App {
                         self.start_insights_view();
                     }
                 }
+            }
+
+            TransactionReviewAction::RequestRemoval => {
+                // Map cursor position to DecisionKey and set pending_removal
+                let key = if let ActiveView::TransactionReview(ref review) = self.view {
+                    self.witch.as_ref().and_then(|witch| {
+                        let keys = witch.decision_keys();
+                        let cursor = review.cursor.min(keys.len().saturating_sub(1));
+                        keys.into_iter().nth(cursor)
+                    })
+                } else {
+                    None
+                };
+                if let Some(key) = key {
+                    if let ActiveView::TransactionReview(ref mut review) = self.view {
+                        review.pending_removal = Some(key);
+                    }
+                }
+            }
+
+            TransactionReviewAction::ConfirmRemoval(key) => {
+                if let Some(ref mut witch) = self.witch {
+                    let _ = super::operator_decisions::remove_decision(witch, &key);
+
+                    // If transaction is now empty, auto-close review
+                    if witch.decision_keys().is_empty() {
+                        if !self.pop_and_restore() {
+                            self.start_insights_view();
+                        }
+                        self.status_message = Some("Decision removed, transaction empty".to_string());
+                        return;
+                    }
+                }
+                // Clamp cursor after removal
+                if let ActiveView::TransactionReview(ref mut review) = self.view {
+                    if let Some(ref witch) = self.witch {
+                        let count = witch.decision_keys().len();
+                        if review.cursor >= count && count > 0 {
+                            review.cursor = count - 1;
+                        }
+                    }
+                }
+                self.status_message = Some("Decision removed".to_string());
             }
         }
     }

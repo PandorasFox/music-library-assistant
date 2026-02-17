@@ -1665,24 +1665,6 @@ impl AggregateSignalStore for EmbeddedDiscNumberSignal {
     }
 }
 
-impl EmbeddedDiscNumberSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_embedded_disc_number ORDER BY key"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(1)?;
-            let data: EmbeddedDiscNumberData = bincode::deserialize(&blob)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            Ok(Self {
-                key: row.get(0)?,
-                data,
-            })
-        })?;
-        rows.collect()
-    }
-}
-
 impl InboxTagCanonicitySignal {
     pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
         use rusqlite::OptionalExtension;

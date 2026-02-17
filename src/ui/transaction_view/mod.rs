@@ -8,21 +8,21 @@ pub mod render;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::meta::decisions::DecisionKey;
 
-/// Focus area within the transaction view.
+/// Button focus within the transaction view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TransactionViewFocus {
+pub enum TransactionButtonFocus {
+    /// Discard all decisions (destructive)
+    Discard,
+    /// Confirm and execute all decisions
     #[default]
-    List,
-    Detail,
-    Buttons,
+    Confirm,
 }
 
 /// State for the Transaction tab view.
 pub struct TransactionViewState {
     pub cursor: usize,
     pub scroll: usize,
-    pub detail_scroll: usize,
-    pub focus: TransactionViewFocus,
+    pub button_focus: TransactionButtonFocus,
 }
 
 impl TransactionViewState {
@@ -30,9 +30,18 @@ impl TransactionViewState {
         Self {
             cursor: 0,
             scroll: 0,
-            detail_scroll: 0,
-            focus: TransactionViewFocus::List,
+            button_focus: TransactionButtonFocus::Confirm,
         }
+    }
+
+    /// Move button focus left (Confirm -> Discard).
+    fn focus_left(&mut self) {
+        self.button_focus = TransactionButtonFocus::Discard;
+    }
+
+    /// Move button focus right (Discard -> Confirm).
+    fn focus_right(&mut self) {
+        self.button_focus = TransactionButtonFocus::Confirm;
     }
 }
 
@@ -65,15 +74,24 @@ impl TransactionViewState {
                 }
                 TransactionViewAction::None
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if decision_count > 0 {
-                    TransactionViewAction::Commit
-                } else {
-                    TransactionViewAction::None
-                }
+            // Shift+Arrow to move button focus
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.focus_left();
+                TransactionViewAction::None
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                TransactionViewAction::DiscardAll
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.focus_right();
+                TransactionViewAction::None
+            }
+            // Enter activates focused button
+            KeyCode::Enter => {
+                if decision_count == 0 {
+                    return TransactionViewAction::None;
+                }
+                match self.button_focus {
+                    TransactionButtonFocus::Confirm => TransactionViewAction::Commit,
+                    TransactionButtonFocus::Discard => TransactionViewAction::DiscardAll,
+                }
             }
             _ => TransactionViewAction::None,
         }

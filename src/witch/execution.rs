@@ -27,6 +27,7 @@ use std::time::Instant;
 
 use crate::config;
 use crate::meta::computations::{Computation, awakening, with_read_only_db};
+use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::db::Database;
 use crate::meta::mutations::{Mutation, PendingSignal};
@@ -63,6 +64,7 @@ fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> R
                 queue_wait_ms,
                 thread_stats: None,
                 config_update: None,
+                recomputation_scope: RecomputationScope::EMPTY,
                 observed_corpus_inodes: HashMap::new(),
                 observed_inbox_inodes: HashMap::new(),
                 observed_library_files: Vec::new(),
@@ -148,6 +150,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 queue_wait_ms,
                 thread_stats: None,
                 config_update: None,
+                recomputation_scope: RecomputationScope::EMPTY,
                 observed_corpus_inodes: HashMap::new(),
                 observed_inbox_inodes: HashMap::new(),
                 observed_library_files: Vec::new(),
@@ -214,6 +217,15 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         None
     };
 
+    // Extract recomputation scope from executor (EMPTY on failure)
+    let recomputation_scope = if success {
+        mutation.as_executor()
+            .map(|e| e.recomputation_scope())
+            .unwrap_or(RecomputationScope::EMPTY)
+    } else {
+        RecomputationScope::EMPTY
+    };
+
     TaskResult {
         success,
         error,
@@ -224,6 +236,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         queue_wait_ms,
         thread_stats: None, // Mutations don't use thread-local stats
         config_update,
+        recomputation_scope,
         observed_corpus_inodes: HashMap::new(),
         observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),
@@ -252,6 +265,7 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
         queue_wait_ms,
         thread_stats,
         config_update: None,
+        recomputation_scope: RecomputationScope::EMPTY,
         observed_corpus_inodes: result.observed_corpus_inodes,
         observed_inbox_inodes: result.observed_inbox_inodes,
         observed_library_files: result.observed_library_files,
@@ -292,6 +306,7 @@ pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_
         queue_wait_ms,
         thread_stats: None, // Migrations don't use thread-local stats
         config_update: None,
+        recomputation_scope: RecomputationScope::EMPTY,
         observed_corpus_inodes: HashMap::new(),
         observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),

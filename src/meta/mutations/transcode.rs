@@ -22,6 +22,8 @@ use crate::corpus::paths;
 use crate::corpus::transcode::{self, TranscodeTarget};
 use crate::witch::MutationExecutionWitness;
 
+use crate::meta::recomputation::RecomputationScope;
+
 use super::file_ops;
 use super::indexing::AssimilateDiskTagsToDbMutation;
 use super::traits::{MutationContext, MutationExecutor};
@@ -85,6 +87,7 @@ impl MutationExecutor for TranscodeMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
 
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::TAGS }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         // Transcode: only spawn for NEW path (source is stashed, would race)

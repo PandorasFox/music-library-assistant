@@ -45,6 +45,8 @@ mod inbox_tags;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::meta::recomputation::RecomputationScope;
+
 pub use schedule::*;
 pub use duplicates::*;
 pub use tags::*;
@@ -66,8 +68,11 @@ pub use inbox_tags::*;
 pub enum Computation {
     /// Schedule all content analysis computations.
     ///
-    /// Orchestrator that spawns all detection computations in parallel.
-    ScheduleContentAnalysis,
+    /// Orchestrator that spawns detection computations filtered by scope.
+    /// None = run all (startup). Some(scope) = filter to dirty domains.
+    ScheduleContentAnalysis {
+        scope: Option<RecomputationScope>,
+    },
 
     /// Detect fingerprint overlaps across all tracks.
     ///
@@ -185,7 +190,7 @@ impl Computation {
     /// Get a human-readable label for this computation.
     pub fn label(&self) -> &'static str {
         match self {
-            Computation::ScheduleContentAnalysis => "Scheduling content analysis",
+            Computation::ScheduleContentAnalysis { .. } => "Scheduling content analysis",
             Computation::DetectFingerprintOverlaps => "Detecting fingerprint overlaps",
             Computation::DetectDuplicateInodes => "Detecting duplicate inodes",
             Computation::DetectMissingTags => "Detecting missing tags",
@@ -210,8 +215,8 @@ impl Computation {
     /// Execute this computation.
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
-            Computation::ScheduleContentAnalysis => {
-                execute_schedule_content_analysis(ctx.read_db, ctx.start)
+            Computation::ScheduleContentAnalysis { ref scope } => {
+                execute_schedule_content_analysis(ctx.read_db, ctx.start, scope)
             }
             Computation::DetectFingerprintOverlaps => {
                 execute_detect_fingerprint_overlaps(ctx.read_db, ctx.witness, ctx.start)

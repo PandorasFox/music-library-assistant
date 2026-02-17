@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::EmbeddableAlbumArtSignal;
 use crate::witch::MutationExecutionWitness;
 
@@ -77,6 +78,8 @@ impl MutationExecutor for EmbedAlbumArtMutation {
     fn affected_inodes(&self) -> Vec<i64> {
         vec![self.inode]
     }
+
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
         vec![SignalToClear::exact::<EmbeddableAlbumArtSignal>(self.signal_key.clone())]

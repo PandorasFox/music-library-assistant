@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::computations::Computation;
+use crate::meta::recomputation::RecomputationScope;
 use crate::witch::MutationExecutionWitness;
 
 use super::types::{MutationResult, SignalClearScope, SignalToClear};
@@ -82,5 +83,22 @@ pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
     /// red→green change visualization. Default empty — mutations opt in.
     fn diff_entries(&self) -> Vec<super::types::DiffEntry> {
         Vec::new()
+    }
+
+    /// Which domains this mutation dirties, for selective content analysis.
+    ///
+    /// The Witch accumulates scopes from completed mutations and passes
+    /// the result to `ScheduleContentAnalysis`, which only spawns
+    /// computations touching the flagged domains.
+    ///
+    /// Mutations with `EMPTY` scope (e.g., AcknowledgeMtimeOnly, operational
+    /// config changes) skip re-awakening entirely.
+    ///
+    /// Default: conservative — assumes all domains are dirty.
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::TAGS
+            | RecomputationScope::FILES
+            | RecomputationScope::DEPLOY
+            | RecomputationScope::INBOX
     }
 }

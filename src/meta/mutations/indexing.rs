@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::corpus::db::types::Zone;
+use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::*;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
@@ -180,6 +181,7 @@ impl MutationExecutor for IndexFileFromPathMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::TAGS | RecomputationScope::FILES }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 
@@ -211,6 +213,7 @@ impl MutationExecutor for UpdateFilePathMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(
@@ -244,6 +247,7 @@ impl MutationExecutor for DropFromIndexMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
     fn affected_inodes(&self) -> Vec<i64> { self.inode.into_iter().collect() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::DEPLOY }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(path_filename(&self.path), self.path.display(), "[removed]")]
@@ -273,6 +277,7 @@ impl MutationExecutor for DropDirectoryFromIndexMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::DEPLOY }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(
@@ -306,6 +311,7 @@ impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { self.tracks.iter().map(|(inode, _)| *inode).collect() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::EMPTY }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         self.tracks.iter().map(|(_, path)| path.clone()).collect()
@@ -341,6 +347,7 @@ impl MutationExecutor for ApplyDbTagsToDiskMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::TAGS }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 
@@ -372,6 +379,7 @@ impl MutationExecutor for FlushTagsToDiskMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::TAGS }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 }
@@ -399,6 +407,7 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::TAGS }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> { vec![self.path.clone()] }
 
@@ -430,6 +439,7 @@ impl MutationExecutor for EmitCanonicalTagMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::TAGS }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(&self.tag_name, "[non-canonical]", &self.canonical_value)]
@@ -459,6 +469,7 @@ impl MutationExecutor for EmitExpectedOverlapMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new("Expected overlap", &self.source_a, &self.source_b)]
@@ -488,6 +499,7 @@ impl MutationExecutor for EmitExpectedDuplicateMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new("Expected duplicate", "[flagged]", &self.fingerprint_key)]
@@ -517,6 +529,7 @@ impl MutationExecutor for EmitExpectedMissingTagMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::TAGS }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(

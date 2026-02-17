@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use crate::meta::computations::Computation;
 use crate::meta::mutations::Mutation;
+use crate::meta::recomputation::RecomputationScope;
 
 // ============================================================================
 // State Machine
@@ -296,6 +297,9 @@ pub(super) struct TaskResult {
     pub thread_stats: Option<crate::meta::computations::ThreadStats>,
     /// Updated config from ApplyConfigEdits mutation (applied to SharedConfig in tick()).
     pub config_update: Option<crate::config::Config>,
+    /// Recomputation scope from this mutation (which domains it dirtied).
+    /// EMPTY for computations, migrations, and failed mutations.
+    pub recomputation_scope: RecomputationScope,
     /// Corpus inodes observed on disk during this computation (inode → relative path).
     pub observed_corpus_inodes: HashMap<i64, String>,
     /// Inbox inodes observed on disk during this computation (inode → relative path).

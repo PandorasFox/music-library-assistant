@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::meta::computations::{Computation, awakening};
+use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::*;
 
 use super::traits::{MutationContext, MutationExecutor};
@@ -94,6 +95,7 @@ impl MutationExecutor for MoveMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
@@ -146,6 +148,7 @@ impl MutationExecutor for MoveToStashMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::DEPLOY }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
         use crate::corpus::paths;
@@ -197,6 +200,7 @@ impl MutationExecutor for HardLinkMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::DEPLOY }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
@@ -242,6 +246,7 @@ impl MutationExecutor for LibraryMoveMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
 
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::DEPLOY }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
@@ -309,6 +314,7 @@ impl MutationExecutor for InboxToCorpusMutation {
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
 
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.inbox_path.clone(), self.corpus_path.clone()]

@@ -48,7 +48,7 @@ pub struct Opinions {
 
 
 /// Opinions for fingerprint matching thresholds
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FingerprintMatchingOpinions {
     /// Duration difference above this % = different track (default: 10.0)
     pub duration_tolerance_percent: f64,
@@ -197,7 +197,7 @@ impl Default for PerformanceOpinions {
 /// - `collaboration_keywords`: Keywords like "feat", "ft", "vs" for artist collabs
 /// - `tag_separators`: Per-tag separator lists (e.g., ARTIST: [";"], GENRE: [";", ","])
 /// - `canonicalization_synonyms`: Substitutions during matching (e.g., "and" -> "&")
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TagSplittingOpinions {
     /// Collaboration keywords for artist tags (e.g., "feat", "ft", "featuring", "vs", "with").
     /// Used to detect featuring patterns like "Artist A feat. Artist B".
@@ -241,7 +241,7 @@ impl Default for TagSplittingOpinions {
 ///
 /// Controls similarity thresholds and duration tolerance for detecting
 /// true duplicates vs. different versions of tracks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DuplicateAnalysisOpinions {
     /// Fingerprint similarity threshold (0-100). Pairs below this are not duplicates.
     /// Default: 95.0
@@ -286,7 +286,7 @@ pub enum InboxOrganizeGranularity {
 }
 
 /// Opinions for inbox organize workflow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InboxOrganizeOpinions {
     /// How to group inbox directories for the organize workflow.
     pub directory_granularity: InboxOrganizeGranularity,

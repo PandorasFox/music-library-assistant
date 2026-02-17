@@ -117,9 +117,15 @@ pub struct Witch {
     /// Once set, cannot be unset - operator must fix the issue and restart MM.
     safety_latch_reason: Option<String>,
 
-    /// Whether mutations have run this session.
-    /// Used to auto-trigger content analysis after mutations + awakening drain.
-    mutations_ran_this_session: bool,
+    /// Accumulated recomputation scope from mutations this session.
+    /// Used to determine whether re-awakening is needed and which content
+    /// analysis computations to spawn.
+    session_recomputation_scope: crate::meta::recomputation::RecomputationScope,
+
+    /// Recomputation scope carried across re-awakening phases (observation → awakening → awake).
+    /// None = run all content analysis (startup/initial awakening).
+    /// Some(scope) = filter content analysis to these domains post-mutation.
+    pending_recomputation_scope: Option<crate::meta::recomputation::RecomputationScope>,
 
     /// Force verification of all indexed files at startup, bypassing mtime optimization.
     /// Catches out-of-band tag changes and corrupt files.
@@ -254,7 +260,8 @@ impl Witch {
             legacy_enabled: cfg.legacy_enabled,
             read_only_mode: false,
             safety_latch_reason: None,
-            mutations_ran_this_session: false,
+            session_recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
+            pending_recomputation_scope: None,
             force_check_all_files_at_startup: false, // Set via with_opinions()
             session_start: None,
             session_queued: 0,
@@ -536,6 +543,11 @@ impl Witch {
                 self.update_shared_config(new_config);
             }
 
+            // Accumulate recomputation scope from mutation results
+            if !result.recomputation_scope.is_empty() {
+                self.session_recomputation_scope |= result.recomputation_scope;
+            }
+
             // Accumulate observed inodes from ScanCorpusDirectory results
             self.observed_corpus_inodes.extend(result.observed_corpus_inodes);
             self.observed_inbox_inodes.extend(result.observed_inbox_inodes);
@@ -615,8 +627,10 @@ impl Witch {
     }
 
     fn transition_to_completed(&mut self) {
-        // Capture mutation flag before session reset
-        let had_mutations = self.mutations_ran_this_session;
+        // Mutations with non-empty scope need re-awakening. Mutations with EMPTY
+        // scope (AcknowledgeMtimeOnly, operational config edits) don't — their
+        // post-execution pipeline already handles everything they need.
+        let had_mutations = !self.session_recomputation_scope.is_empty();
 
         // Flag to queue awakening computations after session reset
         let mut queue_awakening_after_reset = false;
@@ -725,10 +739,18 @@ impl Witch {
                 } else if had_mutations {
                     // Mutations ran - re-validate everything via re-awakening
                     crate::logging::log_general(format!(
-                        "[STATE] Mutations complete. Transitioning Awake -> Awakening for re-validation. \
+                        "[STATE] Mutations complete (scope={:?}). Transitioning Awake -> Awakening for re-validation. \
                          Processed {} tasks.",
-                        self.total_processed
+                        self.session_recomputation_scope, self.total_processed
                     ));
+                    // Carry the accumulated scope into the pending slot for
+                    // ScheduleContentAnalysis to consume after re-awakening.
+                    self.pending_recomputation_scope = Some(
+                        std::mem::replace(
+                            &mut self.session_recomputation_scope,
+                            crate::meta::recomputation::RecomputationScope::EMPTY,
+                        )
+                    );
                     self.eye_state = EyeState::Awakening;
                     self.observation_state = CorpusObservationState::Observing;
                     queue_reobservation_after_reset = true;
@@ -764,7 +786,7 @@ impl Witch {
         self.pending_by_label.clear();
         self.recent_errors.clear();
         self.current_label = None;
-        self.mutations_ran_this_session = false;
+        self.session_recomputation_scope = crate::meta::recomputation::RecomputationScope::EMPTY;
 
         // Flush all pending db_thread writes before queueing the next phase.
         // Computation tasks fire writes asynchronously via db_thread (fire-and-forget).
@@ -1008,13 +1030,16 @@ impl Witch {
     /// Only callable from `transition_to_completed` when mutations drain while Awake.
     /// Sealed by requiring `ContentAnalysisWitness` which can only be created in that context.
     fn queue_content_analysis(&mut self, _witness: ContentAnalysisWitness) {
-        crate::logging::log_general(
-            "[STATE] Queueing ScheduleContentAnalysis for content analysis"
-        );
+        let scope = self.pending_recomputation_scope.take();
+
+        crate::logging::log_general(format!(
+            "[STATE] Queueing ScheduleContentAnalysis for content analysis (scope={:?})",
+            scope
+        ));
 
         // Queue the orchestrator computation that will spawn all detection computations
         self.queue_computation_with_label(
-            Computation::Awake(awake::Computation::ScheduleContentAnalysis),
+            Computation::Awake(awake::Computation::ScheduleContentAnalysis { scope }),
             Some("Analyzing metadata".to_string()),
         );
     }
@@ -1069,6 +1094,7 @@ impl Witch {
                         queue_wait_ms: 0,
                         thread_stats: None,
                         config_update: None,
+                        recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
                         observed_corpus_inodes: HashMap::new(),
                         observed_inbox_inodes: HashMap::new(),
                         observed_library_files: Vec::new(),
@@ -1105,7 +1131,6 @@ impl Witch {
 
     pub(super) fn queue_mutations_internal(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>) {
         self.transition_to_working();
-        self.mutations_ran_this_session = true;
 
         let queue_time = Instant::now();
         let mutations: Vec<_> = mutations.into_iter().collect();
@@ -1139,7 +1164,6 @@ impl Witch {
 
         // Spawned mutations inherit the working state from their parent
         // (transition_to_working already happened when parent was queued)
-        self.mutations_ran_this_session = true;
 
         let task = Task::Mutation(mutation);
         let task_label = TaskLabel::from_task(&task).0;

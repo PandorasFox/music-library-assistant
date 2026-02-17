@@ -19,6 +19,7 @@ use crate::corpus::db::types::Zone;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::db_thread;
+use crate::meta::recomputation::RecomputationScope;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
 use crate::corpus::tags::TagSet;
@@ -72,6 +73,13 @@ impl MutationExecutor for ApplyTagOpsMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+
+    fn recomputation_scope(&self) -> RecomputationScope {
+        match self.zone {
+            Zone::Inbox => RecomputationScope::INBOX,
+            _ => RecomputationScope::TAGS,
+        }
+    }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         use std::collections::BTreeMap;

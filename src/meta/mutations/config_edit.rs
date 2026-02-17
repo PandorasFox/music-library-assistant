@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::meta::computations::Computation;
 use crate::meta::mutations::types::{DiffEntry, MutationResult, SignalClearScope, SignalToClear};
+use crate::meta::recomputation::RecomputationScope;
 use super::traits::{MutationContext, MutationExecutor};
 
 /// Mutation that applies config edits to disk.
@@ -84,6 +85,10 @@ impl MutationExecutor for ApplyConfigEditsMutation {
 
     fn paths_for_signal_updates(&self) -> Vec<std::path::PathBuf> {
         Vec::new()
+    }
+
+    fn recomputation_scope(&self) -> RecomputationScope {
+        config_recomputation_scope(&self.old_config, &self.new_config)
     }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
@@ -169,4 +174,44 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
     cmp!("Timing instrumentation", o.performance.timing_instrumentation, n.performance.timing_instrumentation);
 
     diffs
+}
+
+/// Determine which domains a config change affects.
+///
+/// Inspects old vs new config field-by-field to produce a precise scope.
+/// Fields that only affect runtime policy (startup, performance, quality resolution)
+/// return EMPTY — they don't need content re-analysis.
+fn config_recomputation_scope(old: &Config, new: &Config) -> RecomputationScope {
+    let o = &old.opinions;
+    let n = &new.opinions;
+    let mut scope = RecomputationScope::EMPTY;
+
+    // TAGS: fields that affect tag-sensitive computations
+    if o.health_detection.required_tags != n.health_detection.required_tags
+        || o.health_detection.album_artist_only_required_if_compilation != n.health_detection.album_artist_only_required_if_compilation
+        || o.health_detection.single_album_suffix != n.health_detection.single_album_suffix
+        || o.canonicalization.strip_album_format_suffixes != n.canonicalization.strip_album_format_suffixes
+        || o.tag_splitting != n.tag_splitting
+    {
+        scope |= RecomputationScope::TAGS;
+    }
+
+    // FILES: fields that affect file/fingerprint/duplicate detection
+    if o.fingerprint_matching != n.fingerprint_matching
+        || o.duplicate_analysis != n.duplicate_analysis
+        || o.lossy_shit_formats_to_flac != n.lossy_shit_formats_to_flac
+    {
+        scope |= RecomputationScope::FILES;
+    }
+
+    // INBOX: fields that affect inbox computations
+    if o.inbox_organize != n.inbox_organize {
+        scope |= RecomputationScope::INBOX;
+    }
+
+    // These fields are runtime policy — no content re-analysis needed:
+    // startup.*, performance.*, idle_rescan_interval_secs, leave_transactions_open,
+    // quality_resolution.*
+
+    scope
 }

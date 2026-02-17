@@ -102,24 +102,45 @@ impl App {
     /// Starts a transaction with the given label, stages the mutations as a
     /// single decision. Used by simple resolution modals that have a straightforward
     /// "collect mutations → review → commit" pattern.
+    ///
+    /// In open-txn mode, skips `start_transaction` since the persistent transaction
+    /// is already active.
     fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, key: DecisionKey, _witness: &witness::DecisionWitness) {
+        let open_txn = self.open_txn_mode();
         let Some(ref mut witch) = self.witch else { return };
-        let _ = witch.start_transaction(label);
+        if !open_txn {
+            let _ = witch.start_transaction(label);
+        }
         let _ = super::operator_decisions::stage_decision(witch, key, label, mutations);
     }
 
-    /// Cancel the current modal: discard any active transaction and return to Insights.
+    /// Cancel the current modal and return to the source view.
     ///
-    /// Logs the provided message, discards any open transaction, and navigates
-    /// back to the Insights view. The old view is dropped when we set self.view.
-    pub(in crate::ui) fn cancel_and_return_to_insights(&mut self, log_message: &str) {
+    /// In default (closed-txn) mode: discards any open transaction before returning.
+    /// In open-txn mode: leaves the persistent transaction intact.
+    pub(in crate::ui) fn cancel_and_return_to_source(&mut self, log_message: &str) {
         crate::logging::log_general(log_message);
-        if let Some(ref mut witch) = self.witch {
-            if witch.has_transaction() {
-                let _ = super::operator_decisions::discard_transaction(witch);
+        if !self.open_txn_mode() {
+            if let Some(ref mut witch) = self.witch {
+                if witch.has_transaction() {
+                    let _ = super::operator_decisions::discard_transaction(witch);
+                }
             }
         }
-        self.start_insights_view();
+        self.return_to_last_lateral_view();
+    }
+
+    /// After staging decisions: route to review (closed-txn) or return to source (open-txn).
+    ///
+    /// In default mode: shows the TransactionReview modal.
+    /// In open-txn mode: returns to the last lateral view with a status message.
+    pub(in crate::ui) fn after_staging_decisions(&mut self) {
+        if self.open_txn_mode() {
+            self.return_to_last_lateral_view();
+            self.status_message = Some("Decision staged".into());
+        } else {
+            self.start_transaction_review();
+        }
     }
 
     // =========================================================================
@@ -177,14 +198,17 @@ impl App {
                         new_config,
                     });
 
+                    let open_txn = self.open_txn_mode();
                     if let Some(ref mut witch) = self.witch {
-                        let _ = witch.start_transaction("Config update");
+                        if !open_txn {
+                            let _ = witch.start_transaction("Config update");
+                        }
                         let _ = super::operator_decisions::stage_decision(
                             witch, DecisionKey::single(DecisionSource::ConfigEdit), "Apply config changes", vec![mutation],
                         );
                     }
 
-                    self.start_transaction_review();
+                    self.after_staging_decisions();
                 } else {
                     // No edits — just return to insights
                     self.start_insights_view();
@@ -457,7 +481,7 @@ impl App {
             MissingAlbumAction::None => {}
 
             MissingAlbumAction::Cancel => {
-                self.cancel_and_return_to_insights("Missing album single resolution cancelled");
+                self.cancel_and_return_to_source("Missing album single resolution cancelled");
             }
 
             MissingAlbumAction::Confirm(resolution) => {
@@ -529,7 +553,7 @@ impl App {
                         state.current_group += 1;
                     } else {
                         // All groups visited — go to review
-                        self.start_transaction_review();
+                        self.after_staging_decisions();
                         return;
                     }
                 }
@@ -552,7 +576,7 @@ impl App {
             }
 
             MissingAlbumAction::ShowReview => {
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
 
             MissingAlbumAction::EditTracks => {
@@ -682,8 +706,11 @@ impl App {
                     ));
 
                     // Start transaction and stage the decision
+                    let open_txn = self.open_txn_mode();
                     if let Some(the_witch) = self.witch.as_mut() {
-                        let _ = the_witch.start_transaction("Intake indexing");
+                        if !open_txn {
+                            let _ = the_witch.start_transaction("Intake indexing");
+                        }
                         let _ = operator_decisions::stage_decision(
                             the_witch,
                             DecisionKey::single(DecisionSource::IntakeIndex),
@@ -692,11 +719,16 @@ impl App {
                         );
                     }
 
-                    // Note: IntakeConfirmation state is preserved inside the suspended view for Cancel return
-                    // Transition to review modal with ContentAnalysis phase for post-commit
-                    self.start_transaction_review_with_phase(
-                        transaction_review::PostCommitPhase::ContentAnalysis,
-                    );
+                    if open_txn {
+                        self.return_to_last_lateral_view();
+                        self.status_message = Some(format!("{} files staged for indexing", count));
+                    } else {
+                        // Note: IntakeConfirmation state is preserved inside the suspended view for Cancel return
+                        // Transition to review modal with ContentAnalysis phase for post-commit
+                        self.start_transaction_review_with_phase(
+                            transaction_review::PostCommitPhase::ContentAnalysis,
+                        );
+                    }
                 }
             }
             startup::IntakeConfirmationAction::Skipped => {
@@ -800,7 +832,7 @@ impl App {
 
                 // Transition to standardized review modal
                 // Note: tag editor state is preserved on the view stack for Cancel return
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
 
             UnifiedTagEditorAction::DiscardTransaction => {
@@ -889,7 +921,7 @@ impl App {
             UnifiedTagEditorAction::RequestTransactionReview => {
                 // Transition to standardized review modal
                 // Note: tag editor state is preserved on the view stack for Cancel return
-                self.start_transaction_review();
+                self.after_staging_decisions();
             }
         }
     }

@@ -28,6 +28,8 @@ pub enum ConfigValue {
         selected: usize,
         options: Vec<&'static str>,
     },
+    /// Duration in seconds, edited/displayed as humantime strings (e.g. "3m", "180s").
+    Duration(u64),
     /// Set of strings (opens StringSetEditor popup).
     StringSet(Vec<String>),
     /// Map of string pairs (opens StringPairMapEditor popup).
@@ -47,6 +49,13 @@ impl ConfigValue {
             ConfigValue::SignedInt(n) => format!("{}", n),
             ConfigValue::OptionalUint(None) => "auto".to_string(),
             ConfigValue::OptionalUint(Some(n)) => format!("{}", n),
+            ConfigValue::Duration(secs) => {
+                if *secs == 0 {
+                    "disabled".to_string()
+                } else {
+                    humantime::format_duration(std::time::Duration::from_secs(*secs)).to_string()
+                }
+            }
             ConfigValue::String(s) => {
                 if s.is_empty() { "(empty)".to_string() } else { s.clone() }
             }
@@ -87,6 +96,7 @@ impl ConfigValue {
             (ConfigValue::UintU32(a), ConfigValue::UintU32(b)) => a == b,
             (ConfigValue::SignedInt(a), ConfigValue::SignedInt(b)) => a == b,
             (ConfigValue::OptionalUint(a), ConfigValue::OptionalUint(b)) => a == b,
+            (ConfigValue::Duration(a), ConfigValue::Duration(b)) => a == b,
             (ConfigValue::String(a), ConfigValue::String(b)) => a == b,
             (ConfigValue::StringList(a), ConfigValue::StringList(b)) => a == b,
             (ConfigValue::Enum { selected: a, .. }, ConfigValue::Enum { selected: b, .. }) => a == b,

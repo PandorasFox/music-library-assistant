@@ -504,7 +504,8 @@ impl ConfigEditorState {
                 }
             }
             ConfigValue::Float(_) | ConfigValue::Uint(_) | ConfigValue::UintU32(_)
-            | ConfigValue::SignedInt(_) | ConfigValue::OptionalUint(_) | ConfigValue::String(_) => {
+            | ConfigValue::SignedInt(_) | ConfigValue::OptionalUint(_) | ConfigValue::String(_)
+            | ConfigValue::Duration(_) => {
                 let mut input = TextInputState::new();
                 input.set_value(field.value.display());
                 input.focused = true;
@@ -598,6 +599,18 @@ impl ConfigEditorState {
                     true
                 } else if let Ok(parsed) = text.parse::<usize>() {
                     *v = Some(parsed);
+                    true
+                } else {
+                    false
+                }
+            }
+            ConfigValue::Duration(ref mut secs) => {
+                let trimmed = text.trim();
+                if trimmed.eq_ignore_ascii_case("disabled") || trimmed == "0" {
+                    *secs = 0;
+                    true
+                } else if let Ok(dur) = humantime::parse_duration(trimmed) {
+                    *secs = dur.as_secs();
                     true
                 } else {
                     false

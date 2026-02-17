@@ -262,6 +262,11 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Advanced",
             collapsed: false,
             fields: vec![
+                field("Idle rescan interval", "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)",
+                    ConfigValue::Duration(ops.idle_rescan_interval_secs),
+                    ConfigValue::Duration(defaults.idle_rescan_interval_secs),
+                    source_for(ops.idle_rescan_interval_secs == defaults.idle_rescan_interval_secs, "idle-rescan-interval"),
+                    false),
                 field("Leave transactions open", "Keep one open transaction; adds Transaction tab to view ring",
                     ConfigValue::Bool(ops.leave_transactions_open),
                     ConfigValue::Bool(defaults.leave_transactions_open),
@@ -381,6 +386,9 @@ fn apply_field(config: &mut Config, group_name: &str, field: &ConfigField) {
             if let ConfigValue::StringListMap(v) = &field.value {
                 config.opinions.tag_splitting.tag_separators = v.iter().cloned().collect();
             }
+        }
+        ("Advanced", "Idle rescan interval") => {
+            if let ConfigValue::Duration(secs) = &field.value { config.opinions.idle_rescan_interval_secs = *secs; }
         }
         ("Advanced", "Leave transactions open") => {
             if let ConfigValue::Bool(v) = &field.value { config.opinions.leave_transactions_open = *v; }

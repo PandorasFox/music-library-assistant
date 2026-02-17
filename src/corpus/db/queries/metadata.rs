@@ -159,6 +159,32 @@ impl Database {
     }
 
     // ========================================================================
+    // Album Value Queries (for embedded disc number detection)
+    // ========================================================================
+
+    /// Get ALBUM tag values with their inodes from both corpus and inbox.
+    ///
+    /// Returns Vec of (inode, album_value) covering both zones.
+    /// Used by DetectEmbeddedDiscNumbers to find embedded disc numbers.
+    pub fn get_album_values_with_inodes(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT ct.inode, ct.tag_value FROM corpus_tags ct
+               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
+               WHERE UPPER(ct.tag_name) = 'ALBUM' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''
+               UNION ALL
+               SELECT it.inode, it.tag_value FROM inbox_tags it
+               INNER JOIN files f ON it.inode = f.inode AND f.zone = 'inbox'
+               WHERE UPPER(it.tag_name) = 'ALBUM' AND it.tag_value IS NOT NULL AND it.tag_value != ''"#,
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    // ========================================================================
     // OOB Tag Resolution Queries
     // ========================================================================
 

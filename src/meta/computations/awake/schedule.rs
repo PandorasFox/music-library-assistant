@@ -34,6 +34,7 @@ pub fn execute_schedule_content_analysis(
         Computation::DetectEmbeddableAlbumArt,
         Computation::DetectInboxCorpusMatches,
         Computation::DetectInboxTagCanonicity,
+        Computation::DetectEmbeddedDiscNumbers,
     ];
 
     // Also spawn DeriveDeployHealthSignals for each configured library

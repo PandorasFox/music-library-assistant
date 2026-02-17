@@ -105,6 +105,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | InconsistentAlbumArtist | DetectInconsistentAlbumArtist | DetectInconsistentAlbumArtist | Album with inconsistent artist. Suppressed when any track in the group has `FLAGCOMPILATION=0` tag |
 | RedundantDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps | Group of files with identical fingerprints and equivalent quality tier (same format class + metric). Requires operator choice — neither file is subpar. Key: fingerprint text. Data (bincode): `file_type`, `inodes[]`, `paths[]` |
 | EmbeddableAlbumArt | DetectEmbeddableAlbumArt | DetectEmbeddableAlbumArt, EmbedAlbumArt | Directory with sidecar image and audio files lacking embedded art. Key: relative directory path. Metadata (bincode): `image_path`, `image_filename`, `artless_inodes[]`, `artless_paths[]` |
+| EmbeddedDiscNumber | DetectEmbeddedDiscNumbers | DetectEmbeddedDiscNumbers | Album tag contains embedded disc number (e.g., "Album, Disc 2"). Key: `{cleaned_album}\|{disc_number}`. Data (bincode BLOB): `original_album`, `cleaned_album`, `disc_number`, `inodes[]`. Covers both corpus and inbox files |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
 
 ---

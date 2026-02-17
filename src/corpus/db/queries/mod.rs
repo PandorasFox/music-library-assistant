@@ -774,6 +774,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_inbox_inodes_for_tag_values(tag_name, values)
     }
 
+    /// Get ALBUM tag values with their inodes from both corpus and inbox.
+    pub fn get_album_values_with_inodes(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_album_values_with_inodes()
+    }
+
     /// Query album data with artist context for collision detection.
     #[allow(clippy::type_complexity)]
     pub fn get_album_data_for_collision_detection(&self) -> Result<Vec<(String, String, String, String, String, String)>> {

@@ -695,6 +695,27 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
+        InsightType::EmbeddedDiscNumber => {
+            lines.push(Line::from(Span::styled(
+                "Embedded Disc Numbers",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Albums with disc number in the ALBUM",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "tag (e.g., \"Album, Disc 2\").",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Extract to DISCNUMBER + clean ALBUM.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
         // Other bucket - dynamic entries
         InsightType::OtherSignal { index } => {
             // Get extended info from cached_data if available

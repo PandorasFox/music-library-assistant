@@ -549,6 +549,28 @@ pub struct InboxTagCanonicityData {
     pub corpus_variants: Vec<(String, usize)>,
 }
 
+/// Album has disc number embedded in the ALBUM tag (e.g., "Album Name, Disc 2").
+/// Aggregate signal keyed by "{cleaned_album}|{disc_number}".
+#[derive(Debug, Clone)]
+pub struct EmbeddedDiscNumberSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: EmbeddedDiscNumberData,
+}
+
+/// Bincode-serialized payload for EmbeddedDiscNumber.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedDiscNumberData {
+    /// Original album tag value (e.g., "Some Album, Disc 2")
+    pub original_album: String,
+    /// Cleaned album name (e.g., "Some Album")
+    pub cleaned_album: String,
+    /// Extracted disc number (e.g., "2")
+    pub disc_number: String,
+    /// Inodes of files with this embedded disc number
+    pub inodes: Vec<i64>,
+}
+
 /// A pair of tracks from different sources that share a fingerprint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossSourceTrackPair {
@@ -609,6 +631,7 @@ pub enum TypedSignalWrite {
     MissingAlbumSingle(MissingAlbumSingleSignal),
     ExpectedMissingTag(ExpectedMissingTagSignal),
     InboxTagCanonicity(InboxTagCanonicitySignal),
+    EmbeddedDiscNumber(EmbeddedDiscNumberSignal),
 }
 
 impl TypedSignalWrite {
@@ -653,6 +676,7 @@ impl TypedSignalWrite {
             Self::MissingAlbumSingle(s) => s.insert(conn),
             Self::ExpectedMissingTag(s) => s.insert(conn),
             Self::InboxTagCanonicity(s) => s.insert(conn),
+            Self::EmbeddedDiscNumber(s) => s.insert(conn),
         }
     }
 
@@ -697,6 +721,7 @@ impl TypedSignalWrite {
             Self::MissingAlbumSingle(s) => MissingAlbumSingleSignal::exists(conn, &s.key),
             Self::ExpectedMissingTag(s) => ExpectedMissingTagSignal::exists(conn, s.inode),
             Self::InboxTagCanonicity(s) => InboxTagCanonicitySignal::exists(conn, &s.key),
+            Self::EmbeddedDiscNumber(s) => EmbeddedDiscNumberSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }
@@ -794,6 +819,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::InboxTagCanonicity(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::EmbeddedDiscNumber(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

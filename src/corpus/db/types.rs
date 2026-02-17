@@ -181,6 +181,8 @@ pub struct TagSquashBucket {
     pub embeddable_album_art: usize,
     /// Missing album singles (tracks without ALBUM but with ARTIST+TITLE)
     pub missing_album_single_count: usize,
+    /// Albums with disc number embedded in the ALBUM tag
+    pub embedded_disc_number_count: usize,
 }
 
 /// Entry for tag squash signals (grouped by tag name)

@@ -1625,6 +1625,64 @@ impl AggregateSignalStore for InboxTagCanonicitySignal {
     }
 }
 
+impl AggregateSignalStore for EmbeddedDiscNumberSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_embedded_disc_number (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_embedded_disc_number";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_embedded_disc_number (key, data, data_hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_embedded_disc_number")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_embedded_disc_number WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_embedded_disc_number WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl EmbeddedDiscNumberSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM signal_embedded_disc_number ORDER BY key"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            let data: EmbeddedDiscNumberData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Self {
+                key: row.get(0)?,
+                data,
+            })
+        })?;
+        rows.collect()
+    }
+}
+
 impl InboxTagCanonicitySignal {
     pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
         use rusqlite::OptionalExtension;
@@ -1689,6 +1747,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(EmbeddableAlbumArtSignal::TABLE_SQL)?;
     conn.execute_batch(MissingAlbumSingleSignal::TABLE_SQL)?;
     conn.execute_batch(InboxTagCanonicitySignal::TABLE_SQL)?;
+    conn.execute_batch(EmbeddedDiscNumberSignal::TABLE_SQL)?;
 
     Ok(())
 }

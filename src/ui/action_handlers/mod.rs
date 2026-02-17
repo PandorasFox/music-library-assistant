@@ -323,6 +323,9 @@ impl App {
                     Some(insights_view::InsightAction::LaunchMissingAlbumSingleResolution) => {
                         self.start_missing_album_single_resolution();
                     }
+                    Some(insights_view::InsightAction::LaunchEmbeddedDiscNumberResolution) => {
+                        self.status_message = Some("Not yet implemented".to_string());
+                    }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Not yet implemented".to_string());
                     }

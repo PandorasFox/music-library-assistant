@@ -139,6 +139,7 @@ pub enum InsightType {
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
     EmbeddableAlbumArt,
     MissingAlbumSingle,
+    EmbeddedDiscNumber,
     // Other bucket - dynamic entries identified by index
     OtherSignal { index: usize },
 }
@@ -180,6 +181,8 @@ pub enum InsightAction {
     LaunchMissingTagResolution,
     /// Launch missing album single resolution modal
     LaunchMissingAlbumSingleResolution,
+    /// Launch embedded disc number resolution
+    LaunchEmbeddedDiscNumberResolution,
     /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -317,6 +320,18 @@ impl BucketEntry {
             color: if count > 0 { Color::Yellow } else { Color::DarkGray },
             rank: 0,
             action: InsightAction::LaunchMissingAlbumSingleResolution,
+        }
+    }
+
+    /// Create embedded disc number entry
+    fn embedded_disc_number(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::EmbeddedDiscNumber,
+            label: "Embedded disc numbers".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            rank: 0,
+            action: InsightAction::LaunchEmbeddedDiscNumberResolution,
         }
     }
 
@@ -513,6 +528,11 @@ impl CachedBucketEntries {
         // Missing album singles
         if bucket.missing_album_single_count > 0 {
             entries.push(BucketEntry::missing_album_single(bucket.missing_album_single_count));
+        }
+
+        // Embedded disc numbers
+        if bucket.embedded_disc_number_count > 0 {
+            entries.push(BucketEntry::embedded_disc_number(bucket.embedded_disc_number_count));
         }
 
         // Embeddable album art at bottom
@@ -868,6 +888,7 @@ mod tests {
                 compound_tags: vec![],
                 embeddable_album_art: 0,
                 missing_album_single_count: 0,
+                embedded_disc_number_count: 0,
             },
             bucket_other: OtherSignalsBucket {
                 entries: vec![],

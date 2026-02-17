@@ -69,6 +69,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectEmbeddableAlbumArt | Find directories with sidecar album art images alongside audio files lacking embedded pictures |
 | DetectInboxCorpusMatches | Find inbox files matching corpus by fingerprint+duration similarity |
 | DetectInboxTagCanonicity | Compare inbox tag values against corpus vocabulary. Flags inbox values whose normalized form matches a corpus value but whose exact spelling differs. Skips novel values (no corpus equivalent) and CanonicalTag whitelisted values. Full recompute each cycle |
+| DetectEmbeddedDiscNumbers | Detect ALBUM tags with embedded disc numbers (e.g., "Album, Disc 2"). Scans both corpus and inbox. Emits EmbeddedDiscNumber aggregate signals |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality tier partitioning |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
 | DetectDeployConflicts | Detect path collisions in deployment |
@@ -121,6 +122,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectEmbeddableAlbumArt | — | EmbeddableAlbumArt | EmbeddableAlbumArt (stale, via set reconciliation) |
 | DetectInboxCorpusMatches | — | InboxCorpusMatch | InboxCorpusMatch (via hash-based corpus reconciliation). For each inbox file with fingerprint, finds corpus files within duration tolerance with similarity above threshold. Data stored as bincode BLOB |
 | DetectInboxTagCanonicity | — | InboxTagCanonicity | InboxTagCanonicity (via hash-based aggregate reconciliation). For each tag field (artist, album_artist, album, genre): normalizes inbox values, finds corpus matches, skips exact matches and CanonicalTag whitelisted values. Data stored as bincode BLOB |
+| DetectEmbeddedDiscNumbers | — | EmbeddedDiscNumber | EmbeddedDiscNumber (via hash-based aggregate reconciliation). Scans ALBUM tags from corpus_tags and inbox_tags for `,?\s*disc\s+(\d+)\s*$` pattern |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (via hash-based aggregate reconciliation). Skips source pairs with an ExpectedOverlap signal (operator whitelist) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (via hash-based aggregate reconciliation). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale. Masks stale-conflicts: if a stale file's expected path is already occupied by a different inode, no stale signal is emitted (the LibraryMove would always fail). |

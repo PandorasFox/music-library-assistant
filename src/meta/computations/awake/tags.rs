@@ -16,6 +16,7 @@ use crate::meta::signals::data::{
     MissingTagSignal, MissingTagData,
     MissingAlbumSingleSignal, MissingAlbumSingleData, SingleTrackInfo,
     CompoundTagSignal, CompoundTagEntry as TypedCompoundEntry,
+    EmbeddedDiscNumberSignal, EmbeddedDiscNumberData,
 };
 use crate::corpus::db::ReadOnlyDb;
 use crate::db_thread;
@@ -621,6 +622,101 @@ pub fn execute_detect_inconsistent_album_artist(
 
     log_general(format!(
         "[COMPUTE] DetectInconsistentAlbumArtist: cleared={}, new={}, updated={}, unchanged={}",
+        cleared, new, updated, unchanged
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Embedded Disc Number Detection
+// ============================================================================
+
+/// Execute DetectEmbeddedDiscNumbers - detect album tags with embedded disc numbers.
+///
+/// Scans ALBUM tag values from both corpus and inbox for patterns like
+/// "Album Name, Disc 2" or "Album Name Disc 1", extracting the disc number
+/// and cleaned album name. Emits EmbeddedDiscNumber aggregate signals keyed
+/// by "{cleaned_album}|{disc_number}".
+pub fn execute_detect_embedded_disc_numbers(
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    use regex::Regex;
+
+    let computation = Computation::DetectEmbeddedDiscNumbers;
+
+    let sender = match db_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // Pattern: optional comma, optional whitespace, "disc" (case-insensitive), space(s), digits, end
+    let disc_re = Regex::new(r"(?i),?\s*disc\s+(\d+)\s*$").unwrap();
+
+    // Query ALBUM tags from both corpus and inbox with their inodes.
+    // Each row: (inode, album_value)
+    let album_entries = match read_only_db.get_album_values_with_inodes() {
+        Ok(entries) => entries,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to query album values: {}", e),
+            );
+        }
+    };
+
+    // Group by key: "{cleaned_album}|{disc_number}" -> (original_album, cleaned_album, disc_number, inodes)
+    let mut groups: HashMap<String, (String, String, String, Vec<i64>)> = HashMap::new();
+
+    for (inode, album_value) in album_entries {
+        if let Some(caps) = disc_re.captures(&album_value) {
+            let disc_number = caps[1].to_string();
+            let match_start = caps.get(0).unwrap().start();
+            let cleaned_album = album_value[..match_start].trim().to_string();
+
+            if cleaned_album.is_empty() {
+                continue;
+            }
+
+            let key = format!("{}|{}", cleaned_album, disc_number);
+            let entry = groups.entry(key).or_insert_with(|| {
+                (album_value.clone(), cleaned_album.clone(), disc_number.clone(), Vec::new())
+            });
+            if !entry.3.contains(&inode) {
+                entry.3.push(inode);
+            }
+        }
+    }
+
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
+
+    for (key, (original_album, cleaned_album, disc_number, inodes)) in groups {
+        let signal = TypedSignalWrite::EmbeddedDiscNumber(EmbeddedDiscNumberSignal {
+            key: key.clone(),
+            data: EmbeddedDiscNumberData {
+                original_album,
+                cleaned_album,
+                disc_number,
+                inodes,
+            },
+        });
+        computed.push(ComputedAggregateSignal::new(key, signal));
+    }
+
+    let (cleared, new, updated, unchanged) =
+        reconcile_aggregate_signals::<EmbeddedDiscNumberSignal>(read_only_db, &sender, computed, witness);
+
+    log_general(format!(
+        "[COMPUTE] DetectEmbeddedDiscNumbers: cleared={}, new={}, updated={}, unchanged={}",
         cleared, new, updated, unchanged
     ));
 

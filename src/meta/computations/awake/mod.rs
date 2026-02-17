@@ -172,6 +172,13 @@ pub enum Computation {
     /// InboxTagCanonicitySignal for values whose normalized form matches
     /// corpus values but whose exact spelling differs.
     DetectInboxTagCanonicity,
+
+    /// Detect album tags with embedded disc numbers.
+    ///
+    /// Scans ALBUM tags from corpus and inbox for patterns like
+    /// "Album Name, Disc 2", extracting disc number and cleaned album.
+    /// Emits EmbeddedDiscNumber aggregate signals.
+    DetectEmbeddedDiscNumbers,
 }
 
 impl Computation {
@@ -196,6 +203,7 @@ impl Computation {
             Computation::DetectEmbeddableAlbumArt => "Detecting embeddable album art",
             Computation::DetectInboxCorpusMatches => "Detecting inbox-corpus matches",
             Computation::DetectInboxTagCanonicity => "Detecting inbox tag canonicity",
+            Computation::DetectEmbeddedDiscNumbers => "Detecting embedded disc numbers",
         }
     }
 
@@ -255,6 +263,9 @@ impl Computation {
             }
             Computation::DetectInboxTagCanonicity => {
                 execute_detect_inbox_tag_canonicity(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectEmbeddedDiscNumbers => {
+                execute_detect_embedded_disc_numbers(ctx.read_db, ctx.witness, ctx.start)
             }
         }
     }

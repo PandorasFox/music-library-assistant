@@ -21,7 +21,7 @@ use ratatui::{
 
 use crate::corpus::db::types::MatchClassification;
 use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::{ConfirmationButton, render_button_row, CURSOR_STYLE};
+use crate::ui::widgets::{ConfirmationButton, render_button_row, PathField, CURSOR_STYLE};
 
 use super::types::{InboxCorpusMatchModalData, SelectedButton};
 
@@ -295,29 +295,38 @@ impl InboxCorpusMatchPreviewState {
         let current = self.cached_data.entries.get(self.scroll);
 
         let lines = if let Some(entry) = current {
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::styled("Inbox: ", Style::default().fg(Color::Magenta)),
-                    Span::styled(&entry.inbox_path, Style::default().fg(Color::White)),
-                    Span::styled(
-                        format!("  [{}]", entry.inbox_quality),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]),
-            ];
+            let mut inbox_lines = PathField::new(
+                Span::styled("Inbox: ", Style::default().fg(Color::Magenta)),
+                &entry.inbox_path,
+            )
+            .style(Style::default().fg(Color::White))
+            .render_lines(inner.width);
+            if let Some(last) = inbox_lines.last_mut() {
+                last.spans.push(Span::styled(
+                    format!("  [{}]", entry.inbox_quality),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            let mut lines = inbox_lines;
 
             for (i, cm) in entry.corpus_matches.iter().enumerate().take(3) {
-                lines.push(Line::from(vec![
+                let mut match_lines = PathField::new(
                     Span::styled(
                         format!("  #{}: ", i + 1),
                         Style::default().fg(Color::Green),
                     ),
-                    Span::styled(&cm.corpus_path, Style::default().fg(Color::White)),
-                    Span::styled(
+                    &cm.corpus_path,
+                )
+                .style(Style::default().fg(Color::White))
+                .render_lines(inner.width);
+                if let Some(last) = match_lines.last_mut() {
+                    last.spans.push(Span::styled(
                         format!("  [{}] {:.1}%", cm.corpus_quality, cm.similarity),
                         Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
+                    ));
+                }
+                lines.extend(match_lines);
             }
 
             lines

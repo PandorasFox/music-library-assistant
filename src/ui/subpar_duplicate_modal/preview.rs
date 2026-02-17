@@ -21,7 +21,7 @@ use ratatui::{
 
 use super::types::{SubparDuplicateModalData, SelectedButton};
 use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::CURSOR_STYLE;
+use crate::ui::widgets::{PathField, CURSOR_STYLE};
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -310,20 +310,27 @@ impl SubparDuplicatePreviewState {
         let current_file = self.cached_data.files.get(self.scroll);
 
         let lines = if let Some(file) = current_file {
-            vec![
-                Line::from(vec![
-                    Span::styled("Subpar: ", Style::default().fg(Color::Red)),
-                    Span::styled(&file.corpus_path, Style::default().fg(Color::White)),
-                ]),
-                Line::from(vec![
-                    Span::styled("Better: ", Style::default().fg(Color::Green)),
-                    Span::styled(&file.superior_path, Style::default().fg(Color::White)),
-                    Span::styled(
-                        format!("  [{:.1}% match]", file.similarity_score),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]),
-            ]
+            let mut lines = PathField::new(
+                Span::styled("Subpar: ", Style::default().fg(Color::Red)),
+                &file.corpus_path,
+            )
+            .style(Style::default().fg(Color::White))
+            .render_lines(inner.width);
+
+            let mut better_lines = PathField::new(
+                Span::styled("Better: ", Style::default().fg(Color::Green)),
+                &file.superior_path,
+            )
+            .style(Style::default().fg(Color::White))
+            .render_lines(inner.width);
+            if let Some(last) = better_lines.last_mut() {
+                last.spans.push(Span::styled(
+                    format!("  [{:.1}% match]", file.similarity_score),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            lines.extend(better_lines);
+            lines
         } else {
             vec![
                 Line::from(Span::styled("No file selected", Style::default().fg(Color::DarkGray))),

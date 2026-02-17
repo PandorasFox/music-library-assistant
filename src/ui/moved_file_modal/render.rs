@@ -10,7 +10,7 @@ use ratatui::{
 
 use super::types::{MovedFileButton, MovedFileState};
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{FocusPane, CURSOR_STYLE, LIST_ITEM_STYLE};
+use crate::ui::widgets::{FocusPane, PathField, CURSOR_STYLE, LIST_ITEM_STYLE};
 
 /// Render the moved file acknowledgement modal.
 pub fn render(state: &MovedFileState, f: &mut Frame, area: Rect) {
@@ -101,20 +101,27 @@ fn render_details(state: &MovedFileState, f: &mut Frame, area: Rect) {
 
     let file = &state.files[state.current_file];
 
-    let mut lines = vec![
-        Line::from(vec![
+    let mut lines = Vec::new();
+    lines.extend(
+        PathField::new(
             Span::styled("Old path: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&file.old_path, Style::default().fg(Color::Red)),
-        ]),
-        Line::from(vec![
+            &file.old_path,
+        )
+        .style(Style::default().fg(Color::Red))
+        .render_lines(inner.width),
+    );
+    lines.extend(
+        PathField::new(
             Span::styled("New path: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&file.new_path, Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::styled("Inode: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(file.inode.to_string()),
-        ]),
-    ];
+            &file.new_path,
+        )
+        .style(Style::default().fg(Color::Green))
+        .render_lines(inner.width),
+    );
+    lines.push(Line::from(vec![
+        Span::styled("Inode: ", Style::default().fg(Color::DarkGray)),
+        Span::raw(file.inode.to_string()),
+    ]));
 
     // Show zone transition for cross-zone moves
     if file.old_zone != file.new_zone {

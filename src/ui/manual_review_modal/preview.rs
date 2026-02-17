@@ -23,7 +23,7 @@ use ratatui::{
 
 use super::types::{ManualReviewData, ReviewKind};
 use crate::ui::helpers::{render_pane, truncate_left, truncate_right};
-use crate::ui::widgets::CURSOR_STYLE;
+use crate::ui::widgets::{PathField, CURSOR_STYLE};
 
 /// Actions returned from the manual review modal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,10 +405,11 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &ManualReviewState) {
 
     // Selected file info
     if let Some(file) = file {
-        lines.push(Line::from(vec![
-            Span::styled("Path: ", label_style),
-            Span::styled(&file.corpus_path, value_style),
-        ]));
+        lines.extend(
+            PathField::new(Span::styled("Path: ", label_style), &file.corpus_path)
+                .style(value_style)
+                .render_lines(inner.width),
+        );
 
         // Context line (kind-specific: deploy path, quality score, tag signature)
         lines.push(Line::from(vec![

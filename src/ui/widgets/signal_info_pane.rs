@@ -13,6 +13,7 @@ use ratatui::{
 
 use crate::ui::helpers::render_pane;
 
+use super::path_display::{path_lines, PathField};
 use super::tabbed_signal_list::DeployTab;
 
 /// Information about a deploy signal for display in the info pane.
@@ -70,7 +71,7 @@ impl<'a> SignalInfoPane<'a> {
 
         let inner = render_pane(f, area, block);
 
-        let lines = self.build_content();
+        let lines = self.build_content(inner.width);
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         f.render_widget(paragraph, inner);
     }
@@ -85,29 +86,29 @@ impl<'a> SignalInfoPane<'a> {
         }
     }
 
-    fn build_content(&self) -> Vec<Line<'a>> {
+    fn build_content(&self, width: u16) -> Vec<Line<'a>> {
         match self.info {
             SignalInfo::None => self.no_selection_content(),
             SignalInfo::Healthy {
                 corpus_path,
                 library_path,
-            } => self.healthy_content(corpus_path, library_path),
+            } => self.healthy_content(corpus_path, library_path, width),
             SignalInfo::NewDirectory {
                 directory,
                 file_count,
-            } => self.new_directory_content(directory, *file_count),
+            } => self.new_directory_content(directory, *file_count, width),
             SignalInfo::Conflict {
                 deploy_path,
                 conflicting_files,
-            } => self.conflict_content(deploy_path, conflicting_files),
+            } => self.conflict_content(deploy_path, conflicting_files, width),
             SignalInfo::LeftoverDirectory {
                 directory,
                 file_count,
-            } => self.leftover_directory_content(directory, *file_count),
+            } => self.leftover_directory_content(directory, *file_count, width),
             SignalInfo::Stale {
                 library_path,
                 expected_path,
-            } => self.stale_content(library_path, expected_path),
+            } => self.stale_content(library_path, expected_path, width),
         }
     }
 
@@ -126,8 +127,8 @@ impl<'a> SignalInfoPane<'a> {
         ]
     }
 
-    fn healthy_content(&self, corpus_path: &str, library_path: &str) -> Vec<Line<'a>> {
-        vec![
+    fn healthy_content(&self, corpus_path: &str, library_path: &str, width: u16) -> Vec<Line<'a>> {
+        let mut lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
@@ -145,20 +146,21 @@ impl<'a> SignalInfoPane<'a> {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(corpus_path.to_string()),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Library Path:",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(library_path.to_string()),
-        ]
+        ];
+        lines.extend(path_lines(corpus_path, Style::default(), width));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Library Path:",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.extend(path_lines(library_path, Style::default(), width));
+        lines
     }
 
-    fn new_directory_content(&self, directory: &str, file_count: usize) -> Vec<Line<'a>> {
-        vec![
+    fn new_directory_content(&self, directory: &str, file_count: usize, width: u16) -> Vec<Line<'a>> {
+        let mut lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
@@ -176,30 +178,31 @@ impl<'a> SignalInfoPane<'a> {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(directory.to_string()),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    format!("{}", file_count),
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    if file_count == 1 { " file" } else { " files" },
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(" ready to deploy", Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Hard links will be created from corpus to library.",
+        ];
+        lines.extend(path_lines(directory, Style::default(), width));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{}", file_count),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                if file_count == 1 { " file" } else { " files" },
                 Style::default().fg(Color::DarkGray),
-            )),
-        ]
+            ),
+            Span::styled(" ready to deploy", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Hard links will be created from corpus to library.",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines
     }
 
-    fn conflict_content(&self, deploy_path: &str, conflicting_files: &[String]) -> Vec<Line<'a>> {
+    fn conflict_content(&self, deploy_path: &str, conflicting_files: &[String], width: u16) -> Vec<Line<'a>> {
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
@@ -218,18 +221,21 @@ impl<'a> SignalInfoPane<'a> {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(deploy_path.to_string()),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Conflicting Corpus Files:",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            )),
         ];
+        lines.extend(path_lines(deploy_path, Style::default(), width));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Conflicting Corpus Files:",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )));
 
         for file in conflicting_files {
-            lines.push(Line::from(format!("  - {}", file)));
+            lines.extend(
+                PathField::new(Span::raw("  - "), file)
+                    .render_lines(width),
+            );
         }
 
         lines.push(Line::from(""));
@@ -241,8 +247,8 @@ impl<'a> SignalInfoPane<'a> {
         lines
     }
 
-    fn leftover_directory_content(&self, directory: &str, file_count: usize) -> Vec<Line<'a>> {
-        vec![
+    fn leftover_directory_content(&self, directory: &str, file_count: usize, width: u16) -> Vec<Line<'a>> {
+        let mut lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
@@ -260,31 +266,32 @@ impl<'a> SignalInfoPane<'a> {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(directory.to_string()),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    format!("{}", file_count),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    if file_count == 1 { " file" } else { " files" },
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(" with no corpus backing", Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "These files may be safe to remove if not needed.",
+        ];
+        lines.extend(path_lines(directory, Style::default(), width));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{}", file_count),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                if file_count == 1 { " file" } else { " files" },
                 Style::default().fg(Color::DarkGray),
-            )),
-        ]
+            ),
+            Span::styled(" with no corpus backing", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "These files may be safe to remove if not needed.",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines
     }
 
-    fn stale_content(&self, library_path: &str, expected_path: &str) -> Vec<Line<'a>> {
-        vec![
+    fn stale_content(&self, library_path: &str, expected_path: &str, width: u16) -> Vec<Line<'a>> {
+        let mut lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
@@ -302,24 +309,25 @@ impl<'a> SignalInfoPane<'a> {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(library_path.to_string()),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Expected Library Path:",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(expected_path.to_string()),
-            Line::from(""),
-            Line::from(Span::styled(
-                "The file's tags changed, requiring a new path.",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "Re-deploying will move to the expected path.",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ]
+        ];
+        lines.extend(path_lines(library_path, Style::default(), width));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Expected Library Path:",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.extend(path_lines(expected_path, Style::default(), width));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "The file's tags changed, requiring a new path.",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Re-deploying will move to the expected path.",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines
     }
 }

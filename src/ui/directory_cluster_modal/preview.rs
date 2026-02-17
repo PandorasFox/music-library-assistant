@@ -24,7 +24,7 @@ use ratatui::{
 use super::types::{ClusterResolutionOption, DirectoryClusterModalData, StashFileEntry};
 use crate::ui::helpers::{render_pane, truncate_left, truncate_right};
 use crate::ui::widgets::file_path_list::{render_file_path_list, PathEntry};
-use crate::ui::widgets::CURSOR_STYLE;
+use crate::ui::widgets::{PathField, CURSOR_STYLE};
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -561,10 +561,11 @@ impl DirectoryClusterPreviewState {
         };
 
         // Path
-        lines.push(Line::from(vec![
-            Span::styled("Path: ", label_style),
-            Span::styled(&file.corpus_path, value_style),
-        ]));
+        lines.extend(
+            PathField::new(Span::styled("Path: ", label_style), &file.corpus_path)
+                .style(value_style)
+                .render_lines(inner.width),
+        );
 
         // Audio metadata from cache
         if let Some(meta) = self.cached_data.file_meta_cache.get(&file.inode) {

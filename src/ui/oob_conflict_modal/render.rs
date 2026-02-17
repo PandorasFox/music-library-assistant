@@ -13,7 +13,7 @@ use ratatui::Frame;
 
 use crate::corpus::db::types::ConflictBucket;
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, ResolutionLayout};
+use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout};
 
 use super::types::{OobConflictState, ResolutionButton};
 
@@ -94,11 +94,13 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
 
     // Full path of selected file
     if let Some(file) = state.active_bucket_state().current_file() {
-        let path_line = Line::from(vec![
+        let path_lines = PathField::new(
             Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&file.path, Style::default().fg(Color::Cyan)),
-        ]);
-        f.render_widget(Paragraph::new(path_line), chunks[1]);
+            &file.path,
+        )
+        .style(Style::default().fg(Color::Cyan))
+        .render_lines(chunks[1].width);
+        f.render_widget(Paragraph::new(path_lines), chunks[1]);
     }
 }
 

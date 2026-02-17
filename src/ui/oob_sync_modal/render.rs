@@ -13,7 +13,7 @@ use ratatui::Frame;
 
 use crate::corpus::db::types::OobSyncDirection;
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, ResolutionLayout};
+use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout};
 
 use super::types::{OobSyncButton, OobSyncState};
 
@@ -63,11 +63,13 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobSyncState) {
 
     // Show full untruncated path of selected file
     if let Some(file) = state.files.get(state.current_file) {
-        let path_line = Line::from(vec![
+        let path_lines = PathField::new(
             Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&file.path, Style::default().fg(Color::Cyan)),
-        ]);
-        let para = Paragraph::new(path_line);
+            &file.path,
+        )
+        .style(Style::default().fg(Color::Cyan))
+        .render_lines(inner.width);
+        let para = Paragraph::new(path_lines);
         f.render_widget(para, inner);
     }
 }

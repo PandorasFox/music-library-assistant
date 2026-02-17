@@ -4,7 +4,7 @@
 //! - Left-truncation via `truncate_left()` from `ui/helpers.rs`
 //! - Standard cursor highlighting via `CURSOR_STYLE`
 //! - Optional prefix/suffix `Span`s per entry (for `[WAV]` tags, `> ` cursors, etc.)
-//! - 2-line balloon expansion for the cursor item when its path exceeds available width
+//! - Multi-line balloon expansion for the cursor item when its path exceeds available width
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem};
 use ratatui::Frame;
 
+use super::path_display::wrap_path;
 use super::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 use crate::ui::helpers::truncate_left;
 
@@ -46,9 +47,10 @@ const BALLOON_PREFIX: &str = "  \u{21b3} ";
 /// Returns the full untruncated path of the cursor item (useful for info bars).
 ///
 /// **Balloon behavior:** When the cursor item's path exceeds the available width
-/// (after accounting for prefix/suffix), a second line is shown with a `↳` prefix
-/// containing the truncated-away directory portion. The visible height is reduced
-/// by 1 when the balloon is active.
+/// (after accounting for prefix/suffix), one or more continuation lines are shown
+/// with a `↳` prefix containing the hidden directory portion, wrapped at `/`
+/// boundaries via `wrap_path`. The visible height is reduced by the balloon line
+/// count when active.
 pub fn render_file_path_list(
     f: &mut Frame,
     area: Rect,
@@ -67,28 +69,36 @@ pub fn render_file_path_list(
         return None;
     }
 
-    // Check if the cursor item's path needs a balloon
+    // Check if the cursor item's path needs a balloon; compute how many lines
     let cursor_entry = entries.get(cursor);
-    let needs_balloon = cursor_entry.is_some_and(|entry| {
-        let prefix_width = span_char_width(&entry.prefix);
-        let suffix_width = span_char_width(&entry.suffix);
-        let path_budget = total_width.saturating_sub(prefix_width + suffix_width);
-        entry.path.chars().count() > path_budget
-    });
+    let balloon_line_count = cursor_entry
+        .map(|entry| {
+            let prefix_width = span_char_width(&entry.prefix);
+            let suffix_width = span_char_width(&entry.suffix);
+            let path_budget = total_width.saturating_sub(prefix_width + suffix_width);
+            if entry.path.chars().count() <= path_budget {
+                return 0;
+            }
+            // Hidden portion = everything truncate_left replaced with "..."
+            let visible_chars = path_budget.saturating_sub(3);
+            let char_count = entry.path.chars().count();
+            let hidden_count = char_count.saturating_sub(visible_chars);
+            let hidden_part: String = entry.path.chars().take(hidden_count).collect();
+            let balloon_prefix_width = BALLOON_PREFIX.chars().count();
+            let balloon_budget = total_width.saturating_sub(balloon_prefix_width);
+            wrap_path(&hidden_part, balloon_budget).len()
+        })
+        .unwrap_or(0);
 
-    // If balloon is active and cursor is visible, we lose one display line
-    let visible_height = if needs_balloon {
-        total_height.saturating_sub(1)
-    } else {
-        total_height
-    };
+    // If balloon is active and cursor is visible, we lose display lines
+    let visible_height = total_height.saturating_sub(balloon_line_count);
 
     // Clamp scroll so cursor is visible
     let scroll = clamp_scroll(scroll, cursor, visible_height, entries.len());
 
     // Determine if cursor is in the visible window
     let cursor_visible = cursor >= scroll && cursor < scroll + visible_height;
-    let balloon_active = needs_balloon && cursor_visible;
+    let balloon_active = balloon_line_count > 0 && cursor_visible;
 
     // The cursor's position within the visible window
     let cursor_visual_row = if cursor_visible {
@@ -98,11 +108,9 @@ pub fn render_file_path_list(
     };
 
     // Build list items
-    let mut items: Vec<ListItem> = Vec::with_capacity(if balloon_active {
-        visible_height + 1
-    } else {
-        visible_height
-    });
+    let mut items: Vec<ListItem> = Vec::with_capacity(
+        visible_height + balloon_line_count,
+    );
 
     for (visible_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
         let Some(entry) = entries.get(entry_idx) else {
@@ -150,10 +158,11 @@ pub fn render_file_path_list(
 
         items.push(ListItem::new(Line::from(spans)));
 
-        // Insert balloon line immediately after cursor
+        // Insert balloon lines immediately after cursor
         if balloon_active && Some(visible_idx) == cursor_visual_row {
-            let balloon_line = build_balloon_line(entry.path, path_budget, total_width);
-            items.push(ListItem::new(balloon_line));
+            for line in build_balloon_lines(entry.path, path_budget, total_width) {
+                items.push(ListItem::new(line));
+            }
         }
     }
 
@@ -163,8 +172,11 @@ pub fn render_file_path_list(
     cursor_entry.map(|e| e.path.to_string())
 }
 
-/// Build the balloon continuation line showing the truncated-away directory portion.
-fn build_balloon_line(full_path: &str, path_budget: usize, total_width: usize) -> Line<'static> {
+/// Build balloon continuation lines showing the truncated-away directory portion.
+///
+/// Uses `wrap_path` to split the hidden portion at `/` boundaries so the
+/// full path is always visible across multiple balloon lines.
+fn build_balloon_lines(full_path: &str, path_budget: usize, total_width: usize) -> Vec<Line<'static>> {
     let char_count = full_path.chars().count();
     // The part that was truncated away (the left portion that got replaced by "...")
     let visible_chars = path_budget.saturating_sub(3); // "..." takes 3
@@ -173,13 +185,16 @@ fn build_balloon_line(full_path: &str, path_budget: usize, total_width: usize) -
 
     let prefix_width = BALLOON_PREFIX.chars().count();
     let balloon_budget = total_width.saturating_sub(prefix_width);
-    // If even the hidden part is too long, truncate it from the left too
-    let display_part = truncate_left(&hidden_part, balloon_budget);
 
-    Line::from(vec![
-        Span::styled(BALLOON_PREFIX.to_string(), BALLOON_STYLE),
-        Span::styled(display_part, BALLOON_STYLE),
-    ])
+    wrap_path(&hidden_part, balloon_budget)
+        .into_iter()
+        .map(|seg| {
+            Line::from(vec![
+                Span::styled(BALLOON_PREFIX.to_string(), BALLOON_STYLE),
+                Span::styled(seg, BALLOON_STYLE),
+            ])
+        })
+        .collect()
 }
 
 /// Compute total character width of prefix/suffix Span slices.
@@ -252,15 +267,18 @@ mod tests {
     }
 
     #[test]
-    fn test_balloon_line_content() {
-        let line = build_balloon_line(
+    fn test_balloon_lines_content() {
+        let lines = build_balloon_lines(
             "/very/long/path/to/some/deeply/nested/directory/file.flac",
             30,
             60,
         );
-        // Should start with balloon prefix
-        let first_span = &line.spans[0];
-        assert!(first_span.content.contains('\u{21b3}'));
+        assert!(!lines.is_empty());
+        // Each line should start with balloon prefix
+        for line in &lines {
+            let first_span = &line.spans[0];
+            assert!(first_span.content.contains('\u{21b3}'));
+        }
     }
 
     #[test]

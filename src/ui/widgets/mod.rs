@@ -16,6 +16,7 @@ pub mod file_path_list;
 mod layout;
 mod list_click_targets;
 mod modal;
+pub mod path_display;
 mod resolution_layout;
 pub mod selection_styles;
 pub mod signal_info_pane;
@@ -44,6 +45,9 @@ pub use text_input::TextInputState;
 // Deploy signal widgets
 pub use signal_info_pane::{SignalInfo, SignalInfoPane};
 pub use tabbed_signal_list::{DeployTab, TabbedSignalList};
+
+// Path display
+pub use path_display::PathField;
 
 // File path list + selection styles
 pub use file_path_list::{render_file_path_list, PathEntry};

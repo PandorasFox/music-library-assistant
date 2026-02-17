@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::ui::widgets::{ConfirmationButton, ConfirmationModal, PaneConfig, ThreePaneLayout};
+use crate::ui::widgets::{ConfirmationButton, ConfirmationModal, PaneConfig, PathField, ThreePaneLayout};
 
 use super::mutations::compute_changes;
 use super::state::UnifiedTagEditorState;
@@ -90,17 +90,18 @@ impl UnifiedTagEditorState {
             .map(|sr| format!("{} Hz", sr))
             .unwrap_or_else(|| "Unknown".to_string());
 
-        let mut info_lines = vec![
-            Line::from(format!("Path: {}", path)),
-            Line::from(format!(
-                "Format: {} | Size: {} | Duration: {} | Bitrate: {} | Sample Rate: {}",
-                file_type.to_uppercase(),
-                size_str,
-                duration_str,
-                bitrate_str,
-                sample_rate_str
-            )),
-        ];
+        // Borders take 2 chars; path wrapping uses inner width
+        let inner_width = area.width.saturating_sub(2);
+        let mut info_lines = PathField::new(Span::raw("Path: "), &path)
+            .render_lines(inner_width);
+        info_lines.push(Line::from(format!(
+            "Format: {} | Size: {} | Duration: {} | Bitrate: {} | Sample Rate: {}",
+            file_type.to_uppercase(),
+            size_str,
+            duration_str,
+            bitrate_str,
+            sample_rate_str
+        )));
 
         // Add MP3 warning if applicable
         let is_mp3 = file_type.to_lowercase() == "mp3";

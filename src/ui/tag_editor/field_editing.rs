@@ -5,7 +5,7 @@
 
 use super::state::UnifiedTagEditorState;
 use super::types::{
-    AggregatedValue, FieldEditState, TagField, UnifiedTagEditorModal,
+    AggregatedTagField, AggregatedValue, FieldEditState, TagField, UnifiedTagEditorModal,
 };
 
 impl UnifiedTagEditorState {
@@ -172,17 +172,36 @@ impl UnifiedTagEditorState {
     // ========================================================================
 
     pub(super) fn create_new_tag(&mut self) {
-        let new_field = TagField {
-            name: "new_tag".to_string(),
-            value: String::new(),
-            editable: true,
-            deleted: false,
+        let insert_pos = if self.is_aggregated_mode() {
+            if let Some(ref mut agg_fields) = self.aggregated_fields {
+                let pos = agg_fields.len().saturating_sub(1);
+                agg_fields.insert(pos, AggregatedTagField {
+                    name: "new_tag".to_string(),
+                    value: AggregatedValue::Edited(String::new()),
+                    original_value: AggregatedValue::Consistent(String::new()),
+                });
+                Some(pos)
+            } else {
+                None
+            }
+        } else {
+            let new_field = TagField {
+                name: "new_tag".to_string(),
+                value: String::new(),
+                editable: true,
+                deleted: false,
+            };
+            if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
+                let pos = fields.len().saturating_sub(1);
+                fields.insert(pos, new_field);
+                Some(pos)
+            } else {
+                None
+            }
         };
 
-        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
-            let insert_pos = fields.len().saturating_sub(1);
-            fields.insert(insert_pos, new_field);
-            self.current_field_idx = insert_pos;
+        if let Some(pos) = insert_pos {
+            self.current_field_idx = pos;
             // Scroll to show the new tag
             if self.field_visible_height > 0 {
                 let visible_end = self.field_scroll_offset + self.field_visible_height.saturating_sub(1);

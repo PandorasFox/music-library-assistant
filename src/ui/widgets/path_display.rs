@@ -98,16 +98,6 @@ impl<'a> PathField<'a> {
         self
     }
 
-    /// How many lines this field will occupy at the given terminal width.
-    pub fn height(&self, width: u16) -> u16 {
-        let label_width = self.label.content.chars().count();
-        let budget = (width as usize).saturating_sub(label_width);
-        if budget == 0 {
-            return 1;
-        }
-        wrap_path(self.path, budget).len() as u16
-    }
-
     /// Produce the wrapped lines ready for inclusion in a `Vec<Line>`.
     ///
     /// All output data is owned (`'static`) — the label and path segments
@@ -237,18 +227,6 @@ mod tests {
         let path = "/exact/fit";
         let result = wrap_path(path, path.len());
         assert_eq!(result, vec![path]);
-    }
-
-    #[test]
-    fn path_field_height_accuracy() {
-        let label = Span::raw("Path: ");
-        let path = "/very/long/path/to/some/deeply/nested/file.flac";
-        let field = PathField::new(label, path);
-
-        // With width 30, label "Path: " is 6 chars, budget = 24
-        let height = field.height(30);
-        let lines = field.render_lines(30);
-        assert_eq!(height as usize, lines.len());
     }
 
     #[test]

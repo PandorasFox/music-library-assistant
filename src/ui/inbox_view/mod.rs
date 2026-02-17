@@ -76,6 +76,8 @@ pub struct InboxViewState {
     pub entries: Vec<InboxBucketEntry>,
     /// Currently selected index
     pub selected: usize,
+    /// True when the Witch has pending work (dims UI, blocks actions).
+    pub busy: bool,
 }
 
 impl InboxViewState {
@@ -83,6 +85,7 @@ impl InboxViewState {
         Self {
             entries: Vec::new(),
             selected: 0,
+            busy: false,
         }
     }
 
@@ -157,6 +160,9 @@ impl InboxViewState {
             KeyCode::BackTab => InboxAction::CyclePrev,
 
             KeyCode::Enter => {
+                if self.busy {
+                    return InboxAction::None;
+                }
                 if let Some(entry) = self.selected_entry() {
                     match entry.action {
                         InboxInsightAction::LaunchIntake => InboxAction::LaunchIntake,

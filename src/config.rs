@@ -23,7 +23,6 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
 pub struct Opinions {
     /// When true, lossy shit formats (MP3, M4A, etc.) are captured to FLAC
     /// instead of transcoded to Opus. The decoded PCM waveform is losslessly
@@ -38,6 +37,9 @@ pub struct Opinions {
     pub tag_splitting: TagSplittingOpinions,
     pub duplicate_analysis: DuplicateAnalysisOpinions,
     pub inbox_organize: InboxOrganizeOpinions,
+    /// Seconds of idle time before auto-rescanning corpus/inbox for filesystem changes.
+    /// Default: 180. Set to 0 to disable.
+    pub idle_rescan_interval_secs: u64,
 }
 
 
@@ -290,6 +292,24 @@ impl Default for InboxOrganizeOpinions {
     fn default() -> Self {
         Self {
             directory_granularity: InboxOrganizeGranularity::default(),
+        }
+    }
+}
+
+impl Default for Opinions {
+    fn default() -> Self {
+        Self {
+            lossy_shit_formats_to_flac: false,
+            fingerprint_matching: FingerprintMatchingOpinions::default(),
+            quality_resolution: QualityResolutionOpinions::default(),
+            canonicalization: CanonicalizationOpinions::default(),
+            startup: StartupOpinions::default(),
+            health_detection: HealthDetectionOpinions::default(),
+            performance: PerformanceOpinions::default(),
+            tag_splitting: TagSplittingOpinions::default(),
+            duplicate_analysis: DuplicateAnalysisOpinions::default(),
+            inbox_organize: InboxOrganizeOpinions::default(),
+            idle_rescan_interval_secs: 180,
         }
     }
 }
@@ -718,6 +738,11 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         if new_da.elide_variant_titles != old_da.elide_variant_titles {
             set_or_create_bool_node(block, "elide-variant-titles", new_da.elide_variant_titles);
         }
+    }
+
+    // --- Idle Rescan Interval ---
+    if new_config.opinions.idle_rescan_interval_secs != old_config.opinions.idle_rescan_interval_secs {
+        set_or_create_int_node(opinions_doc, "idle-rescan-interval", new_config.opinions.idle_rescan_interval_secs as i64);
     }
 
     // --- Inbox Organize ---
@@ -1430,6 +1455,13 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "inbox-organize" => {
                                 parse_inbox_organize_opinions(child, &mut config.opinions.inbox_organize);
+                            }
+                            "idle-rescan-interval" => {
+                                if let Some(entry) = child.entries().first() {
+                                    if let Some(val) = entry.value().as_i64() {
+                                        config.opinions.idle_rescan_interval_secs = val.max(0) as u64;
+                                    }
+                                }
                             }
                             _ => {}
                         }

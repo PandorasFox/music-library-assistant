@@ -438,7 +438,9 @@ fn render(f: &mut Frame, app: &mut App) {
     };
 
     // Build status bar lines
-    let status_line_1 = if let Some(ref msg) = app.status_message {
+    let status_line_1 = if app.witch.as_ref().map_or(false, |w| w.idle_rescan_active()) {
+        Some("Refreshing corpus...".to_string())
+    } else if let Some(ref msg) = app.status_message {
         Some(msg.clone())
     } else {
         app.view.selected_path().map(|s| s.to_string())
@@ -545,6 +547,17 @@ fn run_app<B: ratatui::backend::Backend>(
             app.handle_key(esc_key);
         }
 
+        // Set idle rescan eligibility based on current view (lateral views only)
+        let idle_eligible = matches!(app.view,
+            ActiveView::Insights(_)
+            | ActiveView::CorpusBrowser(_)
+            | ActiveView::TagSearch(_)
+            | ActiveView::Inbox(_)
+        );
+        if let Some(ref mut witch) = app.witch {
+            witch.set_idle_rescan_eligible(idle_eligible);
+        }
+
         // Tick the Witch first
         let tick_start = std::time::Instant::now();
         let tick_status = app.witch().tick();
@@ -566,10 +579,11 @@ fn run_app<B: ratatui::backend::Backend>(
             view.update(status.as_ref(), insights_data);
         }
 
-        // Update inbox view with cached overview data
+        // Update inbox view with cached overview data and busy state
         if let ActiveView::Inbox(ref mut view) = app.view {
             let inbox_data = app.witch.as_ref().and_then(|w| w.ui_read_cache().inbox_overview());
             view.update(inbox_data);
+            view.busy = tick_status.pending > 0 || tick_status.idle_rescan_active;
         }
 
         // Tick progress screen if active (includes eye animation update)

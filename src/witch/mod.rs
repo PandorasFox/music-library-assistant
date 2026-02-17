@@ -199,6 +199,15 @@ pub struct Witch {
     /// Shared config reference for runtime config updates.
     /// Set after construction via `set_shared_config()`.
     shared_config: Option<SharedConfig>,
+
+    /// When the Witch entered Idle state while Awake. For idle rescan timer.
+    idle_since: Option<Instant>,
+
+    /// True while an idle rescan is in progress.
+    idle_rescan_active: bool,
+
+    /// UI-controlled gate: true only on safe browsing views (lateral ring).
+    idle_rescan_eligible: bool,
 }
 
 impl Witch {
@@ -269,6 +278,9 @@ impl Witch {
             library_reconciliation_done: false,
             log_thread_handle,
             shared_config: None,
+            idle_since: None,
+            idle_rescan_active: false,
+            idle_rescan_eligible: false,
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
@@ -349,19 +361,34 @@ impl Witch {
         matches!(self.observation_state, CorpusObservationState::Observing)
     }
 
+    /// Set the UI-controlled idle rescan eligibility flag.
+    ///
+    /// Should be true only on lateral browsing views (Insights, CorpusBrowser,
+    /// TagSearch, Inbox). False during modals, resolution flows, or transactions.
+    pub fn set_idle_rescan_eligible(&mut self, eligible: bool) {
+        self.idle_rescan_eligible = eligible;
+    }
+
+    /// Check if an idle rescan is currently in progress.
+    pub fn idle_rescan_active(&self) -> bool {
+        self.idle_rescan_active
+    }
+
     /// Check if mutations are currently accepted.
     ///
     /// Mutations are only accepted when:
     /// - Eye state is Awake (observing and awakening complete)
     /// - Not in read-only mode (config setting)
     /// - Safety latch not triggered (runtime invariant violation)
+    /// - No idle rescan in progress
     ///
     /// This is derived state - mutations are automatically blocked during
-    /// re-awakening cycles after mutations drain.
+    /// re-awakening cycles after mutations drain, and during idle rescans.
     fn accepting_mutations(&self) -> bool {
         self.eye_state == EyeState::Awake
             && !self.read_only_mode
             && self.safety_latch_reason.is_none()
+            && !self.idle_rescan_active
     }
 
     /// Trigger the safety latch, permanently disabling mutations for this session.
@@ -565,6 +592,9 @@ impl Witch {
         // State machine transitions (uses self.in_flight internally)
         self.update_state();
 
+        // Check if idle rescan should trigger
+        self.maybe_start_idle_rescan();
+
         DaemonStatus {
             state: self.state.into(),
             pending: current_in_flight,
@@ -573,6 +603,7 @@ impl Witch {
             total_processed: current_total_processed,
             session_queued: current_session_queued,
             pending_by_label: current_pending_by_label,
+            idle_rescan_active: self.idle_rescan_active,
         }
     }
 
@@ -608,6 +639,8 @@ impl Witch {
 
         // Flag to queue awakening computations after session reset
         let mut queue_awakening_after_reset = false;
+        // Flag to queue idle-rescan-only awakening (corpus+inbox signals, no second-level)
+        let mut queue_idle_rescan_awakening_after_reset = false;
         // Flag to auto-queue content analysis after mutations drain
         let mut queue_content_analysis_after_reset = false;
         // Flag to queue re-observation (WalkCorpus) after mutations complete
@@ -637,12 +670,21 @@ impl Witch {
             // Re-observing completed while Awake: sync signals via awakening
             (true, EyeState::Awake) => {
                 self.observation_state = CorpusObservationState::Complete;
-                crate::logging::log_general(format!(
-                    "[STATE] Re-observing complete while Awake. Queueing awakening to sync signals. \
-                     Processed {} tasks.",
-                    self.total_processed
-                ));
-                queue_awakening_after_reset = true;
+                if self.idle_rescan_active {
+                    crate::logging::log_general(format!(
+                        "[STATE] Idle rescan observation complete. Queueing lightweight signal derivation. \
+                         Processed {} tasks.",
+                        self.total_processed
+                    ));
+                    queue_idle_rescan_awakening_after_reset = true;
+                } else {
+                    crate::logging::log_general(format!(
+                        "[STATE] Re-observing complete while Awake. Queueing awakening to sync signals. \
+                         Processed {} tasks.",
+                        self.total_processed
+                    ));
+                    queue_awakening_after_reset = true;
+                }
             }
 
             // Re-walk completed during re-awakening: proceed to derivations
@@ -692,7 +734,14 @@ impl Witch {
 
             // Normal operation: work completed while Awake
             (false, EyeState::Awake) => {
-                if had_mutations {
+                if self.idle_rescan_active {
+                    // Idle rescan signal derivation complete
+                    crate::logging::log_general(format!(
+                        "[STATE] Idle rescan complete. Processed {} tasks.",
+                        self.total_processed
+                    ));
+                    self.idle_rescan_active = false;
+                } else if had_mutations {
                     // Mutations ran - re-validate everything via re-awakening
                     crate::logging::log_general(format!(
                         "[STATE] Mutations complete. Transitioning Awake -> Awakening for re-validation. \
@@ -703,7 +752,7 @@ impl Witch {
                     self.observation_state = CorpusObservationState::Observing;
                     queue_reobservation_after_reset = true;
                 }
-                // If no mutations, stay Awake (normal work completion)
+                // If no mutations and not idle rescan, stay Awake (normal work completion)
             }
 
             // Migrations can complete while Closed - this is valid, just NOP
@@ -742,7 +791,7 @@ impl Witch {
         // writes. Without this barrier, the next phase's computations could read stale
         // data (e.g., DeriveDeployHealthSignals reading library files written by
         // ScanLibraryDirectory, or Awake-phase computations reading Awakening signals).
-        if queue_awakening_after_reset || queue_content_analysis_after_reset || queue_reobservation_after_reset || queue_reconcile_library_after_reset {
+        if queue_awakening_after_reset || queue_idle_rescan_awakening_after_reset || queue_content_analysis_after_reset || queue_reobservation_after_reset || queue_reconcile_library_after_reset {
             db_thread::wait_for_queue_drain();
         }
 
@@ -753,6 +802,9 @@ impl Witch {
         }
         if queue_awakening_after_reset {
             self.queue_awakening_computations();
+        }
+        if queue_idle_rescan_awakening_after_reset {
+            self.queue_idle_rescan_awakening();
         }
         if queue_reconcile_library_after_reset {
             if let Some(observed) = reconcile_library_observed {
@@ -803,6 +855,105 @@ impl Witch {
         self.queue_computation_with_label(
             Computation::Awakening(awakening::Computation::ScheduleSecondLevelDerivations),
             Some("Computing directory signals".to_string()),
+        );
+    }
+
+    /// Check if conditions are met to start an idle rescan.
+    ///
+    /// Called from `tick()` after `update_state()`. All gates:
+    /// - State is Idle, eye is Awake
+    /// - `idle_rescan_eligible` (UI on lateral view)
+    /// - No active transaction
+    /// - Config interval > 0 and timer expired
+    fn maybe_start_idle_rescan(&mut self) {
+        if self.state != TaskExecutionState::Idle || self.eye_state != EyeState::Awake {
+            return;
+        }
+        if !self.idle_rescan_eligible || self.pending_transaction.is_some() {
+            return;
+        }
+
+        let interval_secs = self.shared_config.as_ref()
+            .map(|sc| sc.read().expect("SharedConfig lock poisoned").opinions.idle_rescan_interval_secs)
+            .unwrap_or(0);
+        if interval_secs == 0 {
+            return;
+        }
+
+        let idle_since = match self.idle_since {
+            Some(t) => t,
+            None => return,
+        };
+        if idle_since.elapsed() < Duration::from_secs(interval_secs) {
+            return;
+        }
+
+        // All gates passed — start idle rescan
+        crate::logging::log_general(format!(
+            "[STATE] Starting idle rescan (idle for {}s, interval={}s)",
+            idle_since.elapsed().as_secs(), interval_secs
+        ));
+
+        self.idle_rescan_active = true;
+        self.idle_since = None;
+        self.observation_state = CorpusObservationState::Observing;
+
+        // Clear accumulated observation state before fresh scan
+        self.observed_corpus_inodes.clear();
+        self.observed_inbox_inodes.clear();
+
+        let resolver = crate::corpus::paths::get_resolver();
+
+        // Queue corpus walk (mtime-optimized)
+        self.queue_computation_with_label(
+            Computation::Asleep(asleep::Computation::WalkCorpus {
+                root: resolver.corpus_dir(),
+                zone: "corpus".to_string(),
+                force_check: false,
+            }),
+            Some("Rescanning corpus".to_string()),
+        );
+
+        // Queue inbox walk if directory exists (mtime-optimized)
+        let inbox_dir = resolver.inbox_dir();
+        if inbox_dir.is_dir() {
+            self.queue_computation_with_label(
+                Computation::Asleep(asleep::Computation::WalkCorpus {
+                    root: inbox_dir,
+                    zone: "inbox".to_string(),
+                    force_check: false,
+                }),
+                Some("Rescanning inbox".to_string()),
+            );
+        }
+    }
+
+    /// Queue lightweight awakening computations for idle rescan.
+    ///
+    /// Takes the accumulated observed inode maps and queues DeriveCorpusSignals
+    /// and DeriveInboxSignals. Does NOT queue ScheduleSecondLevelDerivations
+    /// (no library walks, no directory-level checks).
+    fn queue_idle_rescan_awakening(&mut self) {
+        let observed_corpus = std::mem::take(&mut self.observed_corpus_inodes);
+        let observed_inbox = std::mem::take(&mut self.observed_inbox_inodes);
+
+        crate::logging::log_general(format!(
+            "[STATE] Queueing idle rescan awakening: DeriveCorpusSignals ({} inodes), DeriveInboxSignals ({} inodes)",
+            observed_corpus.len(), observed_inbox.len()
+        ));
+
+        self.queue_computation_with_label(
+            Computation::Awakening(awakening::Computation::DeriveCorpusSignals {
+                observed_inodes: observed_corpus,
+            }),
+            Some("Deriving corpus signals".to_string()),
+        );
+
+        self.queue_computation_with_label(
+            Computation::Awakening(awakening::Computation::DeriveInboxSignals {
+                observed_inodes: observed_inbox,
+            }),
+            Some("Deriving inbox signals".to_string()),
         );
     }
 
@@ -882,6 +1033,9 @@ impl Witch {
     fn transition_to_idle(&mut self) {
         self.state = TaskExecutionState::Idle;
         self.completed_at = None;
+        if self.eye_state == EyeState::Awake {
+            self.idle_since = Some(Instant::now());
+        }
     }
 
     fn transition_to_working(&mut self) {
@@ -1256,6 +1410,7 @@ impl Witch {
             total_processed: self.total_processed,
             session_queued: self.session_queued,
             pending_by_label: self.pending_by_label.clone(),
+            idle_rescan_active: self.idle_rescan_active,
         }
     }
 

@@ -348,6 +348,8 @@ pub struct DaemonStatus {
     pub session_queued: usize,
     /// Breakdown of pending tasks by type label
     pub pending_by_label: HashMap<String, usize>,
+    /// Whether an idle rescan is currently in progress.
+    pub idle_rescan_active: bool,
 }
 
 /// Snapshot of Witch state for status reporting.

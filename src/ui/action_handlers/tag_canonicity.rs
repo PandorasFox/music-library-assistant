@@ -38,13 +38,7 @@ impl App {
 
         // Determine signal kind and load keys (scoped borrow of read_db)
         let (signal_keys, kind) = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => {
-                    self.status_message = Some("Database not available".to_string());
-                    return;
-                }
-            };
+            let read_db = self.witch.read_db();
 
             match &insight_type {
                 insights_view::InsightType::InconsistentAlbumArtist => {
@@ -75,20 +69,12 @@ impl App {
         let clusters = TagCanonicityClusters::new(signal_keys, kind);
 
         // Start transaction ONCE for entire modal
-        if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction("Tag canonicalization");
-        }
+        let _ = self.witch.start_transaction("Tag canonicalization");
 
         // Load the first signal into V2 modal data using typed query
         let first_key = clusters.signal_keys[0].clone();
         let data = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => {
-                    self.status_message = Some("Database not available".to_string());
-                    return;
-                }
-            };
+            let read_db = self.witch.read_db();
             Self::load_typed_signal_data(&first_key, kind, &read_db)
         };
 
@@ -97,9 +83,7 @@ impl App {
             None => {
                 self.status_message = Some("Failed to load signal data".to_string());
                 // Discard the transaction we just started via sealed operator decision handler
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::super::operator_decisions::discard_transaction(witch);
-                }
+                let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
                 return;
             }
         };
@@ -175,10 +159,7 @@ impl App {
 
         // Query audio files by inodes
         let audio_files = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => return,
-            };
+            let read_db = self.witch.read_db();
             read_db.get_audio_files_by_inodes(&inodes, zone)
                 .unwrap_or_default()
         };
@@ -293,9 +274,7 @@ impl App {
         let label = format!("Canonicalize {}", tag_name);
 
         // Add decision to existing transaction via sealed operator decision handler
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()), &label, mutations, gesture);
-        }
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()), &label, mutations, gesture);
     }
 
     /// Stage a "flag as non-compilation" decision for the current cluster.
@@ -322,15 +301,13 @@ impl App {
             _ => return,
         };
 
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(
-                witch,
-                DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
-                "Flag non-compilation",
-                mutations,
-                gesture,
-            );
-        }
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
+            "Flag non-compilation",
+            mutations,
+            gesture,
+        );
     }
 
     /// Stage a "flag as canonical" decision for the current collision group.
@@ -359,15 +336,13 @@ impl App {
             _ => return,
         };
 
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(
-                witch,
-                DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
-                "Flag canonical",
-                mutations,
-                gesture,
-            );
-        }
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
+            "Flag canonical",
+            mutations,
+            gesture,
+        );
     }
 
     /// Load the signal at the current cluster index into modal state.
@@ -389,10 +364,7 @@ impl App {
             _ => return false,
         };
 
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => return false,
-        };
+        let read_db = self.witch.read_db();
 
         let data = match Self::load_typed_signal_data(&signal_key, kind, &read_db) {
             Some(d) => d,
@@ -408,11 +380,9 @@ impl App {
         let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist, zone);
 
         // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
-                state.restore_from_mutations(&decision.mutations);
-                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
-            }
+        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
+            state.restore_from_mutations(&decision.mutations);
+            state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
         }
 
         // Update state in existing view, or set view if called from restore path
@@ -435,10 +405,7 @@ impl App {
         let kind = clusters.kind;
         let (current_index, total) = (clusters.current_index, clusters.signal_keys.len());
 
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => return false,
-        };
+        let read_db = self.witch.read_db();
 
         let data = match Self::load_typed_signal_data(&signal_key, kind, &read_db) {
             Some(d) => d,
@@ -454,11 +421,9 @@ impl App {
         let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist, zone);
 
         // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
-                state.restore_from_mutations(&decision.mutations);
-                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
-            }
+        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
+            state.restore_from_mutations(&decision.mutations);
+            state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
         }
 
         self.view = ActiveView::TagCanonicityResolution { state, clusters };

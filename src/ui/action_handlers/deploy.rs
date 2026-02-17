@@ -64,9 +64,6 @@ impl App {
         use crate::meta::mutations::Mutation;
 
         let open_txn = self.open_txn_mode();
-        let Some(ref mut witch) = self.witch else {
-            return 0;
-        };
         let resolver = paths::get_resolver();
         let mut mutations = Vec::new();
 
@@ -152,10 +149,10 @@ impl App {
 
         // Start transaction and stage the decision
         if !open_txn {
-            let _ = witch.start_transaction("Deploy");
+            let _ = self.witch.start_transaction("Deploy");
         }
         let _ = super::super::operator_decisions::stage_decision(
-            witch,
+            &mut self.witch,
             DecisionKey::single(DecisionSource::Deploy),
             "Deploy operations",
             mutations,

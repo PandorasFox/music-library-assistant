@@ -171,15 +171,13 @@ impl App {
         group_context: Option<tag_editor::GroupContext>,
     ) {
         // Start transaction
-        if let Some(the_witch) = self.witch.as_mut() {
-            let label = match source {
-                tag_editor::TagEditorSource::CorpusBrowser => "Tag edits",
-                tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
-                tag_editor::TagEditorSource::TagSearch => "Tag search edits",
-                tag_editor::TagEditorSource::HealthModal => "Health tag edits",
-            };
-            let _ = the_witch.start_transaction(label);
-        }
+        let label = match source {
+            tag_editor::TagEditorSource::CorpusBrowser => "Tag edits",
+            tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
+            tag_editor::TagEditorSource::TagSearch => "Tag search edits",
+            tag_editor::TagEditorSource::HealthModal => "Health tag edits",
+        };
+        let _ = self.witch.start_transaction(label);
 
         // NOTE: single_file reads tags from disk
         let editor = tag_editor::UnifiedTagEditorState::single_file(
@@ -202,15 +200,13 @@ impl App {
         group_context: Option<tag_editor::GroupContext>,
     ) {
         // Start transaction
-        if let Some(the_witch) = self.witch.as_mut() {
-            let label = match source {
-                tag_editor::TagEditorSource::CorpusBrowser => "Bulk tag edits",
-                tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
-                tag_editor::TagEditorSource::TagSearch => "Tag search edits",
-                tag_editor::TagEditorSource::HealthModal => "Health tag edits",
-            };
-            let _ = the_witch.start_transaction(label);
-        }
+        let label = match source {
+            tag_editor::TagEditorSource::CorpusBrowser => "Bulk tag edits",
+            tag_editor::TagEditorSource::DirectoryEdit => "Directory tag edits",
+            tag_editor::TagEditorSource::TagSearch => "Tag search edits",
+            tag_editor::TagEditorSource::HealthModal => "Health tag edits",
+        };
+        let _ = self.witch.start_transaction(label);
 
         // NOTE: bulk_from_audio_files reads tags from disk for all files
         let editor = tag_editor::UnifiedTagEditorState::bulk_from_audio_files(
@@ -262,9 +258,7 @@ impl App {
         }
 
         // Start transaction for directory edits
-        if let Some(the_witch) = self.witch.as_mut() {
-            let _ = the_witch.start_transaction("Directory tag edits");
-        }
+        let _ = self.witch.start_transaction("Directory tag edits");
 
         // Use directory_aggregated for aggregated tag view across all files
         // NOTE: This is slow - reads tags from disk for all files
@@ -312,9 +306,7 @@ impl App {
     /// Start unified tag editor for aggregated bulk editing from tag search results
     pub(super) fn start_unified_tag_editor_for_audio_files(&mut self, audio_files: Vec<AudioFile>) {
         // Start transaction
-        if let Some(the_witch) = self.witch.as_mut() {
-            let _ = the_witch.start_transaction("Tag search bulk edit");
-        }
+        let _ = self.witch.start_transaction("Tag search bulk edit");
 
         // Use aggregated mode - all files edited as one unit
         // NOTE: aggregated_bulk reads tags from disk for all files

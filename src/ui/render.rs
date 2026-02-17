@@ -71,13 +71,11 @@ pub fn render_app(
             .split(f.area());
 
         // Read deploy_needs_action from UiCache for titlebar
-        let deploy_needs_action = app.witch.as_ref()
-            .and_then(|w| w.ui_read_cache().deploy_status())
+        let deploy_needs_action = app.witch.ui_read_cache().deploy_status()
             .map_or(false, |s| s.needs_action);
 
         let transactions_open = app.config().opinions.leave_transactions_open;
-        let transaction_has_decisions = app.witch.as_ref()
-            .is_some_and(|w| w.has_transaction() && w.transaction_summary().is_some_and(|(_, d, _)| d > 0));
+        let transaction_has_decisions = app.witch.has_transaction() && app.witch.transaction_summary().is_some_and(|(_, d, _)| d > 0);
 
         let titlebar = UnifiedTitleBar::new(lv)
             .with_deploy_needs_action(deploy_needs_action)
@@ -204,11 +202,7 @@ fn render_content(
         }
         ActiveView::Transaction(ref state) => {
             vname = "transaction";
-            let decisions = if let Some(ref witch) = app.witch {
-                transaction_review::fetch_decision_summaries(witch)
-            } else {
-                Vec::new()
-            };
+            let decisions = transaction_review::fetch_decision_summaries(&app.witch);
             transaction_view::render::render(f, area, state, &decisions);
         }
         ActiveView::TagSearch(ref state) => {

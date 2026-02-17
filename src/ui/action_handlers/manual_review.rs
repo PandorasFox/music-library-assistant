@@ -16,12 +16,10 @@ impl App {
     /// Loads data from the database based on review kind, starts a transaction,
     /// and switches to the ManualReview view.
     pub(in crate::ui) fn start_manual_review(&mut self, kind: types::ReviewKind) {
-        let data = self.witch.as_mut()
-            .and_then(|w| {
-                let read_db = w.read_db();
-                types::ManualReviewData::load(&read_db, kind).ok()
-            })
-            .unwrap_or_default();
+        let data = {
+            let read_db = self.witch.read_db();
+            types::ManualReviewData::load(&read_db, kind).ok()
+        }.unwrap_or_default();
 
         if !data.has_groups() {
             self.status_message = Some(format!("No {} groups to review", kind.title()));
@@ -29,9 +27,7 @@ impl App {
         }
 
         // Start transaction for the review session
-        if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction(kind.transaction_label());
-        }
+        let _ = self.witch.start_transaction(kind.transaction_label());
 
         let state = manual_review_modal::ManualReviewState::new(kind, data);
         self.view = ActiveView::ManualReview(state);
@@ -113,16 +109,14 @@ impl App {
         let mutations = types::stash_file_mutations(&corpus_path, inode, stash_name);
 
         // Stage the decision
-        if let Some(ref mut witch) = self.witch {
-            let label = format!("Stash {}", corpus_path);
-            let _ = super::super::operator_decisions::stage_decision(
-                witch,
-                DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
-                &label,
-                mutations,
-                gesture,
-            );
-        }
+        let label = format!("Stash {}", corpus_path);
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
+            &label,
+            mutations,
+            gesture,
+        );
 
         // Mark file as stashed in the UI state
         if let ActiveView::ManualReview(ref mut state) = self.view {
@@ -146,16 +140,14 @@ impl App {
             },
         );
 
-        if let Some(ref mut witch) = self.witch {
-            let label = format!("Mark expected duplicate: {}", group_label);
-            let _ = super::super::operator_decisions::stage_decision(
-                witch,
-                DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
-                &label,
-                vec![mutation],
-                gesture,
-            );
-        }
+        let label = format!("Mark expected duplicate: {}", group_label);
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
+            &label,
+            vec![mutation],
+            gesture,
+        );
 
         // Advance to next group or show review if at the end
         if is_last {

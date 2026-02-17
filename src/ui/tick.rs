@@ -34,21 +34,17 @@ impl App {
         match phase {
             MigrationPhase::Running => {
                 // Tick the Witch to process migration tasks
-                if let Some(ref mut witch) = self.witch {
-                    witch.tick();
-                    if !witch.has_pending() {
-                        // All migrations complete
-                        if let ActiveView::MigrationApproval(ref mut state) = self.view {
-                            state.phase = MigrationPhase::Complete;
-                        }
+                self.witch.tick();
+                if !self.witch.has_pending() {
+                    // All migrations complete
+                    if let ActiveView::MigrationApproval(ref mut state) = self.view {
+                        state.phase = MigrationPhase::Complete;
                     }
                 }
             }
             MigrationPhase::Complete => {
                 // Invalidate read-only connection so it picks up new schema
-                if let Some(ref mut witch) = self.witch {
-                    witch.invalidate_read_only_conn();
-                }
+                self.witch.invalidate_read_only_conn();
 
                 // Advance past migrations
                 let db_path = self.db_path.clone();
@@ -82,17 +78,13 @@ impl App {
                     }
                 }
 
-                // Execute VACUUM synchronously
+                // Execute VACUUM via db_thread
                 let db_path = match self.view {
                     ActiveView::VacuumPrompt(ref state) => state.db_path.clone(),
                     _ => return,
                 };
 
-                let vacuum_result = if let Some(ref mut witch) = self.witch {
-                    witch.execute_vacuum(&db_path)
-                } else {
-                    Err(anyhow::anyhow!("No witch"))
-                };
+                let vacuum_result = self.witch.execute_vacuum();
 
                 match vacuum_result {
                     Ok(()) => {
@@ -152,13 +144,13 @@ impl App {
         let phase = screen.phase();
 
         // Update eye animation (scoped to Progress view)
-        let can_animate = self.witch().eye_state() == crate::witch::EyeState::Awake;
+        let can_animate = self.witch.eye_state() == crate::witch::EyeState::Awake;
         eye.update(can_animate);
 
         // Tick progress screen - it checks daemon state for completion
-        let completed = screen.tick(self.witch());
+        let completed = screen.tick(&mut self.witch);
         if completed {
-            let status = self.witch().status();
+            let status = self.witch.status();
             crate::logging::log_general(format!(
                 "{:?} phase complete: {} processed",
                 phase, status.total_processed
@@ -185,7 +177,7 @@ impl App {
                     } else {
                         let check_duration = transition_start.elapsed();
                         // Check if the Witch has pending work (e.g., freshen latch triggered content analysis)
-                        if self.witch().has_pending() {
+                        if self.witch.has_pending() {
                             crate::logging::log_general(format!(
                                 "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files but Witch has pending work - showing content analysis progress",
                                 check_duration.as_millis()
@@ -208,11 +200,9 @@ impl App {
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
                     // Invalidate caches before transitioning - mutations just completed
-                    if let Some(ref witch) = self.witch {
-                        witch.ui_read_cache().invalidate_insights_data();
-                        witch.ui_read_cache().invalidate_inbox_overview();
-                        witch.ui_read_cache().invalidate_deploy_status();
-                    }
+                    self.witch.ui_read_cache().invalidate_insights_data();
+                    self.witch.ui_read_cache().invalidate_inbox_overview();
+                    self.witch.ui_read_cache().invalidate_deploy_status();
                     // Transition to configured default view
                     self.start_default_view();
                 }
@@ -244,7 +234,7 @@ impl App {
         // Clone corpus_root to avoid borrow conflict with daemon's db reference
         let corpus_root = self.config().corpus_dir();
 
-        let eye_state = self.witch().eye_state();
+        let eye_state = self.witch.eye_state();
         crate::logging::log_general(format!(
             "check_for_unindexed_files: eye_state={:?}",
             eye_state
@@ -336,13 +326,7 @@ impl App {
 
         // Load compound split data from the group (scoped borrow)
         let data = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => {
-                    worker.nops_elided += 1;
-                    return;
-                }
-            };
+            let read_db = self.witch.read_db();
 
             match compound_split_v2::CompoundSplitDataV2::from_compound_group(group, &read_db) {
                 Some(d) => d,
@@ -382,12 +366,8 @@ impl App {
             data.compound.split_parts.join(", ")
         );
 
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, idx.to_string()), &description, mutations, &worker.gesture);
-            worker.mutations_generated += 1;
-        } else {
-            worker.nops_elided += 1;
-        }
+        let _ = super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::CompoundSplit, idx.to_string()), &description, mutations, &worker.gesture);
+        worker.mutations_generated += 1;
     }
 
     /// Handle completion of progressive work.

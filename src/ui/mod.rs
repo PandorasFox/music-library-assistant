@@ -97,10 +97,7 @@ pub(crate) struct App {
     pub(super) view: ActiveView,
 
     // The Witch - enforcer of orderliness, handles all mutations and background work
-    pub(super) witch: Option<crate::witch::Witch>,
-
-    // Log channel receiver, held until the Witch takes ownership
-    log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
+    pub(super) witch: crate::witch::Witch,
 
     // Filter popup overlay (Ctrl+F in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
@@ -126,8 +123,7 @@ impl App {
             should_quit: false,
             status_message: None,
             view: ActiveView::Insights(insights_view::InsightsViewState::new()),
-            witch: Some(witch),
-            log_rx: None,
+            witch,
             filter_overlay: None,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Insights,
@@ -169,10 +165,8 @@ impl App {
                     match context {
                         FilterPopupContext::CorpusBrowser => {
                             if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
-                                if let Some(ref mut witch) = self.witch {
-                                    let read_db = witch.read_db();
-                                    browser.apply_filter(condition, &read_db);
-                                }
+                                let read_db = self.witch.read_db();
+                                browser.apply_filter(condition, &read_db);
                             }
                         }
                         FilterPopupContext::OobSync => {
@@ -243,9 +237,7 @@ impl App {
             ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_key(key)),
             ActiveView::Inbox(s) => ViewAction::Inbox(s.handle_key(key)),
             ActiveView::Transaction(ref mut state) => {
-                let decision_count = self.witch.as_ref()
-                    .map(|w| w.transaction_summary().map_or(0, |(_, d, _)| d))
-                    .unwrap_or(0);
+                let decision_count = self.witch.transaction_summary().map_or(0, |(_, d, _)| d);
                 ViewAction::Transaction(state.handle_key(key, decision_count))
             }
             ActiveView::ExitConfirm(state) => {
@@ -313,7 +305,7 @@ impl App {
 
     /// Check if there are any pending operations (Witch work).
     pub(super) fn has_pending_operations(&self) -> bool {
-        self.witch.as_ref().map(|d| d.has_pending()).unwrap_or(false)
+        self.witch.has_pending()
     }
 
     /// Start the insights view.
@@ -345,11 +337,9 @@ impl App {
     where
         T: ProgressStatsUpdater,
     {
-        if let Some(the_witch) = &self.witch {
-            state.set_db_queue_depth(the_witch.db_queue_depth());
-            state.set_db_stats(the_witch.db_stats());
-            state.set_worker_stats(the_witch.worker_stats());
-        }
+        state.set_db_queue_depth(self.witch.db_queue_depth());
+        state.set_db_stats(self.witch.db_stats());
+        state.set_worker_stats(self.witch.worker_stats());
     }
 
     pub(super) fn start_tag_search(&mut self) {
@@ -360,10 +350,10 @@ impl App {
     pub(super) fn start_inbox_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
-        let intake_state = self.witch.as_mut().and_then(|w| {
-            let read_db = w.read_db();
+        let intake_state = {
+            let read_db = self.witch.read_db();
             startup::IntakeConfirmationState::gather_inbox(&read_db)
-        });
+        };
 
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);
@@ -411,18 +401,14 @@ impl App {
     /// per-library file counts.
     pub(super) fn start_deploy_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Deploy;
-        let deploy_status = self.witch.as_ref()
-            .and_then(|w| w.ui_read_cache().deploy_status());
+        let deploy_status = self.witch.ui_read_cache().deploy_status();
 
         let needs_action = deploy_status.as_ref().map_or(false, |s| s.needs_action);
 
         if needs_action {
             let config = crate::config::load_config().ok();
-            let data = self.witch.as_mut()
-                .and_then(|w| {
-                    let read_db = w.read_db();
-                    deploy_modal::DeployModalData::load(&read_db, config.as_ref()).ok()
-                })
+            let read_db = self.witch.read_db();
+            let data = deploy_modal::DeployModalData::load(&read_db, config.as_ref())
                 .unwrap_or_default();
             let preview = deploy_modal::DeploymentPreviewState::new(data);
             self.view = ActiveView::Deploy(deploy_modal::DeployViewState::Preview(preview));
@@ -455,33 +441,18 @@ impl App {
 
     /// Check Witch status and update UI with any failure messages.
     fn check_witch_status(&mut self) {
-        if let Some(ref the_witch) = self.witch {
-            let status = the_witch.status();
-            if status.failed > 0 {
-                self.status_message = Some(format!(
-                    "Tasks: {} done, {} failed",
-                    status.completed, status.failed
-                ));
-            }
+        let status = self.witch.status();
+        if status.failed > 0 {
+            self.status_message = Some(format!(
+                "Tasks: {} done, {} failed",
+                status.completed, status.failed
+            ));
         }
-    }
-
-    /// Get or create the Witch.
-    pub(super) fn witch(&mut self) -> &mut crate::witch::Witch {
-        if self.witch.is_none() {
-            let (force_check, config_clone) = {
-                let config = self.config();
-                (config.opinions.startup.force_check_all_files_at_startup, config.clone())
-            };
-            let log_rx = self.log_rx.take();
-            self.witch = Some(crate::witch::Witch::with_opinions(&config_clone, false, force_check, log_rx));
-        }
-        self.witch.as_mut().unwrap()
     }
 
     /// Shorthand for read-only database access.
     pub(super) fn read_db(&mut self) -> crate::corpus::db::ReadOnlyDb<'_> {
-        self.witch().read_db()
+        self.witch.read_db()
     }
 
     // =========================================================================
@@ -492,15 +463,12 @@ impl App {
     /// and transition to the Progress screen.
     pub(super) fn complete_startup(&mut self) {
         let shared = self.shared_config.clone();
-        self.witch().spawn_db_thread();
-        self.witch().set_shared_config(shared);
-        self.witch().start_observing();
+        self.witch.set_shared_config(shared);
+        self.witch.start_observing();
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {
-            if let Some(ref mut witch) = self.witch {
-                let _ = witch.start_transaction("Open");
-            }
+            let _ = self.witch.start_transaction("Open");
         }
 
         self.view = ActiveView::Progress {
@@ -565,15 +533,13 @@ impl App {
 fn render(f: &mut Frame, app: &mut App) {
     // Fetch decision summaries from Witch if transaction review is active
     let transaction_review_decisions = if matches!(app.view, ActiveView::TransactionReview(_)) {
-        app.witch.as_ref()
-            .map(transaction_review::fetch_decision_summaries)
-            .unwrap_or_default()
+        transaction_review::fetch_decision_summaries(&app.witch)
     } else {
         Vec::new()
     };
 
     // Build status bar lines
-    let status_line_1 = if app.witch.as_ref().map_or(false, |w| w.idle_rescan_active()) {
+    let status_line_1 = if app.witch.idle_rescan_active() {
         Some("Refreshing corpus...".to_string())
     } else if let Some(ref msg) = app.status_message {
         Some(msg.clone())
@@ -581,8 +547,7 @@ fn render(f: &mut Frame, app: &mut App) {
         app.view.selected_path().map(|s| s.to_string())
     };
 
-    let status_line_2 = app.witch.as_ref()
-        .and_then(|w| w.transaction_summary())
+    let status_line_2 = app.witch.transaction_summary()
         .map(|(label, dec, mut_)| {
             let pd = if dec == 1 { "" } else { "s" };
             let pm = if mut_ == 1 { "" } else { "s" };
@@ -625,10 +590,8 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     app.db_path = db_path.clone();
 
     // Determine initial view based on startup state
-    if app.witch.as_ref().map_or(false, |w| w.needs_migrations()) {
-        let descriptions = app.witch.as_ref()
-            .map(|w| w.pending_migration_descriptions())
-            .unwrap_or_default();
+    if app.witch.needs_migrations() {
+        let descriptions = app.witch.pending_migration_descriptions();
         app.view = ActiveView::MigrationApproval(MigrationApprovalState {
             descriptions,
             phase: MigrationPhase::Approval,
@@ -704,14 +667,12 @@ fn run_app<B: ratatui::backend::Backend>(
             | ActiveView::Inbox(_)
             | ActiveView::Transaction(_)
         );
-        if let Some(ref mut witch) = app.witch {
-            witch.set_idle_rescan_eligible(idle_eligible);
-        }
+        app.witch.set_idle_rescan_eligible(idle_eligible);
 
         // Tick the Witch (skip during startup views — they tick internally as needed)
         let (tick_status, tick_duration) = if !is_startup_view {
             let tick_start = std::time::Instant::now();
-            let status = app.witch().tick();
+            let status = app.witch.tick();
             let duration = tick_start.elapsed();
             if duration.as_millis() > 16 {
                 crate::logging::log_perf(format!(
@@ -729,14 +690,14 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Update insights view with the Witch's status and cached data
         if let ActiveView::Insights(ref mut view) = app.view {
-            let status = app.witch.as_ref().map(|d| d.status());
-            let insights_data = app.witch.as_ref().and_then(|w| w.ui_read_cache().insights_data());
-            view.update(status.as_ref(), insights_data);
+            let status = app.witch.status();
+            let insights_data = app.witch.ui_read_cache().insights_data();
+            view.update(Some(&status), insights_data);
         }
 
         // Update inbox view with cached overview data and busy state
         if let ActiveView::Inbox(ref mut view) = app.view {
-            let inbox_data = app.witch.as_ref().and_then(|w| w.ui_read_cache().inbox_overview());
+            let inbox_data = app.witch.ui_read_cache().inbox_overview();
             view.update(inbox_data);
             view.busy = tick_status.pending > 0 || tick_status.idle_rescan_active;
         }
@@ -753,21 +714,19 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Update deploy UpToDate with fresh counts each frame
         if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
-            if let Some(status) = app.witch.as_ref().and_then(|w| w.ui_read_cache().deploy_status()) {
+            if let Some(status) = app.witch.ui_read_cache().deploy_status() {
                 *library_file_counts = status.library_file_counts;
             }
         }
 
         // Flag demand for cached UI data
-        if let Some(ref the_witch) = app.witch {
-            // Always want deploy status — titlebar needs it for purple indicator
-            the_witch.ui_read_cache().want_deploy_status();
-            if matches!(app.view, ActiveView::Insights(_)) {
-                the_witch.ui_read_cache().want_insights_data();
-            }
-            if matches!(app.view, ActiveView::Inbox(_)) {
-                the_witch.ui_read_cache().want_inbox_overview();
-            }
+        // Always want deploy status — titlebar needs it for purple indicator
+        app.witch.ui_read_cache().want_deploy_status();
+        if matches!(app.view, ActiveView::Insights(_)) {
+            app.witch.ui_read_cache().want_insights_data();
+        }
+        if matches!(app.view, ActiveView::Inbox(_)) {
+            app.witch.ui_read_cache().want_inbox_overview();
         }
 
         let draw_start = std::time::Instant::now();

@@ -36,10 +36,10 @@ impl App {
             }
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
-                let intake_state = self.witch.as_mut().and_then(|w| {
-                    let read_db = w.read_db();
+                let intake_state = {
+                    let read_db = self.witch.read_db();
                     startup::IntakeConfirmationState::gather_inbox(&read_db)
-                });
+                };
 
                 match intake_state {
                     Some(state) => {
@@ -68,13 +68,7 @@ impl App {
     /// `InboxTagCanonicity` kind, and launches the standard canonicity modal.
     fn start_inbox_tag_canonicity_resolution(&mut self) {
         let signal_keys = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => {
-                    self.status_message = Some("Database not available".to_string());
-                    return;
-                }
-            };
+            let read_db = self.witch.read_db();
             read_db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
                 .unwrap_or_default()
         };
@@ -88,20 +82,12 @@ impl App {
         let clusters = TagCanonicityClusters::new(signal_keys, kind);
 
         // Start transaction for the modal
-        if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction("Inbox tag canonicalization");
-        }
+        let _ = self.witch.start_transaction("Inbox tag canonicalization");
 
         // Load the first signal
         let first_key = clusters.signal_keys[0].clone();
         let data = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => {
-                    self.status_message = Some("Database not available".to_string());
-                    return;
-                }
-            };
+            let read_db = self.witch.read_db();
             read_db.get_inbox_tag_canonicity_signal(&first_key)
                 .ok()
                 .flatten()
@@ -114,9 +100,7 @@ impl App {
             Some(d) => d,
             None => {
                 self.status_message = Some("Failed to load inbox tag canonicity data".to_string());
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::super::operator_decisions::discard_transaction(witch);
-                }
+                let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
                 return;
             }
         };
@@ -133,12 +117,10 @@ impl App {
     /// Start inbox corpus match resolution modal.
     pub(in crate::ui) fn start_inbox_corpus_match_resolution(&mut self) {
         let fuzz = self.config().opinions.quality_resolution.inbox_bitrate_fuzz_percent;
-        let data = self.witch.as_mut()
-            .and_then(|w| {
-                let read_db = w.read_db();
-                inbox_corpus_match_modal::InboxCorpusMatchModalData::load(&read_db, fuzz).ok()
-            })
-            .unwrap_or_default();
+        let data = {
+            let read_db = self.witch.read_db();
+            inbox_corpus_match_modal::InboxCorpusMatchModalData::load(&read_db, fuzz).ok()
+        }.unwrap_or_default();
 
         if data.total_count() == 0 {
             self.status_message = Some("No inbox corpus matches to resolve".to_string());
@@ -196,10 +178,10 @@ impl App {
     /// Start the inbox organize workflow.
     fn start_inbox_organize(&mut self) {
         let config = self.config().clone();
-        let state = self.witch.as_mut().and_then(|w| {
-            let read_db = w.read_db();
+        let state = {
+            let read_db = self.witch.read_db();
             inbox_organize::InboxOrganizeState::load_from_read_db(&read_db, &config)
-        });
+        };
 
         match state {
             Some(state) => {

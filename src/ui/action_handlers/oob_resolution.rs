@@ -15,13 +15,7 @@ impl App {
 
     /// Start OOB tag sync resolution from Insights view.
     pub(in crate::ui) fn start_oob_sync_resolution(&mut self) {
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => {
-                self.status_message = Some("Database not available".to_string());
-                return;
-            }
-        };
+        let read_db = self.witch.read_db();
 
         let files = read_db.get_oob_sync_files().unwrap_or_default();
         if files.is_empty() {
@@ -30,9 +24,7 @@ impl App {
         }
 
         // Start transaction for the sync resolution
-        if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction("OOB tag sync");
-        }
+        let _ = self.witch.start_transaction("OOB tag sync");
 
         let state = oob_sync_modal::OobSyncState::new(files);
         self.view = ActiveView::OobSyncResolution(state);
@@ -130,9 +122,7 @@ impl App {
             ),
         };
 
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobSync), label, mutations, gesture);
-        }
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::single(DecisionSource::OobSync), label, mutations, gesture);
     }
 
     // ========================================================================
@@ -146,13 +136,7 @@ impl App {
     pub(in crate::ui) fn start_oob_conflict_inspection(&mut self) {
         // First pass: query bucketed files (scoped borrow)
         let files = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => {
-                    self.status_message = Some("Database not available".to_string());
-                    return;
-                }
-            };
+            let read_db = self.witch.read_db();
             match read_db.get_oob_files_bucketed() {
                 Ok(f) => f,
                 Err(e) => {
@@ -169,9 +153,7 @@ impl App {
         }
 
         // Start transaction for potential resolution
-        if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction("OOB tag resolution");
-        }
+        let _ = self.witch.start_transaction("OOB tag resolution");
 
         let mut state = oob_conflict_modal::OobConflictState::new(files);
 
@@ -179,12 +161,10 @@ impl App {
         if let Some(file) = state.active_bucket_state().current_file() {
             let inode = file.inode;
             let path = file.path.clone();
-            if let Some(w) = self.witch.as_mut() {
-                let read_db = w.read_db();
-                let resolver = paths::get_resolver();
-                let abs_path = resolver.resolve(std::path::Path::new(&path));
-                state.current_diff = oob_conflict_modal::types::compute_tag_diff(&read_db, inode, &abs_path);
-            }
+            let read_db = self.witch.read_db();
+            let resolver = paths::get_resolver();
+            let abs_path = resolver.resolve(std::path::Path::new(&path));
+            state.current_diff = oob_conflict_modal::types::compute_tag_diff(&read_db, inode, &abs_path);
         }
 
         self.view = ActiveView::OobConflictInspection(state);
@@ -234,10 +214,7 @@ impl App {
             _ => return Vec::new(),
         };
 
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => return Vec::new(),
-        };
+        let read_db = self.witch.read_db();
 
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(&path));
@@ -312,9 +289,7 @@ impl App {
             ),
         };
 
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobConflict), label, mutations, gesture);
-        }
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::single(DecisionSource::OobConflict), label, mutations, gesture);
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
         self.after_staging_decisions();
@@ -362,15 +337,13 @@ impl App {
         // Create single mutation with all files as (inode, path) pairs
         let mutations = vec![Mutation::AcknowledgeMtimeOnly(AcknowledgeMtimeOnlyMutation { tracks })];
 
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(
-                witch,
-                DecisionKey::single(DecisionSource::MtimeAck),
-                "Acknowledge mtime changes",
-                mutations,
-                gesture,
-            );
-        }
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::single(DecisionSource::MtimeAck),
+            "Acknowledge mtime changes",
+            mutations,
+            gesture,
+        );
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
         self.after_staging_decisions();
@@ -382,14 +355,9 @@ impl App {
 
     /// Start moved file acknowledgement modal.
     pub(in crate::ui) fn start_moved_file_acknowledge(&mut self) {
-        let Some(ref mut witch) = self.witch else {
-            self.status_message = Some("No database connection".to_string());
-            return;
-        };
-
         // Query files with moved_file signals
         let files = {
-            let read_db = witch.read_db();
+            let read_db = self.witch.read_db();
             match read_db.get_moved_files() {
                 Ok(f) => f,
                 Err(e) => {
@@ -410,7 +378,7 @@ impl App {
         ));
 
         // Start transaction for the acknowledgement
-        let _ = witch.start_transaction("Moved file acknowledgement");
+        let _ = self.witch.start_transaction("Moved file acknowledgement");
 
         let state = moved_file_modal::MovedFileState::new(files);
         self.view = ActiveView::MovedFileAcknowledge(state);
@@ -467,8 +435,6 @@ impl App {
         };
 
         // Stage the UpdateFilePath mutations
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::MovedFile), &label, mutations, gesture);
-        }
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::single(DecisionSource::MovedFile), &label, mutations, gesture);
     }
 }

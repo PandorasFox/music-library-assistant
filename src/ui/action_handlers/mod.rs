@@ -84,14 +84,12 @@ impl App {
 
     /// Stage a tag editor decision to the Witch's transaction and update editor state.
     fn stage_tag_editor_decision(&mut self, key: DecisionKey, mutations: Vec<crate::meta::mutations::Mutation>, gesture: &witness::ConfirmationGesture) {
-        if let Some(the_witch) = self.witch.as_mut() {
-            let label = if let ActiveView::UnifiedTagEditor(ref editor) = self.view {
-                editor.current_item_label()
-            } else {
-                "Tag edit".to_string()
-            };
-            let _ = super::operator_decisions::stage_decision(the_witch, key, &label, mutations.clone(), gesture);
-        }
+        let label = if let ActiveView::UnifiedTagEditor(ref editor) = self.view {
+            editor.current_item_label()
+        } else {
+            "Tag edit".to_string()
+        };
+        let _ = super::operator_decisions::stage_decision(&mut self.witch, key, &label, mutations.clone(), gesture);
         if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
             editor.set_staged_mutations(mutations);
             editor.staged_decision_count += 1;
@@ -109,11 +107,10 @@ impl App {
     /// is already active.
     fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, key: DecisionKey, gesture: &witness::ConfirmationGesture) {
         let open_txn = self.open_txn_mode();
-        let Some(ref mut witch) = self.witch else { return };
         if !open_txn {
-            let _ = witch.start_transaction(label);
+            let _ = self.witch.start_transaction(label);
         }
-        let _ = super::operator_decisions::stage_decision(witch, key, label, mutations, gesture);
+        let _ = super::operator_decisions::stage_decision(&mut self.witch, key, label, mutations, gesture);
     }
 
     /// Cancel the current modal and return to the source view.
@@ -123,10 +120,8 @@ impl App {
     pub(in crate::ui) fn cancel_and_return_to_source(&mut self, log_message: &str) {
         crate::logging::log_general(log_message);
         if !self.open_txn_mode() {
-            if let Some(ref mut witch) = self.witch {
-                if witch.has_transaction() {
-                    let _ = super::operator_decisions::discard_transaction(witch);
-                }
+            if self.witch.has_transaction() {
+                let _ = super::operator_decisions::discard_transaction(&mut self.witch);
             }
         }
         self.return_to_last_lateral_view();
@@ -184,9 +179,7 @@ impl App {
             super::MigrationAction::Approve => {
                 if let super::ActiveView::MigrationApproval(ref mut state) = self.view {
                     if state.phase == MigrationPhase::Approval {
-                        if let Some(ref mut witch) = self.witch {
-                            witch.queue_pending_migrations();
-                        }
+                                self.witch.queue_pending_migrations();
                         state.phase = MigrationPhase::Running;
                     }
                 }
@@ -254,14 +247,12 @@ impl App {
                     });
 
                     let open_txn = self.open_txn_mode();
-                    if let Some(ref mut witch) = self.witch {
-                        if !open_txn {
-                            let _ = witch.start_transaction("Config update");
-                        }
-                        let _ = super::operator_decisions::stage_decision(
-                            witch, DecisionKey::single(DecisionSource::ConfigEdit), "Apply config changes", vec![mutation], g,
-                        );
+                    if !open_txn {
+                        let _ = self.witch.start_transaction("Config update");
                     }
+                    let _ = super::operator_decisions::stage_decision(
+                        &mut self.witch, DecisionKey::single(DecisionSource::ConfigEdit), "Apply config changes", vec![mutation], g,
+                    );
 
                     self.after_staging_decisions();
                 } else {
@@ -423,10 +414,10 @@ impl App {
     /// Gathers unindexed files and opens the intake confirmation modal.
     fn start_intake_confirmation_from_insights(&mut self) {
         let corpus_root = self.config().corpus_dir();
-        let intake_state = self.witch.as_mut().and_then(|w| {
-            let read_db = w.read_db();
+        let intake_state = {
+            let read_db = self.witch.read_db();
             startup::IntakeConfirmationState::gather(&read_db, &corpus_root, "insights")
-        });
+        };
 
         match intake_state {
             Some(state) => {
@@ -514,9 +505,7 @@ impl App {
         let suffix = self.config().opinions.health_detection.single_album_suffix.clone();
 
         // Start transaction for the resolution session
-        if let Some(ref mut witch) = self.witch {
-            let _ = witch.start_transaction("Missing album singles");
-        }
+        let _ = self.witch.start_transaction("Missing album singles");
 
         let state = missing_album_modal::MissingAlbumState::new(data, suffix);
         self.view = ActiveView::MissingAlbumSingleResolution(state);
@@ -558,11 +547,9 @@ impl App {
                         };
                         if !ops.is_empty() {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
-                            if let Some(ref mut witch) = self.witch {
-                                let _ = super::operator_decisions::stage_decision(
-                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag as singles", vec![mutation], g,
-                                );
-                            }
+                            let _ = super::operator_decisions::stage_decision(
+                                &mut self.witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag as singles", vec![mutation], g,
+                            );
                         }
                     }
 
@@ -576,11 +563,9 @@ impl App {
                         };
                         if !ops.is_empty() {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
-                            if let Some(ref mut witch) = self.witch {
-                                let _ = super::operator_decisions::stage_decision(
-                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag all as Singles", vec![mutation], g,
-                                );
-                            }
+                            let _ = super::operator_decisions::stage_decision(
+                                &mut self.witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag all as Singles", vec![mutation], g,
+                            );
                         }
                     }
 
@@ -591,11 +576,9 @@ impl App {
                         };
                         if !inodes.is_empty() {
                             let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
-                            if let Some(ref mut witch) = self.witch {
-                                let _ = super::operator_decisions::stage_decision(
-                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Suppress missing album", vec![mutation], g,
-                                );
-                            }
+                            let _ = super::operator_decisions::stage_decision(
+                                &mut self.witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Suppress missing album", vec![mutation], g,
+                            );
                         }
                     }
                 }
@@ -711,10 +694,8 @@ impl App {
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search - access witch and view as disjoint fields
-                if let (Some(ref mut witch), ActiveView::TagSearch(ref mut search)) =
-                    (&mut self.witch, &mut self.view)
-                {
-                    let read_db = witch.read_db();
+                if let ActiveView::TagSearch(ref mut search) = self.view {
+                    let read_db = self.witch.read_db();
                     search.execute_search(&read_db);
                 }
             }
@@ -764,18 +745,16 @@ impl App {
 
                     // Start transaction and stage the decision
                     let open_txn = self.open_txn_mode();
-                    if let Some(the_witch) = self.witch.as_mut() {
-                        if !open_txn {
-                            let _ = the_witch.start_transaction("Intake indexing");
-                        }
-                        let _ = operator_decisions::stage_decision(
-                            the_witch,
-                            DecisionKey::single(DecisionSource::IntakeIndex),
-                            "Index unindexed files",
-                            mutations,
-                            g,
-                        );
+                    if !open_txn {
+                        let _ = self.witch.start_transaction("Intake indexing");
                     }
+                    let _ = operator_decisions::stage_decision(
+                        &mut self.witch,
+                        DecisionKey::single(DecisionSource::IntakeIndex),
+                        "Index unindexed files",
+                        mutations,
+                        g,
+                    );
 
                     if open_txn {
                         self.start_transaction_view();
@@ -796,10 +775,8 @@ impl App {
 
                 // Discard any active transaction from review modal (not in open-txn mode)
                 if !self.open_txn_mode() {
-                    if let Some(ref mut witch) = self.witch {
-                        if witch.has_transaction() {
-                            let _ = operator_decisions::discard_transaction(witch);
-                        }
+                    if self.witch.has_transaction() {
+                        let _ = operator_decisions::discard_transaction(&mut self.witch);
                     }
                 }
 
@@ -899,9 +876,7 @@ impl App {
                 // In closed-txn mode, discard the transaction.
                 // In open-txn mode, leave the persistent transaction intact.
                 if !self.open_txn_mode() {
-                    if let Some(the_witch) = self.witch.as_mut() {
-                        let _ = super::operator_decisions::discard_transaction(the_witch);
-                    }
+                    let _ = super::operator_decisions::discard_transaction(&mut self.witch);
                 }
                 // Return to the view that launched the tag editor (e.g., corpus browser)
                 if !self.pop_and_restore() {
@@ -970,11 +945,9 @@ impl App {
             UnifiedTagEditorAction::StageAndCloseEmbedded { decision_key, decision_label, mutations } => {
                 let Some(g) = witness else { return };
                 // Stage collected mutations at parent's decision key
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::stage_decision(
-                        witch, decision_key, &decision_label, mutations, g,
-                    );
-                }
+                let _ = super::operator_decisions::stage_decision(
+                    &mut self.witch, decision_key, &decision_label, mutations, g,
+                );
                 // Return to parent health modal
                 if !self.pop_and_restore() {
                     self.start_insights_view();
@@ -1015,9 +988,7 @@ impl App {
             TransactionReviewAction::Discard => {
                 // Discard transaction, clear entire view stack, return to insights
                 self.clear_view_stack();
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::discard_transaction(witch);
-                }
+                let _ = super::operator_decisions::discard_transaction(&mut self.witch);
                 self.start_insights_view();
                 self.status_message = Some("Transaction discarded".to_string());
             }
@@ -1036,11 +1007,7 @@ impl App {
                 self.clear_view_stack();
 
                 // Commit transaction
-                let commit_result = if let Some(ref mut witch) = self.witch {
-                    super::operator_decisions::commit_transaction(witch, g)
-                } else {
-                    Err(crate::meta::decisions::TransactionError::NoActiveTransaction)
-                };
+                let commit_result = super::operator_decisions::commit_transaction(&mut self.witch, g);
 
                 match commit_result {
                     Ok(()) => {
@@ -1069,11 +1036,9 @@ impl App {
             TransactionReviewAction::RequestRemoval => {
                 // Map cursor position to DecisionKey and set pending_removal
                 let key = if let ActiveView::TransactionReview(ref review) = self.view {
-                    self.witch.as_ref().and_then(|witch| {
-                        let keys = witch.decision_keys();
-                        let cursor = review.cursor.min(keys.len().saturating_sub(1));
-                        keys.into_iter().nth(cursor)
-                    })
+                    let keys = self.witch.decision_keys();
+                    let cursor = review.cursor.min(keys.len().saturating_sub(1));
+                    keys.into_iter().nth(cursor)
                 } else {
                     None
                 };
@@ -1086,25 +1051,21 @@ impl App {
 
             TransactionReviewAction::ConfirmRemoval(key) => {
                 let Some(g) = gesture else { return };
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::remove_decision(witch, &key, g);
+                let _ = super::operator_decisions::remove_decision(&mut self.witch, &key, g);
 
-                    // If transaction is now empty, auto-close review
-                    if witch.decision_keys().is_empty() {
-                        if !self.pop_and_restore() {
-                            self.start_insights_view();
-                        }
-                        self.status_message = Some("Decision removed, transaction empty".to_string());
-                        return;
+                // If transaction is now empty, auto-close review
+                if self.witch.decision_keys().is_empty() {
+                    if !self.pop_and_restore() {
+                        self.start_insights_view();
                     }
+                    self.status_message = Some("Decision removed, transaction empty".to_string());
+                    return;
                 }
                 // Clamp cursor after removal
                 if let ActiveView::TransactionReview(ref mut review) = self.view {
-                    if let Some(ref witch) = self.witch {
-                        let count = witch.decision_keys().len();
-                        if review.cursor >= count && count > 0 {
-                            review.cursor = count - 1;
-                        }
+                    let count = self.witch.decision_keys().len();
+                    if review.cursor >= count && count > 0 {
+                        review.cursor = count - 1;
                     }
                 }
                 self.status_message = Some("Decision removed".to_string());
@@ -1129,36 +1090,26 @@ impl App {
             }
             TransactionViewAction::Commit => {
                 let Some(g) = gesture else { return };
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::commit_transaction(witch, g);
-                }
+                let _ = super::operator_decisions::commit_transaction(&mut self.witch, g);
                 // Re-open transaction immediately
-                if let Some(ref mut witch) = self.witch {
-                    let _ = witch.start_transaction("Open");
-                }
+                let _ = self.witch.start_transaction("Open");
                 self.transition_to_progress_after_mutations(
                     super::progress_screen::ProgressPhase::SignalRefresh,
                 );
             }
             TransactionViewAction::DiscardAll => {
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::discard_transaction(witch);
-                    // Re-open transaction immediately
-                    let _ = witch.start_transaction("Open");
-                }
+                let _ = super::operator_decisions::discard_transaction(&mut self.witch);
+                // Re-open transaction immediately
+                let _ = self.witch.start_transaction("Open");
                 self.status_message = Some("Transaction discarded".into());
             }
             TransactionViewAction::RemoveDecision(key) => {
                 let Some(g) = gesture else { return };
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::remove_decision(witch, &key, g);
-                }
+                let _ = super::operator_decisions::remove_decision(&mut self.witch, &key, g);
             }
             TransactionViewAction::RemoveMutation(key, idx) => {
                 let Some(g) = gesture else { return };
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::remove_mutation(witch, &key, idx, g);
-                }
+                let _ = super::operator_decisions::remove_mutation(&mut self.witch, &key, idx, g);
             }
         }
     }

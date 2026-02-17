@@ -17,13 +17,7 @@ impl App {
     /// If `safe_only` is true, loads only signals where all split parts exist in corpus.
     /// If `tag_filter` is Some, only loads signals for that specific tag name.
     pub(in crate::ui) fn start_compound_split_resolution(&mut self, safe_only: bool, tag_filter: Option<&str>) {
-        let read_db = match self.witch.as_mut() {
-            Some(w) => w.read_db(),
-            None => {
-                self.status_message = Some("Database not available".to_string());
-                return;
-            }
-        };
+        let read_db = self.witch.read_db();
 
         // Load compound signal groups filtered by safety classification and tag
         let groups = read_db.get_compound_signal_groups_by_safety(safe_only, tag_filter)
@@ -43,15 +37,13 @@ impl App {
         let clusters = compound_split_v2::CompoundSplitClustersV2::new(groups);
 
         // Start transaction ONCE for entire modal
-        if let Some(ref mut witch) = self.witch {
-            let mode_str = if safe_only { "safe" } else { "review" };
-            let _ = witch.start_transaction(&format!("Compound tag split ({})", mode_str));
-        }
+        let mode_str = if safe_only { "safe" } else { "review" };
+        let _ = self.witch.start_transaction(&format!("Compound tag split ({})", mode_str));
 
         // Load the first group into modal data
         let first_group = clusters.all_groups()[0].clone();
         let data = {
-            let read_db = self.witch.as_mut().unwrap().read_db();
+            let read_db = self.witch.read_db();
             compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, &read_db)
         };
 
@@ -60,9 +52,7 @@ impl App {
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
                 // Discard the transaction we just started
-                if let Some(ref mut witch) = self.witch {
-                    let _ = super::super::operator_decisions::discard_transaction(witch);
-                }
+                let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
                 return;
             }
         };
@@ -141,10 +131,7 @@ impl App {
 
         // Query audio files by inodes
         let audio_files = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => return,
-            };
+            let read_db = self.witch.read_db();
             read_db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
                 .unwrap_or_default()
         };
@@ -259,9 +246,8 @@ impl App {
 
     /// Collect (tag_name, canonical_value) pairs from staged EmitCanonicalTag decisions.
     fn staged_canonical_values(&self) -> Vec<(String, String)> {
-        let Some(ref witch) = self.witch else { return Vec::new() };
-        witch.decision_keys().iter().filter_map(|key| {
-            let decision = witch.get_decision(key)?;
+        self.witch.decision_keys().iter().filter_map(|key| {
+            let decision = self.witch.get_decision(key)?;
             decision.mutations.iter().find_map(|m| {
                 if let crate::meta::mutations::Mutation::EmitCanonicalTag(ref ct) = m {
                     Some((ct.tag_name.clone(), ct.canonical_value.clone()))
@@ -297,9 +283,7 @@ impl App {
         };
 
         // Stage the decision via operator_decisions
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
-        }
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
     }
 
     /// Stage a canonicalize decision (mark compound value as canonical, don't split).
@@ -318,9 +302,7 @@ impl App {
         };
 
         // Stage the decision via operator_decisions
-        if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
-        }
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
     }
 
     /// Start progressive worker to stage ALL compound splits.
@@ -368,11 +350,7 @@ impl App {
         };
 
         let data = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => return false,
-            };
-
+            let read_db = self.witch.read_db();
             compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &read_db)
         };
 
@@ -390,11 +368,9 @@ impl App {
         );
 
         // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
-                state.restore_from_mutations(&decision.mutations);
-                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
-            }
+        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
+            state.restore_from_mutations(&decision.mutations);
+            state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
         }
 
         // Update state in existing view
@@ -421,11 +397,7 @@ impl App {
         let (group_index, total) = (clusters.current_index(), clusters.total());
 
         let data = {
-            let read_db = match self.witch.as_mut() {
-                Some(w) => w.read_db(),
-                None => return false,
-            };
-
+            let read_db = self.witch.read_db();
             compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &read_db)
         };
 
@@ -443,11 +415,9 @@ impl App {
         );
 
         // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(ref witch) = self.witch {
-            if let Some(decision) = witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
-                state.restore_from_mutations(&decision.mutations);
-                state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
-            }
+        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
+            state.restore_from_mutations(&decision.mutations);
+            state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
         }
 
         self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode };

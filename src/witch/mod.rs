@@ -155,8 +155,8 @@ pub struct Witch {
 
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
-    /// None during migration phase (before db_thread is safe to spawn).
-    db_thread_handle: Option<DbThreadHandle>,
+    /// Spawned at construction time — always present.
+    db_thread_handle: DbThreadHandle,
 
     // -------------------------------------------------------------------------
     // Worker Performance Stats (Thread-Safe, Isolated)
@@ -233,9 +233,10 @@ impl Witch {
         // Channel for receiving task results
         let (result_tx, result_rx) = mpsc::channel();
 
-        // NOTE: db_thread is NOT spawned here. It is spawned later via spawn_db_thread()
-        // after migrations complete. This ensures the schema is correct before
-        // db_thread opens its write connection.
+        // Spawn db_thread early. Migrations coexist with an idle db_thread — they open
+        // their own write connections on rayon threads, and in WAL mode concurrent
+        // connections work with busy_timeout. The db_thread sits idle on recv() during migrations.
+        crate::logging::log_general("[WITCH] Spawning db_thread");
 
         // Create isolated worker stats only when timing instrumentation is enabled
         let worker_stats_shared = if config::is_timing_enabled() {
@@ -267,7 +268,7 @@ impl Witch {
             completed_at: None,
             pending_transaction: None,
             read_only_conn: None,
-            db_thread_handle: None,  // Spawned later via spawn_db_thread()
+            db_thread_handle: db_thread::spawn(),
             worker_stats_shared,
             ui_read_cache: UiReadCache::new(),
             observed_corpus_inodes: HashMap::new(),
@@ -325,24 +326,6 @@ impl Witch {
             let mut guard = shared.write().expect("SharedConfig lock poisoned");
             *guard = new_config;
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // DB Thread Lifecycle
-    // -------------------------------------------------------------------------
-
-    /// Spawn the db_thread. Called after migrations complete.
-    ///
-    /// # Panics
-    ///
-    /// Panics if db_thread is already spawned.
-    pub fn spawn_db_thread(&mut self) {
-        assert!(
-            self.db_thread_handle.is_none(),
-            "db_thread already spawned"
-        );
-        crate::logging::log_general("[WITCH] Spawning db_thread");
-        self.db_thread_handle = Some(db_thread::spawn());
     }
 
     // -------------------------------------------------------------------------
@@ -1301,15 +1284,13 @@ impl Witch {
     // Database Maintenance (Pre-db_thread, Witness-Guarded)
     // -------------------------------------------------------------------------
 
-    /// Execute VACUUM on the database.
+    /// Execute VACUUM on the database via db_thread's write connection.
     ///
-    /// Runs synchronously before db_thread is spawned. Call only after
-    /// operator approval (VacuumPrompt view).
-    pub fn execute_vacuum(&mut self, db_path: &std::path::Path) -> anyhow::Result<()> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        conn.execute_batch("VACUUM")?;
-        drop(conn);
-        Ok(())
+    /// Blocks until VACUUM completes. Call only after operator approval
+    /// (VacuumPrompt view).
+    pub fn execute_vacuum(&mut self) -> anyhow::Result<()> {
+        self.read_only_conn = None; // Defensive: ensure no other connections
+        crate::db_thread::execute_vacuum().map_err(|e| anyhow::anyhow!(e))
     }
 
     // -------------------------------------------------------------------------
@@ -1384,28 +1365,22 @@ impl Witch {
         if self.in_flight > 0 {
             return true;
         }
-        // Check db_thread queue (if spawned)
-        if let Some(ref handle) = self.db_thread_handle {
-            if !handle.queue_empty() {
-                return true;
-            }
+        // Check db_thread queue
+        if !self.db_thread_handle.queue_empty() {
+            return true;
         }
         false
     }
 
     /// Get current DB thread stats for UI display.
-    /// Returns None if db_thread not spawned or timing instrumentation is disabled.
+    /// Returns None if timing instrumentation is disabled.
     pub fn db_stats(&self) -> Option<DbThreadStats> {
-        self.db_thread_handle.as_ref()?.stats()
+        self.db_thread_handle.stats()
     }
 
     /// Get pending DB write queue depth (always available, no timing guard).
-    /// Returns 0 if db_thread not spawned.
     pub fn db_queue_depth(&self) -> u64 {
-        self.db_thread_handle
-            .as_ref()
-            .map(|h| h.queue_depth())
-            .unwrap_or(0)
+        self.db_thread_handle.queue_depth()
     }
 
     /// Get current worker performance stats for UI display.
@@ -1459,13 +1434,8 @@ impl Drop for Witch {
         }
 
         // Step 4: Shut down the DB thread (it will checkpoint and close write connection)
-        // Only if db_thread was spawned (may not be if shutdown during migrations)
-        if self.db_thread_handle.is_some() {
-            crate::db_thread::request_shutdown();
-            if let Some(ref mut handle) = self.db_thread_handle {
-                handle.join();
-            }
-        }
+        crate::db_thread::request_shutdown();
+        self.db_thread_handle.join();
 
         // Step 5: Shut down the logging thread last so all shutdown messages get logged
         crate::logging::request_shutdown();

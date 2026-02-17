@@ -46,7 +46,7 @@ use crate::ui::{
 /// The active view and its state. One variant is active at a time.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ActiveView {
-    // Startup views (before db_thread, before observing)
+    // Startup views (before observing)
     MigrationApproval(MigrationApprovalState),
     VacuumPrompt(VacuumPromptState),
 

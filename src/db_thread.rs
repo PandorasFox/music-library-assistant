@@ -132,6 +132,19 @@ pub fn wait_for_queue_drain() -> bool {
     }
 }
 
+/// Execute VACUUM on the db_thread's write connection.
+///
+/// Blocks the caller until VACUUM completes. Called during startup before
+/// any read-only connections exist, so the write connection has exclusive access.
+pub fn execute_vacuum() -> Result<(), String> {
+    let sender = SIGNAL_SENDER.get()
+        .ok_or_else(|| "db_thread not initialized".to_string())?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    sender.mark_enqueued();
+    let _ = sender.tx.send(SignalWriteOp::ExecuteVacuum { result_tx: tx });
+    rx.recv().map_err(|_| "db_thread disconnected during VACUUM".to_string())?
+}
+
 /// Signal the DB thread to close its connection and exit.
 ///
 /// Called by `Witch::drop()`. After this, further signal sends will still
@@ -356,6 +369,11 @@ enum SignalWriteOp {
     // =========================================================================
     // Shutdown
     // =========================================================================
+
+    /// Execute VACUUM on the write connection. Handled in main loop (like Shutdown).
+    ExecuteVacuum {
+        result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
 
     /// Shutdown sentinel — close DB connection and exit thread.
     Shutdown,
@@ -989,6 +1007,19 @@ fn run_db_thread(
 
     loop {
         match signal_rx.recv() {
+            Ok(SignalWriteOp::ExecuteVacuum { result_tx }) => {
+                crate::logging::log_general("[DB_THREAD] Executing VACUUM");
+                let result = db.conn().execute_batch("VACUUM")
+                    .map_err(|e| format!("{}", e));
+                if result.is_ok() {
+                    crate::logging::log_general("[DB_THREAD] VACUUM completed");
+                }
+                let _ = result_tx.send(result);
+                stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                if stats.queue_depth.load(Ordering::Relaxed) == 0 {
+                    stats.queue_empty.store(true, Ordering::Release);
+                }
+            }
             Ok(SignalWriteOp::Shutdown) => {
                 crate::logging::log_general(
                     "[DB_THREAD] Shutdown requested, closing database connection",
@@ -1357,7 +1388,8 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        // Shutdown is handled in the run_db_thread loop, never reaches here
+        // ExecuteVacuum and Shutdown are handled in the run_db_thread loop, never reach here
+        SignalWriteOp::ExecuteVacuum { .. } => unreachable!("ExecuteVacuum handled in run_db_thread loop"),
         SignalWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }
 }

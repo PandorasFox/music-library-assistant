@@ -599,24 +599,13 @@ mod tests {
     #[test]
     fn test_migration_registry_baseline() {
         let registry = MigrationRegistry::new();
+        let latest = registry.latest_version();
 
-        // v1→v2: tags_version + dirty_inodes
-        // v2→v3: inode column in signals table
-        // v3→v4: per-signal typed tables
-        // v4→v5: drop old signals table
-        // v5→v6: re-seed dirty inodes for compound tag detection
-        // v6→v7: re-seed after split rule priority reorder
-        // v7→v8: uppercase all tag names
-        // v8→v9: has_pictures column in audio_info
-        // v9→v10: rename files.source to files.zone
-        // v10→v11: inbox signal tables
-        // v11→v12: zone columns in signal_moved_file
-        // v12→v13: inbox corpus match signal table
-        // v13→v14: inbox tag canonicity signal table
-        // v14→v15: data_hash columns, observation generations, shit_format dirty inodes
-        assert_eq!(registry.latest_version(), 15);
-        assert_eq!(registry.pending_migrations(1).len(), 14);
-        assert_eq!(registry.pending_migrations(14).len(), 1);
-        assert!(registry.pending_migrations(15).is_empty());
+        // Derived from latest_version so this test stays correct as migrations are added.
+        assert!(latest >= 16, "expected at least version 16, got {}", latest);
+        let migration_count = (latest - 1) as usize; // v1 is base, each migration bumps by 1
+        assert_eq!(registry.pending_migrations(1).len(), migration_count);
+        assert_eq!(registry.pending_migrations(latest - 1).len(), 1);
+        assert!(registry.pending_migrations(latest).is_empty());
     }
 }

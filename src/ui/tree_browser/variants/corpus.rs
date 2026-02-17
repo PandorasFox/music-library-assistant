@@ -131,7 +131,7 @@ impl CorpusBrowserVariant {
         // If we have search results visible, capture navigation keys
         if !self.search.matches.is_empty() {
             match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
+                KeyCode::Up => {
                     if !self.match_selection_mode {
                         self.match_selection_mode = true;
                         self.match_selection_idx = 0;
@@ -139,7 +139,7 @@ impl CorpusBrowserVariant {
                     self.match_selection_up();
                     return TreeBrowserAction::None;
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                KeyCode::Down => {
                     if !self.match_selection_mode {
                         self.match_selection_mode = true;
                         self.match_selection_idx = 0;
@@ -147,8 +147,8 @@ impl CorpusBrowserVariant {
                     self.match_selection_down();
                     return TreeBrowserAction::None;
                 }
-                // Consume h/l to prevent tree navigation when search results visible
-                KeyCode::Char('h') | KeyCode::Char('l') | KeyCode::Left | KeyCode::Right => {
+                // Consume Left/Right to prevent tree navigation when search results visible
+                KeyCode::Left | KeyCode::Right => {
                     return TreeBrowserAction::None;
                 }
                 _ => {}
@@ -199,7 +199,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             // Up/Down navigate search results (if any), or do nothing
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if !self.search.matches.is_empty() {
                     // Enter match selection mode and navigate
                     if !self.match_selection_mode {
@@ -210,7 +210,7 @@ impl CorpusBrowserVariant {
                 }
                 TreeBrowserAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if !self.search.matches.is_empty() {
                     // Enter match selection mode and navigate
                     if !self.match_selection_mode {
@@ -219,11 +219,6 @@ impl CorpusBrowserVariant {
                     }
                     self.match_selection_down();
                 }
-                TreeBrowserAction::None
-            }
-            // hjkl for navigation should not pass through
-            KeyCode::Char('h') | KeyCode::Char('l') => {
-                // Consume these to prevent tree browser navigation
                 TreeBrowserAction::None
             }
             // Arrow keys for cursor navigation in text input
@@ -307,11 +302,11 @@ impl CorpusBrowserVariant {
         nav: &mut TreeNavigator,
     ) -> TreeBrowserAction {
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.match_selection_up();
                 TreeBrowserAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.match_selection_down();
                 TreeBrowserAction::None
             }

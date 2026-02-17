@@ -271,6 +271,45 @@ impl UnifiedTagEditorState {
     // Query Methods
     // ========================================================================
 
+    /// Build a stable decision key item from the mutations being staged.
+    ///
+    /// Derives the key from the mutation content itself (inodes + tag names),
+    /// so it's collision-free across editor sessions and works for individual,
+    /// aggregated, directory, and search-result editing contexts alike.
+    ///
+    /// Same inode + same tags = overwrites (re-editing the same thing).
+    /// Same inode + different tags = coexists (separate decisions pile up).
+    pub fn decision_key_item(&self, mutations: &[Mutation]) -> String {
+        use std::collections::BTreeSet;
+
+        let mut inodes = BTreeSet::new();
+        let mut tag_names = BTreeSet::new();
+
+        for m in mutations {
+            if let Mutation::ApplyTagOps(ref atm) = m {
+                for op in &atm.ops {
+                    inodes.insert(op.inode);
+                    tag_names.insert(op.tag_name.to_uppercase());
+                }
+            }
+        }
+
+        let inode_part: String = inodes.iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let tags_part: String = tag_names.into_iter()
+            .collect::<Vec<_>>()
+            .join(",");
+
+        if tags_part.is_empty() {
+            inode_part
+        } else {
+            format!("{}:{}", inode_part, tags_part)
+        }
+    }
+
     /// Get a label for the current item (for transaction decision labels)
     pub fn current_item_label(&self) -> String {
         match &self.context {

@@ -86,11 +86,11 @@ impl ShitFormatPreviewState {
 
         match key.code {
             // Scroll file list
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.scroll = self.scroll.saturating_sub(1);
                 ShitFormatPreviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 let max = total_files.saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
@@ -108,7 +108,7 @@ impl ShitFormatPreviewState {
             }
 
             // Bitrate adjustment (only when on lossy buttons, and not in FLAC capture mode)
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
                     || self.selected_button == SelectedButton::ConvertAll;
                 if on_lossy_button && !self.cached_data.lossy_to_flac {
@@ -118,7 +118,7 @@ impl ShitFormatPreviewState {
                 }
                 ShitFormatPreviewAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
                     || self.selected_button == SelectedButton::ConvertAll;
                 if on_lossy_button && !self.cached_data.lossy_to_flac {

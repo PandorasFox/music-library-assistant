@@ -176,13 +176,13 @@ impl InboxViewState {
                 }
             }
 
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
                 InboxAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if !self.entries.is_empty() && self.selected < self.entries.len() - 1 {
                     self.selected += 1;
                 }

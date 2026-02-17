@@ -51,21 +51,21 @@ pub fn handle_key(
 
     // Common navigation keys (only when variant doesn't capture)
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => {
+        KeyCode::Up => {
             nav.move_up();
             variant.on_cursor_move(nav);
             return TreeBrowserAction::None;
         }
-        KeyCode::Down | KeyCode::Char('j') => {
+        KeyCode::Down => {
             nav.move_down();
             variant.on_cursor_move(nav);
             return TreeBrowserAction::None;
         }
-        KeyCode::Right | KeyCode::Char('l') => {
+        KeyCode::Right => {
             nav.expand_current();
             return TreeBrowserAction::None;
         }
-        KeyCode::Left | KeyCode::Char('h') => {
+        KeyCode::Left => {
             nav.collapse_or_parent();
             return TreeBrowserAction::None;
         }

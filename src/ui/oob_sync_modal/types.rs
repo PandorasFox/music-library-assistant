@@ -193,13 +193,13 @@ impl OobSyncState {
                 OobSyncAction::None
             }
             // Up/Down: navigate file list (regardless of focus)
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.current_file > 0 {
                     self.current_file -= 1;
                 }
                 OobSyncAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.current_file + 1 < self.files.len() {
                     self.current_file += 1;
                 }
@@ -207,13 +207,13 @@ impl OobSyncState {
             }
 
             // Left/Right: navigate buttons when focused on buttons pane
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.left();
                 }
                 OobSyncAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.right();
                 }

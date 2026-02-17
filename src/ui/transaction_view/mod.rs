@@ -23,6 +23,8 @@ pub struct TransactionViewState {
     pub cursor: usize,
     pub scroll: usize,
     pub button_focus: TransactionButtonFocus,
+    /// Whether the button row has focus (vs the decision list).
+    pub buttons_focused: bool,
     /// When set, a confirmation popup is shown for removing this decision.
     pub pending_removal: Option<DecisionKey>,
 }
@@ -33,17 +35,20 @@ impl TransactionViewState {
             cursor: 0,
             scroll: 0,
             button_focus: TransactionButtonFocus::Confirm,
+            buttons_focused: false,
             pending_removal: None,
         }
     }
 
     /// Move button focus left (Confirm -> Discard).
     fn focus_left(&mut self) {
+        self.buttons_focused = true;
         self.button_focus = TransactionButtonFocus::Discard;
     }
 
     /// Move button focus right (Discard -> Confirm).
     fn focus_right(&mut self) {
+        self.buttons_focused = true;
         self.button_focus = TransactionButtonFocus::Confirm;
     }
 }
@@ -82,13 +87,15 @@ impl TransactionViewState {
         match key.code {
             KeyCode::Tab => TransactionViewAction::CycleNext,
             KeyCode::BackTab => TransactionViewAction::CyclePrev,
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Up => {
+                self.buttons_focused = false;
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 TransactionViewAction::None
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Down => {
+                self.buttons_focused = false;
                 if decision_count > 0 && self.cursor < decision_count.saturating_sub(1) {
                     self.cursor += 1;
                 }
@@ -103,8 +110,8 @@ impl TransactionViewState {
                 self.focus_right();
                 TransactionViewAction::None
             }
-            // Enter activates focused button
-            KeyCode::Enter => {
+            // Enter activates focused button (only when buttons are focused)
+            KeyCode::Enter if self.buttons_focused => {
                 if decision_count == 0 {
                     return TransactionViewAction::None;
                 }

@@ -103,13 +103,13 @@ impl MovedFileState {
 
         match key.code {
             // Up/Down: navigate file list
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.current_file > 0 {
                     self.current_file -= 1;
                 }
                 MovedFileAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.current_file + 1 < self.files.len() {
                     self.current_file += 1;
                 }
@@ -117,13 +117,13 @@ impl MovedFileState {
             }
 
             // Left/Right: navigate buttons when focused on buttons pane
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.left();
                 }
                 MovedFileAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.right();
                 }

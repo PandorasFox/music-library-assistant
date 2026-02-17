@@ -100,11 +100,11 @@ impl InboxCorpusMatchPreviewState {
         }
 
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::List => {
+            KeyCode::Up if self.focus_pane == FocusPane::List => {
                 self.scroll = self.scroll.saturating_sub(1);
                 InboxCorpusMatchPreviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::List => {
+            KeyCode::Down if self.focus_pane == FocusPane::List => {
                 let max = self.cached_data.entries.len().saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
@@ -121,11 +121,11 @@ impl InboxCorpusMatchPreviewState {
                 InboxCorpusMatchPreviewAction::None
             }
 
-            KeyCode::Left | KeyCode::Char('h') if self.focus_pane == FocusPane::Buttons => {
+            KeyCode::Left if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.left();
                 InboxCorpusMatchPreviewAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') if self.focus_pane == FocusPane::Buttons => {
+            KeyCode::Right if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.right();
                 InboxCorpusMatchPreviewAction::None
             }

@@ -813,12 +813,12 @@ impl InsightsViewState {
         match key.code {
             KeyCode::Esc => InsightsAction::RequestQuit,
 
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.navigate_up();
                 InsightsAction::None
             }
 
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.navigate_down();
                 InsightsAction::None
             }

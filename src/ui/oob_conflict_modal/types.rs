@@ -285,14 +285,14 @@ impl OobConflictState {
             }
 
             // File navigation within active bucket
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.active_bucket_state_mut().navigate_up() {
                     OobConflictAction::Navigate
                 } else {
                     OobConflictAction::None
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.active_bucket_state_mut().navigate_down() {
                     OobConflictAction::Navigate
                 } else {
@@ -315,7 +315,7 @@ impl OobConflictState {
             }
 
             // Resolution button toggle (resolvable buckets only, when focused on buttons)
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Left | KeyCode::Right => {
                 if self.focus_pane == FocusPane::Buttons && self.active_bucket.is_resolvable() {
                     self.selected_button = self.selected_button.toggle();
                 }

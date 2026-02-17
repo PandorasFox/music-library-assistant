@@ -161,11 +161,11 @@ impl ManualReviewState {
                     self.stash_confirm = None;
                     ManualReviewAction::CancelStash
                 }
-                KeyCode::Left | KeyCode::Char('h') => {
+                KeyCode::Left => {
                     *button = button.prev();
                     ManualReviewAction::None
                 }
-                KeyCode::Right | KeyCode::Char('l') => {
+                KeyCode::Right => {
                     *button = button.next();
                     ManualReviewAction::None
                 }
@@ -187,11 +187,11 @@ impl ManualReviewState {
             KeyCode::Esc => ManualReviewAction::Cancel,
 
             // File navigation
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.file_cursor = self.file_cursor.saturating_sub(1);
                 ManualReviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if let Some(group) = self.current_group_ref() {
                     let max = group.files.len().saturating_sub(1);
                     if self.file_cursor < max {

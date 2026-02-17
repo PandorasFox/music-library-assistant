@@ -158,7 +158,7 @@ impl ConfigEditorState {
         let item_count = self.current_collection_len();
 
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 match self.collection_pos {
                     Some(CollectionPosition::Item(0)) => {
                         // Exit collection mode, stay on field
@@ -178,7 +178,7 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 match self.collection_pos {
                     Some(CollectionPosition::Item(n)) => {
                         if n + 1 < item_count {
@@ -344,7 +344,7 @@ impl ConfigEditorState {
         }
 
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
@@ -354,7 +354,7 @@ impl ConfigEditorState {
                 self.focus = EditorFocus::Buttons;
                 ConfigEditorAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.cursor + 1 < total {
                     self.cursor += 1;
                 }

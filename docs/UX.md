@@ -25,6 +25,16 @@ This symmetry accommodates non-linear workflows. Librarians may need to revisit 
 
 **Key principle**: Librarians trust us to hold their state. Navigation should never lose work.
 
+### Arrow Keys Only — No Vim-Style Navigation
+
+**Navigation must use arrow keys exclusively.** Do not bind `h`/`j`/`k`/`l` or any other alphanumeric keys as navigation alternatives. Alphanumeric keys are reserved for data input and shortcuts, never for directional movement.
+
+- **Up/Down/Left/Right arrows**: The only valid navigation keys
+- **hjkl**: Not valid navigation inputs — do not add these as alternatives
+- **Alphanumeric keys**: Reserved for data input (typing into fields) or action shortcuts (e.g., `x` to remove, `n` to create)
+
+This is a hard rule. Vim-style navigation keeps getting introduced and must be actively rejected.
+
 ## Pane Focus Indicators
 
 - Focused pane should have highlighted border (typically yellow)

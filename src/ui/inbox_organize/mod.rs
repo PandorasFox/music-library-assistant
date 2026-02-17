@@ -209,19 +209,19 @@ impl InboxOrganizeState {
         match key.code {
             KeyCode::Esc => InboxOrganizeAction::Cancel,
 
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.corpus_navigator.move_up();
                 InboxOrganizeAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.corpus_navigator.move_down();
                 InboxOrganizeAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 self.corpus_navigator.expand_current();
                 InboxOrganizeAction::None
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 self.corpus_navigator.collapse_or_parent();
                 InboxOrganizeAction::None
             }
@@ -291,11 +291,11 @@ impl InboxOrganizeState {
                 self.phase = OrganizePhase::BrowsingCorpus;
                 InboxOrganizeAction::None
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 self.popup_selection = self.popup_selection.prev();
                 InboxOrganizeAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 self.popup_selection = self.popup_selection.next();
                 InboxOrganizeAction::None
             }

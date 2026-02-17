@@ -270,14 +270,14 @@ impl DirectoryClusterPreviewState {
 
         match key.code {
             // Navigate options (only when options focused)
-            KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::Options => {
+            KeyCode::Up if self.focus_pane == FocusPane::Options => {
                 if self.selected_option_index > 0 {
                     self.selected_option_index -= 1;
                     self.recompute_stash_files();
                 }
                 DirectoryClusterPreviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::Options => {
+            KeyCode::Down if self.focus_pane == FocusPane::Options => {
                 if self.selected_option_index + 1 < self.current_options.len() {
                     self.selected_option_index += 1;
                     self.recompute_stash_files();
@@ -286,11 +286,11 @@ impl DirectoryClusterPreviewState {
             }
 
             // Navigate file list (when file list focused)
-            KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::FileList => {
+            KeyCode::Up if self.focus_pane == FocusPane::FileList => {
                 self.file_cursor = self.file_cursor.saturating_sub(1);
                 DirectoryClusterPreviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::FileList => {
+            KeyCode::Down if self.focus_pane == FocusPane::FileList => {
                 if self.file_cursor + 1 < self.stash_files.len() {
                     self.file_cursor += 1;
                 }

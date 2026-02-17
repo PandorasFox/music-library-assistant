@@ -123,14 +123,14 @@ impl EmbedAlbumArtPreviewState {
 
             KeyCode::Enter => EmbedAlbumArtPreviewAction::ConfirmEmbedAll,
 
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.scroll > 0 {
                     self.scroll -= 1;
                 }
                 EmbedAlbumArtPreviewAction::None
             }
 
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.scroll + 1 < self.cached_data.directory_count() {
                     self.scroll += 1;
                 }

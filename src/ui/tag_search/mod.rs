@@ -158,11 +158,11 @@ impl TagSearchState {
             }
 
             // Navigate results
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.results_select_prev();
                 TagSearchAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.results_select_next();
                 TagSearchAction::None
             }

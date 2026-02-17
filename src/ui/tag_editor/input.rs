@@ -157,9 +157,10 @@ impl UnifiedTagEditorState {
                             StageChangesButton::Yes => {
                                 // Stage decision via proper Enter keypress, then navigate
                                 let mutations = self.generate_mutations_for_current_item();
+                                let key_item = self.decision_key_item(&mutations);
                                 self.modal = None;
                                 UnifiedTagEditorAction::StageDecisionAndNavigate {
-                                    key: DecisionKey::new(DecisionSource::TagEdit, self.current_item_idx.to_string()),
+                                    key: DecisionKey::new(DecisionSource::TagEdit, key_item),
                                     mutations,
                                     direction,
                                 }
@@ -399,8 +400,9 @@ impl UnifiedTagEditorState {
                             if current_unstaged {
                                 // Stage current file's changes, then open review
                                 let mutations = self.generate_mutations_for_current_item();
+                                let key_item = self.decision_key_item(&mutations);
                                 UnifiedTagEditorAction::StageDecisionAndReview {
-                                    key: DecisionKey::new(DecisionSource::TagEdit, self.current_item_idx.to_string()),
+                                    key: DecisionKey::new(DecisionSource::TagEdit, key_item),
                                     mutations,
                                 }
                             } else if has_anything {

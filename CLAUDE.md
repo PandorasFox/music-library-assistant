@@ -14,6 +14,10 @@ fs::remove_file (and similar logic that can potentially unlink inodes or free up
 
 This is still alpha~beta software; breaking changes are encouraged - stop focusing on backwards-compatibility and 'legacy' compatibility.
 
+### Navigation Key Bindings
+
+**Arrow keys only for navigation. Never bind hjkl or any alphanumeric keys as navigation alternatives.** Alphanumeric keys are reserved for data input and action shortcuts. This applies to every UI component — modals, views, browsers, editors. See `docs/UX.md` for full details.
+
 ### Database Access Patterns
 
 MM enforces strict separation between read-only UI queries and write mutations:

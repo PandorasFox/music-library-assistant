@@ -148,21 +148,21 @@ impl TransactionReviewState {
 
         // Normal mode
         match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 self.focus_left();
                 TransactionReviewAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 self.focus_right();
                 TransactionReviewAction::None
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 TransactionReviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 // Cursor bounds checked at render time against actual decision count
                 self.cursor = self.cursor.saturating_add(1);
                 TransactionReviewAction::None
@@ -497,7 +497,7 @@ fn render_buttons_and_hints(f: &mut Frame, button_area: Rect, hint_area: Rect, s
 }
 
 /// Render diff entries with red (old) → green (new) coloring.
-fn render_diff_entries(f: &mut Frame, area: Rect, entries: &[DiffEntry]) {
+pub(super) fn render_diff_entries(f: &mut Frame, area: Rect, entries: &[DiffEntry]) {
     if entries.is_empty() {
         let empty = Paragraph::new("No changes")
             .style(Style::default().fg(Color::DarkGray))

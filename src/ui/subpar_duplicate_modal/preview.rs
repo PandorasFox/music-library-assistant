@@ -108,11 +108,11 @@ impl SubparDuplicatePreviewState {
 
         match key.code {
             // Scroll file list (only when list focused)
-            KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::List => {
+            KeyCode::Up if self.focus_pane == FocusPane::List => {
                 self.scroll = self.scroll.saturating_sub(1);
                 SubparDuplicatePreviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::List => {
+            KeyCode::Down if self.focus_pane == FocusPane::List => {
                 let max = self.cached_data.files.len().saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
@@ -130,11 +130,11 @@ impl SubparDuplicatePreviewState {
             }
 
             // Button navigation (when buttons focused)
-            KeyCode::Left | KeyCode::Char('h') if self.focus_pane == FocusPane::Buttons => {
+            KeyCode::Left if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.left(has_files);
                 SubparDuplicatePreviewAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') if self.focus_pane == FocusPane::Buttons => {
+            KeyCode::Right if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.right(has_files);
                 SubparDuplicatePreviewAction::None
             }

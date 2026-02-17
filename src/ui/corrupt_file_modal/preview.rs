@@ -64,11 +64,11 @@ impl CorruptFilePreviewState {
 
         match key.code {
             // Scroll file list
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.scroll = self.scroll.saturating_sub(1);
                 CorruptFilePreviewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 let max = self.cached_data.files.len().saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
@@ -86,11 +86,11 @@ impl CorruptFilePreviewState {
             }
 
             // Button navigation
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 self.selected_button.left(has_files);
                 CorruptFilePreviewAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 self.selected_button.right(has_files);
                 CorruptFilePreviewAction::None
             }

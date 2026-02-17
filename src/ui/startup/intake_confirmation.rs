@@ -268,11 +268,11 @@ impl IntakeConfirmationState {
         match key.code {
             KeyCode::Enter => IntakeConfirmationAction::Confirmed,
             KeyCode::Esc => IntakeConfirmationAction::Skipped,
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
                 IntakeConfirmationAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 let max_scroll = self.total_list_lines().saturating_sub(visible_height);
                 if self.scroll_offset < max_scroll {
                     self.scroll_offset += 1;

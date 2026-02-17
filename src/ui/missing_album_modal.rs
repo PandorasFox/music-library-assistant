@@ -220,13 +220,13 @@ impl MissingAlbumState {
             KeyCode::BackTab => MissingAlbumAction::NavigateGroup(false),
 
             // Track list navigation (List focus)
-            KeyCode::Up | KeyCode::Char('k') if self.focus_pane == FocusPane::List => {
+            KeyCode::Up if self.focus_pane == FocusPane::List => {
                 if self.track_cursor > 0 {
                     self.track_cursor -= 1;
                 }
                 MissingAlbumAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') if self.focus_pane == FocusPane::List => {
+            KeyCode::Down if self.focus_pane == FocusPane::List => {
                 if let Some(group) = self.current_group_data() {
                     if self.track_cursor + 1 < group.tracks.len() {
                         self.track_cursor += 1;
@@ -236,11 +236,11 @@ impl MissingAlbumState {
             }
 
             // Resolution button cycling (Buttons focus)
-            KeyCode::Left | KeyCode::Char('h') if self.focus_pane == FocusPane::Buttons => {
+            KeyCode::Left if self.focus_pane == FocusPane::Buttons => {
                 self.selected_resolution = self.selected_resolution.prev();
                 MissingAlbumAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') if self.focus_pane == FocusPane::Buttons => {
+            KeyCode::Right if self.focus_pane == FocusPane::Buttons => {
                 self.selected_resolution = self.selected_resolution.next();
                 MissingAlbumAction::None
             }

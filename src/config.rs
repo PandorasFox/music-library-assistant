@@ -40,6 +40,10 @@ pub struct Opinions {
     /// Seconds of idle time before auto-rescanning corpus/inbox for filesystem changes.
     /// Default: 180. Set to 0 to disable.
     pub idle_rescan_interval_secs: u64,
+    /// When true, keep one persistent transaction open across modal interactions.
+    /// Decisions accumulate in a Transaction tab; commit/discard from there.
+    /// Default: false.
+    pub leave_transactions_open: bool,
 }
 
 
@@ -310,6 +314,7 @@ impl Default for Opinions {
             duplicate_analysis: DuplicateAnalysisOpinions::default(),
             inbox_organize: InboxOrganizeOpinions::default(),
             idle_rescan_interval_secs: 180,
+            leave_transactions_open: false,
         }
     }
 }
@@ -743,6 +748,11 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     // --- Idle Rescan Interval ---
     if new_config.opinions.idle_rescan_interval_secs != old_config.opinions.idle_rescan_interval_secs {
         set_or_create_int_node(opinions_doc, "idle-rescan-interval", new_config.opinions.idle_rescan_interval_secs as i64);
+    }
+
+    // --- Leave Transactions Open ---
+    if new_config.opinions.leave_transactions_open != old_config.opinions.leave_transactions_open {
+        set_or_create_bool_node(opinions_doc, "leave-transactions-open", new_config.opinions.leave_transactions_open);
     }
 
     // --- Inbox Organize ---
@@ -1460,6 +1470,13 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                                 if let Some(entry) = child.entries().first() {
                                     if let Some(val) = entry.value().as_i64() {
                                         config.opinions.idle_rescan_interval_secs = val.max(0) as u64;
+                                    }
+                                }
+                            }
+                            "leave-transactions-open" => {
+                                if let Some(entry) = child.entries().first() {
+                                    if let Some(val) = entry.value().as_bool() {
+                                        config.opinions.leave_transactions_open = val;
                                     }
                                 }
                             }

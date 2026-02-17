@@ -257,6 +257,18 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     false),
             ],
         },
+        // Group 11: Advanced
+        ConfigGroup {
+            name: "Advanced",
+            collapsed: false,
+            fields: vec![
+                field("Leave transactions open", "Keep one open transaction; adds Transaction tab to view ring",
+                    ConfigValue::Bool(ops.leave_transactions_open),
+                    ConfigValue::Bool(defaults.leave_transactions_open),
+                    source_for(ops.leave_transactions_open == defaults.leave_transactions_open, "leave-transactions-open"),
+                    false),
+            ],
+        },
     ]
 }
 
@@ -369,6 +381,9 @@ fn apply_field(config: &mut Config, group_name: &str, field: &ConfigField) {
             if let ConfigValue::StringListMap(v) = &field.value {
                 config.opinions.tag_splitting.tag_separators = v.iter().cloned().collect();
             }
+        }
+        ("Advanced", "Leave transactions open") => {
+            if let ConfigValue::Bool(v) = &field.value { config.opinions.leave_transactions_open = *v; }
         }
         _ => {} // Unknown fields are ignored
     }

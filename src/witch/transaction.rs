@@ -4,10 +4,10 @@
 
 use std::collections::HashMap;
 
-use super::types::{
-    DecisionWitness, DiscardSummary, PendingTransaction,
-    TransactionError, WitnessedDecision,
+use crate::meta::decisions::{
+    DiscardSummary, PendingTransaction, TransactionError, WitnessedDecision,
 };
+use super::types::DecisionWitness;
 use crate::corpus::db::types::Zone;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;

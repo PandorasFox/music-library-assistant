@@ -940,7 +940,7 @@ impl App {
                 let commit_result = if let Some(ref mut witch) = self.witch {
                     super::operator_decisions::commit_transaction(witch)
                 } else {
-                    Err(crate::witch::TransactionError::NoActiveTransaction)
+                    Err(crate::meta::decisions::TransactionError::NoActiveTransaction)
                 };
 
                 match commit_result {

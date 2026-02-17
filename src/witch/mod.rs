@@ -39,9 +39,9 @@ mod worker_stats;
 pub use messages::InitialUiState;
 pub use types::{
     CorpusObservationState, DaemonStatus, DecisionWitness,
-    DiscardSummary, EyeState, Migration, MigrationWitness, MutationExecutionWitness,
+    EyeState, Migration, MigrationWitness, MutationExecutionWitness,
     PendingTransaction, SpawnedMutation, Task, TaskExecutionState, TaskExecutionStateSnapshot,
-    TaskLabel, TransactionError, WorkerStats,
+    TaskLabel, WorkerStats,
 };
 // NOTE: confirm_startup_migration() has been removed - Witch now handles witness internally.
 // NOTE: confirm_decision() is deliberately NOT exported.

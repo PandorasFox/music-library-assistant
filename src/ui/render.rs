@@ -15,6 +15,7 @@ use ratatui::{
 
 use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
+use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
 use super::{
     compound_split_v2, config_editor, filter_popup, inbox_view, insights_view, manual_review_modal,
@@ -161,6 +162,14 @@ fn render_content(
     let vname: &str;
 
     match app.view {
+        ActiveView::MigrationApproval(ref state) => {
+            vname = "migration_approval";
+            startup::migrations::render_migration_view(f, area, state);
+        }
+        ActiveView::VacuumPrompt(ref state) => {
+            vname = "vacuum_prompt";
+            startup::vacuum::render_vacuum_view(f, area, state);
+        }
         ActiveView::Progress { .. } => {
             // Never reached - handled separately in render_app() before this function
             vname = "progress";
@@ -418,6 +427,8 @@ fn render_status_bar(
 /// Get a short name for the active view (for perf logging).
 fn view_name(view: &ActiveView) -> &'static str {
     match view {
+        ActiveView::MigrationApproval(_) => "migration_approval",
+        ActiveView::VacuumPrompt(_) => "vacuum_prompt",
         ActiveView::ConfigEditor(_) => "config_editor",
         ActiveView::Insights(_) => "insights",
         ActiveView::Inbox(_) => "inbox",

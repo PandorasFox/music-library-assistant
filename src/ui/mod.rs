@@ -14,7 +14,7 @@
 //! 4. Add render case in `render.rs`
 
 pub(crate) mod active_view;
-mod action_handlers;
+pub(crate) mod action_handlers;
 mod suspended_views;
 mod tag_editor_ops;
 mod tick;
@@ -61,7 +61,9 @@ pub mod progressive_worker;
 // Re-export for convenience
 pub(crate) use active_view::{
     ActiveView, CanonicitySignalKind, ExitConfirmModalState, ExitConfirmAction, FilterOverlay,
-    FilterPopupContext, SuspendedView, TagCanonicityClusters, ViewAction,
+    FilterPopupContext, MigrationAction, MigrationApprovalState, MigrationPhase,
+    SuspendedView, TagCanonicityClusters, VacuumAction, VacuumPhase, VacuumPromptState,
+    ViewAction,
 };
 use types::ProgressStatsUpdater;
 
@@ -108,6 +110,12 @@ pub(crate) struct App {
 
     /// Last lateral view the user was on. Used for returning after modal flows.
     pub(super) last_lateral_view: widgets::LateralView,
+
+    /// Database path, stored for startup flow (vacuum prompt needs it).
+    pub(super) db_path: std::path::PathBuf,
+
+    /// Vacuum threshold from config, stored for startup flow.
+    pub(super) vacuum_threshold: f64,
 }
 
 impl App {
@@ -123,6 +131,8 @@ impl App {
             filter_overlay: None,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Insights,
+            db_path: std::path::PathBuf::new(),
+            vacuum_threshold: 0.0,
         }
     }
 
@@ -209,6 +219,22 @@ impl App {
 
         // Phase 1: borrow view, produce action
         let action = match &mut self.view {
+            ActiveView::MigrationApproval(s) => {
+                let a = match (s.phase, key.code) {
+                    (MigrationPhase::Approval, KeyCode::Enter) => MigrationAction::Approve,
+                    (MigrationPhase::Approval, KeyCode::Esc) => MigrationAction::Cancel,
+                    _ => MigrationAction::None,
+                };
+                ViewAction::MigrationApproval(a)
+            }
+            ActiveView::VacuumPrompt(s) => {
+                let a = match (s.phase, key.code) {
+                    (VacuumPhase::Prompt, KeyCode::Enter) => VacuumAction::Compact,
+                    (VacuumPhase::Prompt, KeyCode::Esc) => VacuumAction::Skip,
+                    _ => VacuumAction::None,
+                };
+                ViewAction::VacuumPrompt(a)
+            }
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
             ActiveView::ConfigEditor(s) => ViewAction::ConfigEditor(s.handle_key(key)),
@@ -268,10 +294,7 @@ impl App {
         };
 
         // Phase 2: dispatch with confirmation flag
-        let is_confirmation = matches!(
-            key.code,
-            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('y') | KeyCode::Char('Y')
-        );
+        let is_confirmation = matches!(key.code, KeyCode::Enter);
         self.dispatch_action(action, is_confirmation);
     }
 
@@ -460,6 +483,79 @@ impl App {
     pub(super) fn read_db(&mut self) -> crate::corpus::db::ReadOnlyDb<'_> {
         self.witch().read_db()
     }
+
+    // =========================================================================
+    // Startup Flow
+    // =========================================================================
+
+    /// Complete startup: spawn db_thread, start observing, open persistent txn,
+    /// and transition to the Progress screen.
+    pub(super) fn complete_startup(&mut self) {
+        let shared = self.shared_config.clone();
+        self.witch().spawn_db_thread();
+        self.witch().set_shared_config(shared);
+        self.witch().start_observing();
+
+        // If leave_transactions_open is enabled, open a persistent transaction at startup
+        if self.open_txn_mode() {
+            if let Some(ref mut witch) = self.witch {
+                let _ = witch.start_transaction("Open");
+            }
+        }
+
+        self.view = ActiveView::Progress {
+            screen: progress_screen::ProgressScreen::new_eyeballing(),
+            eye: eye::Eye::default(),
+        };
+    }
+
+    /// After migrations complete, check if vacuum is needed, otherwise complete startup.
+    pub(super) fn advance_past_migrations(&mut self, db_path: &std::path::Path, vacuum_threshold: f64) {
+        if let Some(prompt_state) = Self::check_vacuum_needed(db_path, vacuum_threshold) {
+            self.view = ActiveView::VacuumPrompt(prompt_state);
+        } else {
+            self.complete_startup();
+        }
+    }
+
+    /// Check if the database needs vacuuming. Returns Some(state) if so.
+    fn check_vacuum_needed(db_path: &std::path::Path, threshold: f64) -> Option<VacuumPromptState> {
+        if threshold <= 0.0 || !db_path.exists() {
+            return None;
+        }
+
+        let conn = rusqlite::Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).ok()?;
+
+        let page_count: u64 = conn.pragma_query_value(None, "page_count", |row| row.get(0)).ok()?;
+        let freelist_count: u64 = conn.pragma_query_value(None, "freelist_count", |row| row.get(0)).ok()?;
+        let page_size: u64 = conn.pragma_query_value(None, "page_size", |row| row.get(0)).ok()?;
+
+        drop(conn);
+
+        if page_count == 0 {
+            return None;
+        }
+
+        let ratio = freelist_count as f64 / page_count as f64;
+        if ratio <= threshold {
+            return None;
+        }
+
+        let pct = (ratio * 100.0).round() as u64;
+        let free_bytes = freelist_count * page_size;
+        let free_mb = free_bytes as f64 / (1024.0 * 1024.0);
+
+        Some(VacuumPromptState {
+            pct,
+            free_mb,
+            db_path: db_path.to_path_buf(),
+            phase: VacuumPhase::Prompt,
+            compacting_rendered: false,
+        })
+    }
 }
 
 // ============================================================================
@@ -519,41 +615,27 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     let force_check = config.opinions.startup.force_check_all_files_at_startup;
     let vacuum_threshold = config.opinions.startup.vacuum_threshold;
     let shared_config = config.into_shared();
-    let mut witch = {
+    let witch = {
         let cfg = crate::config::read_shared_config(&shared_config);
         crate::witch::Witch::with_opinions(&cfg, false, force_check, Some(log_rx))
     };
 
-    if witch.needs_migrations() {
-        startup::run_migrations(&mut terminal, &mut witch)?;
-    }
-
-    // Check if DB compaction would help (after migrations, before db_thread)
-    startup::check_and_prompt_vacuum(
-        &mut terminal,
-        &db_path,
-        vacuum_threshold,
-        &mut witch,
-    )?;
-
-    witch.spawn_db_thread();
-    witch.set_shared_config(shared_config.clone());
-
     let mut app = App::new_with_witch(shared_config, witch);
+    app.vacuum_threshold = vacuum_threshold;
+    app.db_path = db_path.clone();
 
-    app.witch().start_observing();
-
-    // If leave_transactions_open is enabled, open a persistent transaction at startup
-    if app.open_txn_mode() {
-        if let Some(ref mut witch) = app.witch {
-            let _ = witch.start_transaction("Open");
-        }
+    // Determine initial view based on startup state
+    if app.witch.as_ref().map_or(false, |w| w.needs_migrations()) {
+        let descriptions = app.witch.as_ref()
+            .map(|w| w.pending_migration_descriptions())
+            .unwrap_or_default();
+        app.view = ActiveView::MigrationApproval(MigrationApprovalState {
+            descriptions,
+            phase: MigrationPhase::Approval,
+        });
+    } else {
+        app.advance_past_migrations(&db_path, vacuum_threshold);
     }
-
-    app.view = ActiveView::Progress {
-        screen: progress_screen::ProgressScreen::new_eyeballing(),
-        eye: eye::Eye::default(),
-    };
 
     let res = run_app(&mut terminal, &mut app);
 
@@ -593,6 +675,27 @@ fn run_app<B: ratatui::backend::Backend>(
             app.handle_key(esc_key);
         }
 
+        // Tick startup views first (they have their own Witch tick calls)
+        if matches!(app.view, ActiveView::MigrationApproval(_)) {
+            app.tick_migration_approval();
+            // If tick changed the view away from MigrationApproval, skip the rest of
+            // this frame to let the new view render first.
+            if !matches!(app.view, ActiveView::MigrationApproval(_)) {
+                terminal.draw(|f| render(f, app))?;
+                continue;
+            }
+        }
+        if matches!(app.view, ActiveView::VacuumPrompt(_)) {
+            app.tick_vacuum_prompt();
+            if !matches!(app.view, ActiveView::VacuumPrompt(_)) {
+                terminal.draw(|f| render(f, app))?;
+                continue;
+            }
+        }
+
+        // Startup views don't interact with the normal Witch tick / idle rescan
+        let is_startup_view = matches!(app.view, ActiveView::MigrationApproval(_) | ActiveView::VacuumPrompt(_));
+
         // Set idle rescan eligibility based on current view (lateral views only)
         let idle_eligible = matches!(app.view,
             ActiveView::Insights(_)
@@ -605,17 +708,22 @@ fn run_app<B: ratatui::backend::Backend>(
             witch.set_idle_rescan_eligible(idle_eligible);
         }
 
-        // Tick the Witch first
-        let tick_start = std::time::Instant::now();
-        let tick_status = app.witch().tick();
-        let tick_duration = tick_start.elapsed();
-        if tick_duration.as_millis() > 16 {
-            crate::logging::log_perf(format!(
-                "[FRAME DEBUG] witch.tick() took {}ms, drained {} results",
-                tick_duration.as_millis(),
-                tick_status.total_processed
-            ));
-        }
+        // Tick the Witch (skip during startup views — they tick internally as needed)
+        let (tick_status, tick_duration) = if !is_startup_view {
+            let tick_start = std::time::Instant::now();
+            let status = app.witch().tick();
+            let duration = tick_start.elapsed();
+            if duration.as_millis() > 16 {
+                crate::logging::log_perf(format!(
+                    "[FRAME DEBUG] witch.tick() took {}ms, drained {} results",
+                    duration.as_millis(),
+                    status.total_processed
+                ));
+            }
+            (status, duration)
+        } else {
+            (crate::witch::DaemonStatus::default(), std::time::Duration::ZERO)
+        };
 
         app.check_witch_status();
 

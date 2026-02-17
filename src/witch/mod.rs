@@ -38,15 +38,13 @@ mod worker_stats;
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
-    CorpusObservationState, DaemonStatus, DecisionWitness,
+    CorpusObservationState, DaemonStatus,
     EyeState, Migration, MigrationWitness, MutationExecutionWitness,
     PendingTransaction, SpawnedMutation, Task, TaskExecutionState, TaskExecutionStateSnapshot,
     TaskLabel, WorkerStats,
 };
-// NOTE: confirm_startup_migration() has been removed - Witch now handles witness internally.
-// NOTE: confirm_decision() is deliberately NOT exported.
-// All decision authority flows through with_operator_decision() which should
-// ONLY be called from ui/operator_decisions.rs. See types.rs for details.
+// Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
+// and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
 pub use ui_read_cache::UiReadCache;
 
 // Internal imports
@@ -1170,41 +1168,6 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
-    // Operator Decision Scope (Sealed Access)
-    // -------------------------------------------------------------------------
-
-    /// Enter operator decision context.
-    ///
-    /// # Sealed Access Pattern
-    ///
-    /// ⚠️ **ONLY CALL FROM `ui/operator_decisions.rs`** ⚠️
-    ///
-    /// This method creates a `DecisionScope` that provides access to transaction
-    /// operations with an internal `DecisionWitness`. The witness exists only
-    /// within the callback scope and cannot be stored, returned, or passed elsewhere.
-    ///
-    /// All UI code that needs to make decisions should call functions in
-    /// `ui/operator_decisions.rs`, which is the only sanctioned call site for
-    /// this method.
-    ///
-    /// # Example (from operator_decisions.rs only)
-    ///
-    /// ```rust,ignore
-    /// pub fn commit_transaction(witch: &mut Witch) -> Result<(), TransactionError> {
-    ///     witch.with_operator_decision(|scope| {
-    ///         scope.confirm_transaction()
-    ///     })
-    /// }
-    /// ```
-    pub(crate) fn with_operator_decision<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut types::DecisionScope<'_>) -> R,
-    {
-        let mut scope = types::DecisionScope::new(self);
-        f(&mut scope)
-    }
-
-    // -------------------------------------------------------------------------
     // Computation Queueing (internal only, no witness required)
     // -------------------------------------------------------------------------
 
@@ -1225,14 +1188,14 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
-    // Migration Queueing (requires witness, bypasses accepting_mutations)
+    // Migration Queueing (bypasses accepting_mutations gate)
     // -------------------------------------------------------------------------
 
-    /// Queue a single migration for execution (internal, called from DecisionScope).
+    /// Queue a single migration for execution.
     ///
-    /// Migrations require a [`DecisionWitness`] (user approval) but bypass the
-    /// `accepting_mutations` gate. They can run before observing completes.
-    pub(super) fn queue_migration(&mut self, migration: Migration, _witness: &DecisionWitness) {
+    /// Migrations bypass the `accepting_mutations` gate and can run before
+    /// observing completes. Called only after operator approval (MigrationApproval view).
+    fn queue_migration(&mut self, migration: Migration) {
         self.transition_to_working();
 
         let task = Task::Migration(migration);
@@ -1281,8 +1244,7 @@ impl Witch {
 
     /// Queue all pending migrations for execution.
     ///
-    /// Creates a DecisionWitness internally via with_operator_decision.
-    /// Call this only after user approval of migrations.
+    /// Call this only after user approval of migrations (MigrationApproval view).
     pub fn queue_pending_migrations(&mut self) {
         use crate::meta::mutations::MigrationRegistry;
 
@@ -1326,34 +1288,28 @@ impl Witch {
         }
 
         crate::logging::log_general(format!(
-            "[WITCH] Queueing {} migrations via operator decision",
+            "[WITCH] Queueing {} migrations (operator approved)",
             migrations.len()
         ));
 
-        // Queue via with_operator_decision to get proper witness
-        self.with_operator_decision(|scope| {
-            for migration in migrations {
-                scope.queue_migration(migration);
-            }
-        });
+        for migration in migrations {
+            self.queue_migration(migration);
+        }
     }
 
     // -------------------------------------------------------------------------
     // Database Maintenance (Pre-db_thread, Witness-Guarded)
     // -------------------------------------------------------------------------
 
-    /// Execute VACUUM on the database, guarded by DecisionWitness.
+    /// Execute VACUUM on the database.
     ///
     /// Runs synchronously before db_thread is spawned. Call only after
-    /// operator approval (Enter in the vacuum prompt).
+    /// operator approval (VacuumPrompt view).
     pub fn execute_vacuum(&mut self, db_path: &std::path::Path) -> anyhow::Result<()> {
-        self.with_operator_decision(|_scope| {
-            // Witness exists within this scope — operator authorized the action.
-            let conn = rusqlite::Connection::open(db_path)?;
-            conn.execute_batch("VACUUM")?;
-            drop(conn);
-            Ok(())
-        })
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute_batch("VACUUM")?;
+        drop(conn);
+        Ok(())
     }
 
     // -------------------------------------------------------------------------

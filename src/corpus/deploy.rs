@@ -308,7 +308,7 @@ mod tests {
 // and library health signals. When re-enabling:
 // - Replace *_to_decisions() functions with *_to_mutations() returning Vec<Mutation>
 // - Integrate with DeriveLibraryHealthSignals computations
-// - Wire into the DecisionWitness transaction pattern
+// - Wire into the ConfirmationGesture transaction pattern
 //
 // ```
 // use anyhow::Result;

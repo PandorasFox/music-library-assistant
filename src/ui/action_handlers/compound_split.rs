@@ -75,7 +75,7 @@ impl App {
     }
 
     /// Handle compound tag split modal actions (v2).
-    pub(super) fn handle_compound_split_action(&mut self, action: compound_split_v2::CompoundSplitActionV2, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_compound_split_action(&mut self, action: compound_split_v2::CompoundSplitActionV2, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             compound_split_v2::CompoundSplitActionV2::None => {}
             compound_split_v2::CompoundSplitActionV2::Confirmed => {
@@ -103,9 +103,9 @@ impl App {
                 self.show_transaction_review_for_compound_split();
             }
             compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
-                let Some(_w) = witness else { return };
+                let Some(g) = witness else { return };
                 // Ctrl+A - stage ALL splits progressively with progress bar
-                self.start_progressive_compound_split_staging();
+                self.start_progressive_compound_split_staging(*g);
             }
             compound_split_v2::CompoundSplitActionV2::OpenTagEditorIndividual => {
                 self.launch_tag_editor_from_compound_split(tag_editor::TagEditorMode::Individual);
@@ -278,7 +278,7 @@ impl App {
     }
 
     /// Stage the current compound split decision (v2).
-    fn stage_compound_split_decision(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_compound_split_decision(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, description) = match &self.view {
             ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
                 let mutations = state.mutations();
@@ -298,12 +298,12 @@ impl App {
 
         // Stage the decision via operator_decisions
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
         }
     }
 
     /// Stage a canonicalize decision (mark compound value as canonical, don't split).
-    fn stage_compound_canonicalize_decision(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_compound_canonicalize_decision(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, description) = match &self.view {
             ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
                 let mutation = state.data.create_canonical_signal();
@@ -319,7 +319,7 @@ impl App {
 
         // Stage the decision via operator_decisions
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
         }
     }
 
@@ -327,7 +327,7 @@ impl App {
     ///
     /// Called when user presses Ctrl+A in the compound split modal.
     /// Uses the progressive worker to process items in timed chunks with progress bar.
-    fn start_progressive_compound_split_staging(&mut self) {
+    fn start_progressive_compound_split_staging(&mut self, gesture: witness::ConfirmationGesture) {
         // Extract groups and safe_mode from current view
         let (groups, is_safe_mode) = match &self.view {
             ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
@@ -348,6 +348,7 @@ impl App {
         let worker = progressive_worker::ProgressiveWorkerState::for_compound_splits(
             groups,
             is_safe_mode,
+            gesture,
         );
         self.push_and_switch(SuspendTarget::ProgressiveWork(worker));
     }

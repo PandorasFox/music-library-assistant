@@ -12,7 +12,7 @@ use super::super::App;
 
 impl App {
     /// Handle Deploy lateral view actions.
-    pub(super) fn handle_deploy_action(&mut self, action: deploy_modal::DeployAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_deploy_action(&mut self, action: deploy_modal::DeployAction, witness: Option<&witness::ConfirmationGesture>) {
         use crate::ui::widgets;
 
         match action {
@@ -60,7 +60,7 @@ impl App {
     /// - deploy_path/library_path/expected_path: relative to libraries_root
     ///
     /// These must be resolved to absolute for filesystem mutations.
-    fn stage_deploy_mutations(&mut self, data: &deploy_modal::DeployModalData, _witness: &witness::DecisionWitness) -> usize {
+    fn stage_deploy_mutations(&mut self, data: &deploy_modal::DeployModalData, gesture: &witness::ConfirmationGesture) -> usize {
         use crate::meta::mutations::Mutation;
 
         let open_txn = self.open_txn_mode();
@@ -159,6 +159,7 @@ impl App {
             DecisionKey::single(DecisionSource::Deploy),
             "Deploy operations",
             mutations,
+            gesture,
         );
 
         count

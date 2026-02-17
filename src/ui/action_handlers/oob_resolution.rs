@@ -39,7 +39,7 @@ impl App {
     }
 
     /// Handle OOB sync resolution actions.
-    pub(super) fn handle_oob_sync_action(&mut self, action: oob_sync_modal::OobSyncAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_oob_sync_action(&mut self, action: oob_sync_modal::OobSyncAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             oob_sync_modal::OobSyncAction::None => {}
             oob_sync_modal::OobSyncAction::AcceptDisk => {
@@ -75,7 +75,7 @@ impl App {
     /// Uses the dedicated batch mutations which properly handle multi-value tags:
     /// - IndexToDisk: ApplyDbTagsToDisk (writes DB tags to disk files)
     /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
-    fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection, _witness: &witness::DecisionWitness) {
+    fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection, gesture: &witness::ConfirmationGesture) {
         use crate::corpus::db::types::{OobSyncDirection, Zone};
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
@@ -131,7 +131,7 @@ impl App {
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobSync), label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobSync), label, mutations, gesture);
         }
     }
 
@@ -191,7 +191,7 @@ impl App {
     }
 
     /// Handle OOB conflict inspection actions.
-    pub(super) fn handle_oob_conflict_action(&mut self, action: oob_conflict_modal::OobConflictAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_oob_conflict_action(&mut self, action: oob_conflict_modal::OobConflictAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             oob_conflict_modal::OobConflictAction::None => {}
             oob_conflict_modal::OobConflictAction::Navigate => {
@@ -252,7 +252,7 @@ impl App {
     /// Uses the dedicated batch mutations which properly handle multi-value tags:
     /// - ApplyDbTagsToDisk: writes DB tags to disk files
     /// - AssimilateDiskTagsToDb: reads disk tags into DB index
-    fn stage_oob_bucket_resolution(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_oob_bucket_resolution(&mut self, gesture: &witness::ConfirmationGesture) {
         use crate::corpus::db::types::Zone;
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
@@ -313,7 +313,7 @@ impl App {
         };
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobConflict), label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::OobConflict), label, mutations, gesture);
         }
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
@@ -324,7 +324,7 @@ impl App {
     ///
     /// If selection is active, only selected files are included.
     /// Otherwise, all files in the bucket are included.
-    fn stage_oob_mtime_acknowledgement(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_oob_mtime_acknowledgement(&mut self, gesture: &witness::ConfirmationGesture) {
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::AcknowledgeMtimeOnlyMutation;
 
@@ -368,6 +368,7 @@ impl App {
                 DecisionKey::single(DecisionSource::MtimeAck),
                 "Acknowledge mtime changes",
                 mutations,
+                gesture,
             );
         }
 
@@ -416,7 +417,7 @@ impl App {
     }
 
     /// Handle moved file acknowledgement actions.
-    pub(super) fn handle_moved_file_action(&mut self, action: moved_file_modal::MovedFileAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_moved_file_action(&mut self, action: moved_file_modal::MovedFileAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             moved_file_modal::MovedFileAction::None => {}
             moved_file_modal::MovedFileAction::Acknowledge => {
@@ -432,7 +433,7 @@ impl App {
     }
 
     /// Stage mutations for moved file acknowledgement.
-    fn stage_moved_file_acknowledge(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_moved_file_acknowledge(&mut self, gesture: &witness::ConfirmationGesture) {
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::UpdateFilePathMutation;
         use std::path::PathBuf;
@@ -467,7 +468,7 @@ impl App {
 
         // Stage the UpdateFilePath mutations
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::MovedFile), &label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::single(DecisionSource::MovedFile), &label, mutations, gesture);
         }
     }
 }

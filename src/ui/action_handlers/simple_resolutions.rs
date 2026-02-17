@@ -35,7 +35,7 @@ impl App {
     }
 
     /// Handle missing file preview actions.
-    pub(super) fn handle_missing_file_preview_action(&mut self, action: missing_file_modal::MissingFilePreviewAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_missing_file_preview_action(&mut self, action: missing_file_modal::MissingFilePreviewAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             missing_file_modal::MissingFilePreviewAction::None => {}
             missing_file_modal::MissingFilePreviewAction::ConfirmRestore => {
@@ -99,7 +99,7 @@ impl App {
     }
 
     /// Handle missing directory preview actions.
-    pub(super) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_modal::MissingDirectoryPreviewAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_modal::MissingDirectoryPreviewAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             missing_directory_modal::MissingDirectoryPreviewAction::None => {}
             missing_directory_modal::MissingDirectoryPreviewAction::ConfirmDrop => {
@@ -148,7 +148,7 @@ impl App {
     }
 
     /// Handle corrupt file preview actions.
-    pub(super) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_modal::CorruptFilePreviewAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_modal::CorruptFilePreviewAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             corrupt_file_modal::CorruptFilePreviewAction::None => {}
             corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
@@ -200,7 +200,7 @@ impl App {
     }
 
     /// Handle shit format preview actions.
-    pub(super) fn handle_shit_format_preview_action(&mut self, action: shit_format_modal::ShitFormatPreviewAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_shit_format_preview_action(&mut self, action: shit_format_modal::ShitFormatPreviewAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             shit_format_modal::ShitFormatPreviewAction::None => {}
             shit_format_modal::ShitFormatPreviewAction::ConfirmRemuxLossless => {
@@ -280,7 +280,7 @@ impl App {
     }
 
     /// Handle subpar duplicate preview actions.
-    pub(super) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_modal::SubparDuplicatePreviewAction, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_modal::SubparDuplicatePreviewAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             subpar_duplicate_modal::SubparDuplicatePreviewAction::None => {}
             subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
@@ -334,7 +334,7 @@ impl App {
     pub(super) fn handle_directory_cluster_preview_action(
         &mut self,
         action: super::super::directory_cluster_modal::DirectoryClusterPreviewAction,
-        witness: Option<&witness::DecisionWitness>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         use super::super::directory_cluster_modal::DirectoryClusterPreviewAction;
 
@@ -474,7 +474,7 @@ impl App {
     pub(super) fn handle_embed_album_art_preview_action(
         &mut self,
         action: embed_album_art_modal::EmbedAlbumArtPreviewAction,
-        witness: Option<&witness::DecisionWitness>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         match action {
             embed_album_art_modal::EmbedAlbumArtPreviewAction::None => {}
@@ -498,7 +498,7 @@ impl App {
     }
 
     /// Stage directory cluster mutations for transaction review.
-    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, _witness: &witness::DecisionWitness) {
+    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, gesture: &witness::ConfirmationGesture) {
         let Some(ref mut witch) = self.witch else {
             return;
         };
@@ -512,6 +512,7 @@ impl App {
             DecisionKey::new(DecisionSource::DirectoryCluster, cluster_index.to_string()),
             label,
             mutations,
+            gesture,
         );
     }
 }

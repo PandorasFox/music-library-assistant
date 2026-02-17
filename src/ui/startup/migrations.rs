@@ -1,7 +1,6 @@
 //! Database Migration UI
 //!
-//! Handles prompting the user to approve database schema migrations
-//! when upgrading to a new version of MM.
+//! Render helpers for the MigrationApproval startup view.
 //!
 //! ## Architecture
 //!
@@ -11,108 +10,32 @@
 //! 3. Queues migrations as `Task::Migration` tasks via rayon
 //! 4. Migrations execute via `execute_migration()` in execution.rs
 //!
-//! The migration UI loop runs until all migrations complete, ticking the
-//! Witch each frame to process task results.
+//! The migration view is an ActiveView variant driven by the main event loop.
+//! Key handling goes through dispatch_action; phase transitions happen in tick.
 
-use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Terminal;
-use std::time::Duration;
 
-use crate::witch::Witch;
+use crate::ui::active_view::{MigrationApprovalState, MigrationPhase};
 
-/// Result of running the migrations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MigrationOutcome {
-    /// Migrations completed successfully.
-    Completed,
-    /// No migrations were needed.
-    NotNeeded,
-}
-
-/// Run migrations with Witch orchestration.
-///
-/// This function:
-/// 1. Shows approval dialog with pending migration descriptions
-/// 2. On Enter: queues migrations via Witch and ticks until complete
-/// 3. On Esc: returns error to abort startup
-///
-/// Returns `MigrationOutcome::Completed` when migrations finish.
-pub fn run_migrations<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    witch: &mut Witch,
-) -> Result<MigrationOutcome> {
-    // Get pending migration descriptions
-    let pending = witch.pending_migration_descriptions();
-    if pending.is_empty() {
-        return Ok(MigrationOutcome::NotNeeded);
+/// Render the migration approval view based on current phase.
+pub fn render_migration_view(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    state: &MigrationApprovalState,
+) {
+    match state.phase {
+        MigrationPhase::Approval => render_migration_approval(f, area, &state.descriptions),
+        MigrationPhase::Running => render_migration_progress(f, area, &state.descriptions),
+        MigrationPhase::Complete => render_migration_complete(f, area, state.descriptions.len()),
     }
-    let migration_count = pending.len();
-
-    // Phase 1: Show approval dialog and wait for user input
-    loop {
-        terminal.draw(|f| {
-            render_migration_approval(f, &pending);
-        })?;
-
-        // Wait for user input
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Enter => {
-                    // User approved - queue migrations through Witch
-                    witch.queue_pending_migrations();
-                    break;
-                }
-                KeyCode::Esc => {
-                    // User declined - exit application
-                    return Err(anyhow::anyhow!("Migration cancelled by user"));
-                }
-                _ => {
-                    // Ignore other keys
-                }
-            }
-        }
-    }
-
-    // Phase 2: Tick Witch until migrations complete
-    loop {
-        terminal.draw(|f| {
-            render_migration_progress(f, &pending, witch);
-        })?;
-
-        // Tick the Witch to process migration tasks
-        witch.tick();
-
-        // Check if all work is done
-        if !witch.has_pending() {
-            break;
-        }
-
-        // Brief sleep to avoid busy-loop
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    // Phase 3: Show completion briefly
-    terminal.draw(|f| {
-        render_migration_complete(f, migration_count);
-    })?;
-    std::thread::sleep(Duration::from_millis(800));
-
-    // Invalidate read-only connection so it picks up new schema
-    witch.invalidate_read_only_conn();
-
-    Ok(MigrationOutcome::Completed)
 }
 
 /// Render the migration approval dialog.
-fn render_migration_approval(f: &mut ratatui::Frame, pending: &[String]) {
-    let area = f.area();
+fn render_migration_approval(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
     let migration_count = pending.len();
 
-    // Center the dialog
     let dialog_width = 60.min(area.width.saturating_sub(4));
     let dialog_height = (migration_count as u16 + 12).min(area.height.saturating_sub(4));
 
@@ -123,10 +46,8 @@ fn render_migration_approval(f: &mut ratatui::Frame, pending: &[String]) {
         height: dialog_height,
     };
 
-    // Clear the area behind the dialog
     f.render_widget(Clear, dialog_area);
 
-    // Build migration list text
     let mut lines = vec![
         ratatui::text::Line::from(""),
         ratatui::text::Line::from("MM needs to upgrade your database.").style(
@@ -167,8 +88,7 @@ fn render_migration_approval(f: &mut ratatui::Frame, pending: &[String]) {
 }
 
 /// Render the migration progress dialog.
-fn render_migration_progress(f: &mut ratatui::Frame, pending: &[String], witch: &Witch) {
-    let area = f.area();
+fn render_migration_progress(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
     let migration_count = pending.len();
 
     let dialog_width = 60.min(area.width.saturating_sub(4));
@@ -182,16 +102,6 @@ fn render_migration_progress(f: &mut ratatui::Frame, pending: &[String], witch: 
     };
 
     f.render_widget(Clear, dialog_area);
-
-    let status = witch.status();
-    let progress_text = if status.session_queued > 0 {
-        format!(
-            "{} / {} migrations...",
-            status.total_processed, status.session_queued
-        )
-    } else {
-        "Preparing...".to_string()
-    };
 
     let mut lines = vec![
         ratatui::text::Line::from(""),
@@ -207,7 +117,7 @@ fn render_migration_progress(f: &mut ratatui::Frame, pending: &[String], witch: 
 
     lines.push(ratatui::text::Line::from(""));
     lines.push(
-        ratatui::text::Line::from(progress_text)
+        ratatui::text::Line::from("Migrating...")
             .style(Style::default().fg(Color::Cyan)),
     );
 
@@ -225,8 +135,7 @@ fn render_migration_progress(f: &mut ratatui::Frame, pending: &[String], witch: 
 }
 
 /// Render the migration complete dialog.
-fn render_migration_complete(f: &mut ratatui::Frame, migration_count: usize) {
-    let area = f.area();
+fn render_migration_complete(f: &mut ratatui::Frame, area: Rect, migration_count: usize) {
     let dialog_width = 50.min(area.width.saturating_sub(4));
     let dialog_height = 7;
 

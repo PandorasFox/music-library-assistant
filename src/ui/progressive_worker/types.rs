@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 
 use crate::meta::signals::data::CompoundGroup;
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 
 /// Unit of work to be processed incrementally.
 ///
@@ -51,6 +52,8 @@ pub struct ProgressiveWorkerState {
     pub on_complete: OnComplete,
     /// Whether we're in safe mode (for compound splits)
     pub is_safe_mode: bool,
+    /// The confirmation gesture that authorized this progressive work.
+    pub gesture: ConfirmationGesture,
 }
 
 impl ProgressiveWorkerState {
@@ -60,7 +63,7 @@ impl ProgressiveWorkerState {
     /// * `label` - Title shown in the progress modal
     /// * `items` - Work items to process
     /// * `on_complete` - Callback identifier for completion handling
-    pub fn new(label: String, items: Vec<WorkItem>, on_complete: OnComplete) -> Self {
+    pub fn new(label: String, items: Vec<WorkItem>, on_complete: OnComplete, gesture: ConfirmationGesture) -> Self {
         let total = items.len();
         Self {
             label,
@@ -72,11 +75,12 @@ impl ProgressiveWorkerState {
             nops_elided: 0,
             on_complete,
             is_safe_mode: false,
+            gesture,
         }
     }
 
     /// Create a new progressive worker for compound splits.
-    pub fn for_compound_splits(groups: Vec<CompoundGroup>, is_safe_mode: bool) -> Self {
+    pub fn for_compound_splits(groups: Vec<CompoundGroup>, is_safe_mode: bool, gesture: ConfirmationGesture) -> Self {
         let items: Vec<WorkItem> = groups
             .into_iter()
             .enumerate()
@@ -87,6 +91,7 @@ impl ProgressiveWorkerState {
             "Staging compound splits...".to_string(),
             items,
             OnComplete::CompoundSplitStaging,
+            gesture,
         );
         state.is_safe_mode = is_safe_mode;
         state

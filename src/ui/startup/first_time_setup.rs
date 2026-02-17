@@ -582,9 +582,9 @@ pub fn handle_first_time_setup<B: Backend>(
         if let Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Enter => {
-                    // User confirmed first-time setup. No DecisionWitness needed here:
+                    // User confirmed first-time setup. No ConfirmationGesture needed here:
                     // database creation is infrastructure setup, not a corpus mutation.
-                    // DecisionWitness is for mutations that alter indexed corpus data.
+                    // ConfirmationGesture is for mutations that alter indexed corpus data.
                     break;
                 }
                 KeyCode::Esc => {

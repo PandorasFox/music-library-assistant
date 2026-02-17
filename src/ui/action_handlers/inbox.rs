@@ -16,7 +16,7 @@ use super::witness;
 use super::App;
 
 impl App {
-    pub(super) fn handle_inbox_action(&mut self, action: super::super::inbox_view::InboxAction, _witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_inbox_action(&mut self, action: super::super::inbox_view::InboxAction, _witness: Option<&witness::ConfirmationGesture>) {
         use super::super::inbox_view::InboxAction;
 
         match action {
@@ -153,7 +153,7 @@ impl App {
     pub(super) fn handle_inbox_corpus_match_preview_action(
         &mut self,
         action: inbox_corpus_match_modal::InboxCorpusMatchPreviewAction,
-        witness: Option<&witness::DecisionWitness>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         match action {
             inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::None => {}
@@ -215,7 +215,7 @@ impl App {
     pub(super) fn handle_inbox_organize_action(
         &mut self,
         action: inbox_organize::InboxOrganizeAction,
-        witness: Option<&witness::DecisionWitness>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         match action {
             inbox_organize::InboxOrganizeAction::None => {}

@@ -4,6 +4,8 @@
 //! Each variant carries its own state, so the type system guarantees that
 //! mode and state are always consistent.
 
+use std::path::PathBuf;
+
 use crate::ui::{
     compound_split_v2,
     config_editor,
@@ -44,6 +46,10 @@ use crate::ui::{
 /// The active view and its state. One variant is active at a time.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ActiveView {
+    // Startup views (before db_thread, before observing)
+    MigrationApproval(MigrationApprovalState),
+    VacuumPrompt(VacuumPromptState),
+
     // Lateral view ring
     ConfigEditor(config_editor::ConfigEditorState),
     Insights(insights_view::InsightsViewState),
@@ -106,6 +112,8 @@ impl ActiveView {
     /// Get a header suffix for the title bar, if applicable.
     pub(crate) fn header_suffix(&self) -> Option<&'static str> {
         match self {
+            Self::MigrationApproval(_) => Some("Database Migration"),
+            Self::VacuumPrompt(_) => Some("Database Compaction"),
             Self::ConfigEditor(_) => Some("Config Editor"),
             Self::Insights(_) => Some("Corpus Insights"),
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
@@ -144,6 +152,7 @@ impl ActiveView {
     /// Views without file listings return None.
     pub(crate) fn selected_path(&self) -> Option<&str> {
         match self {
+            Self::MigrationApproval(_) | Self::VacuumPrompt(_) => None,
             Self::CorpusBrowser(browser) => browser.selected_path()
                 .and_then(|p| p.to_str()),
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
@@ -211,6 +220,8 @@ pub(crate) enum SuspendedView {
 /// consumed by Phase 2 (dispatch on &mut self).
 pub(crate) enum ViewAction {
     None,
+    MigrationApproval(MigrationAction),
+    VacuumPrompt(VacuumAction),
     ConfigEditor(config_editor::ConfigEditorAction),
     Insights(insights_view::InsightsAction),
     CorpusBrowser(tree_browser::TreeBrowserAction),
@@ -347,4 +358,67 @@ impl TagCanonicityClusters {
     pub fn is_last(&self) -> bool {
         self.current_index + 1 >= self.signal_keys.len()
     }
+}
+
+// ============================================================================
+// Startup View State Types
+// ============================================================================
+
+/// Phase of the migration approval flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MigrationPhase {
+    /// Showing approval dialog, waiting for user input.
+    Approval,
+    /// Migrations are running via Witch.
+    Running,
+    /// All migrations complete, brief display before advancing.
+    Complete,
+}
+
+/// State for the migration approval startup view.
+pub(crate) struct MigrationApprovalState {
+    /// Human-readable descriptions of pending migrations.
+    pub descriptions: Vec<String>,
+    /// Current phase of the flow.
+    pub phase: MigrationPhase,
+}
+
+/// Action from the migration approval view.
+pub(crate) enum MigrationAction {
+    None,
+    Approve,
+    Cancel,
+}
+
+/// Phase of the vacuum prompt flow.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum VacuumPhase {
+    /// Showing prompt, waiting for user input.
+    Prompt,
+    /// VACUUM is executing.
+    Compacting,
+    /// Compaction complete, showing results.
+    Complete { new_size_mb: f64 },
+}
+
+/// State for the vacuum prompt startup view.
+pub(crate) struct VacuumPromptState {
+    /// Percentage of reclaimable space.
+    pub pct: u64,
+    /// Reclaimable space in MB.
+    pub free_mb: f64,
+    /// Path to database file (for VACUUM execution).
+    pub db_path: PathBuf,
+    /// Current phase of the flow.
+    pub phase: VacuumPhase,
+    /// Whether the Compacting phase has rendered at least one frame.
+    /// Ensures the "Compacting database..." UI is visible before synchronous vacuum.
+    pub compacting_rendered: bool,
+}
+
+/// Action from the vacuum prompt view.
+pub(crate) enum VacuumAction {
+    None,
+    Compact,
+    Skip,
 }

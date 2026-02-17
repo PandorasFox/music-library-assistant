@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 
 use crate::meta::decisions::{
-    DecisionKey, DiscardSummary, PendingTransaction, TransactionError, WitnessedDecision,
+    ConfirmationGesture, DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
+    WitnessedDecision,
 };
-use super::types::DecisionWitness;
 use crate::corpus::db::types::Zone;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
@@ -133,49 +133,38 @@ impl super::Witch {
     /// Add a witnessed decision to the transaction.
     ///
     /// - `key`: Semantic key identifying the decision source and item
-    /// - `witness`: Proof of operator confirmation
-    /// - `label`: Human-readable description
-    /// - `mutations`: The mutations this decision represents
+    /// - `decision`: A `WitnessedDecision` (already carries gesture proof)
     ///
     /// Overwrites any existing decision at the same key.
     /// Returns Err if no transaction is active.
     pub fn add_decision(
         &mut self,
         key: DecisionKey,
-        _witness: &DecisionWitness,
-        label: impl Into<String>,
-        mutations: Vec<Mutation>,
+        decision: WitnessedDecision,
     ) -> Result<(), TransactionError> {
-        let label_str: String = label.into();
-        let mutation_count = mutations.len();
+        let mutation_count = decision.mutations.len();
 
         self.require_active_transaction(&format!(
             "add_decision(key={}, label={:?}, mutations={})",
-            key, label_str, mutation_count
+            key, decision.label, mutation_count
         ))?;
 
         let txn = self.pending_transaction.as_mut().unwrap();
 
         crate::logging::log_mutation(format!(
             "[TRANSACTION] add_decision(key={}, label={:?}, mutations={}) OK - txn now has {} decisions",
-            key, label_str, mutation_count, txn.decision_count() + 1
+            key, decision.label, mutation_count, txn.decision_count() + 1
         ));
 
         // Log each mutation for debugging
-        for (i, m) in mutations.iter().enumerate() {
+        for (i, m) in decision.mutations.iter().enumerate() {
             crate::logging::log_mutation(format!(
                 "[TRANSACTION]   mutation[{}]: {:?}",
                 i, m
             ));
         }
 
-        txn.decisions.insert(
-            key,
-            WitnessedDecision {
-                label: label_str,
-                mutations,
-            },
-        );
+        txn.decisions.insert(key, decision);
 
         Ok(())
     }
@@ -201,7 +190,7 @@ impl super::Witch {
     pub fn remove_decision(
         &mut self,
         key: &DecisionKey,
-        _witness: &DecisionWitness,
+        _gesture: &ConfirmationGesture,
     ) -> Result<(), TransactionError> {
         self.require_active_transaction(&format!("remove_decision(key={})", key))?;
 
@@ -221,7 +210,7 @@ impl super::Witch {
         &mut self,
         key: &DecisionKey,
         mutation_idx: usize,
-        _witness: &DecisionWitness,
+        _gesture: &ConfirmationGesture,
     ) -> Result<(), TransactionError> {
         self.require_active_transaction(&format!(
             "remove_mutation(key={}, idx={})", key, mutation_idx
@@ -245,7 +234,7 @@ impl super::Witch {
     /// Returns summary of what was committed, or error if mutations not accepted.
     pub fn confirm_transaction(
         &mut self,
-        _witness: &DecisionWitness,
+        _gesture: &ConfirmationGesture,
     ) -> Result<(), TransactionError> {
         // Gate: mutations must be accepted (eye is Awake, not read-only)
         if !self.accepting_mutations() {
@@ -294,12 +283,12 @@ impl super::Witch {
 
     /// Discard the transaction - drop all accumulated decisions.
     ///
-    /// Requires a witness - discarding is also a decision.
+    /// Does not require a gesture — discarding is a safe, non-mutating operation.
+    /// Any code that has access to the Witch can discard (cancel handlers, etc.).
     ///
     /// Returns summary of what was discarded.
     pub fn discard_transaction(
         &mut self,
-        _witness: &DecisionWitness,
     ) -> Result<DiscardSummary, TransactionError> {
         self.require_active_transaction("discard_transaction")?;
 

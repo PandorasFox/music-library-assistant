@@ -11,7 +11,7 @@
 //! they do not alter state - they only emit signals. This distinction is important
 //! because:
 //!
-//! - **Mutations** require a `DecisionWitness` to queue (user-led decision context)
+//! - **Mutations** require a `ConfirmationGesture` to stage (user-led decision context)
 //! - **Computations** can be queued without a witness (config-driven, automatic)
 //!
 //! ## Phase Stratification

@@ -115,7 +115,7 @@ impl App {
     }
 
     /// Handle tag canonicity modal actions (three-pane layout).
-    pub(super) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity_v2::TagCanonicalityActionV2, witness: Option<&witness::DecisionWitness>) {
+    pub(super) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity_v2::TagCanonicalityActionV2, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             tag_canonicity_v2::TagCanonicalityActionV2::None => {}
             tag_canonicity_v2::TagCanonicalityActionV2::Confirmed => {
@@ -278,7 +278,7 @@ impl App {
     ///
     /// This adds the decision to the transaction but does NOT confirm it.
     /// The transaction is confirmed when the user completes the review screen.
-    fn stage_canonicity_decision(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_canonicity_decision(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, tag_name) = match &self.view {
             ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
                 let mutations = state.mutations();
@@ -294,7 +294,7 @@ impl App {
 
         // Add decision to existing transaction via sealed operator decision handler
         if let Some(ref mut witch) = self.witch {
-            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()), &label, mutations);
+            let _ = super::super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()), &label, mutations, gesture);
         }
     }
 
@@ -302,7 +302,7 @@ impl App {
     ///
     /// Adds FLAGCOMPILATION=0 to all tracks in the current group, which will
     /// suppress this group in future inconsistent album artist detection runs.
-    fn stage_flag_non_compilation(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_flag_non_compilation(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx) = match &self.view {
             ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
                 use crate::meta::mutations::{Mutation, TagOp};
@@ -328,6 +328,7 @@ impl App {
                 DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
                 "Flag non-compilation",
                 mutations,
+                gesture,
             );
         }
     }
@@ -336,7 +337,7 @@ impl App {
     ///
     /// Emits an EmitCanonicalTag mutation for each variant in the current group,
     /// which will suppress this collision in future DetectTagCanonicalizations runs.
-    fn stage_flag_canonical(&mut self, _witness: &witness::DecisionWitness) {
+    fn stage_flag_canonical(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx) = match &self.view {
             ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
                 use crate::meta::mutations::Mutation;
@@ -364,6 +365,7 @@ impl App {
                 DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
                 "Flag canonical",
                 mutations,
+                gesture,
             );
         }
     }

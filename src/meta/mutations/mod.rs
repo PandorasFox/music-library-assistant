@@ -15,7 +15,7 @@
 //! Mutations are executed through the Witch:
 //!
 //! ```text
-//! UI Decision (with DecisionWitness)
+//! UI Decision (with ConfirmationGesture)
 //!     │
 //!     ▼
 //! Witch.queue_mutations()

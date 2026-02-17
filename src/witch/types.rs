@@ -65,15 +65,16 @@ pub enum CorpusObservationState {
 
 /// A task that can be queued for execution.
 ///
-/// Tasks are either Mutations (require DecisionWitness), Computations (no witness),
-/// or Migrations (require DecisionWitness but bypass accepting_mutations gate).
+/// Tasks are either Mutations (require ConfirmationGesture to stage), Computations
+/// (no gesture required), or Migrations (require operator approval but bypass
+/// accepting_mutations gate).
 #[derive(Debug, Clone)]
 pub enum Task {
-    /// A state-altering mutation (requires DecisionWitness to queue).
+    /// A state-altering mutation (requires ConfirmationGesture to stage).
     Mutation(Mutation),
-    /// A read-only computation that emits signals (no witness required).
+    /// A read-only computation that emits signals (no gesture required).
     Computation(Computation),
-    /// A schema migration (requires DecisionWitness but bypasses accepting_mutations).
+    /// A schema migration (requires operator approval but bypasses accepting_mutations).
     Migration(Migration),
 }
 
@@ -83,7 +84,7 @@ pub enum Task {
 
 /// A database schema migration.
 ///
-/// Migrations require DecisionWitness (user approval) but bypass the `accepting_mutations`
+/// Migrations require operator approval but bypass the `accepting_mutations`
 /// gate. They must run before indexing can happen if schema changes are required.
 ///
 /// Note: Description is not stored here - it's looked up from MigrationRegistry
@@ -98,40 +99,17 @@ pub struct Migration {
 }
 
 // ============================================================================
-// Decision Witness (Sealed Access Control)
+// Execution Witnesses (Sealed Access Control)
 // ============================================================================
 
-/// Access control for mutation queueing.
+/// Sealed witness types for execution context proofs.
 ///
-/// # Design Pattern: Decision Witness
+/// These witnesses ensure certain operations can only be performed from
+/// within specific execution contexts (mutation worker, migration worker, etc.).
 ///
-/// `DecisionWitness` is a zero-sized proof that mutations are being queued from
-/// a user-led Decision context. The Witch's mutation queueing methods require
-/// this token, preventing code from queueing state-altering mutations without
-/// explicit operator decisions.
-///
-/// The token can ONLY be obtained via [`DecisionScope`], which is created by
-/// [`Witch::with_operator_decision()`]. That method should ONLY be called from
-/// `ui/operator_decisions.rs`, which provides sealed handler functions for
-/// Enter keypress handlers in confirmation modals.
-///
-/// Computations (health signals, verification) use separate queue methods
-/// that do NOT require a witness, as they are decisionless by design.
+/// Decision authority (ConfirmationGesture) is handled separately in
+/// `ui/action_handlers/witness.rs` and flows through `meta/decisions/`.
 pub mod sealed {
-    /// A zero-sized token proving mutations come from a user-led Decision context.
-    ///
-    /// Cannot be constructed outside [`DecisionScope`].
-    /// See `ui/operator_decisions.rs` for the sanctioned access pattern.
-    #[derive(Clone, Copy)]
-    pub struct DecisionWitness(());
-
-    impl DecisionWitness {
-        /// Internal constructor - only callable from DecisionScope::new()
-        pub(super) fn new() -> Self {
-            Self(())
-        }
-    }
-
     /// A zero-sized token proving code is executing inside the Witch's mutation worker.
     ///
     /// All index-mutating database functions require this witness, ensuring they
@@ -212,108 +190,9 @@ pub mod sealed {
 }
 
 pub use sealed::ContentAnalysisWitness;
-pub use sealed::DecisionWitness;
 pub use sealed::MigrationWitness;
 pub use sealed::MutationExecutionWitness;
 pub use sealed::SpawnedMutation;
-
-// ============================================================================
-// Operator Decision Scope (Sealed Access Pattern)
-// ============================================================================
-
-/// A scoped decision context where operator decisions can be made.
-///
-/// `DecisionWitness` exists only within this scope and cannot escape.
-/// All decision operations (add_decision, confirm_transaction, etc.) are
-/// performed through this scope's methods.
-///
-/// # Sealed Access Pattern
-///
-/// This type is created ONLY via [`Witch::with_operator_decision()`], which
-/// should ONLY be called from `ui/operator_decisions.rs`. The callback pattern
-/// ensures the witness cannot be stored, returned, or passed elsewhere.
-///
-/// See `ui/operator_decisions.rs` for the sanctioned call sites.
-pub struct DecisionScope<'a> {
-    witch: &'a mut super::Witch,
-    witness: DecisionWitness,
-}
-
-impl<'a> DecisionScope<'a> {
-    /// Create a new DecisionScope. Only callable from within the witch module.
-    pub(super) fn new(witch: &'a mut super::Witch) -> Self {
-        Self {
-            witch,
-            witness: DecisionWitness::new(),
-        }
-    }
-
-    /// Add a witnessed decision to the active transaction.
-    ///
-    /// - `key`: Semantic key identifying the decision source and item
-    /// - `label`: Human-readable description
-    /// - `mutations`: The mutations this decision represents
-    pub fn add_decision(
-        &mut self,
-        key: DecisionKey,
-        label: impl Into<String>,
-        mutations: Vec<Mutation>,
-    ) -> Result<(), TransactionError> {
-        self.witch.add_decision(key, &self.witness, label, mutations)
-    }
-
-    /// Remove an entire decision from the active transaction.
-    pub fn remove_decision(
-        &mut self,
-        key: &DecisionKey,
-    ) -> Result<(), TransactionError> {
-        self.witch.remove_decision(key, &self.witness)
-    }
-
-    /// Remove a single mutation from a decision in the active transaction.
-    /// Auto-removes the decision if no mutations remain.
-    pub fn remove_mutation(
-        &mut self,
-        key: &DecisionKey,
-        mutation_idx: usize,
-    ) -> Result<(), TransactionError> {
-        self.witch.remove_mutation_from_decision(key, mutation_idx, &self.witness)
-    }
-
-    /// Confirm the transaction - queue all mutations for execution.
-    ///
-    /// This commits all accumulated decisions and queues their mutations.
-    pub fn confirm_transaction(&mut self) -> Result<(), TransactionError> {
-        self.witch.confirm_transaction(&self.witness)
-    }
-
-    /// Discard the transaction - drop all accumulated decisions.
-    pub fn discard_transaction(&mut self) -> Result<DiscardSummary, TransactionError> {
-        self.witch.discard_transaction(&self.witness)
-    }
-
-    /// Queue a migration for execution.
-    ///
-    /// Migrations bypass the `accepting_mutations` gate and can run before
-    /// observing completes. They require DecisionWitness (user approval).
-    pub fn queue_migration(&mut self, migration: Migration) {
-        self.witch.queue_migration(migration, &self.witness)
-    }
-}
-
-// NOTE: confirm_decision() has been removed from the public API.
-// All decision authority now flows through Witch::with_operator_decision()
-// which should ONLY be called from ui/operator_decisions.rs.
-//
-// Transaction pattern for mutations:
-//   1. operator_decisions::start_transaction()
-//   2. operator_decisions::stage_decision() - repeat for each decision
-//   3. operator_decisions::commit_transaction() or discard_transaction()
-//
-// NOTE: confirm_startup_migration() has been removed. The Witch now orchestrates
-// migrations via queue_pending_migrations() which uses with_operator_decision()
-// internally to get a proper DecisionWitness. See run_migrations() in
-// ui/startup/migrations.rs for the new approach.
 
 // ============================================================================
 // Labels and Status Types
@@ -393,9 +272,7 @@ impl From<TaskExecutionState> for TaskExecutionStateSnapshot {
 // Transaction Types (re-exported from meta::decisions)
 // ============================================================================
 
-pub use crate::meta::decisions::{
-    DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
-};
+pub use crate::meta::decisions::PendingTransaction;
 
 // ============================================================================
 // Internal Task Result

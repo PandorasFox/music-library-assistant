@@ -1,12 +1,13 @@
 //! Decision types - first-class meta concepts for operator decisions.
 //!
 //! Contains the data types for witnessed decisions and transactions.
-//! Authority types (`DecisionWitness`, `DecisionScope`) remain in `witch/types.rs` -
-//! the Witch owns the authority mechanism, while these types represent the data.
+//! The `ConfirmationGesture` type is defined in `ui/action_handlers/witness.rs`
+//! and re-exported here for use in `WitnessedDecision`.
 
 use std::collections::HashMap;
 
 use crate::meta::mutations::Mutation;
+pub(crate) use crate::ui::action_handlers::witness::ConfirmationGesture;
 
 // ============================================================================
 // Decision Key Types
@@ -107,12 +108,44 @@ impl std::fmt::Display for DecisionKey {
 /// A witnessed decision with its associated pending mutations.
 ///
 /// Decisions are accumulated in a transaction and committed together.
-#[derive(Debug, Clone)]
+/// The private `_gesture` field ensures this can only be constructed by
+/// code that possesses a `ConfirmationGesture` token.
 pub struct WitnessedDecision {
     /// Human-readable label for this decision
     pub label: String,
     /// The mutations this decision will produce when committed
     pub mutations: Vec<Mutation>,
+    /// Proof that an operator confirmation gesture authorized this decision.
+    _gesture: ConfirmationGesture,
+}
+
+impl WitnessedDecision {
+    pub fn new(label: impl Into<String>, mutations: Vec<Mutation>, gesture: &ConfirmationGesture) -> Self {
+        Self {
+            label: label.into(),
+            mutations,
+            _gesture: *gesture,
+        }
+    }
+}
+
+impl std::fmt::Debug for WitnessedDecision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WitnessedDecision")
+            .field("label", &self.label)
+            .field("mutations", &self.mutations)
+            .finish()
+    }
+}
+
+impl Clone for WitnessedDecision {
+    fn clone(&self) -> Self {
+        Self {
+            label: self.label.clone(),
+            mutations: self.mutations.clone(),
+            _gesture: self._gesture,
+        }
+    }
 }
 
 /// An active transaction accumulating decisions.

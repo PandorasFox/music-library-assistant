@@ -1,7 +1,7 @@
 //! Progressive Worker Modal - Timed Bulk Operations
 //!
 //! This module provides a UI pattern for long operations that must run on the UI thread
-//! (e.g., staging mutations via DecisionWitness). Work is processed in timed chunks
+//! (e.g., staging mutations via ConfirmationGesture). Work is processed in timed chunks
 //! (~50ms per tick) with progress feedback.
 //!
 //! ## Design

@@ -1,111 +1,32 @@
 //! Database Vacuum Prompt
 //!
-//! Checks free-page ratio at startup and prompts the operator to compact
-//! the database when reclaimable space exceeds a configurable threshold.
+//! Render helpers for the VacuumPrompt startup view.
 //!
-//! Runs between migrations and db_thread spawn — no concurrent access.
-//! The actual VACUUM execution is witness-guarded via `Witch::execute_vacuum()`.
+//! The VacuumPrompt view is an ActiveView variant driven by the main event loop.
+//! Key handling goes through dispatch_action; phase transitions happen in tick.
 
-use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Terminal;
-use std::path::Path;
 
-use crate::witch::Witch;
+use crate::ui::active_view::{VacuumPhase, VacuumPromptState};
 
-/// Check database free-page ratio and prompt for VACUUM if above threshold.
-///
-/// - `threshold <= 0.0`: disabled, returns immediately.
-/// - Ratio at or below threshold: no action needed.
-/// - Above threshold: shows prompt; Enter runs VACUUM (witness-guarded), Esc skips.
-pub fn check_and_prompt_vacuum<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    db_path: &Path,
-    threshold: f64,
-    witch: &mut Witch,
-) -> Result<()> {
-    if threshold <= 0.0 {
-        return Ok(());
-    }
-
-    if !db_path.exists() {
-        return Ok(());
-    }
-
-    // Open a temporary read-only connection just for the PRAGMA queries.
-    let conn = rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-
-    let page_count: u64 = conn.pragma_query_value(None, "page_count", |row| row.get(0))?;
-    let freelist_count: u64 = conn.pragma_query_value(None, "freelist_count", |row| row.get(0))?;
-    let page_size: u64 = conn.pragma_query_value(None, "page_size", |row| row.get(0))?;
-
-    drop(conn);
-
-    if page_count == 0 {
-        return Ok(());
-    }
-
-    let ratio = freelist_count as f64 / page_count as f64;
-    if ratio <= threshold {
-        return Ok(());
-    }
-
-    let pct = (ratio * 100.0).round() as u64;
-    let free_bytes = freelist_count * page_size;
-    let free_mb = free_bytes as f64 / (1024.0 * 1024.0);
-
-    // Prompt loop
-    loop {
-        terminal.draw(|f| {
-            render_vacuum_prompt(f, pct, free_mb);
-        })?;
-
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Enter => {
-                    // Show "compacting..." while VACUUM runs
-                    terminal.draw(|f| {
-                        render_vacuum_progress(f);
-                    })?;
-
-                    // Execute VACUUM through the Witch (witness-guarded)
-                    witch.execute_vacuum(db_path)?;
-
-                    // Re-query to show reclaimed amount
-                    let conn2 = rusqlite::Connection::open_with_flags(
-                        db_path,
-                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-                    )?;
-                    let new_page_count: u64 =
-                        conn2.pragma_query_value(None, "page_count", |row| row.get(0))?;
-                    let new_size_mb = (new_page_count * page_size) as f64 / (1024.0 * 1024.0);
-                    drop(conn2);
-
-                    terminal.draw(|f| {
-                        render_vacuum_complete(f, free_mb, new_size_mb);
-                    })?;
-                    std::thread::sleep(std::time::Duration::from_millis(1200));
-
-                    return Ok(());
-                }
-                KeyCode::Esc => {
-                    return Ok(());
-                }
-                _ => {}
-            }
+/// Render the vacuum prompt view based on current phase.
+pub fn render_vacuum_view(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    state: &VacuumPromptState,
+) {
+    match state.phase {
+        VacuumPhase::Prompt => render_vacuum_prompt(f, area, state.pct, state.free_mb),
+        VacuumPhase::Compacting => render_vacuum_progress(f, area),
+        VacuumPhase::Complete { new_size_mb } => {
+            render_vacuum_complete(f, area, state.free_mb, new_size_mb);
         }
     }
 }
 
-fn render_vacuum_prompt(f: &mut ratatui::Frame, pct: u64, free_mb: f64) {
-    let area = f.area();
+fn render_vacuum_prompt(f: &mut ratatui::Frame, area: Rect, pct: u64, free_mb: f64) {
     let dialog_width = 60.min(area.width.saturating_sub(4));
     let dialog_height = 10.min(area.height.saturating_sub(4));
 
@@ -146,8 +67,7 @@ fn render_vacuum_prompt(f: &mut ratatui::Frame, pct: u64, free_mb: f64) {
     f.render_widget(paragraph, dialog_area);
 }
 
-fn render_vacuum_progress(f: &mut ratatui::Frame) {
-    let area = f.area();
+fn render_vacuum_progress(f: &mut ratatui::Frame, area: Rect) {
     let dialog_width = 50.min(area.width.saturating_sub(4));
     let dialog_height = 7;
 
@@ -182,8 +102,7 @@ fn render_vacuum_progress(f: &mut ratatui::Frame) {
     f.render_widget(paragraph, dialog_area);
 }
 
-fn render_vacuum_complete(f: &mut ratatui::Frame, reclaimed_mb: f64, new_size_mb: f64) {
-    let area = f.area();
+fn render_vacuum_complete(f: &mut ratatui::Frame, area: Rect, reclaimed_mb: f64, new_size_mb: f64) {
     let dialog_width = 50.min(area.width.saturating_sub(4));
     let dialog_height = 7;
 

@@ -146,9 +146,12 @@ Prefer isolated helper functions in `ui/helpers.rs` for string operations, espec
 
 Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing strings.
 
-### DecisionWitness - SEALED ACCESS PATTERN
+### Decision Authority - Two-Type Pattern
 
-`DecisionWitness` can ONLY be created via `Witch::with_operator_decision()`, which should ONLY be called from `ui/operator_decisions.rs`. This module is the **operator confirmation boundary**.
+Decision authority uses two concrete types:
+
+- **`ConfirmationGesture`** (`ui/action_handlers/witness.rs`) — zero-sized proof of operator confirmation (Enter keypress). Constructor is `pub(in crate::ui::action_handlers)`, so only action handler code can mint gestures.
+- **`WitnessedDecision`** (`meta/decisions/mod.rs`) — carries mutations + a private `_gesture` field, ensuring decisions can only be constructed by code possessing a gesture.
 
 **If you need to queue mutations from UI code:**
 
@@ -156,17 +159,16 @@ Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing
    - `operator_decisions::stage_decision()` - add decision to active transaction
    - `operator_decisions::commit_transaction()` - commit all staged decisions
    - `operator_decisions::discard_transaction()` - discard all staged decisions
+   - `operator_decisions::remove_decision()` / `remove_mutation()` - edit active transaction
 
-2. These functions are called ONLY from Enter keypress handlers in confirmation modals.
+2. These functions are called ONLY from action handlers that receive a `&ConfirmationGesture`.
 
 **DO NOT:**
-- Call `with_operator_decision()` directly from action handlers or other UI code
+- Construct `ConfirmationGesture` outside of `ui/action_handlers/` (compile error)
+- Construct `WitnessedDecision` without a gesture reference (private field)
 - Add new functions to `operator_decisions.rs` without explicit human approval
-- Try to work around this pattern to "simplify" mutation queueing
 
-**Why this exists:** Previous versions had a public `confirm_decision()` function that could be called from anywhere, making it easy to accidentally bypass operator confirmation. The sealed module pattern ensures all decision authority flows through one small, auditable file.
-
-**Exception:** Database creation in `first_time_setup.rs` doesn't need a witness - it's infrastructure setup, not a corpus mutation. Only mutations that alter indexed corpus data require DecisionWitness.
+**Exception:** Database creation in `first_time_setup.rs` doesn't need a gesture - it's infrastructure setup, not a corpus mutation.
 
 ### Signal Design Principles
 

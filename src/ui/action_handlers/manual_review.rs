@@ -41,7 +41,7 @@ impl App {
     pub(super) fn handle_manual_review_action(
         &mut self,
         action: manual_review_modal::ManualReviewAction,
-        witness: Option<&witness::DecisionWitness>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         use manual_review_modal::ManualReviewAction;
 
@@ -61,13 +61,13 @@ impl App {
             }
 
             ManualReviewAction::ConfirmStash => {
-                let Some(_w) = witness else { return };
-                self.stage_stash_for_selected_file();
+                let Some(g) = witness else { return };
+                self.stage_stash_for_selected_file(g);
             }
 
             ManualReviewAction::ConfirmStashAndAdvance => {
-                let Some(_w) = witness else { return };
-                self.stage_stash_for_selected_file();
+                let Some(g) = witness else { return };
+                self.stage_stash_for_selected_file(g);
                 // Advance to next group
                 self.advance_manual_review_group(true);
             }
@@ -89,13 +89,14 @@ impl App {
             }
 
             ManualReviewAction::MarkExpectedDuplicate => {
-                self.stage_mark_expected_duplicate();
+                let Some(g) = witness else { return };
+                self.stage_mark_expected_duplicate(g);
             }
         }
     }
 
     /// Stage MoveToStash + DropFromIndex mutations for the currently selected file.
-    fn stage_stash_for_selected_file(&mut self) {
+    fn stage_stash_for_selected_file(&mut self, gesture: &witness::ConfirmationGesture) {
         let (group_idx, file_idx, corpus_path, inode, stash_name) = {
             let ActiveView::ManualReview(ref state) = self.view else { return };
             let Some(file) = state.selected_file() else { return };
@@ -119,6 +120,7 @@ impl App {
                 DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
                 &label,
                 mutations,
+                gesture,
             );
         }
 
@@ -129,7 +131,7 @@ impl App {
     }
 
     /// Stage an EmitExpectedDuplicate mutation for the current group's fingerprint key.
-    fn stage_mark_expected_duplicate(&mut self) {
+    fn stage_mark_expected_duplicate(&mut self, gesture: &witness::ConfirmationGesture) {
         let (group_idx, fingerprint_key, group_label, is_last) = {
             let ActiveView::ManualReview(ref state) = self.view else { return };
             if state.kind != types::ReviewKind::RedundantDuplicate { return; }
@@ -151,6 +153,7 @@ impl App {
                 DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
                 &label,
                 vec![mutation],
+                gesture,
             );
         }
 

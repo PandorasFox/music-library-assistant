@@ -18,7 +18,7 @@ mod manual_review;
 mod oob_resolution;
 mod simple_resolutions;
 mod tag_canonicity;
-mod witness;
+pub(crate) mod witness;
 
 use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
@@ -35,23 +35,25 @@ impl App {
     /// Dispatch a view action to the appropriate handler.
     ///
     /// `is_confirmation` is true when the triggering event was a confirmation
-    /// gesture (Enter, Space, y/Y). The witness is minted internally from this
-    /// flag - callers never touch the DecisionWitness type.
+    /// gesture (Enter keypress). The witness is minted internally from this
+    /// flag - callers never touch the ConfirmationGesture type.
     pub(in crate::ui) fn dispatch_action(&mut self, action: ViewAction, is_confirmation: bool) {
         let witness = if is_confirmation {
-            Some(witness::DecisionWitness::new())
+            Some(witness::ConfirmationGesture::new())
         } else {
             None
         };
 
         match action {
             ViewAction::None => {}
-            ViewAction::ConfigEditor(a) => self.handle_config_editor_action(a),
+            ViewAction::MigrationApproval(a) => self.handle_migration_approval_action(a, witness.as_ref()),
+            ViewAction::VacuumPrompt(a) => self.handle_vacuum_prompt_action(a, witness.as_ref()),
+            ViewAction::ConfigEditor(a) => self.handle_config_editor_action(a, witness.as_ref()),
             ViewAction::Insights(a) => self.handle_insights_action(a),
             ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
             ViewAction::Inbox(a) => self.handle_inbox_action(a, witness.as_ref()),
-            ViewAction::Transaction(a) => self.handle_transaction_view_action(a),
+            ViewAction::Transaction(a) => self.handle_transaction_view_action(a, witness.as_ref()),
             ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
             ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
             ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
@@ -81,14 +83,14 @@ impl App {
     // =========================================================================
 
     /// Stage a tag editor decision to the Witch's transaction and update editor state.
-    fn stage_tag_editor_decision(&mut self, key: DecisionKey, mutations: Vec<crate::meta::mutations::Mutation>, _witness: &witness::DecisionWitness) {
+    fn stage_tag_editor_decision(&mut self, key: DecisionKey, mutations: Vec<crate::meta::mutations::Mutation>, gesture: &witness::ConfirmationGesture) {
         if let Some(the_witch) = self.witch.as_mut() {
             let label = if let ActiveView::UnifiedTagEditor(ref editor) = self.view {
                 editor.current_item_label()
             } else {
                 "Tag edit".to_string()
             };
-            let _ = super::operator_decisions::stage_decision(the_witch, key, &label, mutations.clone());
+            let _ = super::operator_decisions::stage_decision(the_witch, key, &label, mutations.clone(), gesture);
         }
         if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
             editor.set_staged_mutations(mutations);
@@ -105,13 +107,13 @@ impl App {
     ///
     /// In open-txn mode, skips `start_transaction` since the persistent transaction
     /// is already active.
-    fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, key: DecisionKey, _witness: &witness::DecisionWitness) {
+    fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, key: DecisionKey, gesture: &witness::ConfirmationGesture) {
         let open_txn = self.open_txn_mode();
         let Some(ref mut witch) = self.witch else { return };
         if !open_txn {
             let _ = witch.start_transaction(label);
         }
-        let _ = super::operator_decisions::stage_decision(witch, key, label, mutations);
+        let _ = super::operator_decisions::stage_decision(witch, key, label, mutations, gesture);
     }
 
     /// Cancel the current modal and return to the source view.
@@ -167,10 +169,61 @@ impl App {
     }
 
     // =========================================================================
+    // Startup Action Handlers
+    // =========================================================================
+
+    /// Handle migration approval actions.
+    fn handle_migration_approval_action(
+        &mut self,
+        action: super::MigrationAction,
+        _witness: Option<&witness::ConfirmationGesture>,
+    ) {
+        use super::MigrationPhase;
+        match action {
+            super::MigrationAction::None => {}
+            super::MigrationAction::Approve => {
+                if let super::ActiveView::MigrationApproval(ref mut state) = self.view {
+                    if state.phase == MigrationPhase::Approval {
+                        if let Some(ref mut witch) = self.witch {
+                            witch.queue_pending_migrations();
+                        }
+                        state.phase = MigrationPhase::Running;
+                    }
+                }
+            }
+            super::MigrationAction::Cancel => {
+                self.should_quit = true;
+            }
+        }
+    }
+
+    /// Handle vacuum prompt actions.
+    fn handle_vacuum_prompt_action(
+        &mut self,
+        action: super::VacuumAction,
+        _witness: Option<&witness::ConfirmationGesture>,
+    ) {
+        use super::VacuumPhase;
+        match action {
+            super::VacuumAction::None => {}
+            super::VacuumAction::Compact => {
+                if let super::ActiveView::VacuumPrompt(ref mut state) = self.view {
+                    if state.phase == VacuumPhase::Prompt {
+                        state.phase = VacuumPhase::Compacting;
+                    }
+                }
+            }
+            super::VacuumAction::Skip => {
+                self.complete_startup();
+            }
+        }
+    }
+
+    // =========================================================================
     // View Action Handlers
     // =========================================================================
 
-    fn handle_config_editor_action(&mut self, action: super::config_editor::ConfigEditorAction) {
+    fn handle_config_editor_action(&mut self, action: super::config_editor::ConfigEditorAction, gesture: Option<&witness::ConfirmationGesture>) {
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::config_edit::ApplyConfigEditsMutation;
 
@@ -192,6 +245,8 @@ impl App {
                 };
 
                 if let Some((original_kdl, old_config, new_config)) = mutation_data {
+                    let Some(g) = gesture else { return };
+
                     let mutation = Mutation::ApplyConfigEdits(ApplyConfigEditsMutation {
                         original_kdl,
                         old_config,
@@ -204,7 +259,7 @@ impl App {
                             let _ = witch.start_transaction("Config update");
                         }
                         let _ = super::operator_decisions::stage_decision(
-                            witch, DecisionKey::single(DecisionSource::ConfigEdit), "Apply config changes", vec![mutation],
+                            witch, DecisionKey::single(DecisionSource::ConfigEdit), "Apply config changes", vec![mutation], g,
                         );
                     }
 
@@ -471,7 +526,7 @@ impl App {
     fn handle_missing_album_single_action(
         &mut self,
         action: crate::ui::missing_album_modal::MissingAlbumAction,
-        witness: Option<&witness::DecisionWitness>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         use crate::corpus::db::types::Zone;
         use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation, indexing::EmitExpectedMissingTagMutation};
@@ -485,7 +540,7 @@ impl App {
             }
 
             MissingAlbumAction::Confirm(resolution) => {
-                let Some(_w) = witness else { return };
+                let Some(g) = witness else { return };
 
                 let group_idx = {
                     let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
@@ -505,7 +560,7 @@ impl App {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
-                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag as singles", vec![mutation],
+                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag as singles", vec![mutation], g,
                                 );
                             }
                         }
@@ -523,7 +578,7 @@ impl App {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
-                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag all as Singles", vec![mutation],
+                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag all as Singles", vec![mutation], g,
                                 );
                             }
                         }
@@ -538,7 +593,7 @@ impl App {
                             let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
                             if let Some(ref mut witch) = self.witch {
                                 let _ = super::operator_decisions::stage_decision(
-                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Suppress missing album", vec![mutation],
+                                    witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Suppress missing album", vec![mutation], g,
                                 );
                             }
                         }
@@ -671,7 +726,7 @@ impl App {
     }
 
     /// Handle intake confirmation dialog actions.
-    fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction, _witness: Option<&witness::DecisionWitness>) {
+    fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction, gesture: Option<&witness::ConfirmationGesture>) {
         use super::operator_decisions;
 
         // Determine zone before matching (used for post-action routing)
@@ -683,6 +738,8 @@ impl App {
         match action {
             startup::IntakeConfirmationAction::None => {}
             startup::IntakeConfirmationAction::Confirmed => {
+                let Some(g) = gesture else { return };
+
                 // User confirmed - create IndexTrack mutations and stage for review
                 let mutations = if let ActiveView::IntakeConfirmation(ref s) = self.view {
                     s.create_index_mutations()
@@ -716,6 +773,7 @@ impl App {
                             DecisionKey::single(DecisionSource::IntakeIndex),
                             "Index unindexed files",
                             mutations,
+                            g,
                         );
                     }
 
@@ -784,7 +842,7 @@ impl App {
         }
     }
 
-    fn handle_unified_tag_editor_action(&mut self, action: tag_editor::UnifiedTagEditorAction, witness: Option<&witness::DecisionWitness>) {
+    fn handle_unified_tag_editor_action(&mut self, action: tag_editor::UnifiedTagEditorAction, witness: Option<&witness::ConfirmationGesture>) {
         use tag_editor::UnifiedTagEditorAction;
 
         match action {
@@ -910,11 +968,11 @@ impl App {
             }
 
             UnifiedTagEditorAction::StageAndCloseEmbedded { decision_key, decision_label, mutations } => {
-                let Some(_w) = witness else { return };
+                let Some(g) = witness else { return };
                 // Stage collected mutations at parent's decision key
                 if let Some(ref mut witch) = self.witch {
                     let _ = super::operator_decisions::stage_decision(
-                        witch, decision_key, &decision_label, mutations,
+                        witch, decision_key, &decision_label, mutations, g,
                     );
                 }
                 // Return to parent health modal
@@ -941,7 +999,7 @@ impl App {
     /// - Cancel: pop view stack to restore source view
     /// - Discard: discard transaction, clear view stack, return to Insights
     /// - Confirm: commit transaction, clear view stack, go to Progress
-    fn handle_transaction_review_action(&mut self, action: transaction_review::TransactionReviewAction, _witness: Option<&witness::DecisionWitness>) {
+    fn handle_transaction_review_action(&mut self, action: transaction_review::TransactionReviewAction, gesture: Option<&witness::ConfirmationGesture>) {
         use transaction_review::TransactionReviewAction;
 
         match action {
@@ -965,6 +1023,8 @@ impl App {
             }
 
             TransactionReviewAction::Confirm => {
+                let Some(g) = gesture else { return };
+
                 // Determine progress phase before clearing state
                 let post_commit_phase = if let ActiveView::TransactionReview(ref review) = self.view {
                     review.post_commit_phase
@@ -977,7 +1037,7 @@ impl App {
 
                 // Commit transaction
                 let commit_result = if let Some(ref mut witch) = self.witch {
-                    super::operator_decisions::commit_transaction(witch)
+                    super::operator_decisions::commit_transaction(witch, g)
                 } else {
                     Err(crate::meta::decisions::TransactionError::NoActiveTransaction)
                 };
@@ -1025,8 +1085,9 @@ impl App {
             }
 
             TransactionReviewAction::ConfirmRemoval(key) => {
+                let Some(g) = gesture else { return };
                 if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::remove_decision(witch, &key);
+                    let _ = super::operator_decisions::remove_decision(witch, &key, g);
 
                     // If transaction is now empty, auto-close review
                     if witch.decision_keys().is_empty() {
@@ -1056,7 +1117,7 @@ impl App {
     // ========================================================================
 
     /// Handle actions from the Transaction lateral tab view.
-    fn handle_transaction_view_action(&mut self, action: super::transaction_view::TransactionViewAction) {
+    fn handle_transaction_view_action(&mut self, action: super::transaction_view::TransactionViewAction, gesture: Option<&witness::ConfirmationGesture>) {
         use super::transaction_view::TransactionViewAction;
         match action {
             TransactionViewAction::None => {}
@@ -1067,8 +1128,9 @@ impl App {
                 self.start_lateral_view(widgets::LateralView::Transaction.prev(self.transactions_open()));
             }
             TransactionViewAction::Commit => {
+                let Some(g) = gesture else { return };
                 if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::commit_transaction(witch);
+                    let _ = super::operator_decisions::commit_transaction(witch, g);
                 }
                 // Re-open transaction immediately
                 if let Some(ref mut witch) = self.witch {
@@ -1087,13 +1149,15 @@ impl App {
                 self.status_message = Some("Transaction discarded".into());
             }
             TransactionViewAction::RemoveDecision(key) => {
+                let Some(g) = gesture else { return };
                 if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::remove_decision(witch, &key);
+                    let _ = super::operator_decisions::remove_decision(witch, &key, g);
                 }
             }
             TransactionViewAction::RemoveMutation(key, idx) => {
+                let Some(g) = gesture else { return };
                 if let Some(ref mut witch) = self.witch {
-                    let _ = super::operator_decisions::remove_mutation(witch, &key, idx);
+                    let _ = super::operator_decisions::remove_mutation(witch, &key, idx, g);
                 }
             }
         }
@@ -1132,7 +1196,7 @@ impl App {
     /// button hits. Mouse clicks on decision buttons are equivalent to
     /// Enter key presses for decision witnessing - clicks always have authority.
     pub(super) fn handle_click(&mut self, x: u16, y: u16) {
-        let click_witness = witness::DecisionWitness::new();
+        let click_witness = witness::ConfirmationGesture::new();
 
         match &self.view {
             ActiveView::OobSyncResolution(state) => {

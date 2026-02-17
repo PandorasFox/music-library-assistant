@@ -14,12 +14,123 @@ use crate::ui::{
     startup,
     transaction_review,
     ActiveView,
+    MigrationPhase, VacuumPhase,
 };
 use super::App;
 use super::eye::Eye;
 use super::insights_view;
 
 impl App {
+    /// Tick the migration approval view.
+    ///
+    /// When phase is Running: check if all migrations have completed.
+    /// When complete: show completion briefly, then advance.
+    pub(super) fn tick_migration_approval(&mut self) {
+        let phase = match self.view {
+            ActiveView::MigrationApproval(ref state) => state.phase,
+            _ => return,
+        };
+
+        match phase {
+            MigrationPhase::Running => {
+                // Tick the Witch to process migration tasks
+                if let Some(ref mut witch) = self.witch {
+                    witch.tick();
+                    if !witch.has_pending() {
+                        // All migrations complete
+                        if let ActiveView::MigrationApproval(ref mut state) = self.view {
+                            state.phase = MigrationPhase::Complete;
+                        }
+                    }
+                }
+            }
+            MigrationPhase::Complete => {
+                // Invalidate read-only connection so it picks up new schema
+                if let Some(ref mut witch) = self.witch {
+                    witch.invalidate_read_only_conn();
+                }
+
+                // Advance past migrations
+                let db_path = self.db_path.clone();
+                let threshold = self.vacuum_threshold;
+                self.advance_past_migrations(&db_path, threshold);
+            }
+            MigrationPhase::Approval => {
+                // Waiting for user input, nothing to tick
+            }
+        }
+    }
+
+    /// Tick the vacuum prompt view.
+    ///
+    /// When phase is Compacting: execute VACUUM synchronously, then show completion.
+    /// When Complete: advance to complete_startup after a brief delay.
+    pub(super) fn tick_vacuum_prompt(&mut self) {
+        let phase = match self.view {
+            ActiveView::VacuumPrompt(ref state) => state.phase,
+            _ => return,
+        };
+
+        match phase {
+            VacuumPhase::Compacting => {
+                // First tick in Compacting: mark as rendered so the UI shows
+                // "Compacting database..." for at least one frame before we block.
+                if let ActiveView::VacuumPrompt(ref mut state) = self.view {
+                    if !state.compacting_rendered {
+                        state.compacting_rendered = true;
+                        return;
+                    }
+                }
+
+                // Execute VACUUM synchronously
+                let db_path = match self.view {
+                    ActiveView::VacuumPrompt(ref state) => state.db_path.clone(),
+                    _ => return,
+                };
+
+                let vacuum_result = if let Some(ref mut witch) = self.witch {
+                    witch.execute_vacuum(&db_path)
+                } else {
+                    Err(anyhow::anyhow!("No witch"))
+                };
+
+                match vacuum_result {
+                    Ok(()) => {
+                        // Re-query to show reclaimed amount
+                        let new_size_mb = Self::query_db_size_mb(&db_path).unwrap_or(0.0);
+                        if let ActiveView::VacuumPrompt(ref mut state) = self.view {
+                            state.phase = VacuumPhase::Complete { new_size_mb };
+                        }
+                    }
+                    Err(e) => {
+                        crate::logging::log_error(format!("Vacuum failed: {}", e));
+                        // Skip vacuum and complete startup
+                        self.complete_startup();
+                    }
+                }
+            }
+            VacuumPhase::Complete { .. } => {
+                // Advance to normal startup
+                self.complete_startup();
+            }
+            VacuumPhase::Prompt => {
+                // Waiting for user input
+            }
+        }
+    }
+
+    /// Query the current database size in MB.
+    fn query_db_size_mb(db_path: &std::path::Path) -> Option<f64> {
+        let conn = rusqlite::Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).ok()?;
+        let page_count: u64 = conn.pragma_query_value(None, "page_count", |row| row.get(0)).ok()?;
+        let page_size: u64 = conn.pragma_query_value(None, "page_size", |row| row.get(0)).ok()?;
+        Some((page_count * page_size) as f64 / (1024.0 * 1024.0))
+    }
+
     /// Tick the progress screen and check for completion.
     ///
     /// Called each frame while the active view is Progress. Handles all progress phases:
@@ -272,7 +383,7 @@ impl App {
         );
 
         if let Some(ref mut witch) = self.witch {
-            let _ = super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, idx.to_string()), &description, mutations);
+            let _ = super::operator_decisions::stage_decision(witch, DecisionKey::new(DecisionSource::CompoundSplit, idx.to_string()), &description, mutations, &worker.gesture);
             worker.mutations_generated += 1;
         } else {
             worker.nops_elided += 1;

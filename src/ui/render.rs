@@ -20,7 +20,7 @@ use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar
 use super::{
     compound_split_v2, config_editor, filter_popup, inbox_view, insights_view, manual_review_modal,
     oob_conflict_modal, oob_sync_modal, progressive_worker, tag_canonicity_v2,
-    transaction_review, transaction_view,
+    tabbed_transaction_review, transaction_review,
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
@@ -200,10 +200,10 @@ fn render_content(
             vname = "inbox";
             inbox_view::render_inbox_view(f, area, state);
         }
-        ActiveView::Transaction(ref state) => {
-            vname = "transaction";
+        ActiveView::TabbedTransactionReview(ref state) => {
+            vname = "tabbed_transaction_review";
             let decisions = transaction_review::fetch_decision_summaries(&app.witch);
-            transaction_view::render::render(f, area, state, &decisions);
+            tabbed_transaction_review::render(f, area, state, &decisions);
         }
         ActiveView::TagSearch(ref state) => {
             vname = "tag_search";
@@ -426,7 +426,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::ConfigEditor(_) => "config_editor",
         ActiveView::Insights(_) => "insights",
         ActiveView::Inbox(_) => "inbox",
-        ActiveView::Transaction(_) => "transaction",
+        ActiveView::TabbedTransactionReview(_) => "tabbed_transaction_review",
         ActiveView::CorpusBrowser(_) => "corpus_browser",
         ActiveView::TagSearch(_) => "tag_search",
         ActiveView::Progress { .. } => "progress",

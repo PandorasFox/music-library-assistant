@@ -53,7 +53,7 @@ impl App {
             ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
             ViewAction::Inbox(a) => self.handle_inbox_action(a, witness.as_ref()),
-            ViewAction::Transaction(a) => self.handle_transaction_view_action(a, witness.as_ref()),
+            ViewAction::TabbedTransactionReview(a) => self.handle_tabbed_transaction_review_action(a, witness.as_ref()),
             ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
             ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
             ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
@@ -133,7 +133,7 @@ impl App {
     /// In open-txn mode: returns to the last lateral view with a status message.
     pub(in crate::ui) fn after_staging_decisions(&mut self) {
         if self.open_txn_mode() {
-            self.start_transaction_view();
+            self.start_tabbed_transaction_review();
             self.status_message = Some("Decision staged".into());
         } else {
             self.start_transaction_review();
@@ -757,7 +757,7 @@ impl App {
                     );
 
                     if open_txn {
-                        self.start_transaction_view();
+                        self.start_tabbed_transaction_review();
                         self.status_message = Some(format!("{} files staged for indexing", count));
                     } else {
                         // Note: IntakeConfirmation state is preserved inside the suspended view for Cancel return
@@ -979,9 +979,18 @@ impl App {
             TransactionReviewAction::None => {}
 
             TransactionReviewAction::Cancel => {
-                // Pop the view stack to restore the parent view
-                if !self.pop_and_restore() {
-                    self.start_insights_view();
+                if self.witch.decision_keys().is_empty() {
+                    // Empty transaction — treat Esc as exit request
+                    if self.has_pending_operations() {
+                        self.status_message = Some("Cannot quit while operations are pending".to_string());
+                    } else {
+                        self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
+                    }
+                } else {
+                    // Pop the view stack to restore the parent view
+                    if !self.pop_and_restore() {
+                        self.start_insights_view();
+                    }
                 }
             }
 
@@ -1074,55 +1083,65 @@ impl App {
     }
 
     // ========================================================================
-    // Transaction Tab View
+    // Tabbed Transaction Review
     // ========================================================================
 
-    /// Handle actions from the Transaction lateral tab view.
-    fn handle_transaction_view_action(&mut self, action: super::transaction_view::TransactionViewAction, gesture: Option<&witness::ConfirmationGesture>) {
-        use super::transaction_view::TransactionViewAction;
+    /// Handle actions from the tabbed transaction review lateral view.
+    fn handle_tabbed_transaction_review_action(
+        &mut self,
+        action: super::tabbed_transaction_review::TabbedTransactionReviewAction,
+        gesture: Option<&witness::ConfirmationGesture>,
+    ) {
+        use super::tabbed_transaction_review::TabbedTransactionReviewAction;
+        use transaction_review::TransactionReviewAction;
+
         match action {
-            TransactionViewAction::None => {}
-            TransactionViewAction::CycleNext => {
+            TabbedTransactionReviewAction::None => {}
+            TabbedTransactionReviewAction::CycleNext => {
                 self.start_lateral_view(widgets::LateralView::Transaction.next(self.transactions_open()));
             }
-            TransactionViewAction::CyclePrev => {
+            TabbedTransactionReviewAction::CyclePrev => {
                 self.start_lateral_view(widgets::LateralView::Transaction.prev(self.transactions_open()));
             }
-            TransactionViewAction::Commit => {
-                let Some(g) = gesture else { return };
-                let _ = super::operator_decisions::commit_transaction(&mut self.witch, g);
-                // Re-open transaction immediately
-                let _ = self.witch.start_transaction("Open");
-                self.transition_to_progress_after_mutations(
-                    super::progress_screen::ProgressPhase::SignalRefresh,
-                );
-            }
-            TransactionViewAction::DiscardAll => {
-                let _ = super::operator_decisions::discard_transaction(&mut self.witch);
-                // Re-open transaction immediately
-                let _ = self.witch.start_transaction("Open");
-                self.status_message = Some("Transaction discarded".into());
-            }
-            TransactionViewAction::RequestRemoval => {
-                if let ActiveView::Transaction(ref mut state) = self.view {
-                    let decisions = transaction_review::fetch_decision_summaries(&self.witch);
-                    if let Some(d) = decisions.get(state.cursor) {
-                        state.pending_removal = Some(d.key.clone());
+            TabbedTransactionReviewAction::Review(review_action) => match review_action {
+                TransactionReviewAction::None => {}
+                TransactionReviewAction::Cancel => {} // No cancel in tabbed mode
+                TransactionReviewAction::Confirm => {
+                    let Some(g) = gesture else { return };
+                    let _ = super::operator_decisions::commit_transaction(&mut self.witch, g);
+                    // Re-open transaction immediately
+                    let _ = self.witch.start_transaction("Open");
+                    self.transition_to_progress_after_mutations(
+                        super::progress_screen::ProgressPhase::SignalRefresh,
+                    );
+                }
+                TransactionReviewAction::Discard => {
+                    let _ = super::operator_decisions::discard_transaction(&mut self.witch);
+                    // Re-open transaction immediately
+                    let _ = self.witch.start_transaction("Open");
+                    self.status_message = Some("Transaction discarded".into());
+                }
+                TransactionReviewAction::RequestRemoval => {
+                    if let ActiveView::TabbedTransactionReview(ref mut state) = self.view {
+                        let decisions = transaction_review::fetch_decision_summaries(&self.witch);
+                        if let Some(d) = decisions.get(state.review.cursor) {
+                            state.review.pending_removal = Some(d.key.clone());
+                        }
                     }
                 }
-            }
-            TransactionViewAction::RemoveDecision(key) => {
-                let Some(g) = gesture else { return };
-                let _ = super::operator_decisions::remove_decision(&mut self.witch, &key, g);
-                self.status_message = Some("Decision removed".into());
-                // Clamp cursor
-                if let ActiveView::Transaction(ref mut state) = self.view {
-                    let remaining = transaction_review::fetch_decision_summaries(&self.witch).len();
-                    if state.cursor >= remaining && remaining > 0 {
-                        state.cursor = remaining - 1;
+                TransactionReviewAction::ConfirmRemoval(key) => {
+                    let Some(g) = gesture else { return };
+                    let _ = super::operator_decisions::remove_decision(&mut self.witch, &key, g);
+                    self.status_message = Some("Decision removed".into());
+                    // Clamp cursor
+                    if let ActiveView::TabbedTransactionReview(ref mut state) = self.view {
+                        let remaining = transaction_review::fetch_decision_summaries(&self.witch).len();
+                        if state.review.cursor >= remaining && remaining > 0 {
+                            state.review.cursor = remaining - 1;
+                        }
                     }
                 }
-            }
+            },
         }
     }
 

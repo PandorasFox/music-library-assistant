@@ -22,7 +22,7 @@ mod types;
 
 pub mod operator_decisions;
 pub mod transaction_review;
-pub mod transaction_view;
+pub mod tabbed_transaction_review;
 
 pub mod bulk_selection;
 pub mod config_editor;
@@ -236,9 +236,8 @@ impl App {
             ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_key(key)),
             ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_key(key)),
             ActiveView::Inbox(s) => ViewAction::Inbox(s.handle_key(key)),
-            ActiveView::Transaction(ref mut state) => {
-                let decision_count = self.witch.transaction_summary().map_or(0, |(_, d, _)| d);
-                ViewAction::Transaction(state.handle_key(key, decision_count))
+            ActiveView::TabbedTransactionReview(ref mut state) => {
+                ViewAction::TabbedTransactionReview(state.handle_key(key))
             }
             ActiveView::ExitConfirm(state) => {
                 let a = match key.code {
@@ -370,15 +369,17 @@ impl App {
             widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
             widgets::LateralView::Insights => self.start_insights_view(),
             widgets::LateralView::Inbox => self.start_inbox_view(),
-            widgets::LateralView::Transaction => self.start_transaction_view(),
+            widgets::LateralView::Transaction => self.start_tabbed_transaction_review(),
             widgets::LateralView::Deploy => self.start_deploy_view(),
         }
     }
 
-    /// Start the transaction tab view.
-    pub(super) fn start_transaction_view(&mut self) {
+    /// Start the tabbed transaction review lateral view.
+    pub(super) fn start_tabbed_transaction_review(&mut self) {
         self.last_lateral_view = widgets::LateralView::Transaction;
-        self.view = ActiveView::Transaction(transaction_view::TransactionViewState::new());
+        self.view = ActiveView::TabbedTransactionReview(
+            tabbed_transaction_review::TabbedTransactionReviewState::new(),
+        );
     }
 
     /// Start the config editor view.
@@ -665,7 +666,7 @@ fn run_app<B: ratatui::backend::Backend>(
             | ActiveView::CorpusBrowser(_)
             | ActiveView::TagSearch(_)
             | ActiveView::Inbox(_)
-            | ActiveView::Transaction(_)
+            | ActiveView::TabbedTransactionReview(_)
         );
         app.witch.set_idle_rescan_eligible(idle_eligible);
 

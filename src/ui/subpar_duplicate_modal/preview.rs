@@ -201,144 +201,147 @@ impl SubparDuplicatePreviewState {
         let count = self.cached_data.files.len();
         let list_focused = self.focus_pane == FocusPane::List;
 
-        // Split into detail pane (top) and list pane (bottom)
+        // Pre-compute detail lines to determine dynamic height.
+        // Use area width minus 2 (borders) as the inner width for wrapping.
+        let detail_inner_width = area.width.saturating_sub(2);
+        let detail_lines = self.build_detail_lines(detail_inner_width);
+        let detail_height = (detail_lines.len() as u16) + 2; // +2 for borders
+
+        // Split into list pane (top) and detail pane (bottom, dynamic)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4), // Detail pane: 2 lines + borders
-                Constraint::Min(6),    // List pane
+                Constraint::Min(6),               // List pane (top)
+                Constraint::Length(detail_height), // Detail pane (bottom, dynamic)
             ])
             .split(area);
 
-        // Render detail pane with full paths of current selection
-        self.render_detail_pane(f, chunks[0]);
-
-        // Render list pane with three columns
+        // Render list pane (top)
         let block = Block::default()
             .title(format!(" Subpar Files ({}) ", count))
             .title_style(Style::default().fg(if count > 0 { Color::Cyan } else { Color::DarkGray }))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if list_focused { Color::Cyan } else { Color::DarkGray }));
 
-        let inner = render_pane(f, chunks[1], block);
+        let inner = render_pane(f, chunks[0], block);
 
-        if self.cached_data.files.is_empty() {
+        if !self.cached_data.files.is_empty() {
+            // Calculate visible lines
+            let visible_lines = inner.height as usize;
+            let scroll = self.scroll;
+
+            // Four columns: 40% subpar path | 10% reason | 8% score | 42% superior path
+            let total_width = inner.width as usize;
+            let left_width = (total_width * 40) / 100;
+            let mid_width = (total_width * 10) / 100;
+            let score_width = (total_width * 8) / 100;
+            let right_width = total_width.saturating_sub(left_width + mid_width + score_width);
+
+            let items: Vec<ListItem> = self
+                .cached_data
+                .files
+                .iter()
+                .skip(scroll)
+                .take(visible_lines)
+                .enumerate()
+                .map(|(visible_idx, file)| {
+                    // First visible item (visible_idx 0) is the selected one
+                    let is_selected = visible_idx == 0;
+                    let style = if is_selected && list_focused {
+                        CURSOR_STYLE
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    let reason_style = if is_selected && list_focused {
+                        CURSOR_STYLE
+                    } else {
+                        Style::default().fg(Color::Yellow)
+                    };
+
+                    let subpar_path = truncate_left(&file.corpus_path, left_width.saturating_sub(1));
+                    let superior_path = truncate_left(&file.superior_path, right_width.saturating_sub(1));
+                    let score_str = format!("{:.1}%", file.similarity_score);
+
+                    let score_style = if is_selected && list_focused {
+                        CURSOR_STYLE
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+
+                    let line = Line::from(vec![
+                        Span::styled(
+                            format!("{:<width$}", subpar_path, width = left_width),
+                            style,
+                        ),
+                        Span::styled(
+                            format!("{:^width$}", file.reason, width = mid_width),
+                            reason_style,
+                        ),
+                        Span::styled(
+                            format!("{:>width$}", score_str, width = score_width),
+                            score_style,
+                        ),
+                        Span::styled(
+                            format!(" {:<width$}", superior_path, width = right_width.saturating_sub(1)),
+                            style,
+                        ),
+                    ]);
+                    ListItem::new(line)
+                })
+                .collect();
+
+            let list = List::new(items);
+            f.render_widget(list, inner);
+        } else {
             let empty = Paragraph::new("No subpar duplicates found")
                 .style(Style::default().fg(Color::DarkGray));
             f.render_widget(empty, inner);
-            return;
         }
 
-        // Calculate visible lines
-        let visible_lines = inner.height as usize;
-        let scroll = self.scroll;
-
-        // Four columns: 40% subpar path | 10% reason | 8% score | 42% superior path
-        let total_width = inner.width as usize;
-        let left_width = (total_width * 40) / 100;
-        let mid_width = (total_width * 10) / 100;
-        let score_width = (total_width * 8) / 100;
-        let right_width = total_width.saturating_sub(left_width + mid_width + score_width);
-
-        let items: Vec<ListItem> = self
-            .cached_data
-            .files
-            .iter()
-            .skip(scroll)
-            .take(visible_lines)
-            .enumerate()
-            .map(|(visible_idx, file)| {
-                // First visible item (visible_idx 0) is the selected one
-                let is_selected = visible_idx == 0;
-                let style = if is_selected && list_focused {
-                    CURSOR_STYLE
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                let reason_style = if is_selected && list_focused {
-                    CURSOR_STYLE
-                } else {
-                    Style::default().fg(Color::Yellow)
-                };
-
-                let subpar_path = truncate_left(&file.corpus_path, left_width.saturating_sub(1));
-                let superior_path = truncate_left(&file.superior_path, right_width.saturating_sub(1));
-                let score_str = format!("{:.1}%", file.similarity_score);
-
-                let score_style = if is_selected && list_focused {
-                    CURSOR_STYLE
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-
-                let line = Line::from(vec![
-                    Span::styled(
-                        format!("{:<width$}", subpar_path, width = left_width),
-                        style,
-                    ),
-                    Span::styled(
-                        format!("{:^width$}", file.reason, width = mid_width),
-                        reason_style,
-                    ),
-                    Span::styled(
-                        format!("{:>width$}", score_str, width = score_width),
-                        score_style,
-                    ),
-                    Span::styled(
-                        format!(" {:<width$}", superior_path, width = right_width.saturating_sub(1)),
-                        style,
-                    ),
-                ]);
-                ListItem::new(line)
-            })
-            .collect();
-
-        let list = List::new(items);
-        f.render_widget(list, inner);
-    }
-
-    fn render_detail_pane(&self, f: &mut Frame, area: Rect) {
-        let block = Block::default()
+        // Render detail pane (bottom, dynamically sized)
+        let detail_block = Block::default()
             .title(" Selected Pair ")
             .title_style(Style::default().fg(Color::DarkGray))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        let inner = render_pane(f, area, block);
+        let detail_inner = render_pane(f, chunks[1], detail_block);
+        let para = Paragraph::new(detail_lines);
+        f.render_widget(para, detail_inner);
+    }
 
-        // Get current file if any
-        let current_file = self.cached_data.files.get(self.scroll);
+    /// Build the detail lines for the currently selected pair.
+    /// Returns owned lines so they can be used both for height measurement and rendering.
+    fn build_detail_lines(&self, width: u16) -> Vec<Line<'static>> {
+        match self.cached_data.files.get(self.scroll) {
+            Some(file) => {
+                let mut lines = PathField::new(
+                    Span::styled("Subpar: ", Style::default().fg(Color::Red)),
+                    &file.corpus_path,
+                )
+                .style(Style::default().fg(Color::White))
+                .render_lines(width);
 
-        let lines = if let Some(file) = current_file {
-            let mut lines = PathField::new(
-                Span::styled("Subpar: ", Style::default().fg(Color::Red)),
-                &file.corpus_path,
-            )
-            .style(Style::default().fg(Color::White))
-            .render_lines(inner.width);
-
-            let mut better_lines = PathField::new(
-                Span::styled("Better: ", Style::default().fg(Color::Green)),
-                &file.superior_path,
-            )
-            .style(Style::default().fg(Color::White))
-            .render_lines(inner.width);
-            if let Some(last) = better_lines.last_mut() {
-                last.spans.push(Span::styled(
-                    format!("  [{:.1}% match]", file.similarity_score),
-                    Style::default().fg(Color::DarkGray),
-                ));
+                let mut better_lines = PathField::new(
+                    Span::styled("Better: ", Style::default().fg(Color::Green)),
+                    &file.superior_path,
+                )
+                .style(Style::default().fg(Color::White))
+                .render_lines(width);
+                if let Some(last) = better_lines.last_mut() {
+                    last.spans.push(Span::styled(
+                        format!("  [{:.1}% match]", file.similarity_score),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                lines.extend(better_lines);
+                lines
             }
-            lines.extend(better_lines);
-            lines
-        } else {
-            vec![
-                Line::from(Span::styled("No file selected", Style::default().fg(Color::DarkGray))),
-            ]
-        };
-
-        let para = Paragraph::new(lines);
-        f.render_widget(para, inner);
+            None => vec![Line::from(Span::styled(
+                "No file selected",
+                Style::default().fg(Color::DarkGray),
+            ))],
+        }
     }
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {

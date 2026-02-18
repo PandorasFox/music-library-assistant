@@ -3,8 +3,8 @@
 //! Fingerprint overlaps, duplicate inodes, metadata duplicates, fingerprint
 //! analysis, and cross-source overlap detection.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use mm_utils::tag_names::find_tag_in_map;
@@ -782,6 +782,7 @@ pub fn execute_analyze_fingerprint_overlaps(
     let mut total_groups = 0;
     let mut variant_skipped = 0;
     let mut expected_skipped = 0;
+    let mut interior_skipped = 0;
 
     // Collect all computed signals for reconciliation
     let mut computed_subpar: Vec<ComputedCorpusSignal> = Vec::new();
@@ -889,6 +890,28 @@ pub fn execute_analyze_fingerprint_overlaps(
 
             // For each true duplicate group, partition into quality tiers and collect signals
             for group in true_duplicate_groups {
+                // Check if all files in this group are interior to a single source
+                // that has interior_dupes disabled
+                let group_sources: HashSet<Option<&PathBuf>> = group.iter()
+                    .map(|&idx| {
+                        let path = cluster[idx].path();
+                        let relative = path.strip_prefix("corpus/").unwrap_or(path);
+                        config.get_source_for_relative_path(Path::new(relative))
+                            .map(|sd| &sd.path)
+                    })
+                    .collect();
+
+                if group_sources.len() == 1 {
+                    if let Some(Some(source_path)) = group_sources.iter().next() {
+                        if let Some(sd) = config.get_source_for_relative_path(source_path) {
+                            if !sd.interior_dupes {
+                                interior_skipped += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 // Build quality tiers for each file in the group
                 let mut tiered: Vec<(usize, QualityTier)> = group
                     .iter()
@@ -986,11 +1009,11 @@ pub fn execute_analyze_fingerprint_overlaps(
     let subpar_total = subpar_new + subpar_updated + subpar_unchanged;
     let redundant_total = redundant_new + redundant_updated + redundant_unchanged;
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate (cleared={}, new={}, updated={}, unchanged={}) + {} RedundantDuplicate (cleared={}, new={}, updated={}, unchanged={}), skipped {} variants, {} expected",
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate (cleared={}, new={}, updated={}, unchanged={}) + {} RedundantDuplicate (cleared={}, new={}, updated={}, unchanged={}), skipped {} variants, {} expected, {} interior-suppressed",
         total_groups,
         subpar_total, subpar_cleared, subpar_new, subpar_updated, subpar_unchanged,
         redundant_total, redundant_cleared, redundant_new, redundant_updated, redundant_unchanged,
-        variant_skipped, expected_skipped
+        variant_skipped, expected_skipped, interior_skipped
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

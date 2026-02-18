@@ -378,6 +378,9 @@ pub struct SourceDir {
     pub libraries: Vec<String>,
     /// Whether duplicates from this source can be stashed when another source wins (default: true)
     pub can_stash_dupes: bool,
+    /// Whether intra-source duplicates should be flagged (default: true).
+    /// When false, duplicate groups entirely within this source are suppressed.
+    pub interior_dupes: bool,
 }
 
 /// Shared config wrapped in `Arc<RwLock<Config>>` for thread-safe read/write access.
@@ -1404,6 +1407,7 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                         path,
                         libraries: Vec::new(),
                         can_stash_dupes: true, // default true
+                        interior_dupes: true, // default true
                     };
 
                     if let Some(children) = node.children() {
@@ -1420,6 +1424,11 @@ fn parse_kdl_config(content: &str) -> Result<Config> {
                                 "can-stash-dupes" => {
                                     if let Some(entry) = child.entries().first() {
                                         source.can_stash_dupes = entry.value().as_bool().unwrap_or(true);
+                                    }
+                                }
+                                "interior-dupes" => {
+                                    if let Some(entry) = child.entries().first() {
+                                        source.interior_dupes = entry.value().as_bool().unwrap_or(true);
                                     }
                                 }
                                 _ => {}
@@ -1515,6 +1524,7 @@ root "/Volumes/cerberus/archive"
 dir "web/releases/bandcamp" {
     library "music"
     can-stash-dupes false
+    interior-dupes false
 }
 
 dir "web/releases/indie" {
@@ -1534,9 +1544,11 @@ legacy-library true
         assert_eq!(config.source_dirs[0].path, PathBuf::from("web/releases/bandcamp"));
         assert_eq!(config.source_dirs[0].libraries, vec!["music".to_string()]);
         assert!(!config.source_dirs[0].can_stash_dupes); // explicitly false
+        assert!(!config.source_dirs[0].interior_dupes); // explicitly false
         assert_eq!(config.source_dirs[1].path, PathBuf::from("web/releases/indie"));
         assert_eq!(config.source_dirs[1].libraries, vec!["music".to_string(), "soundtracks".to_string()]);
         assert!(config.source_dirs[1].can_stash_dupes); // default true
+        assert!(config.source_dirs[1].interior_dupes); // default true
     }
 
     #[test]

@@ -9,7 +9,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
@@ -25,6 +25,8 @@ use crate::meta::mutations::Mutation;
 use crate::meta::mutations::album_art::EmbedAlbumArtMutation;
 use crate::meta::signals::data::EmbeddableAlbumArtSignal;
 use crate::ui::helpers::render_pane;
+use crate::ui::widgets::control_colors as cc;
+use crate::ui::widgets::{ConfirmationButton, render_button_row};
 
 /// Actions returned from the embed album art preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,13 +158,14 @@ impl EmbedAlbumArtPreviewState {
         // Clear background
         f.render_widget(Clear, area);
 
-        // Split into title + content + controls
+        // Split into title + content + buttons + hints
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),  // title
                 Constraint::Min(5),    // content
-                Constraint::Length(3), // controls
+                Constraint::Length(1), // buttons
+                Constraint::Length(1), // hints
             ])
             .split(area);
 
@@ -210,21 +213,22 @@ impl EmbedAlbumArtPreviewState {
 
         f.render_widget(list, chunks[1]);
 
-        // Controls
-        let controls = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " [Enter] ",
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Embed all  ", Style::default().fg(Color::White)),
-            Span::styled(
-                " [Esc] ",
-                Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Cancel ", Style::default().fg(Color::White)),
-        ]))
-        .block(Block::default().borders(Borders::ALL));
+        // Buttons
+        let buttons = [
+            ConfirmationButton::new("Confirm", Color::Green).selected(true),
+        ];
+        render_button_row(f, chunks[2], &buttons);
 
-        f.render_widget(controls, chunks[2]);
+        // Hints
+        let hints = Paragraph::new(Line::from(vec![
+            cc::nav("[↑↓]"),
+            cc::text(" navigate  "),
+            cc::confirm("[Enter]"),
+            cc::text(" confirm  "),
+            cc::cancel("[Esc]"),
+            cc::text(" cancel"),
+        ]))
+        .alignment(Alignment::Center);
+        f.render_widget(hints, chunks[3]);
     }
 }

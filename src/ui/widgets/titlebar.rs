@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────┐┌──────────────┐
-//! │ Tag Search | Corpus Browser | ... | Deploy   ││  mm beta 6  │
+//! │ Tag Search | Corpus Browser | ... | Deploy   ││  mm beta 7  │
 //! └──────────────────────────────────────────────┘└──────────────┘
 //! ```
 
@@ -102,7 +102,7 @@ impl LateralView {
 ///
 /// Two bordered panes side by side:
 /// - Left: Tab switcher showing all views with current highlighted
-/// - Right: App title "mm beta 6" (16 chars wide)
+/// - Right: App title "mm beta 7" (16 chars wide)
 pub struct UnifiedTitleBar {
     current_view: LateralView,
     /// When true and Deploy tab is not active, render Deploy label in Magenta.
@@ -202,7 +202,7 @@ impl UnifiedTitleBar {
     }
 
     fn render_title(&self, f: &mut Frame, area: Rect) {
-        let paragraph = Paragraph::new("mm beta 6")
+        let paragraph = Paragraph::new("mm beta 7")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));

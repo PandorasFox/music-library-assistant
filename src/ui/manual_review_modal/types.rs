@@ -10,7 +10,7 @@ use anyhow::Result;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::meta::mutations::Mutation;
-use crate::meta::mutations::file_ops::MoveToStashMutation;
+use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 
 /// What kind of manual review this modal is performing.
@@ -250,13 +250,13 @@ impl ManualReviewData {
     }
 }
 
-/// Generate MoveToStash + DropFromIndex mutations for a single file.
+/// Generate StashFromZone + DropFromIndex mutations for a single file.
 pub fn stash_file_mutations(corpus_path: &str, inode: i64, stash_name: &str) -> Vec<Mutation> {
     let resolver = paths::get_resolver();
     let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
 
     vec![
-        Mutation::MoveToStash(MoveToStashMutation {
+        Mutation::StashFromZone(StashFromZoneMutation {
             path: abs_path,
             stash_name: stash_name.to_string(),
         }),

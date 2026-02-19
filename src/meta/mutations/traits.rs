@@ -14,6 +14,39 @@ use crate::witch::MutationExecutionWitness;
 
 use super::types::{MutationResult, SignalClearScope, SignalToClear};
 
+// ============================================================================
+// Execution Staging
+// ============================================================================
+
+/// The execution phase a mutation belongs to within a staged transaction.
+///
+/// When a transaction is confirmed, mutations are bucketed by stage and
+/// executed in order with drain barriers between each phase. This ensures
+/// that DB writes complete before disk flushes, and disk flushes complete
+/// before deployment operations.
+///
+/// `Ord` derives from declaration order, giving natural phase ordering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MutationExecutionStage {
+    /// Phase 0: app-level config writes
+    Config,
+    /// Phase 1: database record mutations
+    DB,
+    /// Phase 2: flush state to filesystem
+    DiskFlush,
+    /// Phase 3: arrange library copies
+    DiskDeploy,
+}
+
+/// How a mutation is scheduled for execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutationStaging {
+    /// Directly queueable in a transaction phase.
+    Staged(MutationExecutionStage),
+    /// Only spawned by parent mutations during execution (never in transactions).
+    ChainEmitted,
+}
+
 /// Context provided to mutation executors at execution time.
 ///
 /// Contains everything a mutation needs to execute: read-only DB access,
@@ -36,6 +69,12 @@ pub struct MutationContext<'a> {
 pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
     /// Human-readable label for logging/display.
     fn label(&self) -> &'static str;
+
+    /// Which execution stage this mutation belongs to.
+    ///
+    /// Determines ordering within a confirmed transaction. Mutations are
+    /// bucketed by stage and executed phase-by-phase with drain barriers.
+    fn staging(&self) -> MutationStaging;
 
     /// Execute this mutation.
     fn execute(&self, ctx: &MutationContext) -> MutationResult;

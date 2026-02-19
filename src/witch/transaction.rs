@@ -2,14 +2,14 @@
 //!
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::meta::decisions::{
     ConfirmationGesture, DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
     WitnessedDecision,
 };
 use crate::corpus::db::types::Zone;
-use crate::meta::mutations::{Mutation, TagOp};
+use crate::meta::mutations::{Mutation, MutationExecutionStage, MutationStaging, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 
 /// Coalesce ApplyTagOps mutations into per-zone mutations.
@@ -251,13 +251,50 @@ impl super::Witch {
             decision_count, mutation_count, all_mutations.len()
         ));
 
-        // Queue mutations for execution
-        if !all_mutations.is_empty() {
-            self.queue_mutations_internal(all_mutations, Some(txn.label));
-        } else {
+        if all_mutations.is_empty() {
             crate::logging::log_mutation(
                 "[TRANSACTION] confirm_transaction: no mutations to queue (empty transaction)"
             );
+            return Ok(());
+        }
+
+        // Bucket mutations by execution stage (BTreeMap gives ordered iteration via Ord)
+        let mut by_stage: BTreeMap<MutationExecutionStage, Vec<Mutation>> = BTreeMap::new();
+        for mutation in all_mutations {
+            let stage = match mutation.as_executor() {
+                Some(executor) => match executor.staging() {
+                    MutationStaging::Staged(stage) => stage,
+                    MutationStaging::ChainEmitted => {
+                        panic!(
+                            "ChainEmitted mutation {:?} found in transaction — \
+                             these are only spawned during execution, never directly staged",
+                            mutation
+                        );
+                    }
+                },
+                None => panic!("DbMigration in transaction — migrations use queue_migration()"),
+            };
+            by_stage.entry(stage).or_default().push(mutation);
+        }
+
+        // Convert to ordered VecDeque of phases
+        let mut phases: std::collections::VecDeque<(MutationExecutionStage, Vec<Mutation>)> =
+            by_stage.into_iter().collect();
+
+        crate::logging::log_mutation(format!(
+            "[TRANSACTION] Staged execution: {} phase(s): {:?}",
+            phases.len(),
+            phases.iter().map(|(s, m)| format!("{:?}({})", s, m.len())).collect::<Vec<_>>()
+        ));
+
+        // Queue first phase immediately, stash remainder for drain-and-advance
+        if let Some((stage, mutations)) = phases.pop_front() {
+            crate::logging::log_mutation(format!(
+                "[TRANSACTION] Queueing first phase: {:?} ({} mutations)",
+                stage, mutations.len()
+            ));
+            self.pending_mutation_phases = phases;
+            self.queue_mutations_internal(mutations, Some(txn.label));
         }
 
         Ok(())

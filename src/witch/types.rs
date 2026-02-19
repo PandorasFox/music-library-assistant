@@ -3,6 +3,7 @@
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::meta::computations::Computation;
 use crate::meta::mutations::Mutation;
@@ -12,52 +13,166 @@ use crate::meta::recomputation::RecomputationScope;
 // State Machine
 // ============================================================================
 
-/// High-level Witch state for simple O(1) checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskExecutionState {
-    /// No tasks, no lingering status
+/// High-level Witch work state with session data carried inline.
+///
+/// Replaces the old flat `TaskExecutionState` + scattered session fields.
+/// Session-scoped counters live inside `Working`/`Done` variants.
+#[derive(Debug, Clone)]
+pub enum WorkState {
+    /// No work in progress, no lingering status.
     Idle,
-    /// Tasks are queued/executing
-    Working,
-    /// All tasks complete, lingering status available (30s timeout → Idle)
-    Completed,
+    /// Tasks are queued/executing.
+    Working {
+        started_at: Instant,
+        queued: usize,
+        in_flight: usize,
+        processed: usize,
+        failed: usize,
+        by_label: HashMap<String, usize>,
+        label: Option<String>,
+    },
+    /// All tasks complete, lingering status available (LINGER_DURATION → Idle).
+    Done {
+        finished_at: Instant,
+        total_processed: usize,
+        total_failed: usize,
+    },
+}
+
+impl WorkState {
+    /// Increment in-flight counter. No-op if not Working.
+    pub fn inc_in_flight(&mut self) {
+        if let WorkState::Working { ref mut in_flight, .. } = self {
+            *in_flight += 1;
+        }
+    }
+
+    /// Decrement in-flight counter (saturating). No-op if not Working.
+    pub fn dec_in_flight(&mut self) {
+        if let WorkState::Working { ref mut in_flight, .. } = self {
+            *in_flight = in_flight.saturating_sub(1);
+        }
+    }
+
+    /// Increment queued counter by n. No-op if not Working.
+    pub fn inc_queued(&mut self, n: usize) {
+        if let WorkState::Working { ref mut queued, .. } = self {
+            *queued += n;
+        }
+    }
+
+    /// Increment processed counter. No-op if not Working.
+    pub fn inc_processed(&mut self) {
+        if let WorkState::Working { ref mut processed, .. } = self {
+            *processed += 1;
+        }
+    }
+
+    /// Increment failed counter. No-op if not Working.
+    pub fn inc_failed(&mut self) {
+        if let WorkState::Working { ref mut failed, .. } = self {
+            *failed += 1;
+        }
+    }
+
+    /// Get current in-flight count (0 if not Working).
+    pub fn in_flight(&self) -> usize {
+        match self {
+            WorkState::Working { in_flight, .. } => *in_flight,
+            _ => 0,
+        }
+    }
+
+    /// Get current queued count (0 if not Working).
+    pub fn queued(&self) -> usize {
+        match self {
+            WorkState::Working { queued, .. } => *queued,
+            _ => 0,
+        }
+    }
+
+    /// Get current processed count (0 if not Working, total if Done).
+    pub fn processed(&self) -> usize {
+        match self {
+            WorkState::Working { processed, .. } => *processed,
+            WorkState::Done { total_processed, .. } => *total_processed,
+            WorkState::Idle => 0,
+        }
+    }
+
+    /// Check if in Idle state.
+    pub fn is_idle(&self) -> bool {
+        matches!(self, WorkState::Idle)
+    }
+
+    /// Check if in Working state.
+    pub fn is_working(&self) -> bool {
+        matches!(self, WorkState::Working { .. })
+    }
+
+    /// Get pending-by-label map ref (empty if not Working).
+    pub fn by_label(&self) -> Option<&HashMap<String, usize>> {
+        match self {
+            WorkState::Working { ref by_label, .. } => Some(by_label),
+            _ => None,
+        }
+    }
+
+    /// Increment pending count for a label. No-op if not Working.
+    pub fn inc_label(&mut self, label: &str) {
+        if let WorkState::Working { ref mut by_label, .. } = self {
+            *by_label.entry(label.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Decrement pending count for a label. No-op if not Working.
+    pub fn dec_label(&mut self, label: &str) {
+        if let WorkState::Working { ref mut by_label, .. } = self {
+            if let Some(count) = by_label.get_mut(label) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    by_label.remove(label);
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================
 // Eye and Observation State
 // ============================================================================
 
-/// Eye lifecycle state - controlled by the Witch.
+/// Reasoning level - how much signal derivation the Witch has completed.
 ///
-/// The Eye's visual state gates the overall UI mode:
-/// - Closed/Awakening → Splash screen
-/// - Awake → Normal UI with blinking eye
+/// Gates the overall UI mode:
+/// - None/Inodes → Splash screen
+/// - Full → Normal UI with blinking eye
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum EyeState {
-    /// Eye is closed - startup mode, splash screen shown.
+pub enum ReasoningLevel {
+    /// Startup — no reasoning yet.
     #[default]
-    Closed,
-    /// Transitioning to Awake - second-level signals being computed.
-    Awakening,
-    /// Eye is awake - normal operation, can blink.
-    Awake,
+    None,
+    /// Inode-level signal derivation in progress.
+    Inodes,
+    /// Full reasoning available, mutations accepted.
+    Full,
 }
 
 
-/// Corpus observation state - tracks whether the corpus has been seen.
+/// Inode awareness level - tracks filesystem walk progress.
 ///
 /// Controls whether mutations are accepted:
-/// - Unseen/Observing → Mutations rejected
-/// - Complete → Mutations accepted
+/// - None/Checking → Mutations rejected
+/// - Done → Mutations accepted
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CorpusObservationState {
-    /// Initial unknown state (launch only). Corpus has never been eyeballed.
+pub enum InodeAwarenessLevel {
+    /// Never walked the filesystem.
     #[default]
-    Unseen,
-    /// Eyeballing in progress.
-    Observing,
-    /// Eyeballing complete. Ready to accept mutations.
-    Complete,
+    None,
+    /// Walk in progress.
+    Checking,
+    /// Walk complete.
+    Done,
 }
 
 // ============================================================================
@@ -175,7 +290,7 @@ pub mod sealed {
     /// A zero-sized token proving content analysis is being queued from a valid context.
     ///
     /// Content analysis can only be triggered from `transition_to_completed` when
-    /// mutations drain while the Eye is Awake. This prevents accidental queueing
+    /// mutations drain while reasoning is Full. This prevents accidental queueing
     /// from UI code or other invalid contexts.
     ///
     /// Cannot be constructed outside the Witch's `transition_to_completed()` function.
@@ -229,42 +344,42 @@ impl TaskLabel {
     }
 }
 
-/// Status information returned from tick().
+/// Status information returned from tick() and status().
 #[derive(Debug, Clone, Default)]
-pub struct DaemonStatus {
-    /// Current high-level state
-    pub state: TaskExecutionStateSnapshot,
-    /// Tasks waiting to be processed (in queue or in-flight)
+pub struct WorkStatus {
+    /// Current high-level state snapshot.
+    pub state: WorkStateSnapshot,
+    /// Tasks waiting to be processed (in queue or in-flight).
     pub pending: usize,
-    /// Tasks completed in this tick cycle
+    /// Tasks completed in this tick cycle.
     pub completed: usize,
-    /// Tasks failed in this tick cycle
+    /// Tasks failed in this tick cycle.
     pub failed: usize,
-    /// Total tasks processed in current session
+    /// Total tasks processed in current session.
     pub total_processed: usize,
-    /// Total tasks queued in current session (for progress: processed/queued)
+    /// Total tasks queued in current session (for progress: processed/queued).
     pub session_queued: usize,
-    /// Breakdown of pending tasks by type label
+    /// Breakdown of pending tasks by type label.
     pub pending_by_label: HashMap<String, usize>,
     /// Whether an idle rescan is currently in progress.
     pub idle_rescan_active: bool,
 }
 
-/// Snapshot of Witch state for status reporting.
+/// Snapshot of Witch work state for status reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TaskExecutionStateSnapshot {
+pub enum WorkStateSnapshot {
     #[default]
     Idle,
     Working,
-    Completed,
+    Done,
 }
 
-impl From<TaskExecutionState> for TaskExecutionStateSnapshot {
-    fn from(state: TaskExecutionState) -> Self {
+impl From<&WorkState> for WorkStateSnapshot {
+    fn from(state: &WorkState) -> Self {
         match state {
-            TaskExecutionState::Idle => TaskExecutionStateSnapshot::Idle,
-            TaskExecutionState::Working => TaskExecutionStateSnapshot::Working,
-            TaskExecutionState::Completed => TaskExecutionStateSnapshot::Completed,
+            WorkState::Idle => WorkStateSnapshot::Idle,
+            WorkState::Working { .. } => WorkStateSnapshot::Working,
+            WorkState::Done { .. } => WorkStateSnapshot::Done,
         }
     }
 }

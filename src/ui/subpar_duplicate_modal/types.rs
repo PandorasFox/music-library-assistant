@@ -10,7 +10,7 @@ use anyhow::Result;
 
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
-use crate::meta::mutations::file_ops::MoveToStashMutation;
+use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
 
@@ -101,10 +101,10 @@ impl SubparDuplicateModalData {
         !self.files.is_empty()
     }
 
-    /// Generate MoveToStash + DropFromIndex mutations for all files.
+    /// Generate StashFromZone + DropFromIndex mutations for all files.
     ///
     /// For each subpar file:
-    /// 1. MoveToStash to stash/subpar/
+    /// 1. StashFromZone to stash/subpar/
     /// 2. DropFromIndex to remove from database
     pub fn stash_and_drop_mutations(&self) -> Vec<Mutation> {
         let resolver = paths::get_resolver();
@@ -114,8 +114,8 @@ impl SubparDuplicateModalData {
             // Resolve relative path to absolute for filesystem operations
             let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
 
-            // MoveToStash mutation
-            mutations.push(Mutation::MoveToStash(MoveToStashMutation {
+            // StashFromZone mutation
+            mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
                 path: abs_path.clone(),
                 stash_name: "subpar".to_string(),
             }));

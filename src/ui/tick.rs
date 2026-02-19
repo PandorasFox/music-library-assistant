@@ -144,7 +144,7 @@ impl App {
         let phase = screen.phase();
 
         // Update eye animation (scoped to Progress view)
-        let can_animate = self.witch.eye_state() == crate::witch::EyeState::Awake;
+        let can_animate = self.witch.reasoning_level() == crate::witch::ReasoningLevel::Full;
         eye.update(can_animate);
 
         // Tick progress screen - it checks daemon state for completion
@@ -234,10 +234,10 @@ impl App {
         // Clone corpus_root to avoid borrow conflict with daemon's db reference
         let corpus_root = self.config().corpus_dir();
 
-        let eye_state = self.witch.eye_state();
+        let reasoning = self.witch.reasoning_level();
         crate::logging::log_general(format!(
-            "check_for_unindexed_files: eye_state={:?}",
-            eye_state
+            "check_for_unindexed_files: reasoning_level={:?}",
+            reasoning
         ));
 
         let read_db = self.read_db();

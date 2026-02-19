@@ -10,7 +10,7 @@ use anyhow::Result;
 use crate::corpus::db::ReadOnlyDb;
 use crate::corpus::db::types::{InboxCorpusMatchEntry, MatchClassification};
 use crate::meta::mutations::Mutation;
-use crate::meta::mutations::file_ops::MoveToStashMutation;
+use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
 
@@ -68,7 +68,7 @@ impl InboxCorpusMatchModalData {
         (better, equivalent, subpar)
     }
 
-    /// Generate MoveToStash + DropFromIndex mutations for stashable entries.
+    /// Generate StashFromZone + DropFromIndex mutations for stashable entries.
     ///
     /// Only Equivalent and Subpar entries are stashed. Better entries
     /// (inbox is higher quality) are left alone.
@@ -76,7 +76,7 @@ impl InboxCorpusMatchModalData {
         self.stash_mutations_for(|c| matches!(c, MatchClassification::Equivalent | MatchClassification::Subpar))
     }
 
-    /// Generate MoveToStash + DropFromIndex mutations for ALL entries,
+    /// Generate StashFromZone + DropFromIndex mutations for ALL entries,
     /// including those classified as Better.
     pub fn stash_all_mutations(&self) -> Vec<Mutation> {
         self.stash_mutations_for(|_| true)
@@ -93,7 +93,7 @@ impl InboxCorpusMatchModalData {
 
             let abs_path = resolver.resolve(std::path::Path::new(&entry.inbox_path));
 
-            mutations.push(Mutation::MoveToStash(MoveToStashMutation {
+            mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
                 path: abs_path,
                 stash_name: "inbox_duplicate".to_string(),
             }));

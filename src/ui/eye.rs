@@ -16,7 +16,7 @@
 //!
 //! The Eye animation is controlled by passing `can_animate` to `update()`:
 //! - `can_animate=true`: Normal blinking animation
-//! - `can_animate=false`: Eye stays closed (daemon controls this based on eye_state)
+//! - `can_animate=false`: Eye stays closed (daemon controls this based on reasoning_level)
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 

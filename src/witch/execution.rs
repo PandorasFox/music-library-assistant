@@ -381,16 +381,20 @@ fn apply_post_execution(
         }
     }
 
-    // Phase 1b: Drop files table entry for MoveToStash
+    // Phase 1b: Drop files table entry for stash mutations
     // When stashing a file, we must also remove it from the files table (not just signals).
     // Otherwise DeriveDirectorySignals will emit MissingFile for the stashed path.
-    if let Mutation::MoveToStash(ref m) = mutation {
-        let path = &m.path;
+    let stash_path: Option<&std::path::Path> = match mutation {
+        Mutation::StashFromZone(ref m) => Some(&m.path),
+        Mutation::StashLeftovers(ref m) => Some(&m.path),
+        _ => None,
+    };
+    if let Some(path) = stash_path {
         if let Some(sender) = db_thread::signal_sender() {
             let rel_path = if path.is_absolute() {
                 resolver.to_relative(path)
             } else {
-                Some(path.clone())
+                Some(path.to_path_buf())
             };
             if let Some(rel) = rel_path {
                 sender.drop_from_index(&rel.to_string_lossy(), witness);

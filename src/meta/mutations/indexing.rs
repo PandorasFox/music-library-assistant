@@ -154,6 +154,7 @@ pub struct EmitExpectedMissingTagMutation {
 
 impl MutationExecutor for IndexFileFromPathMutation {
     fn label(&self) -> &'static str { "Indexing" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -192,6 +193,7 @@ impl MutationExecutor for IndexFileFromPathMutation {
 
 impl MutationExecutor for UpdateFilePathMutation {
     fn label(&self) -> &'static str { "Path update" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -226,6 +228,7 @@ impl MutationExecutor for UpdateFilePathMutation {
 
 impl MutationExecutor for DropFromIndexMutation {
     fn label(&self) -> &'static str { "Drop from index" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -256,6 +259,7 @@ impl MutationExecutor for DropFromIndexMutation {
 
 impl MutationExecutor for DropDirectoryFromIndexMutation {
     fn label(&self) -> &'static str { "Drop directory from index" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -290,6 +294,7 @@ impl MutationExecutor for DropDirectoryFromIndexMutation {
 
 impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
     fn label(&self) -> &'static str { "Acknowledge mtime" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -326,6 +331,7 @@ impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
 
 impl MutationExecutor for ApplyDbTagsToDiskMutation {
     fn label(&self) -> &'static str { "Tag sync (DB→disk)" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -358,6 +364,7 @@ impl MutationExecutor for ApplyDbTagsToDiskMutation {
 
 impl MutationExecutor for FlushTagsToDiskMutation {
     fn label(&self) -> &'static str { "Tag flush" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::ChainEmitted }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -386,6 +393,7 @@ impl MutationExecutor for FlushTagsToDiskMutation {
 
 impl MutationExecutor for AssimilateDiskTagsToDbMutation {
     fn label(&self) -> &'static str { "Tag sync (disk→DB)" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::ChainEmitted }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -418,6 +426,7 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
 
 impl MutationExecutor for EmitCanonicalTagMutation {
     fn label(&self) -> &'static str { "Mark canonical" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -448,6 +457,7 @@ impl MutationExecutor for EmitCanonicalTagMutation {
 
 impl MutationExecutor for EmitExpectedOverlapMutation {
     fn label(&self) -> &'static str { "Mark expected overlap" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -478,6 +488,7 @@ impl MutationExecutor for EmitExpectedOverlapMutation {
 
 impl MutationExecutor for EmitExpectedDuplicateMutation {
     fn label(&self) -> &'static str { "Mark expected duplicate" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -508,6 +519,7 @@ impl MutationExecutor for EmitExpectedDuplicateMutation {
 
 impl MutationExecutor for EmitExpectedMissingTagMutation {
     fn label(&self) -> &'static str { "Mark expected missing tag" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();

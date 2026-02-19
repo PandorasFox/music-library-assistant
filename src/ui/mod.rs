@@ -692,7 +692,7 @@ fn run_app<B: ratatui::backend::Backend>(
             }
             (status, duration)
         } else {
-            (crate::witch::DaemonStatus::default(), std::time::Duration::ZERO)
+            (Default::default(), std::time::Duration::ZERO)
         };
 
         app.check_witch_status();

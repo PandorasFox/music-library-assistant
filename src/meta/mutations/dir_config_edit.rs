@@ -34,6 +34,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     fn label(&self) -> &'static str {
         "Dir config update"
     }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config) }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let result = (|| -> anyhow::Result<bool> {

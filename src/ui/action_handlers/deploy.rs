@@ -5,7 +5,7 @@
 
 use crate::corpus::paths;
 use crate::meta::decisions::{DecisionKey, DecisionSource};
-use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, MoveToStashMutation};
+use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, StashLeftoversMutation};
 use crate::ui::{deploy_modal, ActiveView};
 use super::witness;
 use super::super::App;
@@ -79,9 +79,8 @@ impl App {
         for file in &data.leftover {
             let path_rel = std::path::Path::new("libraries").join(&file.library_path);
             let path = resolver.resolve(&path_rel);
-            mutations.push(Mutation::MoveToStash(MoveToStashMutation {
+            mutations.push(Mutation::StashLeftovers(StashLeftoversMutation {
                 path,
-                stash_name: "library_leftovers".to_string(),
             }));
         }
 

@@ -49,6 +49,7 @@ pub struct ApplyTagOpsMutation {
 
 impl MutationExecutor for ApplyTagOpsMutation {
     fn label(&self) -> &'static str { "Tag edit" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();

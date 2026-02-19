@@ -32,11 +32,21 @@ pub struct MoveMutation {
     pub destination: PathBuf,
 }
 
-/// Move a file to the stash directory.
+/// Stash a corpus or inbox file (operator-driven eviction).
+///
+/// Always paired with `DropFromIndex` by callers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MoveToStashMutation {
+pub struct StashFromZoneMutation {
     pub path: PathBuf,
     pub stash_name: String,
+}
+
+/// Stash orphaned library files during deploy cleanup.
+///
+/// NOT paired with DropFromIndex — execution.rs Phase 1b handles the files table drop.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StashLeftoversMutation {
+    pub path: PathBuf,
 }
 
 /// Create a hard link from source to destination (for deployment).
@@ -73,6 +83,7 @@ pub struct InboxToCorpusMutation {
 
 impl MutationExecutor for MoveMutation {
     fn label(&self) -> &'static str { "File move" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -110,8 +121,9 @@ impl MutationExecutor for MoveMutation {
     }
 }
 
-impl MutationExecutor for MoveToStashMutation {
-    fn label(&self) -> &'static str { "File move" }
+impl MutationExecutor for StashFromZoneMutation {
+    fn label(&self) -> &'static str { "File stash" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         use std::os::unix::fs::MetadataExt;
@@ -135,7 +147,57 @@ impl MutationExecutor for MoveToStashMutation {
             Err(e) => (false, Some(format!("{:#}", e))),
         };
         MutationResult {
-            _mutation: Mutation::MoveToStash(self.clone()),
+            _mutation: Mutation::StashFromZone(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: discovered,
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+
+    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::DEPLOY }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.path),
+            self.path.display(),
+            format!("\u{2192} {}", self.stash_name),
+        )]
+    }
+}
+
+impl MutationExecutor for StashLeftoversMutation {
+    fn label(&self) -> &'static str { "Library leftover stash" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        use std::os::unix::fs::MetadataExt;
+
+        let start = std::time::Instant::now();
+
+        // Discover inode before the move (file still exists at original path)
+        let discovered = std::fs::metadata(&self.path)
+            .map(|m| vec![m.ino() as i64])
+            .unwrap_or_default();
+
+        let result = match ctx.stash_root {
+            Some(root) => execute_move_to_stash(&self.path, "library_leftovers", root),
+            None => Err(anyhow::anyhow!(
+                "Stash directory not configured. File: {}",
+                self.path.display()
+            )),
+        };
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::StashLeftovers(self.clone()),
             success,
             error,
             _duration_ms: start.elapsed().as_millis() as u64,
@@ -165,19 +227,18 @@ impl MutationExecutor for MoveToStashMutation {
         Vec::new()
     }
 
-    // MoveToStash: no signal updates needed (file is gone)
-
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(
             path_filename(&self.path),
             self.path.display(),
-            format!("\u{2192} {}", self.stash_name),
+            "\u{2192} library_leftovers",
         )]
     }
 }
 
 impl MutationExecutor for HardLinkMutation {
     fn label(&self) -> &'static str { "Hard link" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy) }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -224,6 +285,7 @@ impl MutationExecutor for HardLinkMutation {
 
 impl MutationExecutor for LibraryMoveMutation {
     fn label(&self) -> &'static str { "Library move" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy) }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -278,6 +340,7 @@ impl MutationExecutor for LibraryMoveMutation {
 
 impl MutationExecutor for InboxToCorpusMutation {
     fn label(&self) -> &'static str { "Inbox → Corpus" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();

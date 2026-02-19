@@ -33,7 +33,7 @@ use ratatui::{
 };
 
 use std::collections::HashMap;
-use crate::witch::{TaskExecutionStateSnapshot, DaemonStatus, EyeState, Witch, WorkerStats};
+use crate::witch::{WorkStateSnapshot, WorkStatus, ReasoningLevel, Witch, WorkerStats};
 use crate::db_thread::DbThreadStats;
 use super::eye::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
@@ -55,7 +55,7 @@ pub enum ProgressPhase {
 
 impl ProgressPhase {
     /// Get the status message for this phase (without trailing ellipsis).
-    pub fn status_message(&self, eye_state: EyeState, complete: bool) -> &'static str {
+    pub fn status_message(&self, reasoning: ReasoningLevel, complete: bool) -> &'static str {
         if complete {
             return match self {
                 ProgressPhase::Eyeballing => "Ready!",
@@ -65,10 +65,10 @@ impl ProgressPhase {
         }
 
         match self {
-            ProgressPhase::Eyeballing => match eye_state {
-                EyeState::Closed => "Scanning corpus",
-                EyeState::Awakening => "Computing health signals",
-                EyeState::Awake => "Ready!",
+            ProgressPhase::Eyeballing => match reasoning {
+                ReasoningLevel::None => "Scanning corpus",
+                ReasoningLevel::Inodes => "Computing health signals",
+                ReasoningLevel::Full => "Ready!",
             },
             ProgressPhase::ContentAnalysis => "Analyzing metadata",
             ProgressPhase::SignalRefresh => "Updating signals",
@@ -100,8 +100,8 @@ pub struct ProgressScreen {
     progress_detail: Option<String>,
     /// True once work is complete.
     complete: bool,
-    /// Current eye state (for Eyeballing phase rendering).
-    eye_state: EyeState,
+    /// Current reasoning level (for Eyeballing phase rendering).
+    reasoning_level: ReasoningLevel,
     /// DB thread stats for optional display.
     db_stats: Option<DbThreadStats>,
     /// Worker thread stats for optional display.
@@ -121,7 +121,7 @@ pub struct ProgressScreen {
 impl ProgressScreen {
     /// Create a progress screen for startup eyeballing.
     ///
-    /// Completes when witch.eye_state() becomes Awake.
+    /// Completes when witch.reasoning_level() becomes Full.
     pub fn new_eyeballing() -> Self {
         Self {
             phase: ProgressPhase::Eyeballing,
@@ -129,7 +129,7 @@ impl ProgressScreen {
             progress: Some(0.0),
             progress_detail: Some("Starting...".to_string()),
             complete: false,
-            eye_state: EyeState::Closed,
+            reasoning_level: ReasoningLevel::None,
             db_stats: None,
             worker_stats: None,
             db_queue_depth: 0,
@@ -150,7 +150,7 @@ impl ProgressScreen {
             progress: Some(0.0),
             progress_detail: Some("Starting metadata analysis...".to_string()),
             complete: false,
-            eye_state: EyeState::Awake,
+            reasoning_level: ReasoningLevel::Full,
             db_stats: None,
             worker_stats: None,
             db_queue_depth: 0,
@@ -173,7 +173,7 @@ impl ProgressScreen {
             progress: Some(0.0),
             progress_detail: Some("Updating signals...".to_string()),
             complete: false,
-            eye_state: EyeState::Awake,
+            reasoning_level: ReasoningLevel::Full,
             db_stats: None,
             worker_stats: None,
             db_queue_depth: 0,
@@ -203,7 +203,7 @@ impl ProgressScreen {
 
     /// Get the status message.
     pub fn status_message(&self) -> &'static str {
-        self.phase.status_message(self.eye_state, self.complete)
+        self.phase.status_message(self.reasoning_level, self.complete)
     }
 
     /// Update DB thread stats for display.
@@ -271,11 +271,11 @@ impl ProgressScreen {
         // Phase-specific completion detection
         match self.phase {
             ProgressPhase::Eyeballing => {
-                // Track eye state for rendering
-                self.eye_state = witch.eye_state();
+                // Track reasoning level for rendering
+                self.reasoning_level = witch.reasoning_level();
 
-                // Complete when eye becomes Awake
-                if self.eye_state == EyeState::Awake {
+                // Complete when reasoning reaches Full
+                if self.reasoning_level == ReasoningLevel::Full {
                     self.complete = true;
                 }
             }
@@ -295,7 +295,7 @@ impl ProgressScreen {
                     // assume work already completed before we started watching
                     let is_idle = status.pending == 0 && matches!(
                         status.state,
-                        TaskExecutionStateSnapshot::Idle | TaskExecutionStateSnapshot::Completed
+                        WorkStateSnapshot::Idle | WorkStateSnapshot::Done
                     );
                     if is_idle {
                         self.consecutive_idle_ticks = self.consecutive_idle_ticks.saturating_add(1);
@@ -313,7 +313,7 @@ impl ProgressScreen {
     }
 
     /// Update progress from Witch status.
-    fn update_progress(&mut self, status: &DaemonStatus) {
+    fn update_progress(&mut self, status: &WorkStatus) {
         let completed = status.total_processed;
         let total = status.session_queued;
         if total > 0 {
@@ -369,8 +369,8 @@ impl ProgressScreen {
     /// Get the eye art for this phase.
     pub fn eye_art(&self) -> &'static str {
         match self.phase {
-            ProgressPhase::Eyeballing => match self.eye_state {
-                EyeState::Awakening => EYE_CLOSING, // Half-open frame
+            ProgressPhase::Eyeballing => match self.reasoning_level {
+                ReasoningLevel::Inodes => EYE_CLOSING, // Half-open frame
                 _ => EYE_CLOSED,
             },
             ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {

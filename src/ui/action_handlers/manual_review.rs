@@ -91,7 +91,7 @@ impl App {
         }
     }
 
-    /// Stage MoveToStash + DropFromIndex mutations for the currently selected file.
+    /// Stage StashFromZone + DropFromIndex mutations for the currently selected file.
     fn stage_stash_for_selected_file(&mut self, gesture: &witness::ConfirmationGesture) {
         let (group_idx, file_idx, corpus_path, inode, stash_name) = {
             let ActiveView::ManualReview(ref state) = self.view else { return };

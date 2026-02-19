@@ -14,7 +14,7 @@ use crate::meta::computations::Computation;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::tags::TagSet;
 
-use super::file_ops::{MoveMutation, MoveToStashMutation, HardLinkMutation, LibraryMoveMutation, InboxToCorpusMutation};
+use super::file_ops::{MoveMutation, StashFromZoneMutation, StashLeftoversMutation, HardLinkMutation, LibraryMoveMutation, InboxToCorpusMutation};
 use super::indexing::{
     IndexFileFromPathMutation, UpdateFilePathMutation, DropFromIndexMutation,
     DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
@@ -244,8 +244,11 @@ pub enum Mutation {
     /// Move a file from source to destination.
     Move(MoveMutation),
 
-    /// Move a file to the stash directory.
-    MoveToStash(MoveToStashMutation),
+    /// Stash a corpus or inbox file (operator-driven eviction).
+    StashFromZone(StashFromZoneMutation),
+
+    /// Stash orphaned library files during deploy cleanup.
+    StashLeftovers(StashLeftoversMutation),
 
     // ========================================================================
     // Transcode Operations (struct-backed — see transcode.rs for trait impl)
@@ -342,7 +345,8 @@ impl Mutation {
             Mutation::ApplyTagOps(m) => Some(m),
             Mutation::IndexFileFromPath(m) => Some(m),
             Mutation::Move(m) => Some(m),
-            Mutation::MoveToStash(m) => Some(m),
+            Mutation::StashFromZone(m) => Some(m),
+            Mutation::StashLeftovers(m) => Some(m),
             Mutation::Transcode(m) => Some(m),
             Mutation::HardLink(m) => Some(m),
             Mutation::LibraryMove(m) => Some(m),
@@ -418,7 +422,8 @@ impl Mutation {
             | Mutation::UpdateFilePath(_)
             | Mutation::DropFromIndex(_)
             | Mutation::Move(_)
-            | Mutation::MoveToStash(_)
+            | Mutation::StashFromZone(_)
+            | Mutation::StashLeftovers(_)
             | Mutation::HardLink(_)
             | Mutation::LibraryMove(_)
             | Mutation::DbMigration { .. }
@@ -488,7 +493,12 @@ impl Mutation {
                     dirs.push(parent.to_path_buf());
                 }
             }
-            Mutation::MoveToStash(m) => {
+            Mutation::StashFromZone(m) => {
+                if let Some(parent) = m.path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::StashLeftovers(m) => {
                 if let Some(parent) = m.path.parent() {
                     dirs.push(parent.to_path_buf());
                 }

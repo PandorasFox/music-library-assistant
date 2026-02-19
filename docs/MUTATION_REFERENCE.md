@@ -10,7 +10,7 @@ All mutation code lives in `src/meta/mutations/`:
 - **Types**: `types.rs` (TagOp, PendingSignal, SignalClearScope, MutationResult, etc.)
 - **Tag editing**: `tag_edit.rs` (ApplyTagOps, ApplyDbTagsToDisk, AssimilateDiskTagsToDb)
 - **Indexing**: `indexing.rs` (IndexTrack, IndexFileFromPath, DropFromIndex, DropDirectoryFromIndex)
-- **File operations**: `file_ops.rs` (Move, Copy, MoveToStash, HardLink, LibraryMove, etc.)
+- **File operations**: `file_ops.rs` (Move, Copy, StashFromZone, StashLeftovers, HardLink, LibraryMove, etc.)
 - **Transcoding**: `transcode.rs` (Transcode executor)
 - **Config editing**: `config_edit.rs` (ApplyConfigEdits executor)
 - **Migrations**: `migration.rs` (MigrationRegistry)
@@ -22,6 +22,23 @@ Mutations are operator-confirmed changes to the corpus or index. All mutations:
 - Execute in worker threads with write-capable database connections
 - Can spawn follow-up computations (Awakening phase only)
 - Can emit or clear signals
+
+---
+
+## Execution Staging
+
+When a transaction is confirmed, mutations are bucketed by execution stage and
+executed phase-by-phase with drain barriers between each phase. This ensures
+that DB writes complete before disk flushes, and disk flushes complete before
+deployment operations.
+
+| Stage | Order | Mutations |
+|-------|-------|-----------|
+| Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit |
+| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, ApplyDbTagsToDisk |
+| DiskFlush | 2 | Transcode, EmbedAlbumArt, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
+| DiskDeploy | 3 | HardLink, LibraryMove |
+| *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb *(spawned during execution, never in transactions)* |
 
 ---
 
@@ -96,7 +113,8 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 |----------|---------------------|-----------------|-----------------|-------|
 | Move | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Move file within corpus |
 | Copy | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Copy file within corpus |
-| MoveToStash | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Move to stash directory; discovers inode before move |
+| StashFromZone | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Operator-driven stash of corpus/inbox files; discovers inode before move |
+| StashLeftovers | UpdateCorpusFileSignals | — | All scope signals for discovered inode; LibraryLeftoverSignal by path key | Automated cleanup of orphaned library files during deploy |
 | UpdateTrackPath | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Update path in index |
 | Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode to new format |
 | InboxToCorpus | (via dirty inodes) | — | MutableOnly scope signals for inode | Move inbox file to corpus; updates zone from inbox→corpus, migrates inbox_tags→corpus_tags |

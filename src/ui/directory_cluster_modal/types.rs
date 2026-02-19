@@ -11,7 +11,7 @@ use anyhow::Result;
 use crate::corpus::db::types::Zone;
 use crate::corpus::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
-use crate::meta::mutations::file_ops::MoveToStashMutation;
+use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
 use crate::ui::manual_review_modal::types::FileMetaSummary;
@@ -264,7 +264,7 @@ impl DirectoryClusterModalData {
             for (idx, corpus_path) in dir.paths.iter().enumerate() {
                 let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
 
-                mutations.push(Mutation::MoveToStash(MoveToStashMutation {
+                mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
                     path: abs_path,
                     stash_name: "overlaps".to_string(),
                 }));

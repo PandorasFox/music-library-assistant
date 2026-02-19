@@ -38,9 +38,10 @@ mod worker_stats;
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
-    CorpusObservationState, DaemonStatus,
-    EyeState, Migration, MigrationWitness, MutationExecutionWitness,
-    PendingTransaction, SpawnedMutation, Task, TaskExecutionState, TaskExecutionStateSnapshot,
+    WorkStatus, WorkState, WorkStateSnapshot,
+    ReasoningLevel, InodeAwarenessLevel,
+    Migration, MigrationWitness, MutationExecutionWitness,
+    PendingTransaction, SpawnedMutation, Task,
     TaskLabel, WorkerStats,
 };
 // Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
@@ -97,12 +98,12 @@ pub struct Witch {
     result_tx: Sender<TaskResult>,
     result_rx: Receiver<TaskResult>,
 
-    // State machine
-    state: TaskExecutionState,
+    // Work state machine (carries session counters inline)
+    work_state: WorkState,
 
-    // Eye and corpus observation state
-    eye_state: EyeState,
-    observation_state: CorpusObservationState,
+    // Reasoning and inode awareness state
+    reasoning_level: ReasoningLevel,
+    inode_awareness: InodeAwarenessLevel,
 
     /// Whether legacy library observation is enabled.
     /// Derived from Config at construction time.
@@ -131,28 +132,16 @@ pub struct Witch {
     /// Catches out-of-band tag changes and corrupt files.
     force_check_all_files_at_startup: bool,
 
-    // Session tracking
-    session_start: Option<Instant>,
-    session_queued: usize,
-    total_processed: usize,
-    total_failed: usize,
-
-    /// Tasks that have been sent to the worker but not yet drained from results.
-    /// This includes both queued tasks AND tasks currently executing on worker threads.
-    /// Incremented on add_task(), decremented when result is drained from get().
-    in_flight: usize,
-
-    // Status tracking
+    // Status tracking (survives across sessions)
     recent_errors: VecDeque<String>,
     task_counts: HashMap<String, usize>,
-    /// Pending task counts by label (queued but not yet completed).
-    pending_by_label: HashMap<String, usize>,
-    current_label: Option<String>,
-
-    completed_at: Option<Instant>,
 
     // Transaction state
     pending_transaction: Option<PendingTransaction>,
+
+    /// Remaining mutation phases from a staged transaction.
+    /// Populated by `confirm_transaction()`, drained by `transition_to_completed()`.
+    pending_mutation_phases: VecDeque<(crate::meta::mutations::MutationExecutionStage, Vec<Mutation>)>,
 
     /// Cached read-only database connection for UI queries.
     /// Only accessed from the main thread via `read_db()`.
@@ -254,26 +243,19 @@ impl Witch {
         let she = Self {
             result_tx,
             result_rx,
-            state: TaskExecutionState::Idle,
-            eye_state: EyeState::Closed,
-            observation_state: CorpusObservationState::Unseen,
+            work_state: WorkState::Idle,
+            reasoning_level: ReasoningLevel::None,
+            inode_awareness: InodeAwarenessLevel::None,
             legacy_enabled: cfg.legacy_enabled,
             read_only_mode: false,
             safety_latch_reason: None,
             session_recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
             pending_recomputation_scope: None,
             force_check_all_files_at_startup: false, // Set via with_opinions()
-            session_start: None,
-            session_queued: 0,
-            total_processed: 0,
-            total_failed: 0,
-            in_flight: 0,
             recent_errors: VecDeque::with_capacity(5),
             task_counts: HashMap::new(),
-            pending_by_label: HashMap::new(),
-            current_label: None,
-            completed_at: None,
             pending_transaction: None,
+            pending_mutation_phases: VecDeque::new(),
             read_only_conn: None,
             db_thread_handle: db_thread::spawn(),
             worker_stats_shared,
@@ -294,7 +276,7 @@ impl Witch {
             let (_tasks, total_qw, max_qw) = stats.debug_values();
             crate::logging::log_perf(format!(
                 "[PERF INIT] Witch::new() - total_queue_wait_ms={}, max_queue_wait_ms={}, total_processed={}",
-                total_qw, max_qw, she.total_processed
+                total_qw, max_qw, she.work_state.processed()
             ));
         }
 
@@ -339,14 +321,14 @@ impl Witch {
     // Eye and Observation State
     // -------------------------------------------------------------------------
 
-    /// Get current eye state for UI rendering decisions.
-    pub fn eye_state(&self) -> EyeState {
-        self.eye_state
+    /// Get current reasoning level for UI rendering decisions.
+    pub fn reasoning_level(&self) -> ReasoningLevel {
+        self.reasoning_level
     }
 
-    /// Check if observing is currently in progress.
-    pub fn is_observing(&self) -> bool {
-        matches!(self.observation_state, CorpusObservationState::Observing)
+    /// Check if inode checking is currently in progress.
+    pub fn is_checking_inodes(&self) -> bool {
+        matches!(self.inode_awareness, InodeAwarenessLevel::Checking)
     }
 
     /// Set the UI-controlled idle rescan eligibility flag.
@@ -373,7 +355,7 @@ impl Witch {
     /// This is derived state - mutations are automatically blocked during
     /// re-awakening cycles after mutations drain, and during idle rescans.
     fn accepting_mutations(&self) -> bool {
-        self.eye_state == EyeState::Awake
+        self.reasoning_level == ReasoningLevel::Full
             && !self.read_only_mode
             && self.safety_latch_reason.is_none()
             && !self.idle_rescan_active
@@ -400,11 +382,11 @@ impl Witch {
     /// Derives paths from the global resolver and stored config.
     /// Queues WalkCorpus computations for corpus and optional legacy library.
     pub fn start_observing(&mut self) -> bool {
-        if self.is_observing() {
+        if self.is_checking_inodes() {
             return false;
         }
 
-        self.observation_state = CorpusObservationState::Observing;
+        self.inode_awareness = InodeAwarenessLevel::Checking;
         self.queue_observing_computations();
         true
     }
@@ -465,7 +447,7 @@ impl Witch {
     /// - Auto-queues any spawned follow-up computations
     /// - Updates state machine transitions
     /// - Aggregates worker performance stats (when timing enabled)
-    pub fn tick(&mut self) -> DaemonStatus {
+    pub fn tick(&mut self) -> WorkStatus {
         // Check for mount boundary violations reported by worker threads
         if let Some(reason) = check_mount_violation() {
             self.latch_read_only_for_safety(reason.to_string());
@@ -474,7 +456,7 @@ impl Witch {
         // DEBUG: Log first tick state (only when timing enabled)
         if let Some(ref stats) = self.worker_stats_shared {
             let (_, total_qw_before, _) = stats.debug_values();
-            if self.total_processed == 0 && total_qw_before != 0 {
+            if self.work_state.processed() == 0 && total_qw_before != 0 {
                 crate::logging::log_perf(format!(
                     "[PERF BUG] tick() called with total_processed=0 but total_queue_wait_ms={}!",
                     total_qw_before
@@ -491,36 +473,32 @@ impl Witch {
 
         while let Ok(result) = self.result_rx.try_recv() {
             // Task has completed - no longer in flight
-            self.in_flight = self.in_flight.saturating_sub(1);
-            self.total_processed += 1;
+            self.work_state.dec_in_flight();
+            self.work_state.inc_processed();
 
             // Track by task type
             *self.task_counts.entry(result.label.clone()).or_insert(0) += 1;
 
             // Decrement pending count for this label
-            if let Some(count) = self.pending_by_label.get_mut(&result.label) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    self.pending_by_label.remove(&result.label);
-                }
-            }
+            self.work_state.dec_label(&result.label);
 
             // Record stats via thread-safe interface (only when timing enabled)
+            let current_processed = self.work_state.processed();
             if let Some(ref stats) = self.worker_stats_shared {
                 stats.record_result(&result);
 
                 // DEBUG: Log queue wait values
                 let (_, total_qw_now, max_qw_now) = stats.debug_values();
-                if self.total_processed == 1 {
+                if current_processed == 1 {
                     crate::logging::log_perf(format!(
                         "[PERF FIRST] FIRST TASK: queue_wait_ms={}, total_queue_wait_ms={} (should equal queue_wait_ms!), max_queue_wait_ms={}",
                         result.queue_wait_ms, total_qw_now, max_qw_now
                     ));
                 }
-                if self.total_processed <= 50 || self.total_processed.is_multiple_of(500) || result.queue_wait_ms > 50000 {
+                if current_processed <= 50 || current_processed.is_multiple_of(500) || result.queue_wait_ms > 50000 {
                     crate::logging::log_perf(format!(
                         "[PERF DEBUG] queue_wait_ms={} for task={}, total_processed={}, total_queue_wait_ms={}, max_queue_wait_ms={}",
-                        result.queue_wait_ms, result.label, self.total_processed, total_qw_now, max_qw_now
+                        result.queue_wait_ms, result.label, current_processed, total_qw_now, max_qw_now
                     ));
                 }
             }
@@ -529,7 +507,7 @@ impl Witch {
                 completed += 1;
             } else {
                 failed += 1;
-                self.total_failed += 1;
+                self.work_state.inc_failed();
                 if let Some(err) = result.error {
                     if self.recent_errors.len() >= 5 {
                         self.recent_errors.pop_front();
@@ -576,20 +554,20 @@ impl Witch {
         // Spawn background cache refresh tasks (demand-driven, throttled)
         self.ui_read_cache.spawn_refreshes();
 
-        // Capture current state for status
-        let current_in_flight = self.in_flight;
-        let current_total_processed = self.total_processed;
-        let current_session_queued = self.session_queued;
-        let current_pending_by_label = self.pending_by_label.clone();
+        // Capture current state for status before transitions
+        let current_in_flight = self.work_state.in_flight();
+        let current_total_processed = self.work_state.processed();
+        let current_session_queued = self.work_state.queued();
+        let current_pending_by_label = self.work_state.by_label().cloned().unwrap_or_default();
 
-        // State machine transitions (uses self.in_flight internally)
+        // State machine transitions
         self.update_state();
 
         // Check if idle rescan should trigger
         self.maybe_start_idle_rescan();
 
-        DaemonStatus {
-            state: self.state.into(),
+        WorkStatus {
+            state: WorkStateSnapshot::from(&self.work_state),
             pending: current_in_flight,
             completed,
             failed,
@@ -602,31 +580,50 @@ impl Witch {
 
     /// Update state machine based on in-flight tasks and timing.
     fn update_state(&mut self) {
-        match self.state {
-            TaskExecutionState::Idle => {
+        match self.work_state {
+            WorkState::Idle => {
                 // Idle → Working: handled in queue methods
             }
-            TaskExecutionState::Working => {
-                // Working → Completed: when all work finishes (no in-flight tasks AND
+            WorkState::Working { processed, .. } => {
+                // Working → Done: when all work finishes (no in-flight tasks AND
                 // db_thread queue empty). Uses centralized has_pending() for consistency
                 // with exit handlers and UI state display.
-                if !self.has_pending() && self.total_processed > 0 {
+                if !self.has_pending() && processed > 0 {
                     self.transition_to_completed();
                 }
             }
-            TaskExecutionState::Completed => {
-                // Completed → Idle: after linger timeout
-                if let Some(completed_at) = self.completed_at {
-                    if completed_at.elapsed() >= Self::LINGER_DURATION {
-                        self.transition_to_idle();
-                    }
+            WorkState::Done { finished_at, .. } => {
+                // Done → Idle: after linger timeout
+                if finished_at.elapsed() >= Self::LINGER_DURATION {
+                    self.transition_to_idle();
                 }
-                // Completed → Working: handled in queue methods
+                // Done → Working: handled in queue methods
             }
         }
     }
 
     fn transition_to_completed(&mut self) {
+        // Phase advancement: if there are more mutation phases from a staged
+        // transaction, drain the db_thread queue, then queue the next phase.
+        // Stay in Working state — more work to do.
+        if let Some((stage, mutations)) = self.pending_mutation_phases.pop_front() {
+            crate::logging::log_mutation(format!(
+                "[TRANSACTION] Phase advancement: draining db_thread, then queueing {:?} ({} mutations). \
+                 {} phase(s) remaining.",
+                stage, mutations.len(), self.pending_mutation_phases.len()
+            ));
+            db_thread::wait_for_queue_drain();
+
+            // Extract label from current WorkState before queueing (preserves session label)
+            let label = if let WorkState::Working { ref label, .. } = self.work_state {
+                label.clone()
+            } else {
+                None
+            };
+            self.queue_mutations_internal(mutations, label);
+            return; // Don't transition to Done — more phases to execute
+        }
+
         // Mutations with non-empty scope need re-awakening. Mutations with EMPTY
         // scope (AcknowledgeMtimeOnly, operational config edits) don't — their
         // post-execution pipeline already handles everything they need.
@@ -644,79 +641,82 @@ impl Witch {
         let mut queue_reconcile_library_after_reset = false;
         let mut reconcile_library_observed: Option<Vec<awakening::ObservedLibraryFile>> = None;
 
-        self.completed_at = Some(Instant::now());
-        self.state = TaskExecutionState::Completed;
+        // Extract session counters before transitioning
+        let (session_processed, session_failed) = match &self.work_state {
+            WorkState::Working { processed, failed, .. } => (*processed, *failed),
+            _ => (0, 0),
+        };
 
-        // State transition based on (observing, eye_state) tuple
+        // State transition based on (is_checking_inodes, reasoning_level) tuple
         // All combinations explicitly handled; invalid states panic
-        match (self.is_observing(), self.eye_state) {
-            // Observing completed while Closed: begin Awakening
-            (true, EyeState::Closed) => {
-                self.observation_state = CorpusObservationState::Complete;
+        match (self.is_checking_inodes(), self.reasoning_level) {
+            // Observing completed while None: begin Inodes
+            (true, ReasoningLevel::None) => {
+                self.inode_awareness = InodeAwarenessLevel::Done;
                 crate::logging::log_general(format!(
-                    "[STATE] Observing complete. Transitioning Closed -> Awakening. \
+                    "[STATE] Observing complete. Transitioning None -> Inodes. \
                      Processed {} tasks.",
-                    self.total_processed
+                    session_processed
                 ));
-                self.eye_state = EyeState::Awakening;
+                self.reasoning_level = ReasoningLevel::Inodes;
                 queue_awakening_after_reset = true;
             }
 
-            // Re-observing completed while Awake: sync signals via awakening
-            (true, EyeState::Awake) => {
-                self.observation_state = CorpusObservationState::Complete;
+            // Re-observing completed while Full: sync signals via awakening
+            (true, ReasoningLevel::Full) => {
+                self.inode_awareness = InodeAwarenessLevel::Done;
                 if self.idle_rescan_active {
                     crate::logging::log_general(format!(
                         "[STATE] Idle rescan observation complete. Queueing lightweight signal derivation. \
                          Processed {} tasks.",
-                        self.total_processed
+                        session_processed
                     ));
                     queue_idle_rescan_awakening_after_reset = true;
                 } else {
                     crate::logging::log_general(format!(
-                        "[STATE] Re-observing complete while Awake. Queueing awakening to sync signals. \
+                        "[STATE] Re-observing complete while Full. Queueing awakening to sync signals. \
                          Processed {} tasks.",
-                        self.total_processed
+                        session_processed
                     ));
                     queue_awakening_after_reset = true;
                 }
             }
 
-            // Re-walk completed during re-awakening: proceed to derivations
-            (true, EyeState::Awakening) => {
-                self.observation_state = CorpusObservationState::Complete;
+            // Re-walk completed during Inodes: proceed to derivations
+            (true, ReasoningLevel::Inodes) => {
+                self.inode_awareness = InodeAwarenessLevel::Done;
                 crate::logging::log_general(format!(
-                    "[STATE] Re-observation complete during Awakening. Queueing derivations. \
+                    "[STATE] Re-observation complete during Inodes. Queueing derivations. \
                      Processed {} tasks.",
-                    self.total_processed
+                    session_processed
                 ));
                 queue_awakening_after_reset = true;
             }
 
-            // Awakening completed: two-stage transition
-            // Stage 1: Queue ReconcileLibraryFiles, stay in Awakening
-            // Stage 2: Transition to Awake and queue content analysis
-            (false, EyeState::Awakening) => {
+            // Inodes completed: two-stage transition
+            // Stage 1: Queue ReconcileLibraryFiles, stay in Inodes
+            // Stage 2: Transition to Full and queue content analysis
+            (false, ReasoningLevel::Inodes) => {
                 if !self.library_reconciliation_done {
                     // Stage 1: Library reconciliation not yet done
                     self.library_reconciliation_done = true;
                     let observed = std::mem::take(&mut self.observed_library_files);
                     crate::logging::log_general(format!(
-                        "[STATE] Awakening stage 1 complete. Queueing ReconcileLibraryFiles ({} observed files). \
-                         Staying in Awakening. Processed {} tasks.",
-                        observed.len(), self.total_processed
+                        "[STATE] Inodes stage 1 complete. Queueing ReconcileLibraryFiles ({} observed files). \
+                         Staying in Inodes. Processed {} tasks.",
+                        observed.len(), session_processed
                     ));
                     queue_reconcile_library_after_reset = true;
                     reconcile_library_observed = Some(observed);
                 } else {
-                    // Stage 2: Library reconciliation done, NOW transition to Awake
+                    // Stage 2: Library reconciliation done, NOW transition to Full
                     self.library_reconciliation_done = false;
                     crate::logging::log_general(format!(
-                        "[STATE] Awakening stage 2 complete. Transitioning Awakening -> Awake. \
+                        "[STATE] Inodes stage 2 complete. Transitioning Inodes -> Full. \
                          Processed {} tasks.",
-                        self.total_processed
+                        session_processed
                     ));
-                    self.eye_state = EyeState::Awake;
+                    self.reasoning_level = ReasoningLevel::Full;
 
                     if !self.read_only_mode {
                         crate::logging::log_general("[STATE] Mutations now enabled (read-write mode).");
@@ -727,21 +727,21 @@ impl Witch {
                 }
             }
 
-            // Normal operation: work completed while Awake
-            (false, EyeState::Awake) => {
+            // Normal operation: work completed while Full
+            (false, ReasoningLevel::Full) => {
                 if self.idle_rescan_active {
                     // Idle rescan signal derivation complete
                     crate::logging::log_general(format!(
                         "[STATE] Idle rescan complete. Processed {} tasks.",
-                        self.total_processed
+                        session_processed
                     ));
                     self.idle_rescan_active = false;
                 } else if had_mutations {
                     // Mutations ran - re-validate everything via re-awakening
                     crate::logging::log_general(format!(
-                        "[STATE] Mutations complete (scope={:?}). Transitioning Awake -> Awakening for re-validation. \
+                        "[STATE] Mutations complete (scope={:?}). Transitioning Full -> Inodes for re-validation. \
                          Processed {} tasks.",
-                        self.session_recomputation_scope, self.total_processed
+                        self.session_recomputation_scope, session_processed
                     ));
                     // Carry the accumulated scope into the pending slot for
                     // ScheduleContentAnalysis to consume after re-awakening.
@@ -751,41 +751,39 @@ impl Witch {
                             crate::meta::recomputation::RecomputationScope::EMPTY,
                         )
                     );
-                    self.eye_state = EyeState::Awakening;
-                    self.observation_state = CorpusObservationState::Observing;
+                    self.reasoning_level = ReasoningLevel::Inodes;
+                    self.inode_awareness = InodeAwarenessLevel::Checking;
                     queue_reobservation_after_reset = true;
                 }
-                // If no mutations and not idle rescan, stay Awake (normal work completion)
+                // If no mutations and not idle rescan, stay Full (normal work completion)
             }
 
-            // Migrations can complete while Closed - this is valid, just NOP
-            (false, EyeState::Closed) => {
+            // Migrations can complete while None - this is valid, just NOP
+            (false, ReasoningLevel::None) => {
                 let had_migrations = self.task_counts.keys().any(|k| k.starts_with("Migration"));
                 if had_migrations {
                     crate::logging::log_general(format!(
-                        "[STATE] Migrations complete while Closed. Staying Closed. \
+                        "[STATE] Migrations complete while None. Staying None. \
                          Processed {} tasks.",
-                        self.total_processed
+                        session_processed
                     ));
-                    // NOP: stay Closed, let session reset happen normally
                 } else {
                     panic!(
-                        "Invalid state: non-observing, non-migration work completed while eye is Closed. \
-                         The only work while Closed should be observing or migrations."
+                        "Invalid state: non-observing, non-migration work completed while reasoning is None. \
+                         The only work while None should be observing or migrations."
                     );
                 }
             }
         }
 
-        // Reset session state
-        self.session_start = None;
-        self.total_processed = 0;
-        self.total_failed = 0;
-        self.session_queued = 0;
+        // Transition to Done state
+        self.work_state = WorkState::Done {
+            finished_at: Instant::now(),
+            total_processed: session_processed,
+            total_failed: session_failed,
+        };
         self.task_counts.clear();
-        self.pending_by_label.clear();
         self.recent_errors.clear();
-        self.current_label = None;
         self.session_recomputation_scope = crate::meta::recomputation::RecomputationScope::EMPTY;
 
         // Flush all pending db_thread writes before queueing the next phase.
@@ -869,7 +867,7 @@ impl Witch {
     /// - No active transaction
     /// - Config interval > 0 and timer expired
     fn maybe_start_idle_rescan(&mut self) {
-        if self.state != TaskExecutionState::Idle || self.eye_state != EyeState::Awake {
+        if !self.work_state.is_idle() || self.reasoning_level != ReasoningLevel::Full {
             return;
         }
         if !self.idle_rescan_eligible {
@@ -907,7 +905,7 @@ impl Witch {
 
         self.idle_rescan_active = true;
         self.idle_since = None;
-        self.observation_state = CorpusObservationState::Observing;
+        self.inode_awareness = InodeAwarenessLevel::Checking;
 
         // Clear accumulated observation state before fresh scan
         self.observed_corpus_inodes.clear();
@@ -1045,18 +1043,24 @@ impl Witch {
     }
 
     fn transition_to_idle(&mut self) {
-        self.state = TaskExecutionState::Idle;
-        self.completed_at = None;
-        if self.eye_state == EyeState::Awake {
+        self.work_state = WorkState::Idle;
+        if self.reasoning_level == ReasoningLevel::Full {
             self.idle_since = Some(Instant::now());
         }
     }
 
     fn transition_to_working(&mut self) {
-        if self.session_start.is_none() {
-            self.session_start = Some(Instant::now());
+        if !self.work_state.is_working() {
+            self.work_state = WorkState::Working {
+                started_at: Instant::now(),
+                queued: 0,
+                in_flight: 0,
+                processed: 0,
+                failed: 0,
+                by_label: HashMap::new(),
+                label: None,
+            };
         }
-        self.state = TaskExecutionState::Working;
     }
 
     // -------------------------------------------------------------------------
@@ -1112,7 +1116,13 @@ impl Witch {
     /// Resolve task label from explicit label, current_label, or task fallback.
     fn resolve_label(&self, explicit_label: Option<String>, task: &Task) -> String {
         explicit_label
-            .or_else(|| self.current_label.clone())
+            .or_else(|| {
+                if let WorkState::Working { ref label, .. } = self.work_state {
+                    label.clone()
+                } else {
+                    None
+                }
+            })
             .unwrap_or_else(|| TaskLabel::from_task(task).0)
     }
 
@@ -1140,13 +1150,23 @@ impl Witch {
             mutations.len(), label
         ));
 
-        self.session_queued += mutations.len();
-        self.in_flight += mutations.len();
+        let count = mutations.len();
+        self.work_state.inc_queued(count);
+        for _ in 0..count {
+            self.work_state.inc_in_flight();
+        }
+
+        // Store label in WorkState for phase advancement
+        if let WorkState::Working { label: ref mut ws_label, .. } = self.work_state {
+            if ws_label.is_none() {
+                *ws_label = label.clone();
+            }
+        }
 
         for mutation in mutations {
             let task = Task::Mutation(mutation);
             let task_label = self.resolve_label(label.clone(), &task);
-            *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
+            self.work_state.inc_label(&task_label);
             self.spawn_task(task, task_label, queue_time);
         }
     }
@@ -1168,9 +1188,9 @@ impl Witch {
         let task = Task::Mutation(mutation);
         let task_label = TaskLabel::from_task(&task).0;
 
-        self.session_queued += 1;
-        self.in_flight += 1;
-        *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
+        self.work_state.inc_queued(1);
+        self.work_state.inc_in_flight();
+        self.work_state.inc_label(&task_label);
         self.spawn_task(task, task_label, Instant::now());
     }
 
@@ -1188,9 +1208,9 @@ impl Witch {
         let task = Task::Computation(computation);
         let task_label = self.resolve_label(label, &task);
 
-        self.session_queued += 1;
-        self.in_flight += 1;
-        *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
+        self.work_state.inc_queued(1);
+        self.work_state.inc_in_flight();
+        self.work_state.inc_label(&task_label);
         self.spawn_task(task, task_label, Instant::now());
     }
 
@@ -1208,9 +1228,9 @@ impl Witch {
         let task = Task::Migration(migration);
         let task_label = self.resolve_label(None, &task);
 
-        self.session_queued += 1;
-        self.in_flight += 1;
-        *self.pending_by_label.entry(task_label.clone()).or_insert(0) += 1;
+        self.work_state.inc_queued(1);
+        self.work_state.inc_in_flight();
+        self.work_state.inc_label(&task_label);
         self.spawn_task(task, task_label, Instant::now());
     }
 
@@ -1370,15 +1390,15 @@ impl Witch {
     ///
     /// Safe to call from render code, utility functions, etc.
     /// Use `tick()` only from the main event loop to advance state.
-    pub fn status(&self) -> DaemonStatus {
-        DaemonStatus {
-            state: self.state.into(),
-            pending: self.in_flight,
+    pub fn status(&self) -> WorkStatus {
+        WorkStatus {
+            state: WorkStateSnapshot::from(&self.work_state),
+            pending: self.work_state.in_flight(),
             completed: 0, // Only meaningful from tick() result
             failed: 0,    // Only meaningful from tick() result
-            total_processed: self.total_processed,
-            session_queued: self.session_queued,
-            pending_by_label: self.pending_by_label.clone(),
+            total_processed: self.work_state.processed(),
+            session_queued: self.work_state.queued(),
+            pending_by_label: self.work_state.by_label().cloned().unwrap_or_default(),
             idle_rescan_active: self.idle_rescan_active,
         }
     }
@@ -1386,7 +1406,7 @@ impl Witch {
     /// Check if there's pending work (tasks queued or in-flight).
     pub fn has_pending(&self) -> bool {
         // Check rayon in-flight tasks
-        if self.in_flight > 0 {
+        if self.work_state.in_flight() > 0 {
             return true;
         }
         // Check db_thread queue

@@ -43,6 +43,7 @@ pub struct TranscodeMutation {
 
 impl MutationExecutor for TranscodeMutation {
     fn label(&self) -> &'static str { "Transcode" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();

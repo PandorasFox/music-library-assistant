@@ -37,6 +37,7 @@ impl MutationExecutor for ApplyConfigEditsMutation {
     fn label(&self) -> &'static str {
         "Config update"
     }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config) }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         match crate::config::write_config_to_disk(&self.original_kdl, &self.old_config, &self.new_config) {

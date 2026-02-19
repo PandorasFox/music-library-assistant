@@ -267,7 +267,8 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             }
 
             // Mutations without inodes
-            Mutation::MoveToStash(_)
+            Mutation::StashFromZone(_)
+            | Mutation::StashLeftovers(_)
             | Mutation::Move(_)
             | Mutation::IndexFileFromPath(_)
             | Mutation::HardLink(_)

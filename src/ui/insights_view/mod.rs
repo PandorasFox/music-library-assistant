@@ -35,7 +35,7 @@ use ratatui::style::Color;
 use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, TagSquashBucket, OtherSignalsBucket};
 use crate::meta::decisions::DecisionSource;
 use crate::ui::widgets::ListClickTargets;
-use crate::witch::DaemonStatus;
+use crate::witch::WorkStatus;
 
 pub use render::render_insights_view;
 
@@ -733,7 +733,7 @@ impl InsightsViewState {
     /// this set are filtered out so the operator sees only unhandled insights.
     pub fn update(
         &mut self,
-        witch_status: Option<&DaemonStatus>,
+        witch_status: Option<&WorkStatus>,
         insights_data: Option<InsightsData>,
         handled_sources: &HashSet<DecisionSource>,
     ) {
@@ -1032,7 +1032,7 @@ mod tests {
         assert_eq!(state.modal, InsightsModal::Ready);
 
         // Pending > 0 - should be busy
-        let busy_status = DaemonStatus {
+        let busy_status = WorkStatus {
             pending: 5,
             ..Default::default()
         };
@@ -1040,7 +1040,7 @@ mod tests {
         assert_eq!(state.modal, InsightsModal::NotReady_WitchBusy);
 
         // Pending = 0 - should be ready again
-        let idle_status = DaemonStatus {
+        let idle_status = WorkStatus {
             pending: 0,
             ..Default::default()
         };

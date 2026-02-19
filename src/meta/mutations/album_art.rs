@@ -28,6 +28,7 @@ impl MutationExecutor for EmbedAlbumArtMutation {
     fn label(&self) -> &'static str {
         "Embed album art"
     }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();

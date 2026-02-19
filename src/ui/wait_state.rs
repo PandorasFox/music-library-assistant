@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use crate::witch::{TaskExecutionStateSnapshot, Witch};
+use crate::witch::{WorkStateSnapshot, Witch};
 
 /// Helper for waiting on Witch work completion.
 ///
@@ -70,21 +70,21 @@ impl WaitState {
         let status = witch.status();
 
         // Track when the Witch starts working
-        if status.state == TaskExecutionStateSnapshot::Working {
+        if status.state == WorkStateSnapshot::Working {
             self.seen_working = true;
         }
 
         // Check for completion:
         // - Must have seen working state (to avoid false positive from initial idle)
         // - No pending tasks
-        // - The Witch is now Idle or Completed
+        // - The Witch is now Idle or Done
         if self.seen_working && status.pending == 0 {
             match status.state {
-                TaskExecutionStateSnapshot::Idle | TaskExecutionStateSnapshot::Completed => {
+                WorkStateSnapshot::Idle | WorkStateSnapshot::Done => {
                     self.waiting = false;
                     return true; // Complete!
                 }
-                TaskExecutionStateSnapshot::Working => {
+                WorkStateSnapshot::Working => {
                     // Still working, not complete
                 }
             }

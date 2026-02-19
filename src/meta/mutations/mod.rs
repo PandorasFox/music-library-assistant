@@ -39,6 +39,7 @@ pub mod dir_config_edit;
 
 pub use types::*;
 // MutationContext and MutationExecutor accessible via crate::meta::mutations::traits::{...}
+pub use traits::{MutationExecutionStage, MutationStaging};
 pub use migration::MigrationRegistry;
 
 /// Access control for corpus-mutating operations.

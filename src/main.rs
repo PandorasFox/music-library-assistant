@@ -15,10 +15,10 @@
 // ============================================================================
 
 /// MM release version string (shown in title bar and reports)
-pub const MM_VERSION: &str = "beta 7";
+pub const MM_VERSION: &str = "beta 8";
 
 /// Full application title with version
-pub const MM_TITLE: &str = "Music Magic (mm beta 7)";
+pub const MM_TITLE: &str = "Music Magic (mm beta 8)";
 
 mod config;
 mod corpus;

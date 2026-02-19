@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────┐┌──────────────┐
-//! │ Search | Files | Health | ... | Deploy        ││  mm beta 7  │
+//! │ Search | Files | Health | ... | Deploy        ││  mm beta 8  │
 //! └──────────────────────────────────────────────┘└──────────────┘
 //! ```
 
@@ -102,7 +102,7 @@ impl LateralView {
 ///
 /// Two bordered panes side by side:
 /// - Left: Tab switcher showing all views with current highlighted
-/// - Right: App title "mm beta 7" (16 chars wide)
+/// - Right: App title "mm beta 8" (16 chars wide)
 pub struct UnifiedTitleBar {
     current_view: LateralView,
     /// When true and Deploy tab is not active, render Deploy label in Magenta.
@@ -202,7 +202,7 @@ impl UnifiedTitleBar {
     }
 
     fn render_title(&self, f: &mut Frame, area: Rect) {
-        let paragraph = Paragraph::new("mm beta 7")
+        let paragraph = Paragraph::new("mm beta 8")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));

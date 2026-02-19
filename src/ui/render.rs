@@ -70,8 +70,9 @@ pub fn render_app(
             ])
             .split(f.area());
 
-        // Read deploy_needs_action from UiCache for titlebar
-        let deploy_needs_action = app.witch.ui_read_cache().deploy_status()
+        // Read deploy_needs_action from locally cached deploy status
+        let deploy_needs_action = app.cached_deploy
+            .as_ref()
             .map_or(false, |s| s.needs_action);
 
         let transactions_open = app.config().opinions.leave_transactions_open;

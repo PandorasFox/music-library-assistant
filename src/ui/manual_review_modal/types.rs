@@ -243,11 +243,6 @@ impl ManualReviewData {
             }
         }
     }
-
-    /// Whether there are any groups to review.
-    pub fn has_groups(&self) -> bool {
-        !self.groups.is_empty()
-    }
 }
 
 /// Generate StashFromZone + DropFromIndex mutations for a single file.

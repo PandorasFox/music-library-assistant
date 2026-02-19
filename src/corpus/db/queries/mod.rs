@@ -876,4 +876,23 @@ impl<'a> ReadOnlyDb<'a> {
     pub fn get_library_file_metadata(&self) -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>> {
         self.db.get_library_file_metadata()
     }
+
+    // =========================================================================
+    // Health / Cache Queries
+    // =========================================================================
+
+    /// Get insights data for the health view.
+    pub fn get_insights_data(&self) -> Result<super::types::InsightsData> {
+        self.db.get_insights_data()
+    }
+
+    /// Get inbox overview data.
+    pub fn get_inbox_overview_data(&self) -> Result<super::types::InboxOverviewData> {
+        self.db.get_inbox_overview_data()
+    }
+
+    /// Get deploy status.
+    pub fn get_deploy_status(&self) -> Result<super::types::DeployStatus> {
+        self.db.get_deploy_status()
+    }
 }

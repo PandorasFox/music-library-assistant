@@ -4,8 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::corpus::db::queries::ReadOnlyDb;
-use crate::corpus::db::types::{AudioFile, Zone};
+use crate::corpus::db::types::AudioFile;
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 
@@ -332,13 +331,15 @@ impl TagSearchState {
         }
     }
 
-    /// Execute the search query.
-    pub fn execute_search(&mut self, read_db: &ReadOnlyDb<'_>) {
-        // Build and execute the query
-        let mut results = self.query_database(read_db);
+    /// Execute the search query against pre-fetched file data.
+    pub fn execute_search(&mut self, all_files: Vec<(AudioFile, HashMap<String, Vec<String>>)>) {
+        let mut results: Vec<AudioFileWithTags> = all_files
+            .into_iter()
+            .map(|(audio_file, tags)| AudioFileWithTags { audio_file, tags })
+            .filter(|aft| self.evaluate_conditions(aft))
+            .collect();
 
-        // Sort by corpus path (deployment path sorting disabled)
-        // TODO: Re-enable deployment path sorting when corpus::deploy is available
+        // Sort by corpus path
         results.sort_by(|a, b| a.audio_file.path().cmp(b.audio_file.path()));
 
         self.results = results;
@@ -346,24 +347,10 @@ impl TagSearchState {
         self.results_scroll = 0;
 
         if self.results.is_empty() {
-            // Show "no results" modal
             self.modal = Some(TagSearchModal::NoResults);
         } else {
             self.mode = TagSearchMode::Results;
         }
-    }
-
-    /// Query the database based on conditions.
-    fn query_database(&self, read_db: &ReadOnlyDb<'_>) -> Vec<AudioFileWithTags> {
-        // Get all audio files with tags
-        let all_files = read_db.get_all_audio_files_with_tags(Zone::Corpus).unwrap_or_default();
-
-        // Convert to AudioFileWithTags and filter by conditions
-        all_files
-            .into_iter()
-            .map(|(audio_file, tags)| AudioFileWithTags { audio_file, tags })
-            .filter(|aft| self.evaluate_conditions(aft))
-            .collect()
     }
 
     /// Evaluate all conditions against a track with tags.

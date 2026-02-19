@@ -17,15 +17,9 @@ impl App {
     /// Start missing file resolution modal from Insights view.
     pub(in crate::ui) fn start_missing_file_resolution(&mut self) {
         // Load categorized missing file data
-        let data = {
-            let read_db = self.witch.read_db();
-            missing_file_modal::MissingFileModalData::load(&read_db).ok()
-        }.unwrap_or_default();
-
-        if data.total_count() == 0 {
-            self.status_message = Some("No missing files to resolve".to_string());
-            return;
-        }
+        let data = self.cache.query(|db| {
+            missing_file_modal::MissingFileModalData::load(&db).ok().unwrap_or_default()
+        }).recv();
 
         // Create preview state with cached data
         let preview = missing_file_modal::MissingFilePreviewState::new(data);
@@ -79,15 +73,9 @@ impl App {
     /// Start missing directory resolution modal from Insights view.
     pub(in crate::ui) fn start_missing_directory_resolution(&mut self) {
         // Load missing directory data
-        let data = {
-            let read_db = self.witch.read_db();
-            missing_directory_modal::MissingDirectoryModalData::load(&read_db).ok()
-        }.unwrap_or_default();
-
-        if data.count() == 0 {
-            self.status_message = Some("No missing directories to resolve".to_string());
-            return;
-        }
+        let data = self.cache.query(|db| {
+            missing_directory_modal::MissingDirectoryModalData::load(&db).ok().unwrap_or_default()
+        }).recv();
 
         // Create preview state with cached data
         let preview = missing_directory_modal::MissingDirectoryPreviewState::new(data);
@@ -126,15 +114,9 @@ impl App {
     /// Start corrupt file resolution modal from Insights view.
     pub(in crate::ui) fn start_corrupt_file_resolution(&mut self) {
         // Load corrupt file data
-        let data = {
-            let read_db = self.witch.read_db();
-            corrupt_file_modal::CorruptFileModalData::load(&read_db).ok()
-        }.unwrap_or_default();
-
-        if data.total_count() == 0 {
-            self.status_message = Some("No corrupt files to resolve".to_string());
-            return;
-        }
+        let data = self.cache.query(|db| {
+            corrupt_file_modal::CorruptFileModalData::load(&db).ok().unwrap_or_default()
+        }).recv();
 
         // Create preview state with cached data
         let preview = corrupt_file_modal::CorruptFilePreviewState::new(data);
@@ -173,15 +155,9 @@ impl App {
     /// Start shit format resolution modal from Insights view.
     pub(in crate::ui) fn start_shit_format_resolution(&mut self) {
         // Load shit format file data
-        let mut data = {
-            let read_db = self.witch.read_db();
-            shit_format_modal::ShitFormatModalData::load(&read_db).ok()
-        }.unwrap_or_default();
-
-        if data.total_count() == 0 {
-            self.status_message = Some("No shit format files to resolve".to_string());
-            return;
-        }
+        let mut data = self.cache.query(|db| {
+            shit_format_modal::ShitFormatModalData::load(&db).ok().unwrap_or_default()
+        }).recv();
 
         // Thread opinion: lossy files -> FLAC capture instead of Opus transcode
         data.lossy_to_flac = self.config().opinions.lossy_shit_formats_to_flac;
@@ -254,15 +230,9 @@ impl App {
     /// Start subpar duplicate resolution modal from Insights view.
     pub(in crate::ui) fn start_subpar_duplicate_resolution(&mut self) {
         // Load subpar duplicate file data
-        let data = {
-            let read_db = self.witch.read_db();
-            subpar_duplicate_modal::SubparDuplicateModalData::load(&read_db).ok()
-        }.unwrap_or_default();
-
-        if data.total_count() == 0 {
-            self.status_message = Some("No subpar duplicates to resolve".to_string());
-            return;
-        }
+        let data = self.cache.query(|db| {
+            subpar_duplicate_modal::SubparDuplicateModalData::load(&db).ok().unwrap_or_default()
+        }).recv();
 
         // Create preview state with cached data
         let preview = subpar_duplicate_modal::SubparDuplicatePreviewState::new(data);
@@ -303,15 +273,9 @@ impl App {
         use super::super::directory_cluster_modal;
 
         // Load directory overlap cluster data
-        let data = {
-            let read_db = self.witch.read_db();
-            directory_cluster_modal::DirectoryClusterModalData::load(&read_db).ok()
-        }.unwrap_or_default();
-
-        if !data.has_clusters() {
-            self.status_message = Some("No directory overlap clusters to resolve".to_string());
-            return;
-        }
+        let data = self.cache.query(|db| {
+            directory_cluster_modal::DirectoryClusterModalData::load(&db).ok().unwrap_or_default()
+        }).recv();
 
         // Create preview state with cached data
         let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
@@ -442,15 +406,9 @@ impl App {
 
     /// Start embed album art resolution modal from Insights view.
     pub(in crate::ui) fn start_embed_album_art_resolution(&mut self) {
-        let data = {
-            let read_db = self.witch.read_db();
-            embed_album_art_modal::EmbedAlbumArtModalData::load(&read_db).ok()
-        }.unwrap_or_default();
-
-        if data.directory_count() == 0 {
-            self.status_message = Some("No embeddable album art found".to_string());
-            return;
-        }
+        let data = self.cache.query(|db| {
+            embed_album_art_modal::EmbedAlbumArtModalData::load(&db).ok().unwrap_or_default()
+        }).recv();
 
         let preview = embed_album_art_modal::EmbedAlbumArtPreviewState::new(data);
         self.view = ActiveView::EmbedAlbumArtResolution(preview);

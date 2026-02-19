@@ -24,11 +24,9 @@ pub enum WorkState {
     Idle,
     /// Tasks are queued/executing.
     Working {
-        started_at: Instant,
         queued: usize,
         in_flight: usize,
         processed: usize,
-        failed: usize,
         by_label: HashMap<String, usize>,
         label: Option<String>,
     },
@@ -36,7 +34,6 @@ pub enum WorkState {
     Done {
         finished_at: Instant,
         total_processed: usize,
-        total_failed: usize,
     },
 }
 
@@ -66,13 +63,6 @@ impl WorkState {
     pub fn inc_processed(&mut self) {
         if let WorkState::Working { ref mut processed, .. } = self {
             *processed += 1;
-        }
-    }
-
-    /// Increment failed counter. No-op if not Working.
-    pub fn inc_failed(&mut self) {
-        if let WorkState::Working { ref mut failed, .. } = self {
-            *failed += 1;
         }
     }
 
@@ -336,10 +326,6 @@ pub struct WorkStatus {
     pub state: WorkStateSnapshot,
     /// Tasks waiting to be processed (in queue or in-flight).
     pub pending: usize,
-    /// Tasks completed in this tick cycle.
-    pub completed: usize,
-    /// Tasks failed in this tick cycle.
-    pub failed: usize,
     /// Total tasks processed in current session.
     pub total_processed: usize,
     /// Total tasks queued in current session (for progress: processed/queued).

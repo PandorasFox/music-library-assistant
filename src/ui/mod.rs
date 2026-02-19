@@ -99,6 +99,14 @@ pub(crate) struct App {
     // The Witch - enforcer of orderliness, handles all mutations and background work
     pub(super) witch: crate::witch::Witch,
 
+    /// Handle to the cache thread for periodic refreshes and one-shot queries.
+    pub(super) cache: crate::witch::cache_thread::CacheHandle,
+
+    /// Locally cached periodic data from the cache thread.
+    pub(super) cached_insights: Option<crate::corpus::db::types::InsightsData>,
+    pub(super) cached_inbox: Option<crate::corpus::db::types::InboxOverviewData>,
+    pub(super) cached_deploy: Option<crate::corpus::db::types::DeployStatus>,
+
     // Filter popup overlay (Ctrl+F in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
 
@@ -113,22 +121,39 @@ pub(crate) struct App {
 
     /// Vacuum threshold from config, stored for startup flow.
     pub(super) vacuum_threshold: f64,
+
+    /// Receiver for typed Witch → UI notifications.
+    notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
+
+    /// Locally cached Witch status from StatusUpdate notices.
+    pub(super) cached_status: crate::witch::WorkStatus,
 }
 
 impl App {
-    /// Create a new App with a pre-existing Witch instance and shared config.
-    fn new_with_witch(shared_config: SharedConfig, witch: crate::witch::Witch) -> Self {
+    /// Create a new App with a pre-existing Witch instance, cache handle, and shared config.
+    fn new_with_witch(
+        shared_config: SharedConfig,
+        witch: crate::witch::Witch,
+        cache: crate::witch::cache_thread::CacheHandle,
+        notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
+    ) -> Self {
         Self {
             shared_config,
             should_quit: false,
             status_message: None,
             view: ActiveView::Insights(insights_view::InsightsViewState::new()),
             witch,
+            cache,
+            cached_insights: None,
+            cached_inbox: None,
+            cached_deploy: None,
             filter_overlay: None,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
             db_path: std::path::PathBuf::new(),
             vacuum_threshold: 0.0,
+            notice_rx,
+            cached_status: Default::default(),
         }
     }
 
@@ -164,9 +189,36 @@ impl App {
                     self.filter_overlay = None;
                     match context {
                         FilterPopupContext::CorpusBrowser => {
-                            if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
-                                let read_db = self.witch.read_db();
-                                browser.apply_filter(condition, &read_db);
+                            if !condition.is_active() {
+                                if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
+                                    browser.clear_filter();
+                                }
+                            } else {
+                                let matching_paths = self.cache.query(move |db| {
+                                    let audio_files = db.get_all_audio_files(crate::corpus::db::types::Zone::Corpus)
+                                        .unwrap_or_default();
+                                    let mut paths = Vec::new();
+                                    for audio_file in audio_files {
+                                        let mut tags: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                                        for t in db.get_corpus_tags(audio_file.inode()).unwrap_or_default() {
+                                            tags.entry(t.tag_name.to_uppercase()).or_default().push(t.tag_value);
+                                        }
+                                        if condition.matches(
+                                            audio_file.path(),
+                                            &audio_file.audio.file_type,
+                                            audio_file.audio.sample_rate,
+                                            audio_file.audio.bitrate_kbps,
+                                            audio_file.audio.duration_ms,
+                                            &tags,
+                                        ) {
+                                            paths.push(std::path::PathBuf::from(audio_file.path()));
+                                        }
+                                    }
+                                    paths
+                                }).recv();
+                                if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
+                                    browser.apply_filter_results(matching_paths);
+                                }
                             }
                         }
                         FilterPopupContext::OobSync => {
@@ -349,10 +401,9 @@ impl App {
     pub(super) fn start_inbox_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
-        let intake_state = {
-            let read_db = self.witch.read_db();
-            startup::IntakeConfirmationState::gather_inbox(&read_db)
-        };
+        let intake_state = self.cache.query(|db| {
+            startup::IntakeConfirmationState::gather_inbox(&db)
+        }).recv();
 
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);
@@ -402,15 +453,16 @@ impl App {
     /// per-library file counts.
     pub(super) fn start_deploy_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Deploy;
-        let deploy_status = self.witch.ui_read_cache().deploy_status();
+        let deploy_status = self.cached_deploy.clone();
 
         let needs_action = deploy_status.as_ref().map_or(false, |s| s.needs_action);
 
         if needs_action {
-            let config = crate::config::load_config().ok();
-            let read_db = self.witch.read_db();
-            let data = deploy_modal::DeployModalData::load(&read_db, config.as_ref())
-                .unwrap_or_default();
+            let data = self.cache.query(|db| {
+                let config = crate::config::load_config().ok();
+                deploy_modal::DeployModalData::load(&db, config.as_ref())
+                    .unwrap_or_default()
+            }).recv();
             let preview = deploy_modal::DeploymentPreviewState::new(data);
             self.view = ActiveView::Deploy(deploy_modal::DeployViewState::Preview(preview));
         } else {
@@ -446,22 +498,6 @@ impl App {
             corpus_dir,
             primary_zone_paths,
         ));
-    }
-
-    /// Check Witch status and update UI with any failure messages.
-    fn check_witch_status(&mut self) {
-        let status = self.witch.status();
-        if status.failed > 0 {
-            self.status_message = Some(format!(
-                "Tasks: {} done, {} failed",
-                status.completed, status.failed
-            ));
-        }
-    }
-
-    /// Shorthand for read-only database access.
-    pub(super) fn read_db(&mut self) -> crate::corpus::db::ReadOnlyDb<'_> {
-        self.witch.read_db()
     }
 
     // =========================================================================
@@ -588,12 +624,12 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     let force_check = config.opinions.startup.force_check_all_files_at_startup;
     let vacuum_threshold = config.opinions.startup.vacuum_threshold;
     let shared_config = config.into_shared();
-    let witch = {
+    let (witch, cache_handle, notice_rx) = {
         let cfg = crate::config::read_shared_config(&shared_config);
         crate::witch::Witch::with_opinions(&cfg, false, force_check, Some(log_rx))
     };
 
-    let mut app = App::new_with_witch(shared_config, witch);
+    let mut app = App::new_with_witch(shared_config, witch, cache_handle, notice_rx);
     app.vacuum_threshold = vacuum_threshold;
     app.db_path = db_path.clone();
 
@@ -678,64 +714,88 @@ fn run_app<B: ratatui::backend::Backend>(
         app.witch.set_idle_rescan_eligible(idle_eligible);
 
         // Tick the Witch (skip during startup views — they tick internally as needed)
-        let (tick_status, tick_duration) = if !is_startup_view {
+        let mut tick_duration = std::time::Duration::ZERO;
+        if !is_startup_view {
             let tick_start = std::time::Instant::now();
-            let status = app.witch.tick();
-            let duration = tick_start.elapsed();
-            if duration.as_millis() > 16 {
+            app.witch.tick();
+            tick_duration = tick_start.elapsed();
+            if tick_duration.as_millis() > 16 {
                 crate::logging::log_perf(format!(
-                    "[FRAME DEBUG] witch.tick() took {}ms, drained {} results",
-                    duration.as_millis(),
-                    status.total_processed
+                    "[FRAME DEBUG] witch.tick() took {}ms",
+                    tick_duration.as_millis(),
                 ));
             }
-            (status, duration)
-        } else {
-            (Default::default(), std::time::Duration::ZERO)
-        };
+        }
 
-        app.check_witch_status();
+        // Drain WitchNotices → update local state
+        while let Ok(notice) = app.notice_rx.try_recv() {
+            match notice {
+                crate::witch::WitchNotice::StatusUpdate(status) => {
+                    app.cached_status = status;
+                }
+                crate::witch::WitchNotice::MutationsCompleted => {
+                    app.cache.invalidate_all();
+                }
+                crate::witch::WitchNotice::Error(msg) => {
+                    app.status_message = Some(format!("Task failed: {}", msg));
+                }
+                crate::witch::WitchNotice::SafetyLatch(reason) => {
+                    app.status_message = Some(format!("Safety latch: {}", reason));
+                }
+                crate::witch::WitchNotice::ConfigUpdated => {
+                    // Config already updated on Witch side via shared_config
+                }
+            }
+        }
 
-        // Update health view with the Witch's status and cached data
+        // Drain CacheReady results from cache thread → update local cached data
+        for item in app.cache.drain_ready() {
+            match item {
+                crate::witch::cache_thread::CacheReady::Insights(data) => {
+                    app.cached_insights = Some(data);
+                }
+                crate::witch::cache_thread::CacheReady::InboxOverview(data) => {
+                    app.cached_inbox = Some(data);
+                }
+                crate::witch::cache_thread::CacheReady::DeployStatus(data) => {
+                    app.cached_deploy = Some(data);
+                }
+            }
+        }
+
+        // Update views with cached data
         if let ActiveView::Insights(ref mut view) = app.view {
-            let status = app.witch.status();
-            let insights_data = app.witch.ui_read_cache().insights_data();
-            let handled = app.witch.ui_read_cache().handled_decision_sources();
-            view.update(Some(&status), insights_data, handled);
+            let insights_data = app.cached_insights.clone();
+            let handled = app.witch.handled_decision_sources();
+            view.update(Some(&app.cached_status), insights_data, handled);
         }
-
-        // Update inbox view with cached overview data and busy state
         if let ActiveView::Inbox(ref mut view) = app.view {
-            let inbox_data = app.witch.ui_read_cache().inbox_overview();
+            let inbox_data = app.cached_inbox.clone();
             view.update(inbox_data);
-            view.busy = tick_status.pending > 0 || tick_status.idle_rescan_active;
+            view.busy = app.cached_status.pending > 0 || app.cached_status.idle_rescan_active;
+        }
+        if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
+            if let Some(ref status) = app.cached_deploy {
+                *library_file_counts = status.library_file_counts.clone();
+            }
         }
 
-        // Tick progress screen if active (includes eye animation update)
+        // Tick view-specific state machines
         if matches!(app.view, ActiveView::Progress { .. }) {
             app.tick_progress_screen();
         }
-
-        // Tick progressive worker if active
         if matches!(app.view, ActiveView::ProgressiveWork(_)) {
             app.tick_progressive_worker();
         }
 
-        // Update deploy UpToDate with fresh counts each frame
-        if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
-            if let Some(status) = app.witch.ui_read_cache().deploy_status() {
-                *library_file_counts = status.library_file_counts;
-            }
-        }
-
         // Flag demand for cached UI data
         // Always want deploy status — titlebar needs it for purple indicator
-        app.witch.ui_read_cache().want_deploy_status();
+        app.cache.want_deploy();
         if matches!(app.view, ActiveView::Insights(_)) {
-            app.witch.ui_read_cache().want_insights_data();
+            app.cache.want_insights();
         }
         if matches!(app.view, ActiveView::Inbox(_)) {
-            app.witch.ui_read_cache().want_inbox_overview();
+            app.cache.want_inbox();
         }
 
         let draw_start = std::time::Instant::now();

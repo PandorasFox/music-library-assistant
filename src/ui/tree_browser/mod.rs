@@ -17,15 +17,12 @@ mod navigator;
 mod render;
 pub mod variants;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 use ratatui::Frame;
-
-use crate::corpus::db::ReadOnlyDb;
-use crate::ui::filter_popup::FilterCondition;
 
 pub use actions::TreeBrowserAction;
 pub use config::CorpusBrowserConfig;
@@ -100,45 +97,12 @@ impl TreeBrowserState {
     ///
     /// Queries the database for tracks matching the filter condition, then
     /// computes the set of matching paths plus all ancestor directories.
-    pub fn apply_filter(&mut self, condition: FilterCondition, read_db: &ReadOnlyDb<'_>) {
-        if !condition.is_active() {
-            self.clear_filter();
-            return;
-        }
-
-        // Query all audio files from database
-        let audio_files = match read_db.get_all_audio_files(crate::corpus::db::types::Zone::Corpus) {
-            Ok(af) => af,
-            Err(_) => {
-                self.clear_filter();
-                return;
-            }
-        };
-
-        // Get tags for each file and filter
-        let mut matching_paths: Vec<PathBuf> = Vec::new();
-        for audio_file in audio_files {
-            // Get tags for this file and convert to HashMap (multi-value)
-            let mut tags: HashMap<String, Vec<String>> = HashMap::new();
-            for t in read_db.get_corpus_tags(audio_file.inode()).unwrap_or_default() {
-                tags.entry(t.tag_name.to_uppercase()).or_default().push(t.tag_value);
-            }
-
-            // Check if file matches filter
-            if condition.matches(
-                audio_file.path(),
-                &audio_file.audio.file_type,
-                audio_file.audio.sample_rate,
-                audio_file.audio.bitrate_kbps,
-                audio_file.audio.duration_ms,
-                &tags,
-            ) {
-                matching_paths.push(PathBuf::from(audio_file.path()));
-            }
-        }
-
+    /// Apply filter results (matching paths) to the tree browser.
+    ///
+    /// Call with paths computed via the cache thread. If empty, the
+    /// filter is not applied (existing view retained).
+    pub fn apply_filter_results(&mut self, matching_paths: Vec<PathBuf>) {
         if matching_paths.is_empty() {
-            // No matches - keep current view but don't apply empty filter
             return;
         }
 

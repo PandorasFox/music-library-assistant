@@ -17,21 +17,12 @@ impl App {
     /// If `safe_only` is true, loads only signals where all split parts exist in corpus.
     /// If `tag_filter` is Some, only loads signals for that specific tag name.
     pub(in crate::ui) fn start_compound_split_resolution(&mut self, safe_only: bool, tag_filter: Option<&str>) {
-        let read_db = self.witch.read_db();
-
         // Load compound signal groups filtered by safety classification and tag
-        let groups = read_db.get_compound_signal_groups_by_safety(safe_only, tag_filter)
-            .unwrap_or_default();
-
-        if groups.is_empty() {
-            let msg = if safe_only {
-                "No safe compound splits available"
-            } else {
-                "No compound splits needing review"
-            };
-            self.status_message = Some(msg.to_string());
-            return;
-        }
+        let tag_filter_owned = tag_filter.map(|s| s.to_string());
+        let groups = self.cache.query(move |db| {
+            db.get_compound_signal_groups_by_safety(safe_only, tag_filter_owned.as_deref())
+                .unwrap_or_default()
+        }).recv();
 
         // Store groups for cluster navigation
         let clusters = compound_split_v2::CompoundSplitClustersV2::new(groups);
@@ -42,10 +33,9 @@ impl App {
 
         // Load the first group into modal data
         let first_group = clusters.all_groups()[0].clone();
-        let data = {
-            let read_db = self.witch.read_db();
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, &read_db)
-        };
+        let data = self.cache.query(move |db| {
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, &db)
+        }).recv();
 
         let data = match data {
             Some(d) => d,
@@ -130,11 +120,10 @@ impl App {
             };
 
         // Query audio files by inodes
-        let audio_files = {
-            let read_db = self.witch.read_db();
-            read_db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
+        let audio_files = self.cache.query(move |db| {
+            db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
                 .unwrap_or_default()
-        };
+        }).recv();
 
         if audio_files.is_empty() {
             self.status_message = Some("No indexed files found for this group".to_string());
@@ -349,10 +338,9 @@ impl App {
             _ => return false,
         };
 
-        let data = {
-            let read_db = self.witch.read_db();
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &read_db)
-        };
+        let data = self.cache.query(move |db| {
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db)
+        }).recv();
 
         let Some(data) = data else {
             self.status_message = Some("Failed to parse signal data".to_string());
@@ -396,10 +384,9 @@ impl App {
 
         let (group_index, total) = (clusters.current_index(), clusters.total());
 
-        let data = {
-            let read_db = self.witch.read_db();
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &read_db)
-        };
+        let data = self.cache.query(move |db| {
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db)
+        }).recv();
 
         let Some(data) = data else {
             self.status_message = Some("Failed to parse signal data".to_string());

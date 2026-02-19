@@ -15,13 +15,9 @@ impl App {
 
     /// Start OOB tag sync resolution from Insights view.
     pub(in crate::ui) fn start_oob_sync_resolution(&mut self) {
-        let read_db = self.witch.read_db();
-
-        let files = read_db.get_oob_sync_files().unwrap_or_default();
-        if files.is_empty() {
-            self.status_message = Some("No syncable tag changes".to_string());
-            return;
-        }
+        let files = self.cache.query(|db| {
+            db.get_oob_sync_files().unwrap_or_default()
+        }).recv();
 
         // Start transaction for the sync resolution
         let _ = self.witch.start_transaction("OOB tag sync");
@@ -134,37 +130,25 @@ impl App {
     /// Loads all OOB signal files classified into four buckets, starts a
     /// transaction for potential resolution, and computes the initial diff.
     pub(in crate::ui) fn start_oob_conflict_inspection(&mut self) {
-        // First pass: query bucketed files (scoped borrow)
-        let files = {
-            let read_db = self.witch.read_db();
-            match read_db.get_oob_files_bucketed() {
-                Ok(f) => f,
-                Err(e) => {
-                    crate::logging::log_error(format!("get_oob_files_bucketed failed: {}", e));
-                    self.status_message = Some(format!("Query failed: {}", e));
-                    return;
-                }
-            }
-        };
-
-        if files.is_empty() {
-            self.status_message = Some("No OOB tag signals to inspect".to_string());
-            return;
-        }
+        // Query bucketed files via cache thread
+        let files = self.cache.query(|db| {
+            db.get_oob_files_bucketed().unwrap_or_default()
+        }).recv();
 
         // Start transaction for potential resolution
         let _ = self.witch.start_transaction("OOB tag resolution");
 
         let mut state = oob_conflict_modal::OobConflictState::new(files);
 
-        // Second pass: compute initial diff for first file in the active bucket
+        // Compute initial diff for first file in the active bucket
         if let Some(file) = state.active_bucket_state().current_file() {
             let inode = file.inode;
             let path = file.path.clone();
-            let read_db = self.witch.read_db();
             let resolver = paths::get_resolver();
             let abs_path = resolver.resolve(std::path::Path::new(&path));
-            state.current_diff = oob_conflict_modal::types::compute_tag_diff(&read_db, inode, &abs_path);
+            state.current_diff = self.cache.query(move |db| {
+                oob_conflict_modal::types::compute_tag_diff(&db, inode, &abs_path)
+            }).recv();
         }
 
         self.view = ActiveView::OobConflictInspection(state);
@@ -214,11 +198,11 @@ impl App {
             _ => return Vec::new(),
         };
 
-        let read_db = self.witch.read_db();
-
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(&path));
-        oob_conflict_modal::types::compute_tag_diff(&read_db, inode, &abs_path)
+        self.cache.query(move |db| {
+            oob_conflict_modal::types::compute_tag_diff(&db, inode, &abs_path)
+        }).recv()
     }
 
     /// Stage resolution mutations for files in the active bucket.
@@ -356,21 +340,9 @@ impl App {
     /// Start moved file acknowledgement modal.
     pub(in crate::ui) fn start_moved_file_acknowledge(&mut self) {
         // Query files with moved_file signals
-        let files = {
-            let read_db = self.witch.read_db();
-            match read_db.get_moved_files() {
-                Ok(f) => f,
-                Err(e) => {
-                    self.status_message = Some(format!("Failed to query moved files: {}", e));
-                    return;
-                }
-            }
-        };
-
-        if files.is_empty() {
-            self.status_message = Some("No moved files to acknowledge".to_string());
-            return;
-        }
+        let files = self.cache.query(|db| {
+            db.get_moved_files().unwrap_or_default()
+        }).recv();
 
         crate::logging::log_general(format!(
             "Starting moved file acknowledgement: {} files",

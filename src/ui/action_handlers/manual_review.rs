@@ -16,15 +16,9 @@ impl App {
     /// Loads data from the database based on review kind, starts a transaction,
     /// and switches to the ManualReview view.
     pub(in crate::ui) fn start_manual_review(&mut self, kind: types::ReviewKind) {
-        let data = {
-            let read_db = self.witch.read_db();
-            types::ManualReviewData::load(&read_db, kind).ok()
-        }.unwrap_or_default();
-
-        if !data.has_groups() {
-            self.status_message = Some(format!("No {} groups to review", kind.title()));
-            return;
-        }
+        let data = self.cache.query(move |db| {
+            types::ManualReviewData::load(&db, kind).ok().unwrap_or_default()
+        }).recv();
 
         // Start transaction for the review session
         let _ = self.witch.start_transaction(kind.transaction_label());
@@ -203,16 +197,10 @@ impl App {
         };
 
         // Load audio files from database
-        let audio_files = {
-            let read_db = self.read_db();
-            match read_db.get_audio_files_by_inodes(&inodes, Zone::Corpus) {
-                Ok(files) => files,
-                Err(e) => {
-                    self.status_message = Some(format!("Failed to load files: {}", e));
-                    return;
-                }
-            }
-        };
+        let audio_files = self.cache.query(move |db| {
+            db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
+                .unwrap_or_default()
+        }).recv();
 
         if audio_files.is_empty() {
             self.status_message = Some("No indexed audio files found for editing".to_string());

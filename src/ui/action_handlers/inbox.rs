@@ -36,18 +36,12 @@ impl App {
             }
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
-                let intake_state = {
-                    let read_db = self.witch.read_db();
-                    startup::IntakeConfirmationState::gather_inbox(&read_db)
-                };
+                let intake_state = self.cache.query(|db| {
+                    startup::IntakeConfirmationState::gather_inbox(&db)
+                }).recv();
 
-                match intake_state {
-                    Some(state) => {
-                        self.view = ActiveView::IntakeConfirmation(state);
-                    }
-                    None => {
-                        self.status_message = Some("No unindexed inbox files to process".to_string());
-                    }
+                if let Some(state) = intake_state {
+                    self.view = ActiveView::IntakeConfirmation(state);
                 }
             }
             InboxAction::LaunchCorpusMatchResolution => {
@@ -67,11 +61,10 @@ impl App {
     /// Gathers all inbox tag canonicity signal keys, creates clusters with
     /// `InboxTagCanonicity` kind, and launches the standard canonicity modal.
     fn start_inbox_tag_canonicity_resolution(&mut self) {
-        let signal_keys = {
-            let read_db = self.witch.read_db();
-            read_db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
+        let signal_keys = self.cache.query(|db| {
+            db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
                 .unwrap_or_default()
-        };
+        }).recv();
 
         if signal_keys.is_empty() {
             self.status_message = Some("No inbox tag canonicity signals to resolve".to_string());
@@ -86,15 +79,14 @@ impl App {
 
         // Load the first signal
         let first_key = clusters.signal_keys[0].clone();
-        let data = {
-            let read_db = self.witch.read_db();
-            read_db.get_inbox_tag_canonicity_signal(&first_key)
+        let data = self.cache.query(move |db| {
+            db.get_inbox_tag_canonicity_signal(&first_key)
                 .ok()
                 .flatten()
                 .and_then(|signal| {
-                    tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, &read_db)
+                    tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, &db)
                 })
-        };
+        }).recv();
 
         let data = match data {
             Some(d) => d,
@@ -117,15 +109,9 @@ impl App {
     /// Start inbox corpus match resolution modal.
     pub(in crate::ui) fn start_inbox_corpus_match_resolution(&mut self) {
         let fuzz = self.config().opinions.quality_resolution.inbox_bitrate_fuzz_percent;
-        let data = {
-            let read_db = self.witch.read_db();
-            inbox_corpus_match_modal::InboxCorpusMatchModalData::load(&read_db, fuzz).ok()
-        }.unwrap_or_default();
-
-        if data.total_count() == 0 {
-            self.status_message = Some("No inbox corpus matches to resolve".to_string());
-            return;
-        }
+        let data = self.cache.query(move |db| {
+            inbox_corpus_match_modal::InboxCorpusMatchModalData::load(&db, fuzz).ok().unwrap_or_default()
+        }).recv();
 
         let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(data);
         self.view = ActiveView::InboxCorpusMatchResolution(preview);
@@ -178,18 +164,12 @@ impl App {
     /// Start the inbox organize workflow.
     fn start_inbox_organize(&mut self) {
         let config = self.config().clone();
-        let state = {
-            let read_db = self.witch.read_db();
-            inbox_organize::InboxOrganizeState::load_from_read_db(&read_db, &config)
-        };
+        let state = self.cache.query(move |db| {
+            inbox_organize::InboxOrganizeState::load_from_read_db(&db, &config)
+        }).recv();
 
-        match state {
-            Some(state) => {
-                self.view = ActiveView::InboxOrganize(state);
-            }
-            None => {
-                self.status_message = Some("No organizable inbox files".to_string());
-            }
+        if let Some(state) = state {
+            self.view = ActiveView::InboxOrganize(state);
         }
     }
 

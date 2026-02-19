@@ -29,7 +29,6 @@ impl App {
     /// The input path is an absolute filesystem path. We convert to relative
     /// for database queries since the DB stores paths relative to corpus_root.
     pub(super) fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
-        let read_db = self.read_db();
         let resolver = paths::get_resolver();
 
         // Convert absolute path to relative for DB queries (corpus browser uses corpus paths)
@@ -45,91 +44,54 @@ impl App {
         };
 
         // Load audio files from database using relative path
-        let (audio_files, selected_idx) = if recursive {
-            // Get all audio files in directory and subdirectories (no fingerprint filter)
-            match read_db.get_audio_files_for_tag_editing(&rel_path) {
-                Ok(files) => (files, 0usize),
-                Err(e) => {
-                    self.abort_to_health(format!(
-                        "Query error for path '{}': {}",
-                        path.display(),
-                        e
-                    ));
-                    return;
-                }
-            }
-        } else {
-            // Get all audio files in the same directory for cycling with tab/shift-tab
-            let rel_parent = match rel_path.parent() {
-                Some(p) => p,
-                None => {
-                    self.abort_to_health(format!(
-                        "Cannot determine parent directory: {}",
-                        path.display()
-                    ));
-                    return;
-                }
-            };
-
-            // Load all audio files from parent directory (non-recursive, just this folder)
-            let dir_files = match read_db.get_audio_files_for_tag_editing(rel_parent) {
-                Ok(files) => files,
-                Err(e) => {
-                    self.abort_to_health(format!(
-                        "Query error for directory '{}': {}",
-                        path.display(),
-                        e
-                    ));
-                    return;
-                }
-            };
-
-            // Filter to only files directly in this directory (not subdirectories)
-            let rel_path_str = rel_path.to_string_lossy().to_string();
-            let rel_parent_str = rel_parent.to_string_lossy().to_string();
-            let files_in_dir: Vec<_> = dir_files
-                .into_iter()
-                .filter(|f| {
-                    // Check if file is directly in rel_parent (no additional path separators)
-                    if let Some(suffix) = f.path().strip_prefix(&rel_parent_str) {
-                        let suffix = suffix.trim_start_matches(std::path::MAIN_SEPARATOR);
-                        !suffix.contains(std::path::MAIN_SEPARATOR)
-                    } else {
-                        false
-                    }
-                })
-                .collect();
-
-            // Find the index of the selected file (comparing relative paths)
-            let selected_idx = files_in_dir
-                .iter()
-                .position(|f| f.path() == rel_path_str)
-                .unwrap_or(0);
-
-            if files_in_dir.is_empty() {
-                // Fallback: try to get just the single audio file
-                match read_db.get_audio_file_by_path(&rel_path_str) {
-                    Ok(Some(audio_file)) => (vec![audio_file], 0),
-                    Ok(None) => {
-                        self.abort_to_health(format!(
-                            "File not in index: {}",
-                            path.display()
-                        ));
-                        return;
-                    }
-                    Err(e) => {
-                        self.abort_to_health(format!(
-                            "Query error for '{}': {}",
-                            path.display(),
-                            e
-                        ));
-                        return;
-                    }
-                }
+        let rel_path_owned = rel_path.to_path_buf();
+        let (audio_files, selected_idx) = self.cache.query(move |db| {
+            if recursive {
+                // Get all audio files in directory and subdirectories
+                let files = db.get_audio_files_for_tag_editing(&rel_path_owned)
+                    .unwrap_or_default();
+                (files, 0usize)
             } else {
-                (files_in_dir, selected_idx)
+                let rel_parent = match rel_path_owned.parent() {
+                    Some(p) => p.to_path_buf(),
+                    None => return (Vec::new(), 0usize),
+                };
+
+                // Load all audio files from parent directory
+                let dir_files = db.get_audio_files_for_tag_editing(&rel_parent)
+                    .unwrap_or_default();
+
+                // Filter to only files directly in this directory (not subdirectories)
+                let rel_path_str = rel_path_owned.to_string_lossy().to_string();
+                let rel_parent_str = rel_parent.to_string_lossy().to_string();
+                let files_in_dir: Vec<_> = dir_files
+                    .into_iter()
+                    .filter(|f| {
+                        if let Some(suffix) = f.path().strip_prefix(&rel_parent_str) {
+                            let suffix = suffix.trim_start_matches(std::path::MAIN_SEPARATOR);
+                            !suffix.contains(std::path::MAIN_SEPARATOR)
+                        } else {
+                            false
+                        }
+                    })
+                    .collect();
+
+                let selected_idx = files_in_dir
+                    .iter()
+                    .position(|f| f.path() == rel_path_str)
+                    .unwrap_or(0);
+
+                if files_in_dir.is_empty() {
+                    // Fallback: try to get just the single audio file
+                    match db.get_audio_file_by_path(&rel_path_str) {
+                        Ok(Some(audio_file)) => (vec![audio_file], 0),
+                        _ => (Vec::new(), 0),
+                    }
+                } else {
+                    (files_in_dir, selected_idx)
+                }
             }
-        };
+        }).recv();
 
         if audio_files.is_empty() {
             self.abort_to_health(format!(
@@ -225,8 +187,6 @@ impl App {
     ///
     /// The input is an absolute filesystem path. We convert to relative for DB queries.
     pub(super) fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
-        // Query database for audio files in this directory
-        let read_db = self.read_db();
         let resolver = paths::get_resolver();
 
         // Convert absolute path to relative for DB query
@@ -241,13 +201,9 @@ impl App {
             }
         };
 
-        let audio_files = match read_db.get_audio_files_for_tag_editing(&rel_dir) {
-            Ok(files) => files,
-            Err(e) => {
-                self.status_message = Some(format!("Failed to query audio files: {}", e));
-                return;
-            }
-        };
+        let audio_files = self.cache.query(move |db| {
+            db.get_audio_files_for_tag_editing(&rel_dir).unwrap_or_default()
+        }).recv();
 
         if audio_files.is_empty() {
             self.status_message = Some(format!(

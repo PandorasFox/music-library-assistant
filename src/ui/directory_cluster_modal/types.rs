@@ -220,10 +220,6 @@ impl DirectoryClusterModalData {
         self.clusters.len()
     }
 
-    /// Check if there are any clusters.
-    pub fn has_clusters(&self) -> bool {
-        !self.clusters.is_empty()
-    }
 
     /// Generate mutations for a resolution option on a specific cluster.
     ///

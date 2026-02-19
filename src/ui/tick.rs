@@ -43,8 +43,8 @@ impl App {
                 }
             }
             MigrationPhase::Complete => {
-                // Invalidate read-only connection so it picks up new schema
-                self.witch.invalidate_read_only_conn();
+                // Reconnect cache thread's DB so it picks up new schema
+                self.cache.reconnect_db();
 
                 // Advance past migrations
                 let db_path = self.db_path.clone();
@@ -183,9 +183,7 @@ impl App {
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
                     // Invalidate caches before transitioning - mutations just completed
-                    self.witch.ui_read_cache().invalidate_insights_data();
-                    self.witch.ui_read_cache().invalidate_inbox_overview();
-                    self.witch.ui_read_cache().invalidate_deploy_status();
+                    self.cache.invalidate_all();
                     // Transition to configured default view
                     self.start_default_view();
                 }
@@ -214,7 +212,6 @@ impl App {
     /// Queries UnindexedFile signals (computed during second-level derivation).
     /// Returns Some if there are unindexed files to confirm, None otherwise.
     pub(super) fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
-        // Clone corpus_root to avoid borrow conflict with daemon's db reference
         let corpus_root = self.config().corpus_dir();
 
         let reasoning = self.witch.reasoning_level();
@@ -223,25 +220,24 @@ impl App {
             reasoning
         ));
 
-        let read_db = self.read_db();
+        self.cache.query(move |db| {
+            let signals_start = std::time::Instant::now();
+            let signal_count = db.count_all_signals();
+            crate::logging::log_general(format!(
+                "[TRANSITION] count_all_signals took {}ms, {} signals",
+                signals_start.elapsed().as_millis(),
+                signal_count
+            ));
 
-        // Query signal count from typed tables
-        let signals_start = std::time::Instant::now();
-        let signal_count = read_db.count_all_signals();
-        crate::logging::log_general(format!(
-            "[TRANSITION] count_all_signals took {}ms, {} signals",
-            signals_start.elapsed().as_millis(),
-            signal_count
-        ));
+            let gather_start = std::time::Instant::now();
+            let result = startup::IntakeConfirmationState::gather(&db, &corpus_root, "corpus");
+            crate::logging::log_general(format!(
+                "[TRANSITION] IntakeConfirmationState::gather took {}ms",
+                gather_start.elapsed().as_millis()
+            ));
 
-        let gather_start = std::time::Instant::now();
-        let result = startup::IntakeConfirmationState::gather(&read_db, &corpus_root, "corpus");
-        crate::logging::log_general(format!(
-            "[TRANSITION] IntakeConfirmationState::gather took {}ms",
-            gather_start.elapsed().as_millis()
-        ));
-
-        result
+            result
+        }).recv()
     }
 
     // =========================================================================
@@ -307,18 +303,17 @@ impl App {
         let is_safe_mode = worker.is_safe_mode;
         let total = worker.total;
 
-        // Load compound split data from the group (scoped borrow)
-        let data = {
-            let read_db = self.witch.read_db();
-
-            match compound_split_v2::CompoundSplitDataV2::from_compound_group(group, &read_db) {
-                Some(d) => d,
-                None => {
-                    worker.nops_elided += 1;
-                    return;
-                }
+        // Load compound split data from the group via cache thread
+        let group_clone = group.clone();
+        let data = match self.cache.query(move |db| {
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group_clone, &db)
+        }).recv() {
+            Some(d) => d,
+            None => {
+                worker.nops_elided += 1;
+                return;
             }
-        }; // db borrow ends here
+        };
 
         // Update current label for display
         worker.current_label = Some(format!(

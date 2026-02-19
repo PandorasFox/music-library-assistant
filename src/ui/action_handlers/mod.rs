@@ -415,18 +415,12 @@ impl App {
     /// Gathers unindexed files and opens the intake confirmation modal.
     fn start_intake_confirmation_from_health(&mut self) {
         let corpus_root = self.config().corpus_dir();
-        let intake_state = {
-            let read_db = self.witch.read_db();
-            startup::IntakeConfirmationState::gather(&read_db, &corpus_root, "health")
-        };
+        let intake_state = self.cache.query(move |db| {
+            startup::IntakeConfirmationState::gather(&db, &corpus_root, "health")
+        }).recv();
 
-        match intake_state {
-            Some(state) => {
-                self.view = ActiveView::IntakeConfirmation(state);
-            }
-            None => {
-                self.status_message = Some("No unindexed files to process".to_string());
-            }
+        if let Some(state) = intake_state {
+            self.view = ActiveView::IntakeConfirmation(state);
         }
     }
 
@@ -438,38 +432,21 @@ impl App {
         use crate::corpus::db::types::Zone;
         use std::collections::BTreeSet;
 
-        let read_db = self.read_db();
+        let audio_files = self.cache.query(|db| {
+            let signals = db.get_missing_tag_signals().unwrap_or_default();
 
-        let signals = match read_db.get_missing_tag_signals() {
-            Ok(s) => s,
-            Err(e) => {
-                self.status_message = Some(format!("Failed to load missing tag signals: {}", e));
-                return;
-            }
-        };
+            // Collect all unique inodes across all signal groups
+            let all_inodes: Vec<i64> = signals.iter()
+                .flat_map(|s| s.data.inodes.iter().copied())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
 
-        if signals.is_empty() {
-            self.status_message = Some("No missing tag signals".to_string());
-            return;
-        }
-
-        // Collect all unique inodes across all signal groups
-        let all_inodes: Vec<i64> = signals.iter()
-            .flat_map(|s| s.data.inodes.iter().copied())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let audio_files = match read_db.get_audio_files_by_inodes(&all_inodes, Zone::Corpus) {
-            Ok(f) => f,
-            Err(e) => {
-                self.status_message = Some(format!("Failed to load audio files: {}", e));
-                return;
-            }
-        };
+            db.get_audio_files_by_inodes(&all_inodes, Zone::Corpus)
+                .unwrap_or_default()
+        }).recv();
 
         if audio_files.is_empty() {
-            self.status_message = Some("No indexed audio files for missing tags".to_string());
             return;
         }
 
@@ -487,20 +464,9 @@ impl App {
     fn start_missing_album_single_resolution(&mut self) {
         use crate::ui::missing_album_modal;
 
-        let read_db = self.read_db();
-
-        let signals = match read_db.get_missing_album_single_signals() {
-            Ok(s) => s,
-            Err(e) => {
-                self.status_message = Some(format!("Failed to load missing album singles: {}", e));
-                return;
-            }
-        };
-
-        if signals.is_empty() {
-            self.status_message = Some("No missing album singles".to_string());
-            return;
-        }
+        let signals = self.cache.query(|db| {
+            db.get_missing_album_single_signals().unwrap_or_default()
+        }).recv();
 
         let data = missing_album_modal::MissingAlbumData::from_signals(signals);
         let suffix = self.config().opinions.health_detection.single_album_suffix.clone();
@@ -633,11 +599,12 @@ impl App {
                 if inodes.is_empty() {
                     return;
                 }
-                let read_db = self.read_db();
-                let audio_files = read_db.get_audio_files_by_inodes(
-                    &inodes,
-                    crate::corpus::db::types::Zone::Corpus,
-                ).unwrap_or_default();
+                let audio_files = self.cache.query(move |db| {
+                    db.get_audio_files_by_inodes(
+                        &inodes,
+                        crate::corpus::db::types::Zone::Corpus,
+                    ).unwrap_or_default()
+                }).recv();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Individual,
@@ -662,11 +629,12 @@ impl App {
                 if inodes.is_empty() {
                     return;
                 }
-                let read_db = self.read_db();
-                let audio_files = read_db.get_audio_files_by_inodes(
-                    &inodes,
-                    crate::corpus::db::types::Zone::Corpus,
-                ).unwrap_or_default();
+                let audio_files = self.cache.query(move |db| {
+                    db.get_audio_files_by_inodes(
+                        &inodes,
+                        crate::corpus::db::types::Zone::Corpus,
+                    ).unwrap_or_default()
+                }).recv();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Aggregated,
@@ -694,10 +662,13 @@ impl App {
                 self.start_lateral_view(widgets::LateralView::Search.prev(self.transactions_open()));
             }
             tag_search::TagSearchAction::ExecuteSearch => {
-                // Execute search - access witch and view as disjoint fields
+                // Execute search via cache thread (blocking — fast single query)
                 if let ActiveView::TagSearch(ref mut search) = self.view {
-                    let read_db = self.witch.read_db();
-                    search.execute_search(&read_db);
+                    let all_files = self.cache.query(|db| {
+                        db.get_all_audio_files_with_tags(crate::corpus::db::types::Zone::Corpus)
+                            .unwrap_or_default()
+                    }).recv();
+                    search.execute_search(all_files);
                 }
             }
             tag_search::TagSearchAction::EditAudioFile(audio_file) => {
@@ -1042,24 +1013,18 @@ impl App {
             UnifiedTagEditorAction::RequestFillFromDb { inode } => {
                 match inode {
                     Some(inode) => {
-                        let read_db = self.read_db();
-                        match read_db.get_corpus_tags(inode) {
-                            Ok(tags) => {
-                                // Convert AudioTag to (name, value) pairs
-                                let tag_pairs: Vec<(String, String)> = tags
-                                    .into_iter()
-                                    .map(|t| (t.tag_name, t.tag_value))
-                                    .collect();
+                        let tag_pairs = self.cache.query(move |db| {
+                            db.get_corpus_tags(inode)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|t| (t.tag_name, t.tag_value))
+                                .collect::<Vec<(String, String)>>()
+                        }).recv();
 
-                                if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                                    editor.fill_from_db_result(tag_pairs);
-                                }
-                                self.status_message = Some("Tags loaded from database".to_string());
-                            }
-                            Err(e) => {
-                                self.status_message = Some(format!("Error loading tags: {}", e));
-                            }
+                        if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
+                            editor.fill_from_db_result(tag_pairs);
                         }
+                        self.status_message = Some("Tags loaded from database".to_string());
                     }
                     None => {
                         self.status_message = Some("Track not indexed - no database tags available".to_string());

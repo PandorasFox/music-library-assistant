@@ -23,16 +23,16 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config, SharedConfig};
 use crate::meta::computations::{Computation, asleep, awakening, awake};
-use crate::corpus::db::{Database, ReadOnlyDb};
+use crate::corpus::db::Database;
 use crate::meta::mutations::Mutation;
 use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
 
 // Module declarations
+pub(crate) mod cache_thread;
 mod execution;
 pub mod messages;
 mod transaction;
 mod types;
-mod ui_read_cache;
 mod worker_stats;
 
 // Re-export public types
@@ -46,12 +46,33 @@ pub use types::{
 };
 // Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
 // and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
-pub use ui_read_cache::UiReadCache;
 
 // Internal imports
 use execution::execute_task;
 use types::{ContentAnalysisWitness, TaskResult};
 use worker_stats::SharedWorkerStats;
+
+// ============================================================================
+// WitchNotice — Typed Witch → UI Notifications
+// ============================================================================
+
+/// Typed notifications from the Witch to the UI layer.
+///
+/// Sent via channel each tick. The UI drains these each frame to update
+/// local state (status, errors, cache invalidation) without reaching
+/// through the Witch's fields.
+pub enum WitchNotice {
+    /// Witch's work status snapshot (emitted every tick).
+    StatusUpdate(WorkStatus),
+    /// Mutations have drained — UI should invalidate caches.
+    MutationsCompleted,
+    /// A task failed with this error message.
+    Error(String),
+    /// Safety latch triggered — mutations permanently disabled this session.
+    SafetyLatch(String),
+    /// Config was updated by a mutation (UI should re-read shared config).
+    ConfigUpdated,
+}
 
 // ============================================================================
 // Global Mount Violation Flag
@@ -143,11 +164,6 @@ pub struct Witch {
     /// Populated by `confirm_transaction()`, drained by `transition_to_completed()`.
     pending_mutation_phases: VecDeque<(crate::meta::mutations::MutationExecutionStage, Vec<Mutation>)>,
 
-    /// Cached read-only database connection for UI queries.
-    /// Only accessed from the main thread via `read_db()`.
-    /// UI code should use this instead of creating direct connections.
-    read_only_conn: Option<Database>,
-
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
     /// Spawned at construction time — always present.
@@ -161,9 +177,16 @@ pub struct Witch {
     /// None when timing instrumentation is disabled.
     worker_stats_shared: Option<Arc<SharedWorkerStats>>,
 
-    /// Background cache for UI read queries.
-    /// UI calls want_*() methods, the Witch spawns refresh tasks in tick().
-    ui_read_cache: UiReadCache,
+    /// Handle for the dedicated cache thread (periodic refreshes + one-shot queries).
+    /// Spawned in new(), shut down in Drop.
+    cache_thread_handle: cache_thread::CacheThreadHandle,
+
+    /// Channel for sending typed notices to the UI layer.
+    notice_tx: std::sync::mpsc::Sender<WitchNotice>,
+
+    /// Decision sources with staged decisions in the active transaction.
+    /// Used by the insights view to hide entries already handled.
+    handled_sources: std::collections::HashSet<crate::meta::decisions::DecisionSource>,
 
     /// Corpus inodes observed on disk during the current observation cycle.
     /// Accumulated from ScanCorpusDirectory results in tick().
@@ -207,7 +230,7 @@ impl Witch {
     /// Linger duration for completed session display.
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
-    pub fn new(cfg: &Config, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
+    pub fn new(cfg: &Config, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> (Self, cache_thread::CacheHandle, std::sync::mpsc::Receiver<WitchNotice>) {
         // Spawn the logging thread if we have the receiver
         let log_thread_handle = log_rx.map(crate::logging::spawn_log_thread);
 
@@ -240,6 +263,12 @@ impl Witch {
             None
         };
 
+        // Spawn the dedicated cache thread
+        let (cache_ui_handle, cache_witch_handle) = cache_thread::spawn();
+
+        // Create notice channel for Witch → UI notifications
+        let (notice_tx, notice_rx) = mpsc::channel();
+
         let she = Self {
             result_tx,
             result_rx,
@@ -256,10 +285,11 @@ impl Witch {
             task_counts: HashMap::new(),
             pending_transaction: None,
             pending_mutation_phases: VecDeque::new(),
-            read_only_conn: None,
             db_thread_handle: db_thread::spawn(),
             worker_stats_shared,
-            ui_read_cache: UiReadCache::new(),
+            cache_thread_handle: cache_witch_handle,
+            notice_tx,
+            handled_sources: std::collections::HashSet::new(),
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),
@@ -280,12 +310,12 @@ impl Witch {
             ));
         }
 
-        she
+        (she, cache_ui_handle, notice_rx)
     }
 
     /// Create a new Witch with opinions applied.
-    pub fn with_opinions(cfg: &Config, read_only_mode: bool, force_check_all_files_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> Self {
-        let mut she = Self::new(cfg, log_rx);
+    pub fn with_opinions(cfg: &Config, read_only_mode: bool, force_check_all_files_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> (Self, cache_thread::CacheHandle, std::sync::mpsc::Receiver<WitchNotice>) {
+        let (mut she, cache_handle, notice_rx) = Self::new(cfg, log_rx);
         she.read_only_mode = read_only_mode;
         she.force_check_all_files_at_startup = force_check_all_files_at_startup;
         if force_check_all_files_at_startup {
@@ -293,7 +323,7 @@ impl Witch {
                 "[WITCH] force_check_all_files_at_startup=true: will verify all indexed files at startup"
             );
         }
-        she
+        (she, cache_handle, notice_rx)
     }
 
     // -------------------------------------------------------------------------
@@ -373,6 +403,7 @@ impl Witch {
                 "[WITCH] SAFETY LATCH TRIGGERED: {}",
                 reason
             ));
+            let _ = self.notice_tx.send(WitchNotice::SafetyLatch(reason.clone()));
             self.safety_latch_reason = Some(reason);
         }
     }
@@ -447,7 +478,7 @@ impl Witch {
     /// - Auto-queues any spawned follow-up computations
     /// - Updates state machine transitions
     /// - Aggregates worker performance stats (when timing enabled)
-    pub fn tick(&mut self) -> WorkStatus {
+    pub fn tick(&mut self) {
         // Check for mount boundary violations reported by worker threads
         if let Some(reason) = check_mount_violation() {
             self.latch_read_only_for_safety(reason.to_string());
@@ -463,9 +494,6 @@ impl Witch {
                 ));
             }
         }
-
-        let mut completed = 0;
-        let mut failed = 0;
 
         // Drain completed results and collect spawned computations and mutations
         let mut spawned_computations: Vec<Computation> = Vec::new();
@@ -503,12 +531,9 @@ impl Witch {
                 }
             }
 
-            if result.success {
-                completed += 1;
-            } else {
-                failed += 1;
-                self.work_state.inc_failed();
+            if !result.success {
                 if let Some(err) = result.error {
+                    let _ = self.notice_tx.send(WitchNotice::Error(err.clone()));
                     if self.recent_errors.len() >= 5 {
                         self.recent_errors.pop_front();
                     }
@@ -519,6 +544,7 @@ impl Witch {
             // Apply config update if present (from ApplyConfigEdits mutation)
             if let Some(new_config) = result.config_update {
                 self.update_shared_config(new_config);
+                let _ = self.notice_tx.send(WitchNotice::ConfigUpdated);
             }
 
             // Accumulate recomputation scope from mutation results
@@ -551,8 +577,7 @@ impl Witch {
             self.queue_spawned_mutation(mutation);
         }
 
-        // Spawn background cache refresh tasks (demand-driven, throttled)
-        self.ui_read_cache.spawn_refreshes();
+        // Cache thread handles its own periodic refreshes — no action needed here.
 
         // Capture current state for status before transitions
         let current_in_flight = self.work_state.in_flight();
@@ -566,16 +591,15 @@ impl Witch {
         // Check if idle rescan should trigger
         self.maybe_start_idle_rescan();
 
-        WorkStatus {
+        // Emit status update to UI
+        let _ = self.notice_tx.send(WitchNotice::StatusUpdate(WorkStatus {
             state: WorkStateSnapshot::from(&self.work_state),
             pending: current_in_flight,
-            completed,
-            failed,
             total_processed: current_total_processed,
             session_queued: current_session_queued,
             pending_by_label: current_pending_by_label,
             idle_rescan_active: self.idle_rescan_active,
-        }
+        }));
     }
 
     /// Update state machine based on in-flight tasks and timing.
@@ -642,9 +666,9 @@ impl Witch {
         let mut reconcile_library_observed: Option<Vec<awakening::ObservedLibraryFile>> = None;
 
         // Extract session counters before transitioning
-        let (session_processed, session_failed) = match &self.work_state {
-            WorkState::Working { processed, failed, .. } => (*processed, *failed),
-            _ => (0, 0),
+        let session_processed = match &self.work_state {
+            WorkState::Working { processed, .. } => *processed,
+            _ => 0,
         };
 
         // State transition based on (is_checking_inodes, reasoning_level) tuple
@@ -738,6 +762,8 @@ impl Witch {
                     self.idle_rescan_active = false;
                 } else if had_mutations {
                     // Mutations ran - re-validate everything via re-awakening
+                    let _ = self.notice_tx.send(WitchNotice::MutationsCompleted);
+                    self.cache_thread_handle.invalidate_all();
                     crate::logging::log_general(format!(
                         "[STATE] Mutations complete (scope={:?}). Transitioning Full -> Inodes for re-validation. \
                          Processed {} tasks.",
@@ -780,7 +806,6 @@ impl Witch {
         self.work_state = WorkState::Done {
             finished_at: Instant::now(),
             total_processed: session_processed,
-            total_failed: session_failed,
         };
         self.task_counts.clear();
         self.recent_errors.clear();
@@ -1052,11 +1077,9 @@ impl Witch {
     fn transition_to_working(&mut self) {
         if !self.work_state.is_working() {
             self.work_state = WorkState::Working {
-                started_at: Instant::now(),
                 queued: 0,
                 in_flight: 0,
                 processed: 0,
-                failed: 0,
                 by_label: HashMap::new(),
                 label: None,
             };
@@ -1332,53 +1355,7 @@ impl Witch {
     ) {
         use crate::meta::maintenance::DbMaintenanceTask;
 
-        self.read_only_conn = None; // Defensive: ensure no other connections
         self.queue_maintenance(DbMaintenanceTask::Vacuum);
-    }
-
-    // -------------------------------------------------------------------------
-    // Read-Only Database Access (UI Queries)
-    // -------------------------------------------------------------------------
-
-    /// Get a read-only database view for UI queries.
-    ///
-    /// Returns a `ReadOnlyDb` wrapper that only exposes read methods, providing
-    /// compile-time safety that UI code cannot accidentally attempt writes.
-    /// The underlying connection also uses `PRAGMA query_only = ON` for runtime
-    /// protection.
-    ///
-    /// The connection is cached for the Witch's lifetime. All UI code should use
-    /// this instead of creating direct `Database::open()` connections.
-    ///
-    /// # Naming Convention
-    ///
-    /// Variables holding this should be named `read_db` to make the read-only
-    /// nature clear in code:
-    ///
-    /// ```ignore
-    /// let read_db = witch.read_db();
-    /// let audio_files = read_db.get_all_audio_files(Zone::Corpus)?;
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if database path is not configured or database cannot be opened.
-    pub fn read_db(&mut self) -> ReadOnlyDb<'_> {
-        if self.read_only_conn.is_none() {
-            let db_path = config::get_db_path().expect("Database path not configured");
-            let db = Database::open_read_only(&db_path)
-                .expect("Failed to open read-only database connection");
-            self.read_only_conn = Some(db);
-        }
-        ReadOnlyDb::new(self.read_only_conn.as_ref().unwrap())
-    }
-
-    /// Invalidate the cached read-only connection.
-    ///
-    /// Call this after schema migrations to ensure the UI sees the updated schema.
-    /// The next call to `read_db()` will open a fresh connection.
-    pub fn invalidate_read_only_conn(&mut self) {
-        self.read_only_conn = None;
     }
 
     // -------------------------------------------------------------------------
@@ -1393,8 +1370,6 @@ impl Witch {
         WorkStatus {
             state: WorkStateSnapshot::from(&self.work_state),
             pending: self.work_state.in_flight(),
-            completed: 0, // Only meaningful from tick() result
-            failed: 0,    // Only meaningful from tick() result
             total_processed: self.work_state.processed(),
             session_queued: self.work_state.queued(),
             pending_by_label: self.work_state.by_label().cloned().unwrap_or_default(),
@@ -1442,27 +1417,37 @@ impl Witch {
         Some(stats)
     }
 
-    /// Get the UI read cache for demand-driven background queries.
+    /// Get the decision sources that have been handled in the active transaction.
     ///
-    /// UI components call `want_*()` methods to flag demand, then read
-    /// cached values via the corresponding getter methods.
-    pub fn ui_read_cache(&self) -> &UiReadCache {
-        &self.ui_read_cache
+    /// Used by the insights view to hide entries already staged.
+    pub fn handled_decision_sources(&self) -> &std::collections::HashSet<crate::meta::decisions::DecisionSource> {
+        &self.handled_sources
+    }
+
+    /// Rebuild handled_sources from current transaction state.
+    ///
+    /// Called internally after transaction mutations (add, remove, confirm, discard).
+    pub(crate) fn sync_handled_sources(&mut self) {
+        self.handled_sources = self.pending_transaction
+            .as_ref()
+            .map(|txn| txn.decisions.keys().map(|k| k.source).collect())
+            .unwrap_or_default();
     }
 }
 
 impl Drop for Witch {
     fn drop(&mut self) {
         // Shutdown order is critical for SQLite WAL cleanup:
-        // 1. Stop UI cache refreshes and wait for in-flight tasks
+        // 1. Shut down cache thread (owns a read-only connection)
         // 2. Close thread-local read-only connections on rayon workers
         // 3. Close the Witch's cached read-only connection
         // 4. DB thread checkpoints WAL and closes write connection
         // 5. With all connections closed, SQLite cleans up -wal and -shm files
 
-        // Step 1: Stop UI cache refreshes and wait for in-flight tasks to complete
-        // These tasks open ephemeral connections that must close before WAL checkpoint
-        ui_read_cache::shutdown_ui_cache();
+        // Step 1: Shut down cache thread and wait for it to exit.
+        // The cache thread owns a read-only DB connection that must close
+        // before WAL checkpoint.
+        self.cache_thread_handle.shutdown();
 
         // Step 2: Close thread-local read-only connections on all rayon worker threads
         // These are cached per-thread and must be explicitly closed
@@ -1471,12 +1456,7 @@ impl Drop for Witch {
         });
         crate::logging::log_general("[WITCH] Closed all rayon thread-local DB connections");
 
-        // Step 3: Close the Witch's cached read-only connection
-        if self.read_only_conn.take().is_some() {
-            crate::logging::log_general("[WITCH] Closed read-only database connection");
-        }
-
-        // Step 4: Shut down the DB thread (it will checkpoint and close write connection)
+        // Step 3: Shut down the DB thread (it will checkpoint and close write connection)
         crate::db_thread::request_shutdown();
         self.db_thread_handle.join();
 

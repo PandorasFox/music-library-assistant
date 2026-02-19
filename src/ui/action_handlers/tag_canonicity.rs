@@ -36,28 +36,29 @@ impl App {
             }
         };
 
-        // Determine signal kind and load keys (scoped borrow of read_db)
-        let (signal_keys, kind) = {
-            let read_db = self.witch.read_db();
-
-            match &insight_type {
-                insights_view::InsightType::InconsistentAlbumArtist => {
-                    let keys = read_db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>()
+        // Determine signal kind and load keys via cache thread
+        let (signal_keys, kind) = match &insight_type {
+            insights_view::InsightType::InconsistentAlbumArtist => {
+                let keys = self.cache.query(|db| {
+                    db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>()
+                        .unwrap_or_default()
+                }).recv();
+                (keys, CanonicitySignalKind::InconsistentAlbumArtist)
+            }
+            insights_view::InsightType::TagCanonicity { tag_name } => {
+                let tag_prefix = format!("{}:", tag_name);
+                let keys = self.cache.query(move |db| {
+                    let all_keys = db.aggregate_signal_keys::<TagCanonicitySignal>()
                         .unwrap_or_default();
-                    (keys, CanonicitySignalKind::InconsistentAlbumArtist)
-                }
-                insights_view::InsightType::TagCanonicity { tag_name } => {
-                    let all_keys = read_db.aggregate_signal_keys::<TagCanonicitySignal>()
-                        .unwrap_or_default();
-                    let keys: Vec<String> = all_keys.into_iter()
-                        .filter(|k| k.starts_with(&format!("{}:", tag_name)))
-                        .collect();
-                    (keys, CanonicitySignalKind::TagCanonicity)
-                }
-                _ => {
-                    self.status_message = Some("Invalid insight type for tag resolution".to_string());
-                    return;
-                }
+                    all_keys.into_iter()
+                        .filter(|k| k.starts_with(&tag_prefix))
+                        .collect::<Vec<String>>()
+                }).recv();
+                (keys, CanonicitySignalKind::TagCanonicity)
+            }
+            _ => {
+                self.status_message = Some("Invalid insight type for tag resolution".to_string());
+                return;
             }
         };
 
@@ -73,10 +74,9 @@ impl App {
 
         // Load the first signal into V2 modal data using typed query
         let first_key = clusters.signal_keys[0].clone();
-        let data = {
-            let read_db = self.witch.read_db();
-            Self::load_typed_signal_data(&first_key, kind, &read_db)
-        };
+        let data = self.cache.query(move |db| {
+            Self::load_typed_signal_data(&first_key, kind, &db)
+        }).recv();
 
         let data = match data {
             Some(d) => d,
@@ -158,11 +158,10 @@ impl App {
             };
 
         // Query audio files by inodes
-        let audio_files = {
-            let read_db = self.witch.read_db();
-            read_db.get_audio_files_by_inodes(&inodes, zone)
+        let audio_files = self.cache.query(move |db| {
+            db.get_audio_files_by_inodes(&inodes, zone)
                 .unwrap_or_default()
-        };
+        }).recv();
 
         if audio_files.is_empty() {
             self.status_message = Some("No indexed files found for this group".to_string());
@@ -364,9 +363,11 @@ impl App {
             _ => return false,
         };
 
-        let read_db = self.witch.read_db();
+        let data = self.cache.query(move |db| {
+            Self::load_typed_signal_data(&signal_key, kind, &db)
+        }).recv();
 
-        let data = match Self::load_typed_signal_data(&signal_key, kind, &read_db) {
+        let data = match data {
             Some(d) => d,
             None => {
                 self.status_message = Some("Signal not found".to_string());
@@ -405,9 +406,11 @@ impl App {
         let kind = clusters.kind;
         let (current_index, total) = (clusters.current_index, clusters.signal_keys.len());
 
-        let read_db = self.witch.read_db();
+        let data = self.cache.query(move |db| {
+            Self::load_typed_signal_data(&signal_key, kind, &db)
+        }).recv();
 
-        let data = match Self::load_typed_signal_data(&signal_key, kind, &read_db) {
+        let data = match data {
             Some(d) => d,
             None => {
                 self.status_message = Some("Signal not found".to_string());

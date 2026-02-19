@@ -7,8 +7,8 @@
 //! - **Mutations**: Use thread-local read-only connection (`with_read_only_db`).
 //!   All writes go through `db_thread::signal_sender()`.
 //! - **Computations**: Use thread-local read-only connection (same pattern).
-//! - **Maintenance**: Each variant has its own DB access pattern:
-//!   - Migration: Opens write connection via `Database::open()` (requires schema changes).
+//! - **Maintenance**: Both variants route through db_thread's write connection:
+//!   - Migration: Uses `db_thread::execute_migration()` (schema changes on write connection).
 //!   - Vacuum: Uses `db_thread::execute_vacuum()` (needs exclusive write connection).
 //!
 //! ## Post-Execution Pipeline
@@ -31,51 +31,13 @@ use crate::config;
 use crate::meta::computations::{Computation, awakening, with_read_only_db};
 use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::TypedSignalWrite;
-use crate::corpus::db::Database;
 use crate::meta::mutations::{Mutation, PendingSignal};
 use crate::corpus::paths;
 use crate::db_thread;
 
 use crate::meta::maintenance::DbMaintenanceTask;
 
-use super::types::{MaintenanceWitness, MutationExecutionWitness, Task, TaskResult};
-
-// ============================================================================
-// Database Opening Helper (Maintenance Tasks)
-// ============================================================================
-
-/// Open a write-capable database connection for maintenance tasks.
-///
-/// Used by migration execution which needs direct schema-altering write access.
-/// Regular mutations and computations use thread-local read-only connections
-/// via `with_read_only_db()` and route writes through `db_thread::signal_sender()`.
-#[allow(clippy::result_large_err)]
-fn open_db_for_maintenance(label: String, start: Instant, queue_wait_ms: u64) -> Result<Database, TaskResult> {
-    match config::get_db_path().and_then(|p| Database::open(&p)) {
-        Ok(db) => Ok(db),
-        Err(e) => {
-            crate::logging::log_error(format!(
-                "[EXECUTION] DB open FAILED: {:#}",
-                e
-            ));
-            Err(TaskResult {
-                success: false,
-                error: Some(format!("DB error: {:#}", e)),
-                label,
-                spawn: Vec::new(),
-                spawn_mutations: Vec::new(),
-                duration_ms: start.elapsed().as_millis() as u64,
-                queue_wait_ms,
-                thread_stats: None,
-                config_update: None,
-                recomputation_scope: RecomputationScope::EMPTY,
-                observed_corpus_inodes: HashMap::new(),
-                observed_inbox_inodes: HashMap::new(),
-                observed_library_files: Vec::new(),
-            })
-        }
-    }
-}
+use super::types::{MutationExecutionWitness, Task, TaskResult};
 
 // ============================================================================
 // Task Execution
@@ -271,29 +233,17 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
 pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_wait_ms: u64) -> TaskResult {
     let start = Instant::now();
 
-    // Create maintenance witness - proves we're inside the Witch's execution context
-    let witness = MaintenanceWitness::new();
-
     let (success, error) = match task {
         DbMaintenanceTask::Migration { migration_id, ref description } => {
-            use crate::meta::mutations::MigrationRegistry;
-
             crate::logging::log_mutation(format!(
                 "[EXECUTION] execute_maintenance Migration START: v{} - {} (label={:?})",
                 migration_id, description, label
             ));
 
-            // Open write-capable database (migrations require schema changes)
-            let db = match open_db_for_maintenance(label.clone(), start, queue_wait_ms) {
-                Ok(db) => db,
-                Err(result) => return result,
-            };
-
-            // Apply the migration (includes schema version update in same transaction)
-            let registry = MigrationRegistry::new();
-            match registry.apply_migration(&db, migration_id, &witness) {
+            // Route migration through db_thread which owns the write connection
+            match db_thread::execute_migration(migration_id) {
                 Ok(()) => (true, None),
-                Err(e) => (false, Some(format!("{:#}", e))),
+                Err(e) => (false, Some(e)),
             }
         }
 

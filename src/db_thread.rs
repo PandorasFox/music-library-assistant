@@ -9,7 +9,7 @@
 //! - `SignalWriteSender`: All write operations (signals, index updates, tag edits)
 //! - `DbThreadHandle`: Stats access and shutdown coordination
 //!
-//! All write operations are unified into `SignalWriteOp` variants. This includes:
+//! All write operations are unified into `DbWriteOp` variants. This includes:
 //! - Health signals (corpus file signals, aggregate signals, library signals)
 //! - Index operations (track inserts, updates, deletes)
 //! - Tag operations (edits, sets, history logging)
@@ -141,8 +141,22 @@ pub fn execute_vacuum() -> Result<(), String> {
         .ok_or_else(|| "db_thread not initialized".to_string())?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     sender.mark_enqueued();
-    let _ = sender.tx.send(SignalWriteOp::ExecuteVacuum { result_tx: tx });
+    let _ = sender.tx.send(DbWriteOp::ExecuteVacuum { result_tx: tx });
     rx.recv().map_err(|_| "db_thread disconnected during VACUUM".to_string())?
+}
+
+/// Apply a schema migration on the db_thread's write connection.
+///
+/// Blocks the caller until the migration completes. The migration runs on the
+/// db_thread which owns the write connection, eliminating the need for a
+/// separate write connection opened from the rayon thread pool.
+pub fn execute_migration(migration_id: u32) -> Result<(), String> {
+    let sender = SIGNAL_SENDER.get()
+        .ok_or_else(|| "db_thread not initialized".to_string())?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    sender.mark_enqueued();
+    let _ = sender.tx.send(DbWriteOp::ApplyMigration { migration_id, result_tx: tx });
+    rx.recv().map_err(|_| "db_thread disconnected during migration".to_string())?
 }
 
 /// Signal the DB thread to close its connection and exit.
@@ -152,7 +166,7 @@ pub fn execute_vacuum() -> Result<(), String> {
 /// process exit.
 pub fn request_shutdown() {
     if let Some(sender) = SIGNAL_SENDER.get() {
-        let _ = sender.tx.send(SignalWriteOp::Shutdown);
+        let _ = sender.tx.send(DbWriteOp::Shutdown);
     }
 }
 
@@ -162,7 +176,7 @@ pub fn request_shutdown() {
 
 /// Signal write operations (health signals and computation state).
 #[derive(Debug)]
-enum SignalWriteOp {
+enum DbWriteOp {
     // =========================================================================
     // Signal Clear Operations (function-pointer dispatch)
     // =========================================================================
@@ -375,12 +389,18 @@ enum SignalWriteOp {
         result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
 
+    /// Apply a schema migration on the write connection. Handled in main loop (like Shutdown).
+    ApplyMigration {
+        migration_id: u32,
+        result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
+
     /// Shutdown sentinel — close DB connection and exit thread.
     Shutdown,
 }
 
 // IndexWriteOp has been removed - all index operations are now unified into
-// SignalWriteOp variants. This simplifies the architecture: one channel,
+// DbWriteOp variants. This simplifies the architecture: one channel,
 // one sender, one execution loop.
 
 // ============================================================================
@@ -502,7 +522,7 @@ impl DbThreadHandle {
 /// only computation execution contexts can enqueue signal writes.
 #[derive(Clone)]
 pub struct SignalWriteSender {
-    tx: Sender<SignalWriteOp>,
+    tx: Sender<DbWriteOp>,
     stats: Arc<SharedStats>,
 }
 
@@ -528,7 +548,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearCorpusSignalByInode {
+        let _ = self.tx.send(DbWriteOp::ClearCorpusSignalByInode {
             clear_fn: S::clear_by_inode,
             inode,
             label: S::TABLE_NAME,
@@ -540,7 +560,7 @@ impl SignalWriteSender {
     /// Used when dropping a file from the index to clear all associated signals.
     pub fn clear_all_corpus_signals(&self, inode: i64, _witness: &impl SignalWitness) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAllCorpusSignals { inode });
+        let _ = self.tx.send(DbWriteOp::ClearAllCorpusSignals { inode });
     }
 
     /// Clear mutable corpus signals for an inode (preserves CorruptFile, ShitFormat).
@@ -550,7 +570,7 @@ impl SignalWriteSender {
     /// they represent intrinsic file properties, not computed state.
     pub fn clear_mutable_corpus_signals(&self, inode: i64, _witness: &impl SignalWitness) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearMutableCorpusSignals { inode });
+        let _ = self.tx.send(DbWriteOp::ClearMutableCorpusSignals { inode });
     }
 
     // =========================================================================
@@ -567,7 +587,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignalByKey {
+        let _ = self.tx.send(DbWriteOp::ClearAggregateSignalByKey {
             clear_fn: S::clear_by_key,
             key: key.to_string(),
             label: S::TABLE_NAME,
@@ -586,7 +606,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAggregateSignalByKey {
+        let _ = self.tx.send(DbWriteOp::ClearAggregateSignalByKey {
             clear_fn,
             key: key.to_string(),
             label,
@@ -602,7 +622,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearAggregateByKeyPrefix {
+        let _ = self.tx.send(DbWriteOp::ClearAggregateByKeyPrefix {
             clear_fn: S::clear_by_key_prefix,
             prefix: prefix.to_string(),
             label: S::TABLE_NAME,
@@ -619,7 +639,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::WriteTypedSignal { signal });
+        let _ = self.tx.send(DbWriteOp::WriteTypedSignal { signal });
     }
 
     // =========================================================================
@@ -637,7 +657,7 @@ impl SignalWriteSender {
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpsertLibraryFile {
+        let _ = self.tx.send(DbWriteOp::UpsertLibraryFile {
             stored_path: stored_path.to_string(),
             inode,
             mtime_secs,
@@ -653,7 +673,7 @@ impl SignalWriteSender {
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::DeleteLibraryFile {
+        let _ = self.tx.send(DbWriteOp::DeleteLibraryFile {
             stored_path: stored_path.to_string(),
         });
     }
@@ -673,7 +693,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateFileMtime {
+        let _ = self.tx.send(DbWriteOp::UpdateFileMtime {
             zone: zone.to_string(),
             inode,
             mtime_secs,
@@ -699,7 +719,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::IndexAudioFile {
+        let _ = self.tx.send(DbWriteOp::IndexAudioFile {
             path: path.to_string(),
             file_data,
             audio_data,
@@ -711,7 +731,7 @@ impl SignalWriteSender {
     /// Drop a file from the index by path.
     pub fn drop_from_index(&self, path: &str, _witness: &MutationExecutionWitness) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::DropFromIndex {
+        let _ = self.tx.send(DbWriteOp::DropFromIndex {
             path: path.to_string(),
         });
     }
@@ -729,7 +749,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::SetIndexTrackTags {
+        let _ = self.tx.send(DbWriteOp::SetIndexTrackTags {
             path: path.to_string(),
             tags,
             tag_table: tag_table.to_string(),
@@ -753,7 +773,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ApplyIndexTagOps {
+        let _ = self.tx.send(DbWriteOp::ApplyIndexTagOps {
             path: path.to_string(),
             ops,
             tag_table: tag_table.to_string(),
@@ -773,7 +793,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateTrackPathWithMetadata {
+        let _ = self.tx.send(DbWriteOp::UpdateTrackPathWithMetadata {
             old_path: old_path.to_string(),
             new_path: new_path.to_string(),
             new_inode,
@@ -791,7 +811,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpsertFileEntry {
+        let _ = self.tx.send(DbWriteOp::UpsertFileEntry {
             path: path.to_string(),
             zone: zone.to_string(),
             file_entry,
@@ -806,7 +826,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::DropFileIndexByInode {
+        let _ = self.tx.send(DbWriteOp::DropFileIndexByInode {
             zone: zone.to_string(),
             inode,
         });
@@ -823,7 +843,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::UpdateFilePath {
+        let _ = self.tx.send(DbWriteOp::UpdateFilePath {
             zone: zone.to_string(),
             inode,
             new_path: new_path.to_string(),
@@ -844,7 +864,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::IndexDirectory {
+        let _ = self.tx.send(DbWriteOp::IndexDirectory {
             path: path.to_string(),
             zone: zone.to_string(),
             inode,
@@ -860,7 +880,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearTagMismatchesForTrack {
+        let _ = self.tx.send(DbWriteOp::ClearTagMismatchesForTrack {
             path: path.to_string(),
         });
     }
@@ -879,7 +899,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::SetNeedsDiskFlush {
+        let _ = self.tx.send(DbWriteOp::SetNeedsDiskFlush {
             path: path.to_string(),
             value,
         });
@@ -899,7 +919,7 @@ impl SignalWriteSender {
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::SetHasPictures {
+        let _ = self.tx.send(DbWriteOp::SetHasPictures {
             inode,
             mtime_secs,
             mtime_nanos,
@@ -922,7 +942,7 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::DropInboxFileState { inode });
+        let _ = self.tx.send(DbWriteOp::DropInboxFileState { inode });
     }
 
     // =========================================================================
@@ -940,7 +960,7 @@ impl SignalWriteSender {
         _witness: &ComputationWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(SignalWriteOp::ClearDirtyInode {
+        let _ = self.tx.send(DbWriteOp::ClearDirtyInode {
             inode,
             computation_type: computation_type.to_string(),
         });
@@ -961,8 +981,8 @@ pub fn spawn() -> DbThreadHandle {
     let timing_enabled = config::is_timing_enabled();
     let stats = Arc::new(SharedStats::new(timing_enabled));
 
-    // Create channel (unbounded) - all operations go through SignalWriteOp
-    let (signal_tx, signal_rx) = mpsc::channel::<SignalWriteOp>();
+    // Create channel (unbounded) - all operations go through DbWriteOp
+    let (signal_tx, signal_rx) = mpsc::channel::<DbWriteOp>();
 
     let thread_stats = Arc::clone(&stats);
     let thread_handle = thread::spawn(move || {
@@ -987,7 +1007,7 @@ pub fn spawn() -> DbThreadHandle {
 
 /// Main loop for the DB write thread.
 fn run_db_thread(
-    signal_rx: Receiver<SignalWriteOp>,
+    signal_rx: Receiver<DbWriteOp>,
     stats: Arc<SharedStats>,
 ) {
     // Open database connection (this thread owns the write connection)
@@ -1007,7 +1027,7 @@ fn run_db_thread(
 
     loop {
         match signal_rx.recv() {
-            Ok(SignalWriteOp::ExecuteVacuum { result_tx }) => {
+            Ok(DbWriteOp::ExecuteVacuum { result_tx }) => {
                 crate::logging::log_general("[DB_THREAD] Executing VACUUM");
                 let result = db.conn().execute_batch("VACUUM")
                     .map_err(|e| format!("{}", e));
@@ -1020,7 +1040,26 @@ fn run_db_thread(
                     stats.queue_empty.store(true, Ordering::Release);
                 }
             }
-            Ok(SignalWriteOp::Shutdown) => {
+            Ok(DbWriteOp::ApplyMigration { migration_id, result_tx }) => {
+                crate::logging::log_general(format!(
+                    "[DB_THREAD] Applying migration v{}", migration_id
+                ));
+                let witness = crate::witch::MaintenanceWitness::new_for_db_thread();
+                let registry = crate::meta::mutations::MigrationRegistry::new();
+                let result = registry.apply_migration(&db, migration_id, &witness)
+                    .map_err(|e| format!("{:#}", e));
+                if result.is_ok() {
+                    crate::logging::log_general(format!(
+                        "[DB_THREAD] Migration v{} completed", migration_id
+                    ));
+                }
+                let _ = result_tx.send(result);
+                stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                if stats.queue_depth.load(Ordering::Relaxed) == 0 {
+                    stats.queue_empty.store(true, Ordering::Release);
+                }
+            }
+            Ok(DbWriteOp::Shutdown) => {
                 crate::logging::log_general(
                     "[DB_THREAD] Shutdown requested, closing database connection",
                 );
@@ -1188,34 +1227,34 @@ fn typed_clear_mutable_corpus_signals(db: &Database, inode: i64) {
 }
 
 /// Execute a single signal write operation.
-fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
+fn execute_signal_op(db: &Database, op: &DbWriteOp) {
     // Note: We don't have a ComputationWitness here, but we need one for the db methods.
     // The witness was checked at the send site. We use a thread-local witness for execution.
     let witness = crate::meta::computations::ComputationWitness::new_for_db_thread();
 
     match op {
         // Signal clear operations (function-pointer dispatch)
-        SignalWriteOp::ClearCorpusSignalByInode { clear_fn, inode, label } => {
+        DbWriteOp::ClearCorpusSignalByInode { clear_fn, inode, label } => {
             if let Err(e) = clear_fn(db.conn(), *inode) {
                 crate::logging::log_error(format!(
                     "[DB_THREAD] clear {} by inode {} failed: {}", label, inode, e
                 ));
             }
         }
-        SignalWriteOp::ClearAllCorpusSignals { inode } => {
+        DbWriteOp::ClearAllCorpusSignals { inode } => {
             typed_clear_all_corpus_signals(db, *inode);
         }
-        SignalWriteOp::ClearMutableCorpusSignals { inode } => {
+        DbWriteOp::ClearMutableCorpusSignals { inode } => {
             typed_clear_mutable_corpus_signals(db, *inode);
         }
-        SignalWriteOp::ClearAggregateSignalByKey { clear_fn, key, label } => {
+        DbWriteOp::ClearAggregateSignalByKey { clear_fn, key, label } => {
             if let Err(e) = clear_fn(db.conn(), key) {
                 crate::logging::log_error(format!(
                     "[DB_THREAD] clear {} by key '{}' failed: {}", label, key, e
                 ));
             }
         }
-        SignalWriteOp::ClearAggregateByKeyPrefix { clear_fn, prefix, label } => {
+        DbWriteOp::ClearAggregateByKeyPrefix { clear_fn, prefix, label } => {
             if let Err(e) = clear_fn(db.conn(), prefix) {
                 crate::logging::log_error(format!(
                     "[DB_THREAD] clear {} by prefix '{}' failed: {}", label, prefix, e
@@ -1224,7 +1263,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         }
 
         // Library file operations (Awakening phase - reconciliation)
-        SignalWriteOp::UpsertLibraryFile {
+        DbWriteOp::UpsertLibraryFile {
             stored_path,
             inode,
             mtime_secs,
@@ -1235,20 +1274,20 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
                 execute_upsert_library_file(db, stored_path, *inode, *mtime_secs, *mtime_nanos, *file_size)
             });
         }
-        SignalWriteOp::DeleteLibraryFile { stored_path } => {
+        DbWriteOp::DeleteLibraryFile { stored_path } => {
             with_retry("delete_library_file", stored_path, || {
                 execute_delete_library_file(db, stored_path)
             });
         }
 
-        SignalWriteOp::WriteTypedSignal { signal } => {
+        DbWriteOp::WriteTypedSignal { signal } => {
             if let Err(e) = signal.clone().insert(db.conn()) {
                 crate::logging::log_error(format!(
                     "[DB_THREAD] write_typed_signal failed: {}", e
                 ));
             }
         }
-        SignalWriteOp::UpdateFileMtime {
+        DbWriteOp::UpdateFileMtime {
             zone,
             inode,
             mtime_secs,
@@ -1276,7 +1315,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
         // File/Audio Index Operations (Mutation execution)
         // =====================================================================
 
-        SignalWriteOp::IndexAudioFile {
+        DbWriteOp::IndexAudioFile {
             path,
             file_data,
             audio_data,
@@ -1288,25 +1327,25 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::DropFromIndex { path } => {
+        DbWriteOp::DropFromIndex { path } => {
             with_retry("drop_from_index", path, || {
                 execute_drop_from_index(db, path)
             });
         }
 
-        SignalWriteOp::SetIndexTrackTags { path, tags, tag_table, session_id } => {
+        DbWriteOp::SetIndexTrackTags { path, tags, tag_table, session_id } => {
             with_retry("set_index_track_tags", path, || {
                 execute_set_index_track_tags(db, path, tags, tag_table, session_id)
             });
         }
 
-        SignalWriteOp::ApplyIndexTagOps { path, ops, tag_table, session_id } => {
+        DbWriteOp::ApplyIndexTagOps { path, ops, tag_table, session_id } => {
             with_retry("apply_index_tag_ops", path, || {
                 execute_apply_index_tag_ops(db, path, ops, tag_table, session_id)
             });
         }
 
-        SignalWriteOp::UpdateTrackPathWithMetadata {
+        DbWriteOp::UpdateTrackPathWithMetadata {
             old_path,
             new_path,
             new_inode,
@@ -1320,19 +1359,19 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::UpsertFileEntry { path, zone, file_entry } => {
+        DbWriteOp::UpsertFileEntry { path, zone, file_entry } => {
             with_retry("upsert_file_entry", path, || {
                 execute_upsert_file_entry(db, path, zone, file_entry)
             });
         }
 
-        SignalWriteOp::DropFileIndexByInode { zone, inode } => {
+        DbWriteOp::DropFileIndexByInode { zone, inode } => {
             with_retry("drop_file_index_by_inode", zone, || {
                 db.drop_file_index_by_inode(zone, *inode, &witness).map(|_| ())
             });
         }
 
-        SignalWriteOp::UpdateFilePath { zone, inode, new_path, new_zone } => {
+        DbWriteOp::UpdateFilePath { zone, inode, new_path, new_zone } => {
             with_retry("update_file_path", new_path, || {
                 db.update_file_path(zone, *inode, new_path, &witness)
             });
@@ -1346,7 +1385,7 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             }
         }
 
-        SignalWriteOp::IndexDirectory {
+        DbWriteOp::IndexDirectory {
             path,
             zone,
             inode,
@@ -1358,39 +1397,40 @@ fn execute_signal_op(db: &Database, op: &SignalWriteOp) {
             });
         }
 
-        SignalWriteOp::ClearTagMismatchesForTrack { path } => {
+        DbWriteOp::ClearTagMismatchesForTrack { path } => {
             with_retry("clear_tag_mismatches_for_track", path, || {
                 execute_clear_tag_mismatches_for_track(db, path)
             });
         }
 
-        SignalWriteOp::SetNeedsDiskFlush { path, value } => {
+        DbWriteOp::SetNeedsDiskFlush { path, value } => {
             with_retry("set_needs_disk_flush", path, || {
                 execute_set_needs_disk_flush(db, path, *value)
             });
         }
 
-        SignalWriteOp::SetHasPictures { inode, mtime_secs, mtime_nanos, file_size } => {
+        DbWriteOp::SetHasPictures { inode, mtime_secs, mtime_nanos, file_size } => {
             with_retry("set_has_pictures", &inode.to_string(), || {
                 execute_set_has_pictures(db, *inode, *mtime_secs, *mtime_nanos, *file_size)
             });
         }
 
-        SignalWriteOp::DropInboxFileState { inode } => {
+        DbWriteOp::DropInboxFileState { inode } => {
             with_retry("drop_inbox_file_state", &inode.to_string(), || {
                 execute_drop_inbox_file_state(db, *inode)
             });
         }
 
-        SignalWriteOp::ClearDirtyInode { inode, computation_type } => {
+        DbWriteOp::ClearDirtyInode { inode, computation_type } => {
             with_retry("clear_dirty_inode", computation_type, || {
                 execute_clear_dirty_inode(db, *inode, computation_type)
             });
         }
 
-        // ExecuteVacuum and Shutdown are handled in the run_db_thread loop, never reach here
-        SignalWriteOp::ExecuteVacuum { .. } => unreachable!("ExecuteVacuum handled in run_db_thread loop"),
-        SignalWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
+        // ExecuteVacuum, ApplyMigration, and Shutdown are handled in the run_db_thread loop, never reach here
+        DbWriteOp::ExecuteVacuum { .. } => unreachable!("ExecuteVacuum handled in run_db_thread loop"),
+        DbWriteOp::ApplyMigration { .. } => unreachable!("ApplyMigration handled in run_db_thread loop"),
+        DbWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }
 }
 

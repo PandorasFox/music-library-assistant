@@ -262,8 +262,12 @@ pub mod sealed {
     pub struct MaintenanceWitness(());
 
     impl MaintenanceWitness {
-        /// Internal constructor - only callable from execute_maintenance()
-        pub(in crate::witch) fn new() -> Self {
+        /// Create a witness for the DB write thread.
+        ///
+        /// The DB thread applies migrations that were enqueued from legitimate
+        /// maintenance contexts. This constructor allows the DB thread to obtain
+        /// a witness for the actual migration call.
+        pub(crate) fn new_for_db_thread() -> Self {
             Self(())
         }
     }

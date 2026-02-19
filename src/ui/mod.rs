@@ -402,7 +402,7 @@ impl App {
         self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
         let intake_state = self.cache.query(|db| {
-            startup::IntakeConfirmationState::gather_inbox(&db)
+            startup::IntakeConfirmationState::gather_inbox(&db, startup::IntakeSource::Inbox)
         }).recv();
 
         if let Some(state) = intake_state {

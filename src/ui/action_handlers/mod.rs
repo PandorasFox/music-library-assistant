@@ -416,7 +416,7 @@ impl App {
     fn start_intake_confirmation_from_health(&mut self) {
         let corpus_root = self.config().corpus_dir();
         let intake_state = self.cache.query(move |db| {
-            startup::IntakeConfirmationState::gather(&db, &corpus_root, "health")
+            startup::IntakeConfirmationState::gather(&db, &corpus_root, startup::IntakeSource::Health)
         }).recv();
 
         if let Some(state) = intake_state {
@@ -682,10 +682,10 @@ impl App {
     fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction, gesture: Option<&witness::ConfirmationGesture>) {
         use super::operator_decisions;
 
-        // Determine zone before matching (used for post-action routing)
-        let is_inbox_zone = matches!(
+        // Determine source before matching (used for post-action routing)
+        let is_inbox_source = matches!(
             self.view,
-            ActiveView::IntakeConfirmation(ref s) if s.zone == "inbox"
+            ActiveView::IntakeConfirmation(ref s) if s.source == startup::IntakeSource::Inbox
         );
 
         match action {
@@ -703,7 +703,7 @@ impl App {
                 if mutations.is_empty() {
                     // No files to index (all deleted since detection?)
                     crate::logging::log_general("IntakeConfirmation: no mutations to queue");
-                    if is_inbox_zone {
+                    if is_inbox_source {
                         self.view = ActiveView::Inbox(super::inbox_view::InboxViewState::new());
                     } else {
                         self.start_health_view();
@@ -752,7 +752,7 @@ impl App {
                     }
                 }
 
-                if is_inbox_zone {
+                if is_inbox_source {
                     self.view = ActiveView::Inbox(super::inbox_view::InboxViewState::new());
                 } else {
                     self.start_health_view();

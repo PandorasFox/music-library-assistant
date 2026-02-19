@@ -21,10 +21,24 @@ use crate::ui::widgets::centered_rect_fixed;
 
 use crate::meta::signals::data::UnindexedFileSignal;
 use crate::db::ReadOnlyDb;
+use crate::db::types::Zone;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::indexing::IndexFileFromPathMutation;
 use crate::corpus::paths;
 use crate::logging::log_general;
+
+/// Where the intake confirmation was triggered from.
+///
+/// Replaces the old `zone: String` for post-action routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntakeSource {
+    /// Triggered at startup after eyeballing completes
+    Startup,
+    /// Triggered from Health Insights "Index unindexed" action
+    Health,
+    /// Triggered from Inbox view or inbox lateral navigation
+    Inbox,
+}
 
 /// A directory group for display purposes
 #[derive(Debug, Clone)]
@@ -33,6 +47,8 @@ pub struct DirectoryGroup {
     pub display_path: String,
     /// Filenames within this directory
     pub filenames: Vec<String>,
+    /// Zone this directory belongs to
+    pub zone: Zone,
 }
 
 /// File entry with path for indexing.
@@ -40,6 +56,8 @@ pub struct DirectoryGroup {
 pub struct UnindexedFileEntry {
     /// Absolute path for indexing
     pub abs_path: PathBuf,
+    /// Zone this file belongs to (for mutation creation)
+    pub zone: Zone,
 }
 
 /// State for the intake confirmation modal.
@@ -51,8 +69,10 @@ pub struct IntakeConfirmationState {
     pub total_bytes: u64,
     /// Files to index, keyed by inode
     pub files: Vec<UnindexedFileEntry>,
-    /// Zone identifier ("corpus" or "legacy")
-    pub zone: String,
+    /// Where this intake was triggered from (for post-action routing)
+    pub source: IntakeSource,
+    /// Whether this state contains files from multiple zones (corpus + inbox)
+    pub multi_zone: bool,
     /// Number of directories containing unindexed files
     pub _directory_count: usize,
     /// Files grouped by directory for display
@@ -80,7 +100,7 @@ impl IntakeConfirmationState {
     /// (matching the signal key) with paths for display and mutation creation.
     ///
     /// Returns None if there are no unindexed files.
-    pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, zone: &str) -> Option<Self> {
+    pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, source: IntakeSource) -> Option<Self> {
         // Get all UnindexedFile signals - these are pre-computed during Awakening
         let signals: Vec<UnindexedFileSignal> = match read_db.get_unindexed_file_signals() {
             Ok(s) => s,
@@ -134,6 +154,7 @@ impl IntakeConfirmationState {
 
                 files.push(UnindexedFileEntry {
                     abs_path,
+                    zone: Zone::Corpus,
                 });
             }
         }
@@ -150,6 +171,7 @@ impl IntakeConfirmationState {
                 DirectoryGroup {
                     display_path: dir,
                     filenames,
+                    zone: Zone::Corpus,
                 }
             })
             .collect();
@@ -165,7 +187,8 @@ impl IntakeConfirmationState {
             file_count: files.len(),
             total_bytes,
             files,
-            zone: zone.to_string(),
+            source,
+            multi_zone: false,
             _directory_count: directories.len(),
             grouped_files,
             scroll_offset: 0,
@@ -178,7 +201,7 @@ impl IntakeConfirmationState {
     /// instead of `UnindexedFileSignal` (corpus zone).
     ///
     /// Returns None if there are no unindexed inbox files.
-    pub fn gather_inbox(read_db: &ReadOnlyDb<'_>) -> Option<Self> {
+    pub fn gather_inbox(read_db: &ReadOnlyDb<'_>, source: IntakeSource) -> Option<Self> {
         let unindexed = match read_db.get_inbox_unindexed_files() {
             Ok(u) => u,
             Err(e) => {
@@ -223,7 +246,7 @@ impl IntakeConfirmationState {
                     dir_to_files.entry(dir_str).or_default().push(file_str);
                 }
 
-                files.push(UnindexedFileEntry { abs_path });
+                files.push(UnindexedFileEntry { abs_path, zone: Zone::Inbox });
             }
         }
 
@@ -235,7 +258,7 @@ impl IntakeConfirmationState {
             .into_iter()
             .map(|(dir, mut filenames)| {
                 filenames.sort();
-                DirectoryGroup { display_path: dir, filenames }
+                DirectoryGroup { display_path: dir, filenames, zone: Zone::Inbox }
             })
             .collect();
 
@@ -248,19 +271,86 @@ impl IntakeConfirmationState {
             file_count: files.len(),
             total_bytes,
             files,
-            zone: "inbox".to_string(),
+            source,
+            multi_zone: false,
             _directory_count: directories.len(),
             grouped_files,
             scroll_offset: 0,
         })
     }
 
+    /// Gather intake confirmation state for startup: checks both corpus AND inbox.
+    ///
+    /// Queries both `UnindexedFileSignal` (corpus zone) and inbox unindexed files,
+    /// merging results with corpus groups first, then inbox groups.
+    ///
+    /// Returns None if there are no unindexed files in either zone.
+    pub fn gather_startup(read_db: &ReadOnlyDb<'_>, corpus_root: &std::path::Path) -> Option<Self> {
+        let corpus_state = Self::gather(read_db, corpus_root, IntakeSource::Startup);
+        let inbox_state = Self::gather_inbox(read_db, IntakeSource::Startup);
+
+        match (corpus_state, inbox_state) {
+            (None, None) => None,
+            (Some(mut state), None) => {
+                state.source = IntakeSource::Startup;
+                Some(state)
+            }
+            (None, Some(mut state)) => {
+                state.source = IntakeSource::Startup;
+                Some(state)
+            }
+            (Some(corpus), Some(inbox)) => {
+                // Merge: corpus groups first, then inbox groups
+                let mut files = corpus.files;
+                files.extend(inbox.files);
+
+                let mut grouped_files = corpus.grouped_files;
+                grouped_files.extend(inbox.grouped_files);
+
+                let file_count = files.len();
+                let total_bytes = corpus.total_bytes + inbox.total_bytes;
+                let directory_count = corpus._directory_count + inbox._directory_count;
+
+                log_general(format!(
+                    "IntakeConfirmation (startup): merged {} corpus + {} inbox = {} total files",
+                    corpus.file_count, inbox.file_count, file_count
+                ));
+
+                Some(Self {
+                    file_count,
+                    total_bytes,
+                    files,
+                    source: IntakeSource::Startup,
+                    multi_zone: true,
+                    _directory_count: directory_count,
+                    grouped_files,
+                    scroll_offset: 0,
+                })
+            }
+        }
+    }
+
     /// Compute total number of lines in the file list display
     fn total_list_lines(&self) -> usize {
-        self.grouped_files
+        let group_lines: usize = self.grouped_files
             .iter()
             .map(|g| 1 + g.filenames.len()) // 1 for directory header + files
-            .sum()
+            .sum();
+        if self.multi_zone {
+            // Add 2 lines per zone section header (label + blank separator)
+            let zone_count = {
+                let mut zones = Vec::new();
+                for g in &self.grouped_files {
+                    if zones.last() != Some(&g.zone) {
+                        zones.push(g.zone);
+                    }
+                }
+                zones.len()
+            };
+            group_lines + zone_count * 2
+        } else {
+            group_lines
+        }
     }
 
     /// Handle keyboard input.
@@ -293,7 +383,7 @@ impl IntakeConfirmationState {
             .iter()
             .map(|entry| Mutation::IndexFileFromPath(IndexFileFromPathMutation {
                 path: entry.abs_path.clone(),
-                zone: self.zone.clone(),
+                zone: entry.zone.as_str().to_string(),
             }))
             .collect();
 
@@ -376,7 +466,24 @@ pub fn render(f: &mut Frame, area: Rect, state: &IntakeConfirmationState) {
 
     // Build file list lines with directory grouping
     let mut list_lines: Vec<Line> = Vec::new();
+    let mut last_zone: Option<Zone> = None;
     for group in &state.grouped_files {
+        // Zone section header in multi-zone mode
+        if state.multi_zone && last_zone != Some(group.zone) {
+            if last_zone.is_some() {
+                list_lines.push(Line::from("")); // separator between zones
+            }
+            let zone_label = match group.zone {
+                Zone::Corpus => "--- Corpus ---",
+                Zone::Inbox => "--- Inbox ---",
+                _ => "---",
+            };
+            list_lines.push(Line::from(Span::styled(
+                zone_label,
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )));
+            last_zone = Some(group.zone);
+        }
         // Directory header
         list_lines.push(Line::from(Span::styled(
             format!("{}/", group.display_path),

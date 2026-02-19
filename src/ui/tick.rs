@@ -230,9 +230,9 @@ impl App {
             ));
 
             let gather_start = std::time::Instant::now();
-            let result = startup::IntakeConfirmationState::gather(&db, &corpus_root, "corpus");
+            let result = startup::IntakeConfirmationState::gather_startup(&db, &corpus_root);
             crate::logging::log_general(format!(
-                "[TRANSITION] IntakeConfirmationState::gather took {}ms",
+                "[TRANSITION] IntakeConfirmationState::gather_startup took {}ms",
                 gather_start.elapsed().as_millis()
             ));
 

@@ -269,15 +269,6 @@ pub enum Mutation {
     InboxToCorpus(InboxToCorpusMutation),
 
     // ========================================================================
-    // Database Migration Operations
-    // ========================================================================
-    /// Apply a database schema migration.
-    DbMigration {
-        migration_id: u32,
-        description: String,
-    },
-
-    // ========================================================================
     // Signal Resolution Operations (struct-backed — see indexing.rs for trait impls)
     // ========================================================================
     /// Update file path in files table (for relocated files).
@@ -338,43 +329,38 @@ pub enum Mutation {
 impl Mutation {
     /// Get the inner struct as a trait object.
     ///
-    /// Returns `None` for `DbMigration` which uses a separate execution path.
-    /// All other variants return their inner `MutationExecutor` implementor.
-    pub fn as_executor(&self) -> Option<&dyn super::traits::MutationExecutor> {
+    /// Every variant wraps an inner `MutationExecutor` implementor.
+    pub fn as_executor(&self) -> &dyn super::traits::MutationExecutor {
         match self {
-            Mutation::ApplyTagOps(m) => Some(m),
-            Mutation::IndexFileFromPath(m) => Some(m),
-            Mutation::Move(m) => Some(m),
-            Mutation::StashFromZone(m) => Some(m),
-            Mutation::StashLeftovers(m) => Some(m),
-            Mutation::Transcode(m) => Some(m),
-            Mutation::HardLink(m) => Some(m),
-            Mutation::LibraryMove(m) => Some(m),
-            Mutation::InboxToCorpus(m) => Some(m),
-            Mutation::UpdateFilePath(m) => Some(m),
-            Mutation::DropFromIndex(m) => Some(m),
-            Mutation::DropDirectoryFromIndex(m) => Some(m),
-            Mutation::AcknowledgeMtimeOnly(m) => Some(m),
-            Mutation::ApplyDbTagsToDisk(m) => Some(m),
-            Mutation::FlushTagsToDisk(m) => Some(m),
-            Mutation::AssimilateDiskTagsToDb(m) => Some(m),
-            Mutation::EmitCanonicalTag(m) => Some(m),
-            Mutation::EmitExpectedOverlap(m) => Some(m),
-            Mutation::EmitExpectedDuplicate(m) => Some(m),
-            Mutation::EmitExpectedMissingTag(m) => Some(m),
-            Mutation::EmbedAlbumArt(m) => Some(m),
-            Mutation::ApplyConfigEdits(m) => Some(m),
-            Mutation::ApplyDirConfigEdit(m) => Some(m),
-            Mutation::DbMigration { .. } => None,
+            Mutation::ApplyTagOps(m) => m,
+            Mutation::IndexFileFromPath(m) => m,
+            Mutation::Move(m) => m,
+            Mutation::StashFromZone(m) => m,
+            Mutation::StashLeftovers(m) => m,
+            Mutation::Transcode(m) => m,
+            Mutation::HardLink(m) => m,
+            Mutation::LibraryMove(m) => m,
+            Mutation::InboxToCorpus(m) => m,
+            Mutation::UpdateFilePath(m) => m,
+            Mutation::DropFromIndex(m) => m,
+            Mutation::DropDirectoryFromIndex(m) => m,
+            Mutation::AcknowledgeMtimeOnly(m) => m,
+            Mutation::ApplyDbTagsToDisk(m) => m,
+            Mutation::FlushTagsToDisk(m) => m,
+            Mutation::AssimilateDiskTagsToDb(m) => m,
+            Mutation::EmitCanonicalTag(m) => m,
+            Mutation::EmitExpectedOverlap(m) => m,
+            Mutation::EmitExpectedDuplicate(m) => m,
+            Mutation::EmitExpectedMissingTag(m) => m,
+            Mutation::EmbedAlbumArt(m) => m,
+            Mutation::ApplyConfigEdits(m) => m,
+            Mutation::ApplyDirConfigEdit(m) => m,
         }
     }
 
     /// Human-readable label for this mutation (for logging/display).
     pub fn label(&self) -> &'static str {
-        match self.as_executor() {
-            Some(e) => e.label(),
-            None => "Migration", // DbMigration
-        }
+        self.as_executor().label()
     }
 
     /// Check if this mutation is database-only (no file system operations).
@@ -383,7 +369,6 @@ impl Mutation {
         matches!(
             self,
             Mutation::ApplyTagOps(_)
-                | Mutation::DbMigration { .. }
                 | Mutation::UpdateFilePath(_)
                 | Mutation::DropFromIndex(_)
                 | Mutation::AcknowledgeMtimeOnly(_)
@@ -395,12 +380,6 @@ impl Mutation {
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
             // Note: InboxToCorpus moves files + updates DB, so NOT db-only
         )
-    }
-
-    /// Check if this mutation requires serial execution (cannot be parallelized).
-    #[cfg(test)]
-    pub fn requires_serial(&self) -> bool {
-        matches!(self, Mutation::DbMigration { .. })
     }
 
     /// Get the inode affected by this mutation, if any.
@@ -426,7 +405,6 @@ impl Mutation {
             | Mutation::StashLeftovers(_)
             | Mutation::HardLink(_)
             | Mutation::LibraryMove(_)
-            | Mutation::DbMigration { .. }
             | Mutation::AcknowledgeMtimeOnly(_)
             | Mutation::DropDirectoryFromIndex(_)
             | Mutation::EmitCanonicalTag(_)
@@ -528,9 +506,6 @@ impl Mutation {
                 }
             }
 
-            // Migration doesn't affect signals
-            Mutation::DbMigration { .. } => {}
-
             // Batch OOB resolution: paths resolved at execution time, executors spawn follow-ups directly
             Mutation::AcknowledgeMtimeOnly(_) => {}
 
@@ -571,26 +546,17 @@ impl Mutation {
 
     /// Paths to spawn signal update computations for.
     pub fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        match self.as_executor() {
-            Some(e) => e.paths_for_signal_updates(),
-            None => Vec::new(), // DbMigration
-        }
+        self.as_executor().paths_for_signal_updates()
     }
 
     /// Additional computations to spawn (beyond path-based signal updates).
     pub fn additional_computations(&self) -> Vec<Computation> {
-        match self.as_executor() {
-            Some(e) => e.additional_computations(),
-            None => Vec::new(), // DbMigration
-        }
+        self.as_executor().additional_computations()
     }
 
     /// Specific signals to clear by type+key (beyond path-based clearing).
     pub fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
-        match self.as_executor() {
-            Some(e) => e.specific_signals_to_clear(),
-            None => Vec::new(), // DbMigration
-        }
+        self.as_executor().specific_signals_to_clear()
     }
 }
 
@@ -640,13 +606,6 @@ mod tests {
         });
         assert_eq!(file_move.label(), "File move");
 
-        let migration = Mutation::DbMigration {
-            migration_id: 3,
-            description: "test".to_string(),
-        };
-        assert_eq!(migration.label(), "Migration");
-        assert!(migration.is_db_only());
-        assert!(migration.requires_serial());
     }
 
 }

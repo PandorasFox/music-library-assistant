@@ -171,15 +171,15 @@ impl App {
     fn handle_migration_approval_action(
         &mut self,
         action: super::MigrationAction,
-        _witness: Option<&witness::ConfirmationGesture>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         use super::MigrationPhase;
         match action {
             super::MigrationAction::None => {}
             super::MigrationAction::Approve => {
-                if let super::ActiveView::MigrationApproval(ref mut state) = self.view {
+                if let (super::ActiveView::MigrationApproval(ref mut state), Some(gesture)) = (&mut self.view, witness) {
                     if state.phase == MigrationPhase::Approval {
-                                self.witch.queue_pending_migrations();
+                        self.witch.queue_pending_migrations(gesture);
                         state.phase = MigrationPhase::Running;
                     }
                 }
@@ -194,14 +194,15 @@ impl App {
     fn handle_vacuum_prompt_action(
         &mut self,
         action: super::VacuumAction,
-        _witness: Option<&witness::ConfirmationGesture>,
+        witness: Option<&witness::ConfirmationGesture>,
     ) {
         use super::VacuumPhase;
         match action {
             super::VacuumAction::None => {}
             super::VacuumAction::Compact => {
-                if let super::ActiveView::VacuumPrompt(ref mut state) = self.view {
+                if let (super::ActiveView::VacuumPrompt(ref mut state), Some(gesture)) = (&mut self.view, witness) {
                     if state.phase == VacuumPhase::Prompt {
+                        self.witch.queue_vacuum(gesture);
                         state.phase = VacuumPhase::Compacting;
                     }
                 }

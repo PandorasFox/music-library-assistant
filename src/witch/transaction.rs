@@ -261,18 +261,15 @@ impl super::Witch {
         // Bucket mutations by execution stage (BTreeMap gives ordered iteration via Ord)
         let mut by_stage: BTreeMap<MutationExecutionStage, Vec<Mutation>> = BTreeMap::new();
         for mutation in all_mutations {
-            let stage = match mutation.as_executor() {
-                Some(executor) => match executor.staging() {
-                    MutationStaging::Staged(stage) => stage,
-                    MutationStaging::ChainEmitted => {
-                        panic!(
-                            "ChainEmitted mutation {:?} found in transaction — \
-                             these are only spawned during execution, never directly staged",
-                            mutation
-                        );
-                    }
-                },
-                None => panic!("DbMigration in transaction — migrations use queue_migration()"),
+            let stage = match mutation.as_executor().staging() {
+                MutationStaging::Staged(stage) => stage,
+                MutationStaging::ChainEmitted => {
+                    panic!(
+                        "ChainEmitted mutation {:?} found in transaction — \
+                         these are only spawned during execution, never directly staged",
+                        mutation
+                    );
+                }
             };
             by_stage.entry(stage).or_default().push(mutation);
         }

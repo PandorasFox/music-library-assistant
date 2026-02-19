@@ -530,7 +530,6 @@ impl App {
             free_mb,
             db_path: db_path.to_path_buf(),
             phase: VacuumPhase::Prompt,
-            compacting_rendered: false,
         })
     }
 }

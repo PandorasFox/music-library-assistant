@@ -411,9 +411,6 @@ pub(crate) struct VacuumPromptState {
     pub db_path: PathBuf,
     /// Current phase of the flow.
     pub phase: VacuumPhase,
-    /// Whether the Compacting phase has rendered at least one frame.
-    /// Ensures the "Compacting database..." UI is visible before synchronous vacuum.
-    pub compacting_rendered: bool,
 }
 
 /// Action from the vacuum prompt view.

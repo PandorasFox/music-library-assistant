@@ -273,7 +273,6 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::IndexFileFromPath(_)
             | Mutation::HardLink(_)
             | Mutation::LibraryMove(_)
-            | Mutation::DbMigration { .. }
             | Mutation::UpdateFilePath(_)
             | Mutation::DropDirectoryFromIndex(_)
             | Mutation::EmitCanonicalTag(_)
@@ -304,10 +303,7 @@ pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
         .filter_map(|key| {
             witch.get_decision(key).map(|d| {
                 let diff_entries = d.mutations.iter()
-                    .flat_map(|m| match m.as_executor() {
-                        Some(e) => e.diff_entries(),
-                        None => Vec::new(),
-                    })
+                    .flat_map(|m| m.as_executor().diff_entries())
                     .collect();
 
                 DecisionSummary {

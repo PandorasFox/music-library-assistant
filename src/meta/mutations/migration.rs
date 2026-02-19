@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use rusqlite::params;
 
 use crate::corpus::db::Database;
-use crate::witch::MigrationWitness;
+use crate::witch::MaintenanceWitness;
 
 /// Re-seed all corpus inodes as dirty for a given computation type.
 ///
@@ -560,7 +560,7 @@ impl MigrationRegistry {
         &self,
         db: &Database,
         migration_id: u32,
-        _witness: &MigrationWitness,
+        _witness: &MaintenanceWitness,
     ) -> Result<()> {
         let migration = self
             .migrations

@@ -7,7 +7,7 @@
 //! - `types.rs` - Core types, enums, witness system
 //! - `worker_stats.rs` - Thread-safe performance statistics
 //! - `transaction.rs` - Transaction lifecycle management
-//! - `execution.rs` - Task execution (mutations, computations, migrations)
+//! - `execution.rs` - Task execution (mutations, computations, maintenance)
 //!
 //! ## Extending the Witch
 //! - New task types: Add variants to `Task` enum in `types.rs`
@@ -40,7 +40,7 @@ pub use messages::InitialUiState;
 pub use types::{
     WorkStatus, WorkState, WorkStateSnapshot,
     ReasoningLevel, InodeAwarenessLevel,
-    Migration, MigrationWitness, MutationExecutionWitness,
+    MaintenanceWitness, MutationExecutionWitness,
     PendingTransaction, SpawnedMutation, Task,
     TaskLabel, WorkerStats,
 };
@@ -1215,17 +1215,17 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
-    // Migration Queueing (bypasses accepting_mutations gate)
+    // Maintenance Task Queueing (bypasses accepting_mutations gate)
     // -------------------------------------------------------------------------
 
-    /// Queue a single migration for execution.
+    /// Queue a maintenance task for async execution on the rayon pool.
     ///
-    /// Migrations bypass the `accepting_mutations` gate and can run before
-    /// observing completes. Called only after operator approval (MigrationApproval view).
-    fn queue_migration(&mut self, migration: Migration) {
+    /// Maintenance tasks bypass the `accepting_mutations` gate and can run
+    /// before observing completes. Called only after operator approval.
+    fn queue_maintenance(&mut self, task: crate::meta::maintenance::DbMaintenanceTask) {
         self.transition_to_working();
 
-        let task = Task::Migration(migration);
+        let task = Task::Maintenance(task);
         let task_label = self.resolve_label(None, &task);
 
         self.work_state.inc_queued(1);
@@ -1269,10 +1269,14 @@ impl Witch {
         MigrationRegistry::new().pending_descriptions(&db)
     }
 
-    /// Queue all pending migrations for execution.
+    /// Queue all pending migrations for async execution.
     ///
-    /// Call this only after user approval of migrations (MigrationApproval view).
-    pub fn queue_pending_migrations(&mut self) {
+    /// Requires a `ConfirmationGesture` from the MigrationApproval view.
+    pub fn queue_pending_migrations(
+        &mut self,
+        _gesture: &crate::meta::decisions::ConfirmationGesture,
+    ) {
+        use crate::meta::maintenance::DbMaintenanceTask;
         use crate::meta::mutations::MigrationRegistry;
 
         let db_path = match config::get_db_path() {
@@ -1298,43 +1302,38 @@ impl Witch {
 
         let registry = MigrationRegistry::new();
         let current_version = db.get_schema_version().unwrap_or(1);
+        let pending = registry.pending_migrations(current_version);
 
-        // Collect migrations to queue
-        let migrations: Vec<_> = registry
-            .pending_migrations(current_version)
-            .iter()
-            .map(|m| Migration {
-                from_version: m.from_version,
-                to_version: m.to_version,
-            })
-            .collect();
-
-        if migrations.is_empty() {
+        if pending.is_empty() {
             crate::logging::log_general("[WITCH] No migrations to queue");
             return;
         }
 
         crate::logging::log_general(format!(
             "[WITCH] Queueing {} migrations (operator approved)",
-            migrations.len()
+            pending.len()
         ));
 
-        for migration in migrations {
-            self.queue_migration(migration);
+        for m in pending {
+            self.queue_maintenance(DbMaintenanceTask::Migration {
+                migration_id: m.to_version,
+                description: m.description.to_string(),
+            });
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Database Maintenance (Pre-db_thread, Witness-Guarded)
-    // -------------------------------------------------------------------------
-
-    /// Execute VACUUM on the database via db_thread's write connection.
+    /// Queue a VACUUM for async execution.
     ///
-    /// Blocks until VACUUM completes. Call only after operator approval
-    /// (VacuumPrompt view).
-    pub fn execute_vacuum(&mut self) -> anyhow::Result<()> {
+    /// Requires a `ConfirmationGesture` from the VacuumPrompt view.
+    /// Drops the cached read-only connection first (VACUUM needs exclusive access).
+    pub fn queue_vacuum(
+        &mut self,
+        _gesture: &crate::meta::decisions::ConfirmationGesture,
+    ) {
+        use crate::meta::maintenance::DbMaintenanceTask;
+
         self.read_only_conn = None; // Defensive: ensure no other connections
-        crate::db_thread::execute_vacuum().map_err(|e| anyhow::anyhow!(e))
+        self.queue_maintenance(DbMaintenanceTask::Vacuum);
     }
 
     // -------------------------------------------------------------------------

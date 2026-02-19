@@ -7,8 +7,8 @@
 //! Migrations are orchestrated by the Witch, which:
 //! 1. Checks if migrations are needed via `needs_migrations()`
 //! 2. Gets pending migration descriptions for UI display
-//! 3. Queues migrations as `Task::Migration` tasks via rayon
-//! 4. Migrations execute via `execute_migration()` in execution.rs
+//! 3. Queues migrations as `Task::Maintenance(DbMaintenanceTask::Migration)` tasks via rayon
+//! 4. Migrations execute via `execute_maintenance()` in execution.rs
 //!
 //! The migration view is an ActiveView variant driven by the main event loop.
 //! Key handling goes through dispatch_action; phase transitions happen in tick.

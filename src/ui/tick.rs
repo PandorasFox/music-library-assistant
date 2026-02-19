@@ -59,8 +59,9 @@ impl App {
 
     /// Tick the vacuum prompt view.
     ///
-    /// When phase is Compacting: execute VACUUM synchronously, then show completion.
-    /// When Complete: advance to complete_startup after a brief delay.
+    /// When phase is Compacting: tick the Witch (vacuum runs async on rayon),
+    /// then transition to Complete when done.
+    /// When Complete: advance to complete_startup.
     pub(super) fn tick_vacuum_prompt(&mut self) {
         let phase = match self.view {
             ActiveView::VacuumPrompt(ref state) => state.phase,
@@ -69,35 +70,17 @@ impl App {
 
         match phase {
             VacuumPhase::Compacting => {
-                // First tick in Compacting: mark as rendered so the UI shows
-                // "Compacting database..." for at least one frame before we block.
-                if let ActiveView::VacuumPrompt(ref mut state) = self.view {
-                    if !state.compacting_rendered {
-                        state.compacting_rendered = true;
-                        return;
-                    }
-                }
-
-                // Execute VACUUM via db_thread
-                let db_path = match self.view {
-                    ActiveView::VacuumPrompt(ref state) => state.db_path.clone(),
-                    _ => return,
-                };
-
-                let vacuum_result = self.witch.execute_vacuum();
-
-                match vacuum_result {
-                    Ok(()) => {
-                        // Re-query to show reclaimed amount
-                        let new_size_mb = Self::query_db_size_mb(&db_path).unwrap_or(0.0);
-                        if let ActiveView::VacuumPrompt(ref mut state) = self.view {
-                            state.phase = VacuumPhase::Complete { new_size_mb };
-                        }
-                    }
-                    Err(e) => {
-                        crate::logging::log_error(format!("Vacuum failed: {}", e));
-                        // Skip vacuum and complete startup
-                        self.complete_startup();
+                // Tick the Witch to process the async vacuum task
+                self.witch.tick();
+                if !self.witch.has_pending() {
+                    // Vacuum complete — re-query to show reclaimed amount
+                    let db_path = match self.view {
+                        ActiveView::VacuumPrompt(ref state) => state.db_path.clone(),
+                        _ => return,
+                    };
+                    let new_size_mb = Self::query_db_size_mb(&db_path).unwrap_or(0.0);
+                    if let ActiveView::VacuumPrompt(ref mut state) = self.view {
+                        state.phase = VacuumPhase::Complete { new_size_mb };
                     }
                 }
             }

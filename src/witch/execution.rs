@@ -1,4 +1,4 @@
-//! Task execution for mutations, computations, and migrations.
+//! Task execution for mutations, computations, and maintenance tasks.
 //!
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 //!
@@ -7,7 +7,9 @@
 //! - **Mutations**: Use thread-local read-only connection (`with_read_only_db`).
 //!   All writes go through `db_thread::signal_sender()`.
 //! - **Computations**: Use thread-local read-only connection (same pattern).
-//! - **Migrations**: Open write connection via `Database::open()` (requires schema changes).
+//! - **Maintenance**: Each variant has its own DB access pattern:
+//!   - Migration: Opens write connection via `Database::open()` (requires schema changes).
+//!   - Vacuum: Uses `db_thread::execute_vacuum()` (needs exclusive write connection).
 //!
 //! ## Post-Execution Pipeline
 //!
@@ -34,19 +36,21 @@ use crate::meta::mutations::{Mutation, PendingSignal};
 use crate::corpus::paths;
 use crate::db_thread;
 
-use super::types::{Migration, MigrationWitness, MutationExecutionWitness, SpawnedMutation, Task, TaskResult};
+use crate::meta::maintenance::DbMaintenanceTask;
+
+use super::types::{MaintenanceWitness, MutationExecutionWitness, Task, TaskResult};
 
 // ============================================================================
-// Database Opening Helper (Migrations Only)
+// Database Opening Helper (Maintenance Tasks)
 // ============================================================================
 
-/// Open a write-capable database connection for migrations.
+/// Open a write-capable database connection for maintenance tasks.
 ///
-/// Migrations require write access because they may alter the database schema.
+/// Used by migration execution which needs direct schema-altering write access.
 /// Regular mutations and computations use thread-local read-only connections
 /// via `with_read_only_db()` and route writes through `db_thread::signal_sender()`.
 #[allow(clippy::result_large_err)]
-fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> Result<Database, TaskResult> {
+fn open_db_for_maintenance(label: String, start: Instant, queue_wait_ms: u64) -> Result<Database, TaskResult> {
     match config::get_db_path().and_then(|p| Database::open(&p)) {
         Ok(db) => Ok(db),
         Err(e) => {
@@ -77,14 +81,14 @@ fn open_db_for_migration(label: String, start: Instant, queue_wait_ms: u64) -> R
 // Task Execution
 // ============================================================================
 
-/// Execute a single task (mutation, computation, or migration). Opens DB connection as needed.
+/// Execute a single task (mutation, computation, or maintenance). Opens DB connection as needed.
 pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> TaskResult {
     let queue_wait_ms = queue_time.elapsed().as_millis() as u64;
 
     match task {
         Task::Mutation(mutation) => execute_mutation(mutation, label, queue_wait_ms),
         Task::Computation(computation) => execute_computation(computation, label, queue_wait_ms),
-        Task::Migration(migration) => execute_migration(migration, label, queue_wait_ms),
+        Task::Maintenance(task) => execute_maintenance(task, label, queue_wait_ms),
     }
 }
 
@@ -114,22 +118,15 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Execute mutation via MutationExecutor trait dispatch.
     // All writes go through db_thread::signal_sender() (fire-and-forget).
     let result = with_read_only_db(|read_db| {
-        match mutation.as_executor() {
-            Some(executor) => {
-                let ctx = MutationContext {
-                    read_db,
-                    witness: &witness,
-                    stash_root: stash_root.as_deref(),
-                    session_id,
-                };
-                let r = executor.execute(&ctx);
-                (r.success, r.error, r.spawn_mutations, r.pending_signals, r.discovered_inodes)
-            }
-            None => {
-                // DbMigration - handled separately via execute_migration()
-                (false, Some("Migrations not supported in Witch executor".to_string()), Vec::<SpawnedMutation>::new(), Vec::new(), Vec::new())
-            }
-        }
+        let executor = mutation.as_executor();
+        let ctx = MutationContext {
+            read_db,
+            witness: &witness,
+            stash_root: stash_root.as_deref(),
+            session_id,
+        };
+        let r = executor.execute(&ctx);
+        (r.success, r.error, r.spawn_mutations, r.pending_signals, r.discovered_inodes)
     });
 
     // Handle DB access failure
@@ -219,9 +216,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 
     // Extract recomputation scope from executor (EMPTY on failure)
     let recomputation_scope = if success {
-        mutation.as_executor()
-            .map(|e| e.recomputation_scope())
-            .unwrap_or(RecomputationScope::EMPTY)
+        mutation.as_executor().recomputation_scope()
     } else {
         RecomputationScope::EMPTY
     };
@@ -272,39 +267,65 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
     }
 }
 
-/// Execute a single migration. Opens DB connection and runs the migration.
-pub(super) fn execute_migration(migration: Migration, label: String, queue_wait_ms: u64) -> TaskResult {
-    use crate::meta::mutations::MigrationRegistry;
-
+/// Execute a database maintenance task (migration or vacuum).
+pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_wait_ms: u64) -> TaskResult {
     let start = Instant::now();
 
-    // Create migration witness - proves we're inside the Witch's execution context
-    let witness = MigrationWitness::new();
+    // Create maintenance witness - proves we're inside the Witch's execution context
+    let witness = MaintenanceWitness::new();
 
-    // Open write-capable database (migrations require schema changes)
-    let db = match open_db_for_migration(label.clone(), start, queue_wait_ms) {
-        Ok(db) => db,
-        Err(result) => return result,
+    let (success, error) = match task {
+        DbMaintenanceTask::Migration { migration_id, ref description } => {
+            use crate::meta::mutations::MigrationRegistry;
+
+            crate::logging::log_mutation(format!(
+                "[EXECUTION] execute_maintenance Migration START: v{} - {} (label={:?})",
+                migration_id, description, label
+            ));
+
+            // Open write-capable database (migrations require schema changes)
+            let db = match open_db_for_maintenance(label.clone(), start, queue_wait_ms) {
+                Ok(db) => db,
+                Err(result) => return result,
+            };
+
+            // Apply the migration (includes schema version update in same transaction)
+            let registry = MigrationRegistry::new();
+            match registry.apply_migration(&db, migration_id, &witness) {
+                Ok(()) => (true, None),
+                Err(e) => (false, Some(format!("{:#}", e))),
+            }
+        }
+
+        DbMaintenanceTask::Vacuum => {
+            crate::logging::log_general(format!(
+                "[EXECUTION] execute_maintenance Vacuum START (label={:?})",
+                label
+            ));
+
+            match crate::db_thread::execute_vacuum() {
+                Ok(()) => (true, None),
+                Err(e) => (false, Some(e)),
+            }
+        }
     };
 
-    // Apply the migration (includes schema version update in same transaction)
-    let registry = MigrationRegistry::new();
-    let result = registry.apply_migration(&db, migration.to_version, &witness);
+    let duration_ms = start.elapsed().as_millis() as u64;
 
-    let (success, error) = match &result {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(format!("{:#}", e))),
-    };
+    crate::logging::log_general(format!(
+        "[EXECUTION] execute_maintenance END: success={}, error={:?}, duration={}ms",
+        success, error, duration_ms
+    ));
 
     TaskResult {
         success,
         error,
         label,
         spawn: Vec::new(),
-        spawn_mutations: Vec::new(), // Migrations don't spawn mutations
-        duration_ms: start.elapsed().as_millis() as u64,
+        spawn_mutations: Vec::new(),
+        duration_ms,
         queue_wait_ms,
-        thread_stats: None, // Migrations don't use thread-local stats
+        thread_stats: None,
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         observed_corpus_inodes: HashMap::new(),
@@ -354,7 +375,8 @@ fn apply_post_execution(
     //   - All: clear everything (file gone/replaced)
     //   - MutableOnly: preserve CorruptFile/ShitFormat (file still exists)
     //   - None: skip clearing (DB-only operations)
-    if let Some(executor) = mutation.as_executor() {
+    {
+        let executor = mutation.as_executor();
         let scope = executor.signal_clear_scope();
         if scope != SignalClearScope::None {
             let pre_known = executor.affected_inodes();

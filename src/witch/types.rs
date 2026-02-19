@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::meta::computations::Computation;
+use crate::meta::maintenance::DbMaintenanceTask;
 use crate::meta::mutations::Mutation;
 use crate::meta::recomputation::RecomputationScope;
 
@@ -181,37 +182,17 @@ pub enum InodeAwarenessLevel {
 
 /// A task that can be queued for execution.
 ///
-/// Tasks are either Mutations (require ConfirmationGesture to stage), Computations
-/// (no gesture required), or Migrations (require operator approval but bypass
-/// accepting_mutations gate).
+/// Three kinds: Mutations (operator-confirmed corpus changes), Computations
+/// (read-only signal derivation), and Maintenance (operator-approved DB
+/// infrastructure tasks that run before observing).
 #[derive(Debug, Clone)]
 pub enum Task {
     /// A state-altering mutation (requires ConfirmationGesture to stage).
     Mutation(Mutation),
     /// A read-only computation that emits signals (no gesture required).
     Computation(Computation),
-    /// A schema migration (requires operator approval but bypasses accepting_mutations).
-    Migration(Migration),
-}
-
-// ============================================================================
-// Migration Types
-// ============================================================================
-
-/// A database schema migration.
-///
-/// Migrations require operator approval but bypass the `accepting_mutations`
-/// gate. They must run before indexing can happen if schema changes are required.
-///
-/// Note: Description is not stored here - it's looked up from MigrationRegistry
-/// during execution by version number. UI gets descriptions via
-/// `Witch::pending_migration_descriptions()`.
-#[derive(Debug, Clone)]
-pub struct Migration {
-    /// Version number this migration starts from.
-    pub from_version: u32,
-    /// Version number after migration completes.
-    pub to_version: u32,
+    /// A database maintenance task (requires operator approval, bypasses accepting_mutations).
+    Maintenance(DbMaintenanceTask),
 }
 
 // ============================================================================
@@ -271,17 +252,17 @@ pub mod sealed {
         }
     }
 
-    /// A zero-sized token proving code is executing inside the Witch's migration worker.
+    /// A zero-sized token proving code is executing inside the Witch's maintenance worker.
     ///
-    /// Migration apply functions require this witness, ensuring they can only be
-    /// called from within the Witch's `execute_migration()` function.
+    /// Maintenance task functions (migration apply, vacuum) require this witness,
+    /// ensuring they can only be called from within `execute_maintenance()`.
     ///
-    /// Cannot be constructed outside the Witch's `execute_migration()` function.
+    /// Cannot be constructed outside the Witch's `execute_maintenance()` function.
     #[derive(Clone, Copy)]
-    pub struct MigrationWitness(());
+    pub struct MaintenanceWitness(());
 
-    impl MigrationWitness {
-        /// Internal constructor - only callable from execute_migration()
+    impl MaintenanceWitness {
+        /// Internal constructor - only callable from execute_maintenance()
         pub(in crate::witch) fn new() -> Self {
             Self(())
         }
@@ -306,7 +287,7 @@ pub mod sealed {
 }
 
 pub use sealed::ContentAnalysisWitness;
-pub use sealed::MigrationWitness;
+pub use sealed::MaintenanceWitness;
 pub use sealed::MutationExecutionWitness;
 pub use sealed::SpawnedMutation;
 
@@ -329,17 +310,17 @@ impl TaskLabel {
         Self(computation.label().to_string())
     }
 
-    /// Create label from a migration.
-    pub fn from_migration(migration: &Migration) -> Self {
-        Self(format!("Migration v{} → v{}", migration.from_version, migration.to_version))
+    /// Create label from a maintenance task.
+    pub fn from_maintenance(task: &DbMaintenanceTask) -> Self {
+        Self(task.label())
     }
 
-    /// Create label from a task (mutation, computation, or migration).
+    /// Create label from a task (mutation, computation, or maintenance).
     pub fn from_task(task: &Task) -> Self {
         match task {
             Task::Mutation(m) => Self::from_mutation(m),
             Task::Computation(c) => Self::from_computation(c),
-            Task::Migration(m) => Self::from_migration(m),
+            Task::Maintenance(t) => Self::from_maintenance(t),
         }
     }
 }

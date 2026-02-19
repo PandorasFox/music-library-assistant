@@ -135,12 +135,6 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 
 Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutations documented in Tag Operations above. They clear OutOfBandTagSync, OutOfBandTagConflict, and tag_mismatch signals.
 
-### Administrative Operations
-
-| Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
-|----------|---------------------|-----------------|-----------------|-------|
-| DbMigration | — | — | — | Schema migrations only |
-
 ### Album Art Operations
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |

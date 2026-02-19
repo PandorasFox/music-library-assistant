@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::corpus::db::Database;
+use crate::corpus::db::{Database, ReadOnlyDb};
 use crate::meta::mutations::MigrationRegistry;
 
 /// Initial state the Witch determines at startup.
@@ -26,13 +26,14 @@ impl InitialUiState {
             return InitialUiState::FirstTimeSetup;
         }
 
-        let db = match Database::open(db_path) {
+        let db = match Database::open_read_only(db_path) {
             Ok(db) => db,
             Err(_) => return InitialUiState::FirstTimeSetup,
         };
+        let read_db = ReadOnlyDb::new(&db);
 
         let registry = MigrationRegistry::new();
-        if registry.needs_migration(&db) {
+        if registry.needs_migration(&read_db) {
             return InitialUiState::MigrationRequired;
         }
 

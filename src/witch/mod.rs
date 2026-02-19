@@ -1279,17 +1279,19 @@ impl Witch {
     ///
     /// Returns a list of human-readable descriptions of pending migrations.
     pub fn pending_migration_descriptions(&self) -> Vec<String> {
+        use crate::corpus::db::ReadOnlyDb;
         use crate::meta::mutations::MigrationRegistry;
 
         let db_path = match config::get_db_path() {
             Ok(p) => p,
             Err(_) => return Vec::new(),
         };
-        let db = match Database::open(&db_path) {
+        let db = match Database::open_read_only(&db_path) {
             Ok(d) => d,
             Err(_) => return Vec::new(),
         };
-        MigrationRegistry::new().pending_descriptions(&db)
+        let read_db = ReadOnlyDb::new(&db);
+        MigrationRegistry::new().pending_descriptions(&read_db)
     }
 
     /// Queue all pending migrations for async execution.
@@ -1312,7 +1314,7 @@ impl Witch {
                 return;
             }
         };
-        let db = match Database::open(&db_path) {
+        let db = match Database::open_read_only(&db_path) {
             Ok(d) => d,
             Err(e) => {
                 crate::logging::log_error(format!(
@@ -1322,9 +1324,10 @@ impl Witch {
                 return;
             }
         };
+        let read_db = crate::corpus::db::ReadOnlyDb::new(&db);
 
         let registry = MigrationRegistry::new();
-        let current_version = db.get_schema_version().unwrap_or(1);
+        let current_version = read_db.get_schema_version().unwrap_or(1);
         let pending = registry.pending_migrations(current_version);
 
         if pending.is_empty() {

@@ -30,6 +30,7 @@ use anyhow::{Context, Result};
 use rusqlite::params;
 
 use crate::corpus::db::Database;
+use crate::corpus::db::ReadOnlyDb;
 use crate::witch::MaintenanceWitness;
 
 /// Re-seed all corpus inodes as dirty for a given computation type.
@@ -531,8 +532,8 @@ impl MigrationRegistry {
     }
 
     /// Check if migrations are needed for the given database.
-    pub fn needs_migration(&self, db: &Database) -> bool {
-        let current = db.get_schema_version().unwrap_or(1);
+    pub fn needs_migration(&self, read_db: &ReadOnlyDb<'_>) -> bool {
+        let current = read_db.get_schema_version().unwrap_or(1);
         current < self.latest_version()
     }
 
@@ -545,8 +546,8 @@ impl MigrationRegistry {
     }
 
     /// Get descriptions of pending migrations.
-    pub fn pending_descriptions(&self, db: &Database) -> Vec<String> {
-        let current = db.get_schema_version().unwrap_or(1);
+    pub fn pending_descriptions(&self, read_db: &ReadOnlyDb<'_>) -> Vec<String> {
+        let current = read_db.get_schema_version().unwrap_or(1);
         self.pending_migrations(current)
             .iter()
             .map(|m| format!("v{} → v{}: {}", m.from_version, m.to_version, m.description))

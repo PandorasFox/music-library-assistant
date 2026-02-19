@@ -512,6 +512,17 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_audio_files_with_tag_presence()
     }
 
+    /// Get inbox audio files with their present tag names (for inbox missing tag detection).
+    #[allow(clippy::type_complexity)]
+    pub fn get_inbox_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
+        self.db.get_inbox_audio_files_with_tag_presence()
+    }
+
+    /// Get the inbox path for a single inode.
+    pub fn get_inbox_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
+        self.db.get_inbox_path_for_inode(inode)
+    }
+
     /// Get albums that are compilations (more than one distinct ARTIST value).
     pub fn get_compilation_albums(&self) -> Result<std::collections::HashSet<String>> {
         self.db.get_compilation_albums()

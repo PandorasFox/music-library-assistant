@@ -103,9 +103,11 @@ pub fn execute_schedule_content_analysis(
     }
     if run_all || s.touches_any(&[RecomputationScope::INBOX, RecomputationScope::TAGS]) {
         spawn.push(Computation::DetectInboxTagCanonicity);
+        spawn.push(Computation::DetectInboxMissingTags);
+        spawn.push(Computation::DetectInboxCompoundTags);
     }
 
-    let total_possible = 14; // approximate total without library-specific ones
+    let total_possible = 16; // approximate total without library-specific ones
     log_general(format!(
         "[COMPUTE] ScheduleContentAnalysis: spawning {} computations (of ~{} possible)",
         spawn.len(), total_possible

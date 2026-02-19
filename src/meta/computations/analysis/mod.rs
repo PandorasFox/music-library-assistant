@@ -178,6 +178,19 @@ pub enum Computation {
     /// corpus values but whose exact spelling differs.
     DetectInboxTagCanonicity,
 
+    /// Detect inbox files missing required tags.
+    ///
+    /// Simplified version of DetectMissingTags for inbox zone.
+    /// No ExpectedMissingTag suppression, no MissingAlbumSingle routing.
+    DetectInboxMissingTags,
+
+    /// Detect compound tag values in inbox files.
+    ///
+    /// Single-pass (no orchestrator) since inbox is small.
+    /// Checks collaboration keywords + per-tag separators, enriches
+    /// matching_parts against corpus vocabulary.
+    DetectInboxCompoundTags,
+
     /// Detect album tags with embedded disc numbers.
     ///
     /// Scans ALBUM tags from corpus and inbox for patterns like
@@ -208,6 +221,8 @@ impl Computation {
             Computation::DetectEmbeddableAlbumArt => "Detecting embeddable album art",
             Computation::DetectInboxCorpusMatches => "Detecting inbox-corpus matches",
             Computation::DetectInboxTagCanonicity => "Detecting inbox tag canonicity",
+            Computation::DetectInboxMissingTags => "Detecting inbox missing tags",
+            Computation::DetectInboxCompoundTags => "Detecting inbox compound tags",
             Computation::DetectEmbeddedDiscNumbers => "Detecting embedded disc numbers",
         }
     }
@@ -268,6 +283,12 @@ impl Computation {
             }
             Computation::DetectInboxTagCanonicity => {
                 execute_detect_inbox_tag_canonicity(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectInboxMissingTags => {
+                execute_detect_inbox_missing_tags(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectInboxCompoundTags => {
+                execute_detect_inbox_compound_tags(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::DetectEmbeddedDiscNumbers => {
                 execute_detect_embedded_disc_numbers(ctx.read_db, ctx.witness, ctx.start)

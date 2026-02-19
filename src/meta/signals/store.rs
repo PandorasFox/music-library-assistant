@@ -1625,6 +1625,87 @@ impl AggregateSignalStore for InboxTagCanonicitySignal {
     }
 }
 
+impl AggregateSignalStore for InboxMissingTagSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inbox_missing_tag (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_inbox_missing_tag";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_inbox_missing_tag (key, data, data_hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_inbox_missing_tag")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_inbox_missing_tag WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_inbox_missing_tag WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl CorpusSignalStore for InboxCompoundTagSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inbox_compound_tag (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_inbox_compound_tag";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.compounds)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_inbox_compound_tag (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![self.inode, self.path, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_inode_hashes(conn: &Connection) -> Result<HashMap<i64, i64>> {
+        let mut stmt = conn.prepare("SELECT inode, data_hash FROM signal_inbox_compound_tag")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_inbox_compound_tag WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_inbox_compound_tag WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
 impl AggregateSignalStore for EmbeddedDiscNumberSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_embedded_disc_number (
         key TEXT PRIMARY KEY,
@@ -1729,6 +1810,8 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(EmbeddableAlbumArtSignal::TABLE_SQL)?;
     conn.execute_batch(MissingAlbumSingleSignal::TABLE_SQL)?;
     conn.execute_batch(InboxTagCanonicitySignal::TABLE_SQL)?;
+    conn.execute_batch(InboxMissingTagSignal::TABLE_SQL)?;
+    conn.execute_batch(InboxCompoundTagSignal::TABLE_SQL)?;
     conn.execute_batch(EmbeddedDiscNumberSignal::TABLE_SQL)?;
 
     Ok(())

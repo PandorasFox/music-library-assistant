@@ -528,6 +528,25 @@ pub struct SingleTrackInfo {
     pub path: String,
 }
 
+/// Inbox files missing required tags.
+/// Aggregate signal keyed by album/directory, reuses MissingTagData.
+#[derive(Debug, Clone)]
+pub struct InboxMissingTagSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: MissingTagData,
+}
+
+/// Per-inbox-file compound tag detection results.
+/// Reuses Vec<CompoundTagEntry> from corpus compound tag detection.
+#[derive(Debug, Clone)]
+pub struct InboxCompoundTagSignal {
+    pub inode: i64,
+    pub path: String,
+    /// Serialized as bincode BLOB.
+    pub compounds: Vec<CompoundTagEntry>,
+}
+
 /// Inbox tag values that differ from corpus canonical spellings.
 /// Aggregate signal keyed by "{tag_name}:{normalized_key}".
 #[derive(Debug, Clone)]
@@ -631,6 +650,8 @@ pub enum TypedSignalWrite {
     MissingAlbumSingle(MissingAlbumSingleSignal),
     ExpectedMissingTag(ExpectedMissingTagSignal),
     InboxTagCanonicity(InboxTagCanonicitySignal),
+    InboxMissingTag(InboxMissingTagSignal),
+    InboxCompoundTag(InboxCompoundTagSignal),
     EmbeddedDiscNumber(EmbeddedDiscNumberSignal),
 }
 
@@ -676,6 +697,8 @@ impl TypedSignalWrite {
             Self::MissingAlbumSingle(s) => s.insert(conn),
             Self::ExpectedMissingTag(s) => s.insert(conn),
             Self::InboxTagCanonicity(s) => s.insert(conn),
+            Self::InboxMissingTag(s) => s.insert(conn),
+            Self::InboxCompoundTag(s) => s.insert(conn),
             Self::EmbeddedDiscNumber(s) => s.insert(conn),
         }
     }
@@ -721,6 +744,8 @@ impl TypedSignalWrite {
             Self::MissingAlbumSingle(s) => MissingAlbumSingleSignal::exists(conn, &s.key),
             Self::ExpectedMissingTag(s) => ExpectedMissingTagSignal::exists(conn, s.inode),
             Self::InboxTagCanonicity(s) => InboxTagCanonicitySignal::exists(conn, &s.key),
+            Self::InboxMissingTag(s) => InboxMissingTagSignal::exists(conn, &s.key),
+            Self::InboxCompoundTag(s) => InboxCompoundTagSignal::exists(conn, s.inode),
             Self::EmbeddedDiscNumber(s) => EmbeddedDiscNumberSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
@@ -820,6 +845,16 @@ impl TypedSignalWrite {
             }
             Self::InboxTagCanonicity(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::InboxMissingTag(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::InboxCompoundTag(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.compounds) {
                     bytes.hash(&mut hasher);
                 }
             }

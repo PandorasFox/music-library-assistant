@@ -515,6 +515,20 @@ impl MigrationRegistry {
             },
         });
 
+        // v16→v17: Create inbox missing tag and compound tag signal tables
+        registry.register(Migration {
+            from_version: 16,
+            to_version: 17,
+            description: "Create inbox_missing_tag and inbox_compound_tag signal tables",
+            apply: |db| {
+                use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
+                use crate::meta::signals::data::{InboxMissingTagSignal, InboxCompoundTagSignal};
+                db.conn().execute_batch(InboxMissingTagSignal::TABLE_SQL)?;
+                db.conn().execute_batch(InboxCompoundTagSignal::TABLE_SQL)?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

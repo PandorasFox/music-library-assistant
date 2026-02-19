@@ -495,6 +495,57 @@ impl Database {
         }
     }
 
+    /// Get inbox audio files with their present tag names (for inbox missing tag detection).
+    ///
+    /// Mirrors `get_audio_files_with_tag_presence()` but uses `inbox_tags` and `zone = 'inbox'`.
+    #[allow(clippy::type_complexity)]
+    pub fn get_inbox_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
+        let query = r#"
+            SELECT f.inode, f.path,
+                   (SELECT tag_value FROM inbox_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
+                   GROUP_CONCAT(UPPER(it.tag_name), ',') as present_tags,
+                   (SELECT tag_value FROM inbox_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
+                   (SELECT tag_value FROM inbox_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            LEFT JOIN inbox_tags it ON f.inode = it.inode
+            WHERE f.is_dir = 0 AND f.zone = 'inbox'
+            GROUP BY f.inode
+        "#;
+
+        let mut stmt = self.conn.prepare(query)?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get the inbox path for a single inode.
+    pub fn get_inbox_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path FROM files WHERE inode = ?1 AND zone = 'inbox' AND is_dir = 0 LIMIT 1"
+        )?;
+
+        let mut rows = stmt.query(params![inode])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get all tags ordered by inode and tag name (for metadata duplicate detection, corpus only).
     /// Returns: Vec<(inode, tag_name, tag_value)>
     pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {

@@ -369,7 +369,7 @@ pub fn execute_detect_compound_tag_values(
 ///
 /// Scans the value for the first matching keyword (case-insensitive) and returns
 /// its canonical form with trailing dot (e.g., "feat.", "ft.", "vs.").
-fn determine_collab_separator_label(value: &str, keywords: &[String]) -> String {
+pub(super) fn determine_collab_separator_label(value: &str, keywords: &[String]) -> String {
     let lower = value.to_lowercase();
     for kw in keywords {
         let kw_lower = kw.to_lowercase();

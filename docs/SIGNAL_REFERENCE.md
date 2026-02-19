@@ -51,6 +51,8 @@ Signals are atomic facts about corpus state. They follow these principles:
 | InboxHealthy | DeriveInboxSignals | DeriveInboxSignals, DropInboxFileState, InboxToCorpus (MutableOnly scope) | In inbox, indexed, ready for operations |
 | InboxCorpusMatch | DetectInboxCorpusMatches | DetectInboxCorpusMatches, DropInboxFileState | Inbox file has fingerprint+duration match against corpus file(s). Data (bincode BLOB): `corpus_matches[]` with `corpus_inode`, `corpus_path`, `similarity` |
 | InboxTagCanonicity | DetectInboxTagCanonicity | DetectInboxTagCanonicity | Inbox tag value differs from corpus canonical spelling. Aggregate signal keyed by `{tag_name}:{normalized_key}`. Data (bincode BLOB): `inbox_variants[]` (value, count), `inbox_inodes[]`, `corpus_variants[]` (value, count). Novel inbox values (no corpus equivalent) are NOT flagged |
+| InboxMissingTag | DetectInboxMissingTags | DetectInboxMissingTags | Inbox files missing required tags. Aggregate signal keyed by `inbox:album={name}` or `inbox:dir={path}`. Data (bincode BLOB): reuses `MissingTagData` (`missing_tags[]`, `inodes[]`). No ExpectedMissingTag suppression, no MissingAlbumSingle routing. Informational only |
+| InboxCompoundTag | DetectInboxCompoundTags | DetectInboxCompoundTags | Per-inbox-file compound tag detection. Inode-keyed. Data (bincode BLOB): reuses `Vec<CompoundTagEntry>`. matching_parts enriched against corpus vocabulary. Informational only |
 
 ---
 

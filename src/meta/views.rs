@@ -137,6 +137,10 @@ pub struct InboxOverviewData {
     pub unindexed: usize,
     /// Inbox tag values differing from corpus canonical spellings
     pub tag_canonicity: usize,
+    /// Inbox files missing required tags
+    pub missing_tags: usize,
+    /// Inbox files with compound tag values
+    pub compound_tags: usize,
     /// Healthy inbox files eligible for organizing into corpus
     pub organizable: usize,
 }

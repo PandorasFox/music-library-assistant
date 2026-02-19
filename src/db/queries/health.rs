@@ -374,6 +374,8 @@ impl Database {
             corpus_match: self.count_signal_type("inbox_corpus_match")?,
             unindexed: self.count_signal_type("inbox_unindexed")?,
             tag_canonicity: self.count_signal_type("inbox_tag_canonicity")?,
+            missing_tags: self.count_signal_type("inbox_missing_tag")?,
+            compound_tags: self.count_signal_type("inbox_compound_tag")?,
             organizable: self.get_organizable_inbox_count().unwrap_or(0),
         })
     }
@@ -651,6 +653,8 @@ impl Database {
             "inbox_corpus_match" => InboxCorpusMatchSignal::count(&self.conn)?,
             "file_in_inbox" => FileInInboxSignal::count(&self.conn)?,
             "inbox_tag_canonicity" => InboxTagCanonicitySignal::count(&self.conn)?,
+            "inbox_missing_tag" => InboxMissingTagSignal::count(&self.conn)?,
+            "inbox_compound_tag" => InboxCompoundTagSignal::count(&self.conn)?,
             "embedded_disc_number" => EmbeddedDiscNumberSignal::count(&self.conn)?,
             _ => 0,
         };

@@ -113,6 +113,24 @@ impl InboxViewState {
             });
         }
 
+        if data.missing_tags > 0 {
+            entries.push(InboxBucketEntry {
+                label: "Missing tags".to_string(),
+                count: data.missing_tags,
+                color: Color::LightRed,
+                action: InboxInsightAction::Informational,
+            });
+        }
+
+        if data.compound_tags > 0 {
+            entries.push(InboxBucketEntry {
+                label: "Compound tags".to_string(),
+                count: data.compound_tags,
+                color: Color::LightBlue,
+                action: InboxInsightAction::Informational,
+            });
+        }
+
         if data.organizable > 0 {
             entries.push(InboxBucketEntry {
                 label: "Organize into corpus".to_string(),

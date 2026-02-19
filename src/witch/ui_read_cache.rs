@@ -22,6 +22,7 @@
 //! - **Non-blocking**: UI never waits; reads whatever is cached (may be stale)
 //! - **Generic**: `CacheEntry<T>` template makes adding new cached values mechanical
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -29,6 +30,7 @@ use std::time::{Duration, Instant};
 use crate::config;
 use crate::corpus::db::types::{DeployStatus, InsightsData, InboxOverviewData};
 use crate::corpus::db::Database;
+use crate::meta::decisions::{DecisionSource, PendingTransaction};
 
 // ============================================================================
 // Shutdown Coordination
@@ -266,6 +268,9 @@ pub struct UiReadCache {
     insights_data: CacheEntry<InsightsData>,
     inbox_overview: CacheEntry<InboxOverviewData>,
     deploy_status: CacheEntry<DeployStatus>,
+    /// Decision sources with staged decisions in the active transaction.
+    /// Used by the insights view to hide entries already handled.
+    handled_sources: HashSet<DecisionSource>,
 }
 
 impl UiReadCache {
@@ -282,6 +287,7 @@ impl UiReadCache {
             insights_data: CacheEntry::new(Self::INSIGHTS_THROTTLE),
             inbox_overview: CacheEntry::new(Self::INBOX_OVERVIEW_THROTTLE),
             deploy_status: CacheEntry::new(Self::DEPLOY_STATUS_THROTTLE),
+            handled_sources: HashSet::new(),
         }
     }
 
@@ -347,6 +353,26 @@ impl UiReadCache {
     /// Invalidate deploy status cache, forcing refresh on next want().
     pub fn invalidate_deploy_status(&self) {
         self.deploy_status.invalidate();
+    }
+
+    // -------------------------------------------------------------------------
+    // Transaction-Handled Sources
+    // -------------------------------------------------------------------------
+
+    /// Sources with staged decisions in the active transaction.
+    pub fn handled_decision_sources(&self) -> &HashSet<DecisionSource> {
+        &self.handled_sources
+    }
+
+    /// Rebuild handled sources from current transaction state.
+    /// Called by the Witch at each transaction mutation point.
+    pub(crate) fn sync_handled_sources(&mut self, transaction: Option<&PendingTransaction>) {
+        self.handled_sources = transaction
+            .map(|txn| txn.decisions.keys().map(|k| k.source).collect())
+            .unwrap_or_else(|| {
+                self.handled_sources.clear();
+                std::mem::take(&mut self.handled_sources) // reuse allocation
+            });
     }
 
     // -------------------------------------------------------------------------

@@ -26,11 +26,14 @@
 
 mod render;
 
+use std::collections::HashSet;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, TagSquashBucket, OtherSignalsBucket};
+use crate::meta::decisions::DecisionSource;
 use crate::ui::widgets::ListClickTargets;
 use crate::witch::DaemonStatus;
 
@@ -142,6 +145,40 @@ pub enum InsightType {
     EmbeddedDiscNumber,
     // Other bucket - dynamic entries identified by index
     OtherSignal { index: usize },
+}
+
+impl InsightType {
+    /// For single-decision sources, returns the `DecisionSource` that fully
+    /// handles all items of this insight type. Returns `None` for informational
+    /// entries and per-item sources whose modals already back-fill state.
+    pub fn single_decision_source(&self) -> Option<DecisionSource> {
+        match self {
+            InsightType::CorpusMtimeOnly => Some(DecisionSource::MtimeAck),
+            InsightType::CorpusOobTagSync => Some(DecisionSource::OobSync),
+            InsightType::CorpusOobTagConflict => Some(DecisionSource::OobConflict),
+            InsightType::CorpusFilesUnindexed => Some(DecisionSource::IntakeIndex),
+            InsightType::CorpusFilesMissing => Some(DecisionSource::MissingFile),
+            InsightType::CorpusDirectoriesMissing => Some(DecisionSource::MissingDirectory),
+            InsightType::CorpusFilesRelocated => Some(DecisionSource::MovedFile),
+            InsightType::CorpusCorruptFiles => Some(DecisionSource::CorruptFile),
+            InsightType::CorpusShitFormatFiles => Some(DecisionSource::ShitFormat),
+            InsightType::SubparDuplicates => Some(DecisionSource::SubparDuplicate),
+            InsightType::EmbeddableAlbumArt => Some(DecisionSource::EmbedAlbumArt),
+            // Informational entries
+            InsightType::CorpusFilesInCorpus
+            | InsightType::CorpusFilesIndexed => None,
+            // Per-item sources — modals already back-fill from staged decisions
+            InsightType::TagCanonicity { .. }
+            | InsightType::CompoundTagValueSafe { .. }
+            | InsightType::CompoundTagValueReview { .. }
+            | InsightType::CrossSourceOverlaps
+            | InsightType::RedundantDuplicates
+            | InsightType::InconsistentAlbumArtist
+            | InsightType::MissingAlbumSingle
+            | InsightType::EmbeddedDiscNumber
+            | InsightType::OtherSignal { .. } => None,
+        }
+    }
 }
 
 /// Actions that can be launched from specific insight types.
@@ -552,6 +589,23 @@ impl CachedBucketEntries {
             .collect()
     }
 
+    /// Remove entries whose single-decision source is in the handled set.
+    fn filter_handled(&mut self, handled: &HashSet<DecisionSource>) {
+        if handled.is_empty() {
+            return;
+        }
+        let dominated = |e: &BucketEntry| {
+            e.insight_type
+                .single_decision_source()
+                .map_or(false, |s| handled.contains(&s))
+        };
+        self.corpus.retain(|e| !dominated(e));
+        self.placeholder.retain(|e| !dominated(e));
+        // 'other' bucket entries don't have single_decision_source mappings,
+        // but retain for completeness in case the pattern extends.
+        self.other.retain(|e| !dominated(e));
+    }
+
     /// Get entries for a specific bucket
     pub fn entries_for(&self, bucket: FocusedBucket) -> &[BucketEntry] {
         match bucket {
@@ -648,6 +702,8 @@ pub struct InsightsViewState {
     pub cached_entries: CachedBucketEntries,
     /// Click targets for mouse selection (populated during render)
     pub click_targets: InsightsClickTargets,
+    /// Last handled-sources set, for change detection
+    last_handled_sources: HashSet<DecisionSource>,
 }
 
 impl Default for InsightsViewState {
@@ -659,6 +715,7 @@ impl Default for InsightsViewState {
             cached_data: None,
             cached_entries: CachedBucketEntries::default(),
             click_targets: InsightsClickTargets::new(),
+            last_handled_sources: HashSet::new(),
         }
     }
 }
@@ -669,8 +726,17 @@ impl InsightsViewState {
         Self::default()
     }
 
-    /// Update state every tick - checks Witch status and caches insights data
-    pub fn update(&mut self, witch_status: Option<&DaemonStatus>, insights_data: Option<InsightsData>) {
+    /// Update state every tick - checks Witch status and caches insights data.
+    ///
+    /// `handled_sources` is the set of `DecisionSource`s with staged decisions
+    /// in the active transaction. Entries whose single-decision source is in
+    /// this set are filtered out so the operator sees only unhandled insights.
+    pub fn update(
+        &mut self,
+        witch_status: Option<&DaemonStatus>,
+        insights_data: Option<InsightsData>,
+        handled_sources: &HashSet<DecisionSource>,
+    ) {
         let busy = witch_status
             .map(|s| s.pending > 0)
             .unwrap_or(false);
@@ -681,10 +747,39 @@ impl InsightsViewState {
             InsightsModal::Ready
         };
 
-        // Update cached data and rebuild sorted entries when new data available
-        if let Some(data) = insights_data {
-            self.cached_entries = CachedBucketEntries::from_insights_data(&data);
-            self.cached_data = Some(data);
+        let handled_changed = *handled_sources != self.last_handled_sources;
+
+        // Rebuild when new insights data arrives OR when the handled set changes
+        if insights_data.is_some() || handled_changed {
+            // Use new data if available, otherwise rebuild from cached data
+            if let Some(ref data) = insights_data.as_ref().or(self.cached_data.as_ref()) {
+                let mut entries = CachedBucketEntries::from_insights_data(data);
+                entries.filter_handled(handled_sources);
+                self.cached_entries = entries;
+            }
+
+            if let Some(data) = insights_data {
+                self.cached_data = Some(data);
+            }
+
+            if handled_changed {
+                self.last_handled_sources = handled_sources.clone();
+            }
+
+            self.clamp_all_selections();
+        }
+    }
+
+    /// Clamp all bucket selection indices to stay within bounds after filtering.
+    fn clamp_all_selections(&mut self) {
+        for bucket in [FocusedBucket::Corpus, FocusedBucket::Placeholder, FocusedBucket::Other] {
+            let count = self.cached_entries.entries_for(bucket).len();
+            let sel = &mut self.bucket_selections[bucket.index()];
+            if count == 0 {
+                sel.selected = 0;
+            } else if sel.selected >= count {
+                sel.selected = count - 1;
+            }
         }
     }
 
@@ -930,9 +1025,10 @@ mod tests {
     #[test]
     fn test_update_witch_status() {
         let mut state = InsightsViewState::new();
+        let no_handled = HashSet::new();
 
         // No status - should be Ready
-        state.update(None, None);
+        state.update(None, None, &no_handled);
         assert_eq!(state.modal, InsightsModal::Ready);
 
         // Pending > 0 - should be busy
@@ -940,7 +1036,7 @@ mod tests {
             pending: 5,
             ..Default::default()
         };
-        state.update(Some(&busy_status), None);
+        state.update(Some(&busy_status), None, &no_handled);
         assert_eq!(state.modal, InsightsModal::NotReady_WitchBusy);
 
         // Pending = 0 - should be ready again
@@ -948,8 +1044,100 @@ mod tests {
             pending: 0,
             ..Default::default()
         };
-        state.update(Some(&idle_status), None);
+        state.update(Some(&idle_status), None, &no_handled);
         assert_eq!(state.modal, InsightsModal::Ready);
+    }
+
+    #[test]
+    fn test_filter_hides_handled_entries() {
+        let mut state = InsightsViewState::new();
+        let data = mock_insights_data();
+        let no_handled = HashSet::new();
+
+        // Populate with data, no filtering
+        state.update(None, Some(data.clone()), &no_handled);
+        let corpus_count_before = state.cached_entries.corpus.len();
+        assert!(corpus_count_before > 0);
+
+        // Now mark MtimeAck as handled — CorpusMtimeOnly should disappear
+        let mut handled = HashSet::new();
+        handled.insert(DecisionSource::MtimeAck);
+        state.update(None, None, &handled);
+
+        // Should have one fewer entry
+        assert_eq!(state.cached_entries.corpus.len(), corpus_count_before - 1);
+        // And it shouldn't contain CorpusMtimeOnly
+        assert!(!state.cached_entries.corpus.iter().any(|e| e.insight_type == InsightType::CorpusMtimeOnly));
+    }
+
+    #[test]
+    fn test_informational_entries_survive_filtering() {
+        let mut state = InsightsViewState::new();
+        let data = mock_insights_data();
+
+        // Handle several sources
+        let mut handled = HashSet::new();
+        handled.insert(DecisionSource::MtimeAck);
+        handled.insert(DecisionSource::OobSync);
+        handled.insert(DecisionSource::MissingFile);
+
+        state.update(None, Some(data), &handled);
+
+        // Informational entries (FilesInCorpus, FilesIndexed) should survive
+        assert!(state.cached_entries.corpus.iter().any(|e| e.insight_type == InsightType::CorpusFilesInCorpus));
+        assert!(state.cached_entries.corpus.iter().any(|e| e.insight_type == InsightType::CorpusFilesIndexed));
+    }
+
+    #[test]
+    fn test_selection_clamped_after_filter() {
+        let mut state = InsightsViewState::new();
+        let data = mock_insights_data();
+        let no_handled = HashSet::new();
+
+        // Populate and select last corpus entry
+        state.update(None, Some(data.clone()), &no_handled);
+        let last_idx = state.cached_entries.corpus.len() - 1;
+        state.bucket_selections[FocusedBucket::Corpus.index()].selected = last_idx;
+
+        // Handle multiple sources to shrink the list
+        let mut handled = HashSet::new();
+        handled.insert(DecisionSource::MtimeAck);
+        handled.insert(DecisionSource::OobSync);
+        handled.insert(DecisionSource::OobConflict);
+        handled.insert(DecisionSource::MissingFile);
+        handled.insert(DecisionSource::MissingDirectory);
+        handled.insert(DecisionSource::MovedFile);
+        handled.insert(DecisionSource::CorruptFile);
+        handled.insert(DecisionSource::ShitFormat);
+        handled.insert(DecisionSource::IntakeIndex);
+
+        state.update(None, None, &handled);
+
+        // Selection should be clamped to new bounds
+        let new_count = state.cached_entries.corpus.len();
+        assert!(new_count > 0); // Still have informational entries
+        assert!(state.bucket_selections[FocusedBucket::Corpus.index()].selected < new_count);
+    }
+
+    #[test]
+    fn test_handled_set_change_triggers_rebuild() {
+        let mut state = InsightsViewState::new();
+        let data = mock_insights_data();
+        let no_handled = HashSet::new();
+
+        // Initial populate
+        state.update(None, Some(data), &no_handled);
+        let count_before = state.cached_entries.corpus.len();
+
+        // Change handled set without new InsightsData — should still rebuild
+        let mut handled = HashSet::new();
+        handled.insert(DecisionSource::MtimeAck);
+        state.update(None, None, &handled);
+        assert_eq!(state.cached_entries.corpus.len(), count_before - 1);
+
+        // Discard (empty handled) — should restore
+        state.update(None, None, &no_handled);
+        assert_eq!(state.cached_entries.corpus.len(), count_before);
     }
 
     #[test]

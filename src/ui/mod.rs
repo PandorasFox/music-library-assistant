@@ -701,7 +701,8 @@ fn run_app<B: ratatui::backend::Backend>(
         if let ActiveView::Insights(ref mut view) = app.view {
             let status = app.witch.status();
             let insights_data = app.witch.ui_read_cache().insights_data();
-            view.update(Some(&status), insights_data);
+            let handled = app.witch.ui_read_cache().handled_decision_sources();
+            view.update(Some(&status), insights_data, handled);
         }
 
         // Update inbox view with cached overview data and busy state

@@ -113,6 +113,7 @@ impl super::Witch {
             label
         ));
         self.pending_transaction = Some(PendingTransaction::new(label));
+        self.ui_read_cache.sync_handled_sources(self.pending_transaction.as_ref());
         Ok(())
     }
 
@@ -166,6 +167,7 @@ impl super::Witch {
 
         txn.decisions.insert(key, decision);
 
+        self.ui_read_cache.sync_handled_sources(self.pending_transaction.as_ref());
         Ok(())
     }
 
@@ -201,6 +203,7 @@ impl super::Witch {
                 key, txn.decision_count()
             ));
         }
+        self.ui_read_cache.sync_handled_sources(self.pending_transaction.as_ref());
         Ok(())
     }
 
@@ -225,6 +228,7 @@ impl super::Witch {
         self.require_active_transaction("confirm_transaction")?;
 
         let txn = self.pending_transaction.take().unwrap();
+        self.ui_read_cache.sync_handled_sources(None);
 
         let decision_count = txn.decision_count();
         let mut mutation_count = 0;
@@ -271,6 +275,7 @@ impl super::Witch {
         self.require_active_transaction("discard_transaction")?;
 
         let txn = self.pending_transaction.take().unwrap();
+        self.ui_read_cache.sync_handled_sources(None);
 
         crate::logging::log_mutation(format!(
             "[TRANSACTION] discard_transaction OK - discarded {} decisions, {} mutations",

@@ -830,7 +830,10 @@ impl App {
         }
     }
 
-    /// Open a dir config panel for the given absolute source root path.
+    /// Open a dir config panel for the given absolute corpus directory path.
+    ///
+    /// If an exact SourceDir match exists, loads its values. Otherwise opens
+    /// panel with defaults so the user can create a new config entry.
     fn open_dir_config_panel(&mut self, abs_path: std::path::PathBuf) {
         let config = self.config();
         let corpus_dir = config.corpus_dir();
@@ -841,21 +844,27 @@ impl App {
             Err(_) => return,
         };
 
-        // Find matching SourceDir
-        let source = match config.get_source_for_relative_path(&relative) {
-            Some(sd) if sd.path == relative => sd.clone(),
-            _ => return,
-        };
+        // Find exact matching SourceDir, or use defaults for new entry
+        let (libraries, can_stash_dupes, interior_dupes) =
+            match config.get_source_for_relative_path(&relative) {
+                Some(sd) if sd.path == relative => {
+                    (sd.libraries.clone(), sd.can_stash_dupes, sd.interior_dupes)
+                }
+                _ => {
+                    // Defaults for a new (unconfigured) directory
+                    (vec![], true, true)
+                }
+            };
         drop(config);
 
         let panel = tree_browser::variants::corpus::DirConfigPanelState {
-            source_path: source.path.clone(),
-            libraries: source.libraries.clone(),
-            can_stash_dupes: source.can_stash_dupes,
-            interior_dupes: source.interior_dupes,
-            orig_libraries: source.libraries.clone(),
-            orig_can_stash_dupes: source.can_stash_dupes,
-            orig_interior_dupes: source.interior_dupes,
+            source_path: relative,
+            libraries: libraries.clone(),
+            can_stash_dupes,
+            interior_dupes,
+            orig_libraries: libraries,
+            orig_can_stash_dupes: can_stash_dupes,
+            orig_interior_dupes: interior_dupes,
             field_cursor: 0,
             focus: tree_browser::variants::corpus::PanelFocus::default(),
             button_cursor: 0,

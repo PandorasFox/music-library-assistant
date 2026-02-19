@@ -52,15 +52,32 @@ impl TreeBrowserState {
     /// - Type-to-jump search for directories
     /// - Enter launches tag editor (directory = bulk edit, file = single edit)
     /// - Part of lateral view ring (Tab/Shift-Tab cycling)
-    pub fn corpus_browser(root: PathBuf, variant_config: CorpusBrowserConfig, deploy_source_paths: Vec<PathBuf>) -> Self {
+    ///
+    /// `root` is the archive root (shows zone dirs at depth 0).
+    /// `corpus_dir` is the corpus subdirectory (for C key and initial focus).
+    /// `primary_zone_paths` lists corpus/inbox/stash for dimming non-zone dirs.
+    pub fn corpus_browser(
+        root: PathBuf,
+        variant_config: CorpusBrowserConfig,
+        deploy_source_paths: Vec<PathBuf>,
+        corpus_dir: PathBuf,
+        primary_zone_paths: Vec<PathBuf>,
+    ) -> Self {
         let filter = if variant_config.show_files {
             EntryFilter::with_files()
         } else {
             EntryFilter::directories_only()
         };
 
-        let navigator = TreeNavigator::new(root.clone(), filter, true, deploy_source_paths);
-        let variant = BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(variant_config));
+        let mut navigator = TreeNavigator::new(
+            root,
+            filter,
+            false,
+            deploy_source_paths,
+            primary_zone_paths,
+        );
+        navigator.focus_and_expand(&corpus_dir);
+        let variant = BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(variant_config, corpus_dir));
 
         Self { navigator, variant }
     }

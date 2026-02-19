@@ -167,6 +167,7 @@ impl InboxOrganizeState {
             EntryFilter::directories_only(),
             true,
             Vec::new(), // no deploy source paths needed for selection
+            Vec::new(), // no zone dimming needed
         );
         corpus_navigator.show_new_dir_entry = true;
 

@@ -111,7 +111,7 @@ impl DirectoryPickerState {
     fn new() -> Self {
         let start_path = PathBuf::from("/");
         let filter = EntryFilter::directories_only();
-        let mut navigator = TreeNavigator::new(start_path, filter, false, vec![]);
+        let mut navigator = TreeNavigator::new(start_path, filter, false, vec![], vec![]);
         navigator.show_new_dir_entry = true;
 
         Self {
@@ -125,7 +125,7 @@ impl DirectoryPickerState {
     fn refresh_and_navigate_to(&mut self, target: &Path) {
         let start_path = PathBuf::from("/");
         let filter = EntryFilter::directories_only();
-        let mut navigator = TreeNavigator::new(start_path, filter, false, vec![]);
+        let mut navigator = TreeNavigator::new(start_path, filter, false, vec![], vec![]);
         navigator.show_new_dir_entry = true;
         navigator.navigate_to_path(target);
         self.navigator = navigator;

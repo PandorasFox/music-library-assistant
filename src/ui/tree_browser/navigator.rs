@@ -68,6 +68,9 @@ pub struct TreeNavigator {
     /// When true, prepend a synthetic "[+ new directory]" entry as the first
     /// child of each expanded directory.
     pub show_new_dir_entry: bool,
+    /// Absolute paths of primary zone directories (corpus, inbox, stash).
+    /// Top-level entries not in this set are dimmed.
+    primary_zone_paths: Vec<PathBuf>,
 }
 
 impl TreeNavigator {
@@ -76,7 +79,13 @@ impl TreeNavigator {
     /// - `show_root`: If true, root directory is shown as first entry (corpus browser style).
     ///   If false, only root's children are shown (directory selector style).
     /// - `deploy_source_paths`: Absolute paths of configured deployment source directories.
-    pub fn new(root_path: PathBuf, filter: EntryFilter, show_root: bool, deploy_source_paths: Vec<PathBuf>) -> Self {
+    pub fn new(
+        root_path: PathBuf,
+        filter: EntryFilter,
+        show_root: bool,
+        deploy_source_paths: Vec<PathBuf>,
+        primary_zone_paths: Vec<PathBuf>,
+    ) -> Self {
         let mut nav = Self {
             entries: Vec::new(),
             cursor_idx: 0,
@@ -88,6 +97,7 @@ impl TreeNavigator {
             active_path_filter: None,
             deploy_source_paths,
             show_new_dir_entry: false,
+            primary_zone_paths,
         };
         nav.load_initial();
         nav
@@ -276,6 +286,20 @@ impl TreeNavigator {
         }
     }
 
+    /// Focus on a target path, setting cursor and expanding it.
+    ///
+    /// Used to focus the corpus dir on initial load so the user lands inside it.
+    pub fn focus_and_expand(&mut self, target: &Path) {
+        if let Some(idx) = self.entries.iter().position(|e| e.path == *target) {
+            self.cursor_idx = idx;
+            if self.entries[idx].is_directory && !self.entries[idx].is_expanded {
+                self.entries[idx].is_expanded = true;
+                self.load_children_at(idx);
+            }
+            self.ensure_visible();
+        }
+    }
+
     // =========================================================================
     // Entry Loading
     // =========================================================================
@@ -303,6 +327,9 @@ impl TreeNavigator {
     fn load_children_of(&self, parent: &Path, depth: usize) -> Vec<TreeEntry> {
         let mut dirs: Vec<TreeEntry> = Vec::new();
         let mut files: Vec<TreeEntry> = Vec::new();
+
+        // Dim entries at root level that aren't in primary zone paths
+        let is_root_parent = parent == self.root_path;
 
         if let Ok(read_dir) = fs::read_dir(parent) {
             let mut fs_entries: Vec<_> = read_dir.flatten().collect();
@@ -332,6 +359,11 @@ impl TreeNavigator {
                     let item_count = self.count_audio_files(&path);
                     let mut entry = TreeEntry::directory(path.clone(), name, depth, has_children, item_count);
                     entry.deploy_marker = self.deploy_marker_for(&path);
+                    if is_root_parent && !self.primary_zone_paths.is_empty()
+                        && !self.primary_zone_paths.iter().any(|z| z == &path)
+                    {
+                        entry.is_dimmed = true;
+                    }
                     dirs.push(entry);
                 } else if self.filter.include_files && self.is_audio_file(&path) {
                     files.push(TreeEntry::file(path, name, depth));

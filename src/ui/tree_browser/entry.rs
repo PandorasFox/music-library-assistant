@@ -39,6 +39,8 @@ pub struct TreeEntry {
     pub deploy_marker: DeployMarker,
     /// Whether this is a synthetic UI-only entry (e.g., "[+ new directory]")
     pub is_synthetic: bool,
+    /// Whether this entry should be visually dimmed (non-primary zone dirs)
+    pub is_dimmed: bool,
 }
 
 impl TreeEntry {
@@ -60,6 +62,7 @@ impl TreeEntry {
             item_count,
             deploy_marker: DeployMarker::None,
             is_synthetic: false,
+            is_dimmed: false,
         }
     }
 
@@ -75,6 +78,7 @@ impl TreeEntry {
             item_count: 0,
             deploy_marker: DeployMarker::None,
             is_synthetic: false,
+            is_dimmed: false,
         }
     }
 
@@ -90,6 +94,7 @@ impl TreeEntry {
             item_count: 0,
             deploy_marker: DeployMarker::None,
             is_synthetic: true,
+            is_dimmed: false,
         }
     }
 }

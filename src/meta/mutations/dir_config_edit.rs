@@ -36,7 +36,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
-        let result = (|| -> anyhow::Result<()> {
+        let result = (|| -> anyhow::Result<bool> {
             let config_dir = crate::config::get_config_dir()?;
             let dirs_path = config_dir.join("dirs.kdl");
 
@@ -48,7 +48,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                 Vec::new()
             };
 
-            // Find and replace the matching dir
+            // Find and replace the matching dir, or insert new
             let mut found = false;
             for dir in &mut dirs {
                 if dir.path == self.source_path {
@@ -59,17 +59,18 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
             }
 
             if !found {
-                anyhow::bail!("Source dir {:?} not found in dirs.kdl", self.source_path);
+                dirs.push(self.new_dir.clone());
             }
 
             crate::config::write_dirs_to_disk(&dirs)?;
-            Ok(())
+            Ok(found)
         })();
 
         match result {
-            Ok(()) => {
+            Ok(was_update) => {
                 crate::logging::log_general(format!(
-                    "[DIR CONFIG] Updated config for {:?}",
+                    "[DIR CONFIG] {} config for {:?}",
+                    if was_update { "Updated" } else { "Created" },
                     self.source_path
                 ));
                 MutationResult {

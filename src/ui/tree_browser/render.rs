@@ -162,8 +162,8 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
     } else {
         // Standard tree browser hints
         let cursor_entry = nav.current_entry();
-        let on_source_root = cursor_entry
-            .map(|e| e.deploy_marker == DeployMarker::SourceRoot)
+        let on_corpus_dir = cursor_entry
+            .map(|e| e.is_directory && e.path.starts_with(v.corpus_dir()))
             .unwrap_or(false);
         let on_dir = cursor_entry.map(|e| e.is_directory).unwrap_or(false);
 
@@ -178,7 +178,7 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
             control_colors::text(" filter"),
         ];
 
-        if on_source_root {
+        if on_corpus_dir {
             spans.push(control_colors::text("  "));
             spans.push(control_colors::edit("C"));
             spans.push(control_colors::text(" config"));
@@ -224,6 +224,8 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
 
     let base_style = if is_cursor {
         CURSOR_STYLE
+    } else if entry.is_dimmed {
+        Style::default().fg(Color::DarkGray)
     } else if entry.is_directory {
         Style::default().fg(Color::Blue)
     } else {

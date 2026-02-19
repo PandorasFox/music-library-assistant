@@ -18,7 +18,6 @@ use crate::ui::widgets::detail_panel::{DetailField, DetailWidget, PanelButton, r
 
 use crate::ui::tree_browser::actions::TreeBrowserAction;
 use crate::ui::tree_browser::config::CorpusBrowserConfig;
-use crate::ui::tree_browser::entry::DeployMarker;
 use crate::ui::tree_browser::navigator::TreeNavigator;
 
 /// Focus state for corpus browser
@@ -189,6 +188,8 @@ impl DirConfigPanelState {
 pub struct CorpusBrowserVariant {
     /// Variant-specific configuration
     config: CorpusBrowserConfig,
+    /// Absolute path to corpus directory (for C key guard)
+    corpus_dir: PathBuf,
     /// Current focus (tree browser, search bar, or config panel)
     focus: CorpusBrowserFocus,
     /// Text input state for search bar
@@ -205,9 +206,10 @@ pub struct CorpusBrowserVariant {
 
 impl CorpusBrowserVariant {
     /// Create a new corpus browser variant.
-    pub fn new(config: CorpusBrowserConfig) -> Self {
+    pub fn new(config: CorpusBrowserConfig, corpus_dir: PathBuf) -> Self {
         Self {
             config,
+            corpus_dir,
             focus: CorpusBrowserFocus::TreeBrowser,
             search_input: TextInputState::new(),
             search: SearchState::default(),
@@ -215,6 +217,11 @@ impl CorpusBrowserVariant {
             match_selection_idx: 0,
             config_panel: None,
         }
+    }
+
+    /// Get the corpus directory path.
+    pub fn corpus_dir(&self) -> &Path {
+        &self.corpus_dir
     }
 
     /// Set focus to config panel.
@@ -343,10 +350,10 @@ impl CorpusBrowserVariant {
                     TreeBrowserAction::None
                 }
             }
-            // C opens dir config panel on source root
+            // C opens dir config panel on any corpus directory
             KeyCode::Char('C') => {
                 if let Some(entry) = nav.current_entry() {
-                    if entry.deploy_marker == DeployMarker::SourceRoot {
+                    if entry.is_directory && entry.path.starts_with(&self.corpus_dir) {
                         return TreeBrowserAction::OpenDirConfig(entry.path.clone());
                     }
                 }

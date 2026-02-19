@@ -427,16 +427,24 @@ impl App {
         self.last_lateral_view = widgets::LateralView::Files;
         let variant_config = tree_browser::CorpusBrowserConfig::default();
         let config = self.config();
+        let archive_root = config.root.clone();
         let corpus_dir = config.corpus_dir();
         let deploy_source_paths: Vec<std::path::PathBuf> = config.source_dirs
             .iter()
             .map(|sd| corpus_dir.join(&sd.path))
             .collect();
+        let primary_zone_paths = vec![
+            corpus_dir.clone(),
+            config.inbox_dir(),
+            config.stash_dir(),
+        ];
         drop(config);
         self.view = ActiveView::CorpusBrowser(tree_browser::TreeBrowserState::corpus_browser(
-            corpus_dir,
+            archive_root,
             variant_config,
             deploy_source_paths,
+            corpus_dir,
+            primary_zone_paths,
         ));
     }
 

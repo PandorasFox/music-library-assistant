@@ -193,7 +193,7 @@ fn render_content(
             browser.render(f, area);
         }
         ActiveView::Insights(ref mut view) => {
-            vname = "insights";
+            vname = "health";
             insights_view::render_insights_view(f, area, view);
         }
         ActiveView::Inbox(ref state) => {
@@ -424,7 +424,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::MigrationApproval(_) => "migration_approval",
         ActiveView::VacuumPrompt(_) => "vacuum_prompt",
         ActiveView::ConfigEditor(_) => "config_editor",
-        ActiveView::Insights(_) => "insights",
+        ActiveView::Insights(_) => "health",
         ActiveView::Inbox(_) => "inbox",
         ActiveView::TabbedTransactionReview(_) => "tabbed_transaction_review",
         ActiveView::CorpusBrowser(_) => "corpus_browser",

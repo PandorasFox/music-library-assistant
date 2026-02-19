@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────┐┌──────────────┐
-//! │ Tag Search | Corpus Browser | ... | Deploy   ││  mm beta 7  │
+//! │ Search | Files | Health | ... | Deploy        ││  mm beta 7  │
 //! └──────────────────────────────────────────────┘└──────────────┘
 //! ```
 
@@ -29,11 +29,11 @@ const TITLE_PANE_WIDTH: u16 = 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LateralView {
     Config,
-    TagSearch,
-    CorpusBrowser,
-    Insights,
-    Inbox,
+    Search,
+    Files,
+    Health,
     Transaction,
+    Inbox,
     Deploy,
 }
 
@@ -42,11 +42,11 @@ impl LateralView {
     pub fn label(&self) -> &'static str {
         match self {
             LateralView::Config => "Config",
-            LateralView::TagSearch => "Tag Search",
-            LateralView::CorpusBrowser => "Corpus Browser",
-            LateralView::Insights => "Insights & Operations",
-            LateralView::Inbox => "Inbox",
+            LateralView::Search => "Search",
+            LateralView::Files => "Files",
+            LateralView::Health => "Health",
             LateralView::Transaction => "Transaction",
+            LateralView::Inbox => "Inbox",
             LateralView::Deploy => "Deploy",
         }
     }
@@ -54,14 +54,14 @@ impl LateralView {
     /// Get the next view in the ring (Tab)
     pub fn next(&self, transactions_open: bool) -> Self {
         match self {
-            LateralView::Config => LateralView::TagSearch,
-            LateralView::TagSearch => LateralView::CorpusBrowser,
-            LateralView::CorpusBrowser => LateralView::Insights,
-            LateralView::Insights => LateralView::Inbox,
-            LateralView::Inbox => {
-                if transactions_open { LateralView::Transaction } else { LateralView::Deploy }
+            LateralView::Config => LateralView::Search,
+            LateralView::Search => LateralView::Files,
+            LateralView::Files => LateralView::Health,
+            LateralView::Health => {
+                if transactions_open { LateralView::Transaction } else { LateralView::Inbox }
             }
-            LateralView::Transaction => LateralView::Deploy,
+            LateralView::Transaction => LateralView::Inbox,
+            LateralView::Inbox => LateralView::Deploy,
             LateralView::Deploy => LateralView::Config,
         }
     }
@@ -70,14 +70,14 @@ impl LateralView {
     pub fn prev(&self, transactions_open: bool) -> Self {
         match self {
             LateralView::Config => LateralView::Deploy,
-            LateralView::TagSearch => LateralView::Config,
-            LateralView::CorpusBrowser => LateralView::TagSearch,
-            LateralView::Insights => LateralView::CorpusBrowser,
-            LateralView::Inbox => LateralView::Insights,
-            LateralView::Transaction => LateralView::Inbox,
-            LateralView::Deploy => {
-                if transactions_open { LateralView::Transaction } else { LateralView::Inbox }
+            LateralView::Search => LateralView::Config,
+            LateralView::Files => LateralView::Search,
+            LateralView::Health => LateralView::Files,
+            LateralView::Transaction => LateralView::Health,
+            LateralView::Inbox => {
+                if transactions_open { LateralView::Transaction } else { LateralView::Health }
             }
+            LateralView::Deploy => LateralView::Inbox,
         }
     }
 
@@ -85,14 +85,14 @@ impl LateralView {
     pub fn all(transactions_open: bool) -> Vec<LateralView> {
         let mut views = vec![
             LateralView::Config,
-            LateralView::TagSearch,
-            LateralView::CorpusBrowser,
-            LateralView::Insights,
-            LateralView::Inbox,
+            LateralView::Search,
+            LateralView::Files,
+            LateralView::Health,
         ];
         if transactions_open {
             views.push(LateralView::Transaction);
         }
+        views.push(LateralView::Inbox);
         views.push(LateralView::Deploy);
         views
     }
@@ -217,36 +217,36 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling without transactions: Config → TagSearch → CorpusBrowser → Insights → Inbox → Deploy → Config
+        // Test forward cycling without transactions: Config → Search → Files → Health → Inbox → Deploy → Config
         let view = LateralView::Config;
-        assert_eq!(view.next(false), LateralView::TagSearch);
-        assert_eq!(view.next(false).next(false), LateralView::CorpusBrowser);
-        assert_eq!(view.next(false).next(false).next(false), LateralView::Insights);
+        assert_eq!(view.next(false), LateralView::Search);
+        assert_eq!(view.next(false).next(false), LateralView::Files);
+        assert_eq!(view.next(false).next(false).next(false), LateralView::Health);
         assert_eq!(view.next(false).next(false).next(false).next(false), LateralView::Inbox);
         assert_eq!(view.next(false).next(false).next(false).next(false).next(false), LateralView::Deploy);
         assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false), LateralView::Config);
 
-        // Test backward cycling from TagSearch
-        let view = LateralView::TagSearch;
+        // Test backward cycling from Search
+        let view = LateralView::Search;
         assert_eq!(view.prev(false), LateralView::Config);
         assert_eq!(view.prev(false).prev(false), LateralView::Deploy);
         assert_eq!(view.prev(false).prev(false).prev(false), LateralView::Inbox);
 
-        // Test forward cycling with transactions: Inbox → Transaction → Deploy
-        assert_eq!(LateralView::Inbox.next(true), LateralView::Transaction);
-        assert_eq!(LateralView::Transaction.next(true), LateralView::Deploy);
+        // Test forward cycling with transactions: Health → Transaction → Inbox
+        assert_eq!(LateralView::Health.next(true), LateralView::Transaction);
+        assert_eq!(LateralView::Transaction.next(true), LateralView::Inbox);
 
-        // Test backward cycling with transactions: Deploy → Transaction → Inbox
-        assert_eq!(LateralView::Deploy.prev(true), LateralView::Transaction);
-        assert_eq!(LateralView::Transaction.prev(true), LateralView::Inbox);
+        // Test backward cycling with transactions: Inbox → Transaction → Health
+        assert_eq!(LateralView::Inbox.prev(true), LateralView::Transaction);
+        assert_eq!(LateralView::Transaction.prev(true), LateralView::Health);
     }
 
     #[test]
     fn test_lateral_view_labels() {
         assert_eq!(LateralView::Config.label(), "Config");
-        assert_eq!(LateralView::TagSearch.label(), "Tag Search");
-        assert_eq!(LateralView::CorpusBrowser.label(), "Corpus Browser");
-        assert_eq!(LateralView::Insights.label(), "Insights & Operations");
+        assert_eq!(LateralView::Search.label(), "Search");
+        assert_eq!(LateralView::Files.label(), "Files");
+        assert_eq!(LateralView::Health.label(), "Health");
         assert_eq!(LateralView::Deploy.label(), "Deploy");
     }
 

@@ -162,7 +162,7 @@ impl App {
         let is_last = matches!(&self.view, ActiveView::CompoundTagSplit { clusters, .. } if clusters.is_last());
 
         if !matches!(&self.view, ActiveView::CompoundTagSplit { .. }) {
-            self.start_insights_view();
+            self.start_health_view();
             return;
         }
 
@@ -186,7 +186,7 @@ impl App {
 
         if moved && !self.load_current_compound_split_signal() {
             // Signal load failed - return to insights
-            self.start_insights_view();
+            self.start_health_view();
         }
     }
 

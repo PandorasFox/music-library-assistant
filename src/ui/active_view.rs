@@ -183,9 +183,9 @@ impl ActiveView {
         use crate::ui::widgets::LateralView;
         match self {
             Self::ConfigEditor(_) => Some(LateralView::Config),
-            Self::TagSearch(_) => Some(LateralView::TagSearch),
-            Self::CorpusBrowser(_) => Some(LateralView::CorpusBrowser),
-            Self::Insights(_) => Some(LateralView::Insights),
+            Self::TagSearch(_) => Some(LateralView::Search),
+            Self::CorpusBrowser(_) => Some(LateralView::Files),
+            Self::Insights(_) => Some(LateralView::Health),
             Self::Inbox(_) => Some(LateralView::Inbox),
             Self::TabbedTransactionReview(_) => Some(LateralView::Transaction),
             Self::Deploy(_) => Some(LateralView::Deploy),

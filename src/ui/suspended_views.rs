@@ -5,7 +5,7 @@
 //! to the child. When the child completes (Cancel), it pops the stack and
 //! restores the parent.
 //!
-//! Hard navigation (Confirm, Discard, escape-to-insights) clears the entire
+//! Hard navigation (Confirm, Discard, escape-to-health) clears the entire
 //! stack so no stale views leak.
 
 use crate::ui::{
@@ -52,7 +52,7 @@ impl App {
     }
 
     /// Pop the most recent suspended view and restore it.
-    /// Returns false if the stack was empty (caller should navigate to insights).
+    /// Returns false if the stack was empty (caller should navigate to health).
     pub(crate) fn pop_and_restore(&mut self) -> bool {
         match self.view_stack.pop() {
             Some(suspended) => {
@@ -62,7 +62,7 @@ impl App {
         }
     }
 
-    /// Clear all suspended views (hard navigation: commit, discard, insights).
+    /// Clear all suspended views (hard navigation: commit, discard, health).
     pub(crate) fn clear_view_stack(&mut self) {
         self.view_stack.clear();
     }
@@ -89,7 +89,7 @@ impl App {
 
     /// Restore a suspended view, handling DB-reload variants.
     /// Returns true if restoration succeeded, false if it failed (caller
-    /// should navigate to insights).
+    /// should navigate to health).
     fn restore_suspended_view(&mut self, suspended: SuspendedView) -> bool {
         match suspended {
             SuspendedView::Direct(view) => {

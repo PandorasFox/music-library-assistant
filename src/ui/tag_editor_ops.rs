@@ -36,7 +36,7 @@ impl App {
         let rel_path = match resolver.to_relative(path) {
             Some(p) => p,
             None => {
-                self.abort_to_insights(format!(
+                self.abort_to_health(format!(
                     "Path not in corpus: {}",
                     path.display()
                 ));
@@ -50,7 +50,7 @@ impl App {
             match read_db.get_audio_files_for_tag_editing(&rel_path) {
                 Ok(files) => (files, 0usize),
                 Err(e) => {
-                    self.abort_to_insights(format!(
+                    self.abort_to_health(format!(
                         "Query error for path '{}': {}",
                         path.display(),
                         e
@@ -63,7 +63,7 @@ impl App {
             let rel_parent = match rel_path.parent() {
                 Some(p) => p,
                 None => {
-                    self.abort_to_insights(format!(
+                    self.abort_to_health(format!(
                         "Cannot determine parent directory: {}",
                         path.display()
                     ));
@@ -75,7 +75,7 @@ impl App {
             let dir_files = match read_db.get_audio_files_for_tag_editing(rel_parent) {
                 Ok(files) => files,
                 Err(e) => {
-                    self.abort_to_insights(format!(
+                    self.abort_to_health(format!(
                         "Query error for directory '{}': {}",
                         path.display(),
                         e
@@ -111,14 +111,14 @@ impl App {
                 match read_db.get_audio_file_by_path(&rel_path_str) {
                     Ok(Some(audio_file)) => (vec![audio_file], 0),
                     Ok(None) => {
-                        self.abort_to_insights(format!(
+                        self.abort_to_health(format!(
                             "File not in index: {}",
                             path.display()
                         ));
                         return;
                     }
                     Err(e) => {
-                        self.abort_to_insights(format!(
+                        self.abort_to_health(format!(
                             "Query error for '{}': {}",
                             path.display(),
                             e
@@ -132,7 +132,7 @@ impl App {
         };
 
         if audio_files.is_empty() {
-            self.abort_to_insights(format!(
+            self.abort_to_health(format!(
                 "No indexed files at: {}",
                 path.display()
             ));

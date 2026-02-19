@@ -401,11 +401,11 @@ fn apply_field(config: &mut Config, group_name: &str, field: &ConfigField) {
 // Enum mapping helpers
 // =============================================================================
 
-const STARTUP_VIEW_OPTIONS: &[&str] = &["Insights", "Search", "Browser", "Inbox"];
+const STARTUP_VIEW_OPTIONS: &[&str] = &["Health", "Search", "Browser", "Inbox"];
 
 fn startup_view_index(v: StartupView) -> usize {
     match v {
-        StartupView::Insights => 0,
+        StartupView::Health => 0,
         StartupView::Search => 1,
         StartupView::Browser => 2,
         StartupView::Inbox => 3,
@@ -414,11 +414,11 @@ fn startup_view_index(v: StartupView) -> usize {
 
 fn startup_view_from_index(i: usize) -> StartupView {
     match i {
-        0 => StartupView::Insights,
+        0 => StartupView::Health,
         1 => StartupView::Search,
         2 => StartupView::Browser,
         3 => StartupView::Inbox,
-        _ => StartupView::Insights,
+        _ => StartupView::Health,
     }
 }
 

@@ -1,6 +1,6 @@
 //! Action Handlers for View-Specific Events
 //!
-//! Each view (insights, tag search, tree browser, tag editor, etc.) emits
+//! Each view (health, search, tree browser, tag editor, etc.) emits
 //! Actions that are handled here. These handlers coordinate state transitions,
 //! Witch interactions, and modal displays.
 //!
@@ -49,7 +49,7 @@ impl App {
             ViewAction::MigrationApproval(a) => self.handle_migration_approval_action(a, witness.as_ref()),
             ViewAction::VacuumPrompt(a) => self.handle_vacuum_prompt_action(a, witness.as_ref()),
             ViewAction::ConfigEditor(a) => self.handle_config_editor_action(a, witness.as_ref()),
-            ViewAction::Insights(a) => self.handle_insights_action(a),
+            ViewAction::Insights(a) => self.handle_health_action(a),
             ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a, witness.as_ref()),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
             ViewAction::Inbox(a) => self.handle_inbox_action(a, witness.as_ref()),
@@ -256,12 +256,12 @@ impl App {
 
                     self.after_staging_decisions();
                 } else {
-                    // No edits — just return to insights
-                    self.start_insights_view();
+                    // No edits — just return to health
+                    self.start_health_view();
                 }
             }
             super::config_editor::ConfigEditorAction::Discard => {
-                self.start_insights_view();
+                self.start_health_view();
             }
             super::config_editor::ConfigEditorAction::CycleNext => {
                 self.start_lateral_view(widgets::LateralView::Config.next(self.transactions_open()));
@@ -272,7 +272,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_insights_action(&mut self, action: insights_view::InsightsAction) {
+    pub(super) fn handle_health_action(&mut self, action: insights_view::InsightsAction) {
         match action {
             insights_view::InsightsAction::None => {}
             insights_view::InsightsAction::RequestQuit => {
@@ -285,10 +285,10 @@ impl App {
                 }
             }
             insights_view::InsightsAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Insights.next(self.transactions_open()));
+                self.start_lateral_view(widgets::LateralView::Health.next(self.transactions_open()));
             }
             insights_view::InsightsAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Insights.prev(self.transactions_open()));
+                self.start_lateral_view(widgets::LateralView::Health.prev(self.transactions_open()));
             }
             insights_view::InsightsAction::Launch => {
                 // Use selected_action() to dispatch to appropriate modal
@@ -346,7 +346,7 @@ impl App {
                         self.start_shit_format_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchIntakeConfirmation) => {
-                        self.start_intake_confirmation_from_insights();
+                        self.start_intake_confirmation_from_health();
                     }
                     Some(insights_view::InsightAction::LaunchDirectoryOverlapResolution) => {
                         self.start_directory_overlap_resolution();
@@ -412,11 +412,11 @@ impl App {
     /// Start intake confirmation from Insights view.
     ///
     /// Gathers unindexed files and opens the intake confirmation modal.
-    fn start_intake_confirmation_from_insights(&mut self) {
+    fn start_intake_confirmation_from_health(&mut self) {
         let corpus_root = self.config().corpus_dir();
         let intake_state = {
             let read_db = self.witch.read_db();
-            startup::IntakeConfirmationState::gather(&read_db, &corpus_root, "insights")
+            startup::IntakeConfirmationState::gather(&read_db, &corpus_root, "health")
         };
 
         match intake_state {
@@ -684,13 +684,13 @@ impl App {
             tag_search::TagSearchAction::None => {}
             tag_search::TagSearchAction::Cancel => {
                 // Return to Insights view
-                self.start_insights_view();
+                self.start_health_view();
             }
             tag_search::TagSearchAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::TagSearch.next(self.transactions_open()));
+                self.start_lateral_view(widgets::LateralView::Search.next(self.transactions_open()));
             }
             tag_search::TagSearchAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::TagSearch.prev(self.transactions_open()));
+                self.start_lateral_view(widgets::LateralView::Search.prev(self.transactions_open()));
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search - access witch and view as disjoint fields
@@ -734,7 +734,7 @@ impl App {
                     if is_inbox_zone {
                         self.view = ActiveView::Inbox(super::inbox_view::InboxViewState::new());
                     } else {
-                        self.start_insights_view();
+                        self.start_health_view();
                     }
                 } else {
                     let count = mutations.len();
@@ -783,7 +783,7 @@ impl App {
                 if is_inbox_zone {
                     self.view = ActiveView::Inbox(super::inbox_view::InboxViewState::new());
                 } else {
-                    self.start_insights_view();
+                    self.start_health_view();
                 }
             }
         }
@@ -793,7 +793,7 @@ impl App {
         match action {
             tree_browser::TreeBrowserAction::None => {}
             tree_browser::TreeBrowserAction::Cancel => {
-                self.start_insights_view();
+                self.start_health_view();
             }
             tree_browser::TreeBrowserAction::EditDirectory(path) => {
                 self.push_current_view();
@@ -804,10 +804,10 @@ impl App {
                 self.start_tag_editor_for_path(&path, false);
             }
             tree_browser::TreeBrowserAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::CorpusBrowser.next(self.transactions_open()));
+                self.start_lateral_view(widgets::LateralView::Files.next(self.transactions_open()));
             }
             tree_browser::TreeBrowserAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::CorpusBrowser.prev(self.transactions_open()));
+                self.start_lateral_view(widgets::LateralView::Files.prev(self.transactions_open()));
             }
             tree_browser::TreeBrowserAction::OpenFilter => {
                 // Open filter popup for corpus browser
@@ -1002,7 +1002,7 @@ impl App {
                 }
                 // Return to the view that launched the tag editor (e.g., corpus browser)
                 if !self.pop_and_restore() {
-                    self.start_insights_view();
+                    self.start_health_view();
                 }
                 self.status_message = Some("Edits discarded".to_string());
             }
@@ -1060,7 +1060,7 @@ impl App {
             UnifiedTagEditorAction::CloseEmbedded => {
                 // Return to parent health modal without staging
                 if !self.pop_and_restore() {
-                    self.start_insights_view();
+                    self.start_health_view();
                 }
             }
 
@@ -1072,7 +1072,7 @@ impl App {
                 );
                 // Return to parent health modal
                 if !self.pop_and_restore() {
-                    self.start_insights_view();
+                    self.start_health_view();
                 }
             }
 
@@ -1111,16 +1111,16 @@ impl App {
                 } else {
                     // Pop the view stack to restore the parent view
                     if !self.pop_and_restore() {
-                        self.start_insights_view();
+                        self.start_health_view();
                     }
                 }
             }
 
             TransactionReviewAction::Discard => {
-                // Discard transaction, clear entire view stack, return to insights
+                // Discard transaction, clear entire view stack, return to health
                 self.clear_view_stack();
                 let _ = super::operator_decisions::discard_transaction(&mut self.witch);
-                self.start_insights_view();
+                self.start_health_view();
                 self.status_message = Some("Transaction discarded".to_string());
             }
 
@@ -1159,7 +1159,7 @@ impl App {
                     }
                     Err(e) => {
                         self.status_message = Some(format!("Commit failed: {}", e));
-                        self.start_insights_view();
+                        self.start_health_view();
                     }
                 }
             }
@@ -1187,7 +1187,7 @@ impl App {
                 // If transaction is now empty, auto-close review
                 if self.witch.decision_keys().is_empty() {
                     if !self.pop_and_restore() {
-                        self.start_insights_view();
+                        self.start_health_view();
                     }
                     self.status_message = Some("Decision removed, transaction empty".to_string());
                     return;

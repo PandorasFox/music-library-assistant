@@ -127,8 +127,8 @@ impl App {
     ///
     /// Called each frame while the active view is Progress. Handles all progress phases:
     /// - Eyeballing: checks for unindexed files, proceeds to intake or content analysis
-    /// - ContentAnalysis: transitions to Insights view on completion
-    /// - SignalRefresh: transitions to Insights view on completion
+    /// - ContentAnalysis: transitions to Health view on completion
+    /// - SignalRefresh: transitions to Health view on completion
     ///
     /// Also drives the eye animation (moved here from run_app, scoped to Progress).
     pub(super) fn tick_progress_screen(&mut self) {

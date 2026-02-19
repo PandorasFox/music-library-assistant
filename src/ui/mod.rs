@@ -126,7 +126,7 @@ impl App {
             witch,
             filter_overlay: None,
             view_stack: Vec::new(),
-            last_lateral_view: widgets::LateralView::Insights,
+            last_lateral_view: widgets::LateralView::Health,
             db_path: std::path::PathBuf::new(),
             vacuum_threshold: 0.0,
         }
@@ -297,7 +297,7 @@ impl App {
                 self.should_quit = true;
             }
             ExitConfirmAction::Cancel => {
-                self.start_insights_view();
+                self.start_health_view();
             }
         }
     }
@@ -307,10 +307,10 @@ impl App {
         self.witch.has_pending()
     }
 
-    /// Start the insights view.
-    pub(super) fn start_insights_view(&mut self) {
+    /// Start the health view.
+    pub(super) fn start_health_view(&mut self) {
         self.clear_view_stack();
-        self.last_lateral_view = widgets::LateralView::Insights;
+        self.last_lateral_view = widgets::LateralView::Health;
         self.view = ActiveView::Insights(insights_view::InsightsViewState::new());
     }
 
@@ -318,17 +318,17 @@ impl App {
     pub(super) fn start_default_view(&mut self) {
         let default_view = self.config().opinions.startup.default_view;
         match default_view {
-            crate::config::StartupView::Insights => self.start_insights_view(),
+            crate::config::StartupView::Health => self.start_health_view(),
             crate::config::StartupView::Search => self.start_tag_search(),
             crate::config::StartupView::Browser => self.start_corpus_browser(),
             crate::config::StartupView::Inbox => self.start_inbox_view(),
         }
     }
 
-    /// Abort current operation and return to insights view with a status message.
-    pub(super) fn abort_to_insights(&mut self, message: String) {
+    /// Abort current operation and return to health view with a status message.
+    pub(super) fn abort_to_health(&mut self, message: String) {
         self.status_message = Some(message);
-        self.start_insights_view();
+        self.start_health_view();
     }
 
     /// Update Witch stats on a progress state that implements the stats setter methods.
@@ -342,7 +342,7 @@ impl App {
     }
 
     pub(super) fn start_tag_search(&mut self) {
-        self.last_lateral_view = widgets::LateralView::TagSearch;
+        self.last_lateral_view = widgets::LateralView::Search;
         self.view = ActiveView::TagSearch(tag_search::TagSearchState::new());
     }
 
@@ -365,9 +365,9 @@ impl App {
     pub(super) fn start_lateral_view(&mut self, view: widgets::LateralView) {
         match view {
             widgets::LateralView::Config => self.start_config_editor(),
-            widgets::LateralView::TagSearch => self.start_tag_search(),
-            widgets::LateralView::CorpusBrowser => self.start_corpus_browser(),
-            widgets::LateralView::Insights => self.start_insights_view(),
+            widgets::LateralView::Search => self.start_tag_search(),
+            widgets::LateralView::Files => self.start_corpus_browser(),
+            widgets::LateralView::Health => self.start_health_view(),
             widgets::LateralView::Inbox => self.start_inbox_view(),
             widgets::LateralView::Transaction => self.start_tabbed_transaction_review(),
             widgets::LateralView::Deploy => self.start_deploy_view(),
@@ -424,7 +424,7 @@ impl App {
     }
 
     pub(super) fn start_corpus_browser(&mut self) {
-        self.last_lateral_view = widgets::LateralView::CorpusBrowser;
+        self.last_lateral_view = widgets::LateralView::Files;
         let variant_config = tree_browser::CorpusBrowserConfig::default();
         let config = self.config();
         let corpus_dir = config.corpus_dir();
@@ -689,7 +689,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
         app.check_witch_status();
 
-        // Update insights view with the Witch's status and cached data
+        // Update health view with the Witch's status and cached data
         if let ActiveView::Insights(ref mut view) = app.view {
             let status = app.witch.status();
             let insights_data = app.witch.ui_read_cache().insights_data();

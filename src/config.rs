@@ -112,7 +112,7 @@ impl Default for CanonicalizationOpinions {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum StartupView {
     #[default]
-    Insights,
+    Health,
     Search,
     Browser,
     Inbox,
@@ -128,7 +128,7 @@ pub struct StartupOpinions {
     /// Free-page ratio threshold for prompting DB compaction (default: 0.1 = 10%).
     /// Set to 0.0 to disable.
     pub vacuum_threshold: f64,
-    /// Which view to open after startup progress completes (default: Insights).
+    /// Which view to open after startup progress completes (default: Health).
     pub default_view: StartupView,
 }
 
@@ -643,7 +643,7 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
         if new_s.default_view != old_s.default_view {
             let view_str = match new_s.default_view {
-                StartupView::Insights => "insights",
+                StartupView::Health => "health",
                 StartupView::Search => "search",
                 StartupView::Browser => "browser",
                 StartupView::Inbox => "inbox",
@@ -1232,7 +1232,7 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_string() {
                             match val {
-                                "insights" => opinions.default_view = StartupView::Insights,
+                                "health" => opinions.default_view = StartupView::Health,
                                 "search" => opinions.default_view = StartupView::Search,
                                 "browser" => opinions.default_view = StartupView::Browser,
                                 "inbox" => opinions.default_view = StartupView::Inbox,
@@ -1803,7 +1803,7 @@ dir "web/releases/steam" {
 
 opinions {
     startup {
-        default-view "insights"
+        default-view "health"
     }
 }
 "#;
@@ -1830,7 +1830,7 @@ opinions {
 // Important comment
 opinions {
     startup {
-        default-view "insights"
+        default-view "health"
     }
 }
 "#;
@@ -1849,7 +1849,7 @@ opinions {
 
 opinions {
     startup {
-        default-view "insights"
+        default-view "health"
     }
 }
 "#;
@@ -1903,11 +1903,11 @@ opinions {
         // Default is Insights when not specified
         let kdl = r#"root "/archive""#;
         let config = parse_kdl_config(kdl).unwrap();
-        assert_eq!(config.opinions.startup.default_view, StartupView::Insights);
+        assert_eq!(config.opinions.startup.default_view, StartupView::Health);
 
         // Explicit values
         for (value, expected) in [
-            ("insights", StartupView::Insights),
+            ("health", StartupView::Health),
             ("search", StartupView::Search),
             ("browser", StartupView::Browser),
             ("inbox", StartupView::Inbox),

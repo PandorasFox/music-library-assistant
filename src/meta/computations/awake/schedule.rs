@@ -5,7 +5,7 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::get_configured_library_names;
 use crate::meta::recomputation::RecomputationScope;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 
 use super::{Computation, Result};
 

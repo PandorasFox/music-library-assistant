@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::corpus::db::types::{BucketedOobFile, ConflictBucket, TagMismatchEntry};
+use crate::meta::views::{BucketedOobFile, ConflictBucket, TagMismatchEntry};
 use crate::ui::bulk_selection::BulkSelectionState;
 use crate::ui::filter_popup::FilterCondition;
 use crate::ui::widgets::{ButtonRects, FocusPane};
@@ -356,7 +356,7 @@ impl OobConflictState {
 /// then returns entries for all fields where the values differ.
 /// Properly handles multi-value tags by comparing value sets per key.
 pub fn compute_tag_diff(
-    read_db: &crate::corpus::db::ReadOnlyDb<'_>,
+    read_db: &crate::db::ReadOnlyDb<'_>,
     inode: i64,
     abs_path: &std::path::Path,
 ) -> Vec<TagMismatchEntry> {

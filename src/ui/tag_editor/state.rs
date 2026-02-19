@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::corpus::db::types::AudioFile;
+use crate::db::types::AudioFile;
 use crate::meta::mutations::Mutation;
 
 use super::mutations::{

@@ -3,7 +3,7 @@
 //! Handles the compound tag split modal: loading signals, navigating between
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
 use crate::ui::suspended_views::SuspendTarget;

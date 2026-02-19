@@ -15,10 +15,10 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::signals::data::*;
 use crate::meta::computations::types::ComputationWitness;
-use crate::corpus::db::types::Zone;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
-use crate::db_thread;
+use crate::db::write_thread;
 
 use super::{Computation, Result};
 
@@ -101,7 +101,7 @@ pub fn execute_scan_corpus_directory(
     };
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -347,7 +347,7 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
 /// matches (same zone, inode, mtime), eliminating ~D NOP writes per cycle.
 fn index_directory(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     directory: &Path,
     zone: &str,
     resolver: &crate::corpus::paths::PathResolver,
@@ -487,7 +487,7 @@ pub fn execute_verify_tags(
     };
 
     // Route mismatch writes through db_thread (read-only connection can't write directly)
-    let sender = match crate::db_thread::signal_sender().cloned() {
+    let sender = match crate::db::write_thread::signal_sender().cloned() {
         Some(s) => s,
         None => {
             return Result::failure(
@@ -501,7 +501,7 @@ pub fn execute_verify_tags(
     // Wait for pending DB writes to drain before reading audio_info.
     // This prevents a race where VerifyTags runs before IndexFileFromPath's
     // fire-and-forget write is processed, causing spurious "Audio file not found" errors.
-    crate::db_thread::wait_for_queue_drain();
+    crate::db::write_thread::wait_for_queue_drain();
 
     // Get relative path for signal keys
     let resolver = crate::corpus::paths::get_resolver();
@@ -727,7 +727,7 @@ pub fn execute_verify_audio(
     };
 
     // Get signal sender for async writes
-    let sender = match crate::db_thread::signal_sender().cloned() {
+    let sender = match crate::db::write_thread::signal_sender().cloned() {
         Some(s) => s,
         None => {
             return Result::failure(

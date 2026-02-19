@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::corpus::db::ReadOnlyDb;
-use crate::corpus::db::types::{InboxCorpusMatchEntry, MatchClassification};
+use crate::db::ReadOnlyDb;
+use crate::meta::views::{InboxCorpusMatchEntry, MatchClassification};
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;

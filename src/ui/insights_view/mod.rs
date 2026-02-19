@@ -32,7 +32,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-use crate::corpus::db::types::{InsightsData, CorpusFilesBucket, TagSquashBucket, OtherSignalsBucket};
+use crate::meta::views::{InsightsData, CorpusFilesBucket, TagSquashBucket, OtherSignalsBucket};
 use crate::meta::decisions::DecisionSource;
 use crate::ui::widgets::ListClickTargets;
 use crate::witch::WorkStatus;

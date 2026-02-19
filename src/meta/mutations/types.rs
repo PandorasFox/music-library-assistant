@@ -587,7 +587,7 @@ mod tests {
     fn test_mutation_labels() {
         let apply_tag_ops = Mutation::ApplyTagOps(ApplyTagOpsMutation {
             ops: vec![TagOp::add_tag(1, "artist", "New")],
-            zone: crate::corpus::db::types::Zone::Corpus,
+            zone: crate::db::types::Zone::Corpus,
         });
         assert_eq!(apply_tag_ops.label(), "Tag edit");
         assert!(apply_tag_ops.is_db_only());
@@ -595,7 +595,7 @@ mod tests {
         let apply_tags = Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation {
             inode: 1,
             path: PathBuf::from("/test/file.flac"),
-            zone: crate::corpus::db::types::Zone::Corpus,
+            zone: crate::db::types::Zone::Corpus,
         });
         assert_eq!(apply_tags.label(), "Tag sync (DB→disk)");
         assert!(!apply_tags.is_db_only());

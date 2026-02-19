@@ -10,7 +10,7 @@
 
 use std::time::Instant;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use super::types::ComputationWitness;
 
 /// Context provided to computation executors at execution time.

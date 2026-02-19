@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use super::normalization::normalize_artist;
 
 /// An album with inconsistent album_artist that needs resolution.

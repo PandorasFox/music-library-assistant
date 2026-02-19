@@ -83,9 +83,9 @@ impl ThreadStats {
 //
 // IMPORTANT: This connection has `PRAGMA query_only = ON` set.
 // Any write operations (INSERT, UPDATE, DELETE) will SILENTLY FAIL.
-// All writes from computations must go through `db_thread::signal_sender()`.
+// All writes from computations must go through `write_thread::signal_sender()`.
 thread_local! {
-    static THREAD_READ_ONLY_DB: RefCell<Option<crate::corpus::db::Database>> = const { RefCell::new(None) };
+    static THREAD_READ_ONLY_DB: RefCell<Option<crate::db::Database>> = const { RefCell::new(None) };
     pub(super) static THREAD_STATS: RefCell<ThreadStats> = const { RefCell::new(ThreadStats::new()) };
 }
 
@@ -116,7 +116,7 @@ pub fn close_thread_local_connection() {
 ///
 /// This connection uses `PRAGMA query_only = ON`. All write operations
 /// (INSERT, UPDATE, DELETE) will fail. Computations and mutations that need
-/// to persist data must route writes through `db_thread::signal_sender()`.
+/// to persist data must route writes through `write_thread::signal_sender()`.
 ///
 /// The `read_only_db` parameter name in executor functions reflects this.
 ///
@@ -127,10 +127,10 @@ pub fn close_thread_local_connection() {
 /// of opening new connections for each task.
 pub fn with_read_only_db<T, F>(f: F) -> Result<T, String>
 where
-    F: FnOnce(&crate::corpus::db::ReadOnlyDb<'_>) -> T,
+    F: FnOnce(&crate::db::ReadOnlyDb<'_>) -> T,
 {
     use crate::config;
-    use crate::corpus::db::{Database, ReadOnlyDb};
+    use crate::db::{Database, ReadOnlyDb};
 
     THREAD_READ_ONLY_DB.with(|cell| {
         let mut opt = cell.borrow_mut();

@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::corpus::db::types::ConflictBucket;
+use crate::meta::views::ConflictBucket;
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout};
 

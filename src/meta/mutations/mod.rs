@@ -96,7 +96,7 @@ mod tests {
         ];
 
         // Create a single ApplyTagOps mutation containing all ops
-        let mutation = Mutation::ApplyTagOps(tag_edit::ApplyTagOpsMutation { ops, zone: crate::corpus::db::types::Zone::Corpus });
+        let mutation = Mutation::ApplyTagOps(tag_edit::ApplyTagOpsMutation { ops, zone: crate::db::types::Zone::Corpus });
 
         // Verify ApplyTagOps mutation
         assert_eq!(mutation.label(), "Tag edit");

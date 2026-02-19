@@ -40,7 +40,7 @@ impl MutationExecutor for EmbedAlbumArtMutation {
                 // Update DB: mark has_pictures = 1 and sync mtime/size.
                 // This covers both actual embeds and no-ops (file already had art
                 // but has_pictures was 0 from migration default).
-                if let Some(sender) = crate::db_thread::signal_sender() {
+                if let Some(sender) = crate::db::write_thread::signal_sender() {
                     let meta = std::fs::metadata(&self.audio_path).ok();
                     let (mtime_secs, mtime_nanos, file_size) = meta
                         .map(|m| {

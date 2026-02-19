@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::transcode::TranscodeMutation;
 use crate::corpus::paths;

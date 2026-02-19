@@ -99,7 +99,7 @@ impl App {
 
         let pre_fill = clusters.pre_fill();
         let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
-        let zone = crate::corpus::db::types::Zone::Inbox;
+        let zone = crate::db::types::Zone::Inbox;
         let state = tag_canonicity_v2::TagCanonicalityStateV2::new(
             data, pre_fill, group_index, total_groups, false, zone,
         );

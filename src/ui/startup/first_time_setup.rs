@@ -25,9 +25,13 @@ use ratatui::Terminal;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::Database;
 use crate::meta::mutations::MigrationRegistry;
 use crate::ui::tree_browser::{EntryFilter, TreeEntry, TreeNavigator};
+
+/// Proof that code is executing in the first-time setup path.
+/// Constructor is private to this module; type is pub(crate) so db/ can require it.
+pub(crate) struct FirstTimeSetupToken(());
+
 use crate::ui::widgets::selection_styles::CURSOR_STYLE;
 use crate::ui::widgets::TextInputState;
 
@@ -78,7 +82,8 @@ fn run_setup_flow<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let db = Database::open(&db_path)?;
+    let token = FirstTimeSetupToken(());
+    let db = crate::db::create_database(&db_path, &token)?;
     let registry = MigrationRegistry::new();
     db.set_schema_version(registry.latest_version())?;
     drop(db);
@@ -635,7 +640,8 @@ pub fn handle_first_time_setup<B: Backend>(
     std::fs::create_dir_all(config.inbox_dir())?;
 
     // Create database and set to latest schema version
-    let db = Database::open(db_path)?;
+    let token = FirstTimeSetupToken(());
+    let db = crate::db::create_database(db_path, &token)?;
     let registry = MigrationRegistry::new();
     db.set_schema_version(registry.latest_version())?;
 

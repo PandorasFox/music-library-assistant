@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::computations::Computation;
 use crate::meta::recomputation::RecomputationScope;
 use crate::witch::MutationExecutionWitness;

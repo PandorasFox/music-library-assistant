@@ -14,10 +14,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::*;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
 use crate::witch::MutationExecutionWitness;
@@ -566,11 +566,11 @@ fn index_track_from_metadata(
     session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread::{self, FileData, AudioData};
+    use crate::db::write_thread::{self, FileData, AudioData};
     use std::time::UNIX_EPOCH;
 
     let resolver = paths::get_resolver();
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert absolute path to relative for storage
@@ -698,10 +698,10 @@ pub fn execute_update_file_path(
     new_zone: Option<&str>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread;
+    use crate::db::write_thread;
 
     let resolver = paths::get_resolver();
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert to relative for storage. The new_path may already be relative
@@ -739,9 +739,9 @@ pub fn execute_drop_directory_from_index(
     directory_path: &Path,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread;
+    use crate::db::write_thread;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     let dir_str = directory_path.to_string_lossy().to_string();
@@ -790,9 +790,9 @@ pub fn execute_drop_from_index(
     zone: Option<&str>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread;
+    use crate::db::write_thread;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert path to string for DB operations
@@ -858,7 +858,7 @@ impl TagVerifyResult {
 ///
 /// Note: This function is public because it's called from corpus::computations.
 pub fn execute_verify_tags(
-    db: &crate::corpus::db::ReadOnlyDb<'_>,
+    db: &crate::db::ReadOnlyDb<'_>,
     inode: i64,
     path: &Path,
 ) -> Result<TagVerifyResult> {
@@ -873,7 +873,7 @@ pub fn execute_verify_tags(
     // Get tags from database as TagSet
     let db_tags = db.get_corpus_tags(inode)?;
     let db_tagset = TagSet::new(
-        db_tags.into_iter().map(|t: crate::corpus::db::types::AudioTag| (t.tag_name, t.tag_value))
+        db_tags.into_iter().map(|t: crate::db::types::AudioTag| (t.tag_name, t.tag_value))
     );
 
     // Read tags from file as TagSet
@@ -977,10 +977,10 @@ pub fn execute_acknowledge_mtime_only(
     tracks: &[(i64, std::path::PathBuf)],
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
-    use crate::db_thread;
+    use crate::db::write_thread;
     use std::time::UNIX_EPOCH;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
     let mut affected_paths = Vec::new();
 
@@ -1044,9 +1044,9 @@ pub fn execute_apply_db_tags_to_disk(
 ) -> Result<()> {
     use crate::corpus::paths;
     use crate::corpus::tags::{write_file_tags, TagSet};
-    use crate::db_thread;
+    use crate::db::write_thread;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert abs_path to relative for DB operations.
@@ -1091,17 +1091,17 @@ pub fn execute_flush_tags_to_disk(
     abs_path: &std::path::Path,
     expected_tags: &TagSet,
     zone: Zone,
-    read_db: &crate::corpus::db::queries::ReadOnlyDb<'_>,
+    read_db: &crate::db::queries::ReadOnlyDb<'_>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::corpus::paths;
     use crate::corpus::tags::write_file_tags;
-    use crate::db_thread;
+    use crate::db::write_thread;
 
     // 1. Drain: block until all pending DB writes have committed
-    db_thread::wait_for_queue_drain();
+    write_thread::wait_for_queue_drain();
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     let resolver = paths::get_resolver();
@@ -1158,11 +1158,11 @@ pub fn execute_assimilate_disk_tags_to_db(
 ) -> Result<()> {
     use crate::corpus::paths;
     use crate::corpus::tags::TagSet;
-    use crate::db_thread;
+    use crate::db::write_thread;
     use std::os::unix::fs::MetadataExt;
     use std::time::UNIX_EPOCH;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Convert abs_path to relative for DB operations.
@@ -1262,12 +1262,12 @@ pub fn execute_assimilate_disk_tags_to_db(
 pub fn execute_emit_canonical_tag(
     tag_name: &str,
     canonical_value: &str,
-    read_db: &crate::corpus::db::ReadOnlyDb<'_>,
+    read_db: &crate::db::ReadOnlyDb<'_>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread;
+    use crate::db::write_thread;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Key format: "{tag_name}:{tag_value}" (e.g., "artist:Rinse & Repeat")
@@ -1309,10 +1309,10 @@ pub fn execute_emit_expected_overlap(
     source_b: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread;
+    use crate::db::write_thread;
     use crate::meta::signals::data::ExpectedOverlapSignal;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Key format: sorted "source_a|source_b" (same as CrossSourceOverlap keys)
@@ -1355,10 +1355,10 @@ pub fn execute_emit_expected_duplicate(
     fingerprint_key: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread;
+    use crate::db::write_thread;
     use crate::meta::signals::data::ExpectedDuplicateSignal;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Emit ExpectedDuplicate signal
@@ -1389,9 +1389,9 @@ pub fn execute_emit_expected_missing_tag(
     inodes: &[i64],
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::db_thread;
+    use crate::db::write_thread;
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     for &inode in inodes {

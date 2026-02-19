@@ -8,7 +8,7 @@ pub mod preview;
 
 pub use preview::{MissingDirectoryPreviewAction, MissingDirectoryPreviewState};
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::indexing::DropDirectoryFromIndexMutation;
 use std::path::PathBuf;

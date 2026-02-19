@@ -15,10 +15,10 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::corpus::db::types::Zone;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
-use crate::db_thread;
+use crate::db::write_thread;
 use crate::meta::recomputation::RecomputationScope;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
@@ -129,7 +129,7 @@ fn execute_apply_tag_ops(
     session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<SpawnedMutation>> {
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     // Group ops by inode

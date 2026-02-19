@@ -18,8 +18,8 @@ use crate::meta::signals::data::{
     CompoundTagSignal, CompoundTagEntry as TypedCompoundEntry,
     EmbeddedDiscNumberSignal, EmbeddedDiscNumberData,
 };
-use crate::corpus::db::ReadOnlyDb;
-use crate::db_thread;
+use crate::db::ReadOnlyDb;
+use crate::db::write_thread;
 
 use super::{Computation, Result};
 
@@ -37,7 +37,7 @@ pub fn execute_detect_missing_tags(
 
     let computation = Computation::DetectMissingTags;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -230,7 +230,7 @@ pub fn execute_detect_tag_canonicalizations(
 
     let computation = Computation::DetectTagCanonicalizations;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -402,7 +402,7 @@ pub fn execute_detect_compound_tags_for_inode(
 
     let computation = Computation::DetectCompoundTagsForInode { inode };
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -573,7 +573,7 @@ pub fn execute_detect_inconsistent_album_artist(
 
     let computation = Computation::DetectInconsistentAlbumArtist;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -647,7 +647,7 @@ pub fn execute_detect_embedded_disc_numbers(
 
     let computation = Computation::DetectEmbeddedDiscNumbers;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(

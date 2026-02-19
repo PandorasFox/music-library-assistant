@@ -5,14 +5,14 @@
 //! - `audio_info`: Audio-specific metadata by inode
 //! - `corpus_tags` / `inbox_tags`: Tags by inode
 //!
-//! Write operations go through `db_thread::SignalWriteSender`.
+//! Write operations go through `write_thread::SignalWriteSender`.
 
 use anyhow::Result;
 use rusqlite::params;
 use std::collections::HashMap;
 
 use super::Database;
-use crate::corpus::db::types::{AudioFile, AudioInfo, AudioTag, FileEntry, Zone};
+use crate::db::types::{AudioFile, AudioInfo, AudioTag, FileEntry, Zone};
 
 // ============================================================================
 // Fingerprint Conversion Helpers
@@ -747,7 +747,7 @@ impl Database {
         &self,
         zone: &str,
         inode: i64,
-        _witness: &impl crate::db_thread::SignalWitness,
+        _witness: &impl crate::db::write_thread::SignalWitness,
     ) -> Result<usize> {
         let affected = self.conn.execute(
             "DELETE FROM files WHERE zone = ?1 AND inode = ?2",
@@ -762,7 +762,7 @@ impl Database {
         zone: &str,
         inode: i64,
         new_path: &str,
-        _witness: &impl crate::db_thread::SignalWitness,
+        _witness: &impl crate::db::write_thread::SignalWitness,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE files SET path = ?1 WHERE zone = ?2 AND inode = ?3",
@@ -780,9 +780,9 @@ impl Database {
         old_zone: &str,
         inode: i64,
         new_zone: &str,
-        _witness: &impl crate::db_thread::SignalWitness,
+        _witness: &impl crate::db::write_thread::SignalWitness,
     ) -> Result<()> {
-        use crate::corpus::db::types::Zone;
+        use crate::db::types::Zone;
 
         // Update zone column
         self.conn.execute(

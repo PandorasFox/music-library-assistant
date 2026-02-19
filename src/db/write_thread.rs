@@ -29,7 +29,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::meta::computations::ComputationWitness;
-use crate::corpus::db::Database;
+use crate::db::Database;
 use crate::corpus::tags::TagSet;
 use crate::witch::MutationExecutionWitness;
 use crate::config;

@@ -19,7 +19,7 @@ use ratatui::{
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::album_art::EmbedAlbumArtMutation;

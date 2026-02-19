@@ -20,7 +20,7 @@ mod render;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Color;
 
-use crate::corpus::db::types::InboxOverviewData;
+use crate::meta::views::InboxOverviewData;
 
 pub use render::render_inbox_view;
 

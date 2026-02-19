@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 use super::normalization::{normalize_album, normalize_album_artist, normalize_artist, normalize_genre};
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 
 /// A detected collision between tag values.
 #[derive(Debug, Clone)]

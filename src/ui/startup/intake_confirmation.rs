@@ -20,7 +20,7 @@ use ratatui::Frame;
 use crate::ui::widgets::centered_rect_fixed;
 
 use crate::meta::signals::data::UnindexedFileSignal;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::indexing::IndexFileFromPathMutation;
 use crate::corpus::paths;

@@ -16,8 +16,8 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     EmbeddableAlbumArtData, EmbeddableAlbumArtSignal, TypedSignalWrite,
 };
-use crate::corpus::db::ReadOnlyDb;
-use crate::db_thread;
+use crate::db::ReadOnlyDb;
+use crate::db::write_thread;
 
 use super::{Computation, Result};
 
@@ -91,7 +91,7 @@ pub fn execute_detect_embeddable_album_art(
 ) -> Result {
     let computation = Computation::DetectEmbeddableAlbumArt;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(

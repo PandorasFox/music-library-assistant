@@ -103,9 +103,9 @@ pub(crate) struct App {
     pub(super) cache: crate::witch::cache_thread::CacheHandle,
 
     /// Locally cached periodic data from the cache thread.
-    pub(super) cached_insights: Option<crate::corpus::db::types::InsightsData>,
-    pub(super) cached_inbox: Option<crate::corpus::db::types::InboxOverviewData>,
-    pub(super) cached_deploy: Option<crate::corpus::db::types::DeployStatus>,
+    pub(super) cached_insights: Option<crate::meta::views::InsightsData>,
+    pub(super) cached_inbox: Option<crate::meta::views::InboxOverviewData>,
+    pub(super) cached_deploy: Option<crate::meta::views::DeployStatus>,
 
     // Filter popup overlay (Ctrl+F in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
@@ -195,7 +195,7 @@ impl App {
                                 }
                             } else {
                                 let matching_paths = self.cache.query(move |db| {
-                                    let audio_files = db.get_all_audio_files(crate::corpus::db::types::Zone::Corpus)
+                                    let audio_files = db.get_all_audio_files(crate::db::types::Zone::Corpus)
                                         .unwrap_or_default();
                                     let mut paths = Vec::new();
                                     for audio_file in audio_files {

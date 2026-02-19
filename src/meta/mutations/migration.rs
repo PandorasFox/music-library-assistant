@@ -29,8 +29,8 @@
 use anyhow::{Context, Result};
 use rusqlite::params;
 
-use crate::corpus::db::Database;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::Database;
+use crate::db::ReadOnlyDb;
 use crate::witch::MaintenanceWitness;
 
 /// Re-seed all corpus inodes as dirty for a given computation type.

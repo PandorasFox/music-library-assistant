@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::corpus::paths;
 

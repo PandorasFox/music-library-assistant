@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
@@ -224,7 +224,7 @@ impl ManualReviewData {
                 if let Some(info) = audio_info {
                     // Get file_size from files table
                     let file_size = read_db
-                        .get_audio_file_by_inode(file.inode, crate::corpus::db::types::Zone::Corpus)
+                        .get_audio_file_by_inode(file.inode, crate::db::types::Zone::Corpus)
                         .ok()
                         .flatten()
                         .map(|af| af.entry.file_size)

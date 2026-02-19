@@ -15,9 +15,9 @@ use crate::meta::computations::helpers::{
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::*;
 use crate::meta::signals::store::CorpusSignalStore;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
-use crate::db_thread;
+use crate::db::write_thread;
 
 use super::{Computation, Result};
 
@@ -34,7 +34,7 @@ pub fn execute_schedule_second_level_derivations(
     log_general("[COMPUTE] ScheduleSecondLevelDerivations: starting");
 
     // Get signal sender for missing directory signals
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -146,7 +146,7 @@ pub fn execute_derive_corpus_signals(
     log_general("[COMPUTE] DeriveCorpusSignals: starting global inode comparison");
 
     // Get signal sender for async writes
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -363,7 +363,7 @@ pub fn execute_derive_inbox_signals(
 ) -> Result {
     log_general("[COMPUTE] DeriveInboxSignals: starting inbox inode comparison");
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -562,7 +562,7 @@ pub fn execute_derive_inbox_signals(
 /// Returns the total number of orphaned signals cleared.
 fn gc_orphaned_corpus_signals(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     known_inodes: &HashSet<i64>,
     witness: &ComputationWitness,
 ) -> usize {
@@ -591,7 +591,7 @@ fn gc_orphaned_corpus_signals(
 /// FileInInbox excluded: it IS the disk observation, same reason FileInCorpus is excluded.
 fn gc_orphaned_inbox_signals(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     known_inodes: &HashSet<i64>,
     witness: &ComputationWitness,
 ) -> usize {
@@ -606,7 +606,7 @@ fn gc_orphaned_inbox_signals(
 /// Clear signals from a single corpus signal table for inodes not in `known_inodes`.
 fn gc_signal_table<S: CorpusSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     known_inodes: &HashSet<i64>,
     witness: &ComputationWitness,
 ) -> usize {
@@ -644,7 +644,7 @@ pub fn execute_update_corpus_file_signals(
         path: path.to_path_buf(),
     };
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -806,7 +806,7 @@ pub fn execute_update_library_file_signals(
         path: path.to_path_buf(),
     };
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -983,7 +983,7 @@ pub fn execute_reconcile_library_files(
         observed_files: observed_files.to_vec(),
     };
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -1082,7 +1082,7 @@ pub fn execute_update_deploy_signals(
         library_path: library_path.to_path_buf(),
     };
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -1156,7 +1156,7 @@ pub fn execute_update_deploy_signals(
 /// `library_path` is "{library_name}/relative/path" (e.g., "libraries/music/Artist/track.opus"
 /// or "music/Artist/track.opus" depending on caller).
 fn clear_library_signals_for_path(
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     library_path: &str,
     witness: &ComputationWitness,
 ) {

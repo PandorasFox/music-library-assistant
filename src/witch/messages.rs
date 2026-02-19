@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::corpus::db::{Database, ReadOnlyDb};
+use crate::db::{Database, ReadOnlyDb};
 use crate::meta::mutations::MigrationRegistry;
 
 /// Initial state the Witch determines at startup.

@@ -8,7 +8,7 @@ use anyhow::Result;
 use rusqlite::params;
 
 use super::Database;
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::computations::awake::QualityTier;
 
 impl Database {
@@ -368,8 +368,8 @@ impl Database {
     /// Get InboxOverviewData for the Inbox view.
     ///
     /// Computes signal counts via typed table counts. Called by UiReadCache.
-    pub fn get_inbox_overview_data(&self) -> Result<crate::corpus::db::types::InboxOverviewData> {
-        Ok(crate::corpus::db::types::InboxOverviewData {
+    pub fn get_inbox_overview_data(&self) -> Result<crate::meta::views::InboxOverviewData> {
+        Ok(crate::meta::views::InboxOverviewData {
             file_in_inbox: self.count_signal_type("file_in_inbox")?,
             corpus_match: self.count_signal_type("inbox_corpus_match")?,
             unindexed: self.count_signal_type("inbox_unindexed")?,
@@ -385,8 +385,8 @@ impl Database {
     /// Get InsightsData for the Insights view.
     ///
     /// Computes all bucket data via SQL queries. Called by UiReadCache.
-    pub fn get_insights_data(&self) -> Result<crate::corpus::db::types::InsightsData> {
-        use crate::corpus::db::types::*;
+    pub fn get_insights_data(&self) -> Result<crate::meta::views::InsightsData> {
+        use crate::meta::views::*;
 
         Ok(InsightsData {
             bucket_corpus: self.compute_corpus_files_bucket()?,
@@ -395,8 +395,8 @@ impl Database {
         })
     }
 
-    fn compute_corpus_files_bucket(&self) -> Result<crate::corpus::db::types::CorpusFilesBucket> {
-        use crate::corpus::db::types::*;
+    fn compute_corpus_files_bucket(&self) -> Result<crate::meta::views::CorpusFilesBucket> {
+        use crate::meta::views::*;
 
         // OOB signals (highest priority)
         let oob_tag_sync = self.count_signal_type("oob_tag_sync")?;
@@ -438,8 +438,8 @@ impl Database {
         })
     }
 
-    fn compute_tag_resolution_bucket(&self) -> Result<crate::corpus::db::types::TagSquashBucket> {
-        use crate::corpus::db::types::*;
+    fn compute_tag_resolution_bucket(&self) -> Result<crate::meta::views::TagSquashBucket> {
+        use crate::meta::views::*;
 
         // Cross-source overlap clusters (easy resolutions - at top of bucket)
         // These are derived from fingerprint overlaps, clustered by source directory
@@ -513,9 +513,9 @@ impl Database {
     /// Counts unique (tag_name, compound_value) pairs rather than individual signals,
     /// so the insights view shows how many distinct compound values need resolution.
     /// Returns entries grouped by tag name, sorted by total count descending.
-    fn count_compound_signals_by_tag(&self) -> Result<Vec<crate::corpus::db::types::CompoundTagEntry>> {
+    fn count_compound_signals_by_tag(&self) -> Result<Vec<crate::meta::views::CompoundTagEntry>> {
         use std::collections::{HashMap, HashSet};
-        use crate::corpus::db::types::CompoundTagEntry;
+        use crate::meta::views::CompoundTagEntry;
         use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
 
         let mut stmt = self.conn.prepare(
@@ -579,8 +579,8 @@ impl Database {
         Ok(entries)
     }
 
-    fn compute_other_signals_bucket(&self) -> Result<crate::corpus::db::types::OtherSignalsBucket> {
-        use crate::corpus::db::types::*;
+    fn compute_other_signals_bucket(&self) -> Result<crate::meta::views::OtherSignalsBucket> {
+        use crate::meta::views::*;
 
         let mut entries = Vec::new();
 
@@ -707,8 +707,8 @@ impl Database {
     }
 
     /// Get directory breakdown for a signal type.
-    fn get_directory_breakdown(&self, signal_type: &str) -> Result<crate::corpus::db::types::DirectoryBreakdown> {
-        use crate::corpus::db::types::*;
+    fn get_directory_breakdown(&self, signal_type: &str) -> Result<crate::meta::views::DirectoryBreakdown> {
+        use crate::meta::views::*;
 
         // Map signal type to its typed table name
         let table = match signal_type {
@@ -761,8 +761,8 @@ impl Database {
     ///
     /// Returns files with their corpus path and computed deploy path.
     /// Sorted by corpus_path for consistent display.
-    pub fn get_deploy_ready_files(&self) -> Result<Vec<crate::corpus::db::types::DeploySignalFile>> {
-        use crate::corpus::db::types::DeploySignalFile;
+    pub fn get_deploy_ready_files(&self) -> Result<Vec<crate::meta::views::DeploySignalFile>> {
+        use crate::meta::views::DeploySignalFile;
 
         let mut stmt = self.conn.prepare(
             "SELECT path, deploy_path FROM signal_deploy_ready ORDER BY path"
@@ -784,8 +784,8 @@ impl Database {
     ///
     /// Returns files with their corpus path and library path.
     /// Sorted by corpus_path for consistent display.
-    pub fn get_deployed_healthy_files(&self) -> Result<Vec<crate::corpus::db::types::DeploySignalFile>> {
-        use crate::corpus::db::types::DeploySignalFile;
+    pub fn get_deployed_healthy_files(&self) -> Result<Vec<crate::meta::views::DeploySignalFile>> {
+        use crate::meta::views::DeploySignalFile;
 
         let mut stmt = self.conn.prepare(
             "SELECT path, library_path FROM signal_deployed_healthy ORDER BY path"
@@ -810,8 +810,8 @@ impl Database {
     ///
     /// Returns files with their current library path and expected path.
     /// Sorted by library_path for consistent display.
-    pub fn get_library_stale_files(&self) -> Result<Vec<crate::corpus::db::types::StaleSignalFile>> {
-        use crate::corpus::db::types::StaleSignalFile;
+    pub fn get_library_stale_files(&self) -> Result<Vec<crate::meta::views::StaleSignalFile>> {
+        use crate::meta::views::StaleSignalFile;
 
         let mut stmt = self.conn.prepare(
             "SELECT library_path, expected_path FROM signal_library_stale ORDER BY library_path"
@@ -835,8 +835,8 @@ impl Database {
     /// Get all leftover library files (no corpus backing).
     ///
     /// Sorted by library_path for consistent display.
-    pub fn get_library_leftover_files(&self) -> Result<Vec<crate::corpus::db::types::LeftoverSignalFile>> {
-        use crate::corpus::db::types::LeftoverSignalFile;
+    pub fn get_library_leftover_files(&self) -> Result<Vec<crate::meta::views::LeftoverSignalFile>> {
+        use crate::meta::views::LeftoverSignalFile;
 
         // key = "library_leftover:{library_name}:{library_name}/path/..."
         let mut stmt = self.conn.prepare(
@@ -858,8 +858,8 @@ impl Database {
     /// Get all deploy conflict groups (multiple corpus files → same library path).
     ///
     /// Sorted by deploy_path for consistent display.
-    pub fn get_deploy_conflict_groups(&self) -> Result<Vec<crate::corpus::db::types::ConflictGroup>> {
-        use crate::corpus::db::types::ConflictGroup;
+    pub fn get_deploy_conflict_groups(&self) -> Result<Vec<crate::meta::views::ConflictGroup>> {
+        use crate::meta::views::ConflictGroup;
 
         let mut stmt = self.conn.prepare(
             "SELECT deploy_path, data FROM signal_deploy_conflict ORDER BY deploy_path"
@@ -983,8 +983,8 @@ impl Database {
     ///
     /// Returns (corpus_path, reason, superior_path) for each subpar_duplicate signal.
     /// Used by the subpar duplicate resolution modal.
-    pub fn get_subpar_duplicate_files(&self) -> Result<Vec<crate::corpus::db::types::SubparDuplicateEntry>> {
-        use crate::corpus::db::types::SubparDuplicateEntry;
+    pub fn get_subpar_duplicate_files(&self) -> Result<Vec<crate::meta::views::SubparDuplicateEntry>> {
+        use crate::meta::views::SubparDuplicateEntry;
         use crate::meta::signals::data::SubparDuplicateData;
 
         let mut stmt = self.conn.prepare(
@@ -1131,8 +1131,8 @@ impl Database {
     /// `bitrate_fuzz_percent` applies a tolerance when comparing bitrates:
     /// files with the same format class and sample rate whose bitrates differ
     /// by less than this percentage are treated as equivalent.
-    pub fn get_inbox_corpus_match_entries(&self, bitrate_fuzz_percent: f64) -> Result<Vec<crate::corpus::db::types::InboxCorpusMatchEntry>> {
-        use crate::corpus::db::types::{InboxCorpusMatchEntry, CorpusMatchDetail, MatchClassification};
+    pub fn get_inbox_corpus_match_entries(&self, bitrate_fuzz_percent: f64) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
+        use crate::meta::views::{InboxCorpusMatchEntry, CorpusMatchDetail, MatchClassification};
         use crate::meta::signals::data::InboxCorpusMatchData;
 
         let mut stmt = self.conn.prepare(
@@ -1349,7 +1349,7 @@ impl Database {
     /// Get deploy status for the Deploy view and titlebar indicator.
     ///
     /// Returns whether there's actionable deploy work and per-library file counts.
-    pub fn get_deploy_status(&self) -> Result<crate::corpus::db::types::DeployStatus> {
+    pub fn get_deploy_status(&self) -> Result<crate::meta::views::DeployStatus> {
         let needs_action: bool = self.conn.query_row(
             "SELECT
                 EXISTS(SELECT 1 FROM signal_deploy_ready)
@@ -1382,7 +1382,7 @@ impl Database {
             library_file_counts.push(row?);
         }
 
-        Ok(crate::corpus::db::types::DeployStatus {
+        Ok(crate::meta::views::DeployStatus {
             needs_action,
             library_file_counts,
         })

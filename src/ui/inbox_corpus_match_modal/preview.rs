@@ -19,7 +19,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::corpus::db::types::MatchClassification;
+use crate::meta::views::MatchClassification;
 use crate::ui::helpers::{render_pane, truncate_left};
 use crate::ui::widgets::{ConfirmationButton, render_button_row, PathField, CURSOR_STYLE};
 

@@ -184,7 +184,7 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
     let witness = ComputationWitness::new();
 
     // Use thread-local cached READ-ONLY connection
-    // IMPORTANT: All writes must go through db_thread::signal_sender()
+    // IMPORTANT: All writes must go through write_thread::signal_sender()
     let db_access_start = std::time::Instant::now();
 
     let result = with_read_only_db(|read_only_db| {

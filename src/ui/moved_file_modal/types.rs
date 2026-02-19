@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::corpus::db::types::MovedFileInfo;
+use crate::meta::views::MovedFileInfo;
 use crate::ui::widgets::FocusPane;
 
 // ============================================================================

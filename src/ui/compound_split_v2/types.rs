@@ -12,9 +12,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::signals::data::CompoundGroup;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
@@ -96,7 +96,7 @@ impl CompoundSplitDataV2 {
 
         for &inode in &group.inodes {
             if let Ok(Some(audio_file)) =
-                read_db.get_audio_file_by_inode(inode, crate::corpus::db::types::Zone::Corpus)
+                read_db.get_audio_file_by_inode(inode, crate::db::types::Zone::Corpus)
             {
                 let path = audio_file.path();
                 let filename = Path::new(path)

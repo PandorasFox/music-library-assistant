@@ -4,7 +4,7 @@
 //!
 //! Supports both tag-based conditions and file metadata conditions.
 
-use crate::corpus::db::types::AudioFile;
+use crate::db::types::AudioFile;
 
 // ============================================================================
 // Condition Type

@@ -5,11 +5,11 @@
 //! ## DB Access Patterns
 //!
 //! - **Mutations**: Use thread-local read-only connection (`with_read_only_db`).
-//!   All writes go through `db_thread::signal_sender()`.
+//!   All writes go through `write_thread::signal_sender()`.
 //! - **Computations**: Use thread-local read-only connection (same pattern).
 //! - **Maintenance**: Both variants route through db_thread's write connection:
-//!   - Migration: Uses `db_thread::execute_migration()` (schema changes on write connection).
-//!   - Vacuum: Uses `db_thread::execute_vacuum()` (needs exclusive write connection).
+//!   - Migration: Uses `write_thread::execute_migration()` (schema changes on write connection).
+//!   - Vacuum: Uses `write_thread::execute_vacuum()` (needs exclusive write connection).
 //!
 //! ## Post-Execution Pipeline
 //!
@@ -33,7 +33,7 @@ use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::meta::mutations::{Mutation, PendingSignal};
 use crate::corpus::paths;
-use crate::db_thread;
+use crate::db::write_thread;
 
 use crate::meta::maintenance::DbMaintenanceTask;
 
@@ -56,7 +56,7 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
 
 /// Execute a single mutation using thread-local read-only DB connection.
 ///
-/// All writes go through `db_thread::signal_sender()`. Read operations use
+/// All writes go through `write_thread::signal_sender()`. Read operations use
 /// the same thread-local cached connection as computations.
 pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> TaskResult {
     use crate::meta::mutations::traits::MutationContext;
@@ -78,7 +78,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     let session_id = mutation.label();
 
     // Execute mutation via MutationExecutor trait dispatch.
-    // All writes go through db_thread::signal_sender() (fire-and-forget).
+    // All writes go through write_thread::signal_sender() (fire-and-forget).
     let result = with_read_only_db(|read_db| {
         let executor = mutation.as_executor();
         let ctx = MutationContext {
@@ -136,7 +136,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         // be flagged for stashing rather than remaining as mere UnindexedFile signals.
         if let Mutation::IndexFileFromPath(ref m) = &mutation {
             let path = &m.path;
-            if let Some(sender) = db_thread::signal_sender() {
+            if let Some(sender) = write_thread::signal_sender() {
                 // Get inode from filesystem (file exists but failed to parse)
                 if let Ok(metadata) = std::fs::metadata(path) {
                     let inode = metadata.ino() as i64;
@@ -241,7 +241,7 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
             ));
 
             // Route migration through db_thread which owns the write connection
-            match db_thread::execute_migration(migration_id) {
+            match write_thread::execute_migration(migration_id) {
                 Ok(()) => (true, None),
                 Err(e) => (false, Some(e)),
             }
@@ -253,7 +253,7 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
                 label
             ));
 
-            match crate::db_thread::execute_vacuum() {
+            match crate::db::write_thread::execute_vacuum() {
                 Ok(()) => (true, None),
                 Err(e) => (false, Some(e)),
             }
@@ -336,7 +336,7 @@ fn apply_post_execution(
                 .collect();
 
             if !all_inodes.is_empty() {
-                if let Some(sender) = db_thread::signal_sender() {
+                if let Some(sender) = write_thread::signal_sender() {
                     for inode in &all_inodes {
                         match scope {
                             SignalClearScope::All => {
@@ -362,7 +362,7 @@ fn apply_post_execution(
         _ => None,
     };
     if let Some(path) = stash_path {
-        if let Some(sender) = db_thread::signal_sender() {
+        if let Some(sender) = write_thread::signal_sender() {
             let rel_path = if path.is_absolute() {
                 resolver.to_relative(path)
             } else {
@@ -410,7 +410,7 @@ fn apply_post_execution(
     // e.g., LibraryMove clears LibraryStale for the old path
     let signals_to_clear = mutation.specific_signals_to_clear();
     if !signals_to_clear.is_empty() {
-        if let Some(sender) = db_thread::signal_sender() {
+        if let Some(sender) = write_thread::signal_sender() {
             for spec in &signals_to_clear {
                 sender.clear_aggregate_signal_fn(spec.clear_by_key_fn, &spec.key, spec.label, witness);
             }
@@ -426,7 +426,7 @@ fn apply_post_execution(
 /// avoiding the race condition where a post-execution DB read might not see the write.
 fn emit_pending_signals(
     pending_signals: &[PendingSignal],
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     witness: &MutationExecutionWitness,
 ) {
     for signal in pending_signals {
@@ -445,7 +445,7 @@ fn emit_file_inherent_signals(
 ) {
     // Only IndexFileFromPath emits file-inherent signals
     if let Mutation::IndexFileFromPath(_) = mutation {
-        if let Some(sender) = db_thread::signal_sender() {
+        if let Some(sender) = write_thread::signal_sender() {
             emit_pending_signals(pending_signals, sender, witness);
         }
     }

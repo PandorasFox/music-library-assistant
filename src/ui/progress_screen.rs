@@ -34,7 +34,7 @@ use ratatui::{
 
 use std::collections::HashMap;
 use crate::witch::{WorkStateSnapshot, WorkStatus, ReasoningLevel, Witch, WorkerStats};
-use crate::db_thread::DbThreadStats;
+use crate::db::write_thread::DbThreadStats;
 use super::eye::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
 

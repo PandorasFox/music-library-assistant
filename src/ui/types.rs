@@ -2,7 +2,7 @@
 //!
 //! Core types for UI state management.
 
-use crate::db_thread::DbThreadStats;
+use crate::db::write_thread::DbThreadStats;
 use crate::witch::WorkerStats;
 
 /// Trait for progress states that display daemon statistics.

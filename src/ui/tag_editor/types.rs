@@ -2,7 +2,7 @@
 //!
 //! Core type definitions for the tag editor workflow.
 
-use crate::corpus::db::types::AudioFile;
+use crate::db::types::AudioFile;
 use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::Mutation;
 

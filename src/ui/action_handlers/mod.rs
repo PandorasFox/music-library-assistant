@@ -429,7 +429,7 @@ impl App {
     /// Loads all MissingTag signals, collects unique inodes, and opens
     /// the bulk tag editor so the operator can fill in missing tags.
     fn start_missing_tag_resolution(&mut self) {
-        use crate::corpus::db::types::Zone;
+        use crate::db::types::Zone;
         use std::collections::BTreeSet;
 
         let audio_files = self.cache.query(|db| {
@@ -484,7 +484,7 @@ impl App {
         action: crate::ui::missing_album_modal::MissingAlbumAction,
         witness: Option<&witness::ConfirmationGesture>,
     ) {
-        use crate::corpus::db::types::Zone;
+        use crate::db::types::Zone;
         use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation, indexing::EmitExpectedMissingTagMutation};
         use crate::ui::missing_album_modal::{MissingAlbumAction, AlbumResolution};
 
@@ -602,7 +602,7 @@ impl App {
                 let audio_files = self.cache.query(move |db| {
                     db.get_audio_files_by_inodes(
                         &inodes,
-                        crate::corpus::db::types::Zone::Corpus,
+                        crate::db::types::Zone::Corpus,
                     ).unwrap_or_default()
                 }).recv();
                 if !audio_files.is_empty() {
@@ -632,7 +632,7 @@ impl App {
                 let audio_files = self.cache.query(move |db| {
                     db.get_audio_files_by_inodes(
                         &inodes,
-                        crate::corpus::db::types::Zone::Corpus,
+                        crate::db::types::Zone::Corpus,
                     ).unwrap_or_default()
                 }).recv();
                 if !audio_files.is_empty() {
@@ -665,7 +665,7 @@ impl App {
                 // Execute search via cache thread (blocking — fast single query)
                 if let ActiveView::TagSearch(ref mut search) = self.view {
                     let all_files = self.cache.query(|db| {
-                        db.get_all_audio_files_with_tags(crate::corpus::db::types::Zone::Corpus)
+                        db.get_all_audio_files_with_tags(crate::db::types::Zone::Corpus)
                             .unwrap_or_default()
                     }).recv();
                     search.execute_search(all_files);

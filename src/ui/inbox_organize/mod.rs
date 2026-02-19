@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config::{InboxOrganizeGranularity, Config};
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, file_ops::InboxToCorpusMutation};
 use crate::ui::tree_browser::{EntryFilter, TreeNavigator};
 use crate::ui::widgets::TextInputState;

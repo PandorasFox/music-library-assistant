@@ -14,8 +14,8 @@ use crate::meta::signals::data::{
     LibraryLeftoverSignal, LibraryStaleSignal,
 };
 use crate::corpus::deploy::compute_deployment_path_with_tags;
-use crate::corpus::db::ReadOnlyDb;
-use crate::db_thread;
+use crate::db::ReadOnlyDb;
+use crate::db::write_thread;
 
 use super::{Computation, Result};
 
@@ -31,7 +31,7 @@ pub fn execute_detect_deploy_conflicts(
 ) -> Result {
     let computation = Computation::DetectDeployConflicts;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -120,7 +120,7 @@ pub fn execute_derive_deploy_health_signals(
         corpus_path_prefixes: corpus_path_prefixes.to_vec(),
     };
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -315,7 +315,7 @@ pub fn execute_derive_corpus_deploy_status(
 ) -> Result {
     let computation = Computation::DeriveCorpusDeployStatus;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(

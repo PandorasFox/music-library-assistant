@@ -8,7 +8,7 @@ use crate::meta::decisions::{
     ConfirmationGesture, DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
     WitnessedDecision,
 };
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::mutations::{Mutation, MutationExecutionStage, MutationStaging, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 

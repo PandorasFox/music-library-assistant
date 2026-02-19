@@ -32,13 +32,13 @@ impl App {
             oob_sync_modal::OobSyncAction::None => {}
             oob_sync_modal::OobSyncAction::AcceptDisk => {
                 let Some(w) = witness else { return };
-                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::DiskToIndex, w);
+                self.stage_oob_sync_mutations(crate::meta::views::OobSyncDirection::DiskToIndex, w);
                 // Transition to review
                 self.after_staging_decisions();
             }
             oob_sync_modal::OobSyncAction::AcceptDb => {
                 let Some(w) = witness else { return };
-                self.stage_oob_sync_mutations(crate::corpus::db::types::OobSyncDirection::IndexToDisk, w);
+                self.stage_oob_sync_mutations(crate::meta::views::OobSyncDirection::IndexToDisk, w);
                 // Transition to review
                 self.after_staging_decisions();
             }
@@ -63,8 +63,9 @@ impl App {
     /// Uses the dedicated batch mutations which properly handle multi-value tags:
     /// - IndexToDisk: ApplyDbTagsToDisk (writes DB tags to disk files)
     /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
-    fn stage_oob_sync_mutations(&mut self, direction: crate::corpus::db::types::OobSyncDirection, gesture: &witness::ConfirmationGesture) {
-        use crate::corpus::db::types::{OobSyncDirection, Zone};
+    fn stage_oob_sync_mutations(&mut self, direction: crate::meta::views::OobSyncDirection, gesture: &witness::ConfirmationGesture) {
+        use crate::meta::views::OobSyncDirection;
+        use crate::db::types::Zone;
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
 
@@ -187,7 +188,7 @@ impl App {
     }
 
     /// Compute the tag diff for the currently selected conflict file.
-    fn compute_current_conflict_diff(&mut self) -> Vec<crate::corpus::db::types::TagMismatchEntry> {
+    fn compute_current_conflict_diff(&mut self) -> Vec<crate::meta::views::TagMismatchEntry> {
         let (inode, path) = match &self.view {
             ActiveView::OobConflictInspection(ref state) => {
                 match state.active_bucket_state().current_file() {
@@ -214,7 +215,7 @@ impl App {
     /// - ApplyDbTagsToDisk: writes DB tags to disk files
     /// - AssimilateDiskTagsToDb: reads disk tags into DB index
     fn stage_oob_bucket_resolution(&mut self, gesture: &witness::ConfirmationGesture) {
-        use crate::corpus::db::types::Zone;
+        use crate::db::types::Zone;
         use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
         use crate::ui::oob_conflict_modal::types::ResolutionButton;

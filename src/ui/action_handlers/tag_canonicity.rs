@@ -3,7 +3,7 @@
 //! Handles the tag canonicity modal: loading signals, navigating between
 //! clusters, staging canonicalization decisions.
 
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{
     helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView,
@@ -437,7 +437,7 @@ impl App {
     fn load_typed_signal_data(
         key: &str,
         kind: CanonicitySignalKind,
-        read_db: &crate::corpus::db::ReadOnlyDb,
+        read_db: &crate::db::ReadOnlyDb,
     ) -> Option<tag_canonicity_v2::TagCanonicalityModalDataV2> {
         match kind {
             CanonicitySignalKind::TagCanonicity => {

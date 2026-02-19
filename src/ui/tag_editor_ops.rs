@@ -5,7 +5,7 @@
 
 use crossterm::event;
 
-use crate::corpus::db::types::AudioFile;
+use crate::db::types::AudioFile;
 use crate::corpus::paths;
 use crate::ui::tag_editor;
 use crate::ui::suspended_views::SuspendTarget;

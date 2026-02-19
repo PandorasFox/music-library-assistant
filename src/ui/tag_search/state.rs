@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::corpus::db::types::AudioFile;
+use crate::db::types::AudioFile;
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 

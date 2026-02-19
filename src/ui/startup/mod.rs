@@ -12,7 +12,7 @@
 //! Note: Progress screen (startup eyeballing, content analysis) is now
 //! handled by the unified `progress_screen` module.
 
-mod first_time_setup;
+pub(crate) mod first_time_setup;
 pub mod intake_confirmation;
 pub mod migrations;
 pub mod vacuum;

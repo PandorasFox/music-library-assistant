@@ -191,8 +191,8 @@ impl Database {
     /// Get files with purely one-directional tag mismatches (sync-eligible).
     ///
     /// Reads from typed signal_oob_tag_sync table with bincode BLOB for mismatches.
-    pub fn get_oob_sync_files(&self) -> Result<Vec<crate::corpus::db::types::OobSyncFile>> {
-        use crate::corpus::db::types::{OobSyncDirection, OobSyncFile, TagMismatchEntry};
+    pub fn get_oob_sync_files(&self) -> Result<Vec<crate::meta::views::OobSyncFile>> {
+        use crate::meta::views::{OobSyncDirection, OobSyncFile, TagMismatchEntry};
         use crate::meta::signals::data::TagMismatchEntry as TypedEntry;
 
         let mut stmt = self.conn.prepare(
@@ -262,8 +262,8 @@ impl Database {
     /// - Bucket 1 (DbOnly): all mismatches have disk_value NULL
     /// - Bucket 2 (DiskOnly): all mismatches have db_value NULL
     /// - Bucket 3 (Conflict): mismatches in both directions
-    pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::corpus::db::types::BucketedOobFile>> {
-        use crate::corpus::db::types::{BucketedOobFile, ConflictBucket};
+    pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::meta::views::BucketedOobFile>> {
+        use crate::meta::views::{BucketedOobFile, ConflictBucket};
         use crate::meta::signals::data::TagMismatchEntry as TypedEntry;
 
         let mut files = Vec::new();
@@ -335,8 +335,8 @@ impl Database {
     /// Get files with MovedFile signals (same inode, different path).
     ///
     /// Reads from typed signal_moved_file table: inode, path (new), old_path, zones.
-    pub fn get_moved_files(&self) -> Result<Vec<crate::corpus::db::types::MovedFileInfo>> {
-        use crate::corpus::db::types::MovedFileInfo;
+    pub fn get_moved_files(&self) -> Result<Vec<crate::meta::views::MovedFileInfo>> {
+        use crate::meta::views::MovedFileInfo;
 
         let mut stmt = self.conn.prepare(
             "SELECT inode, old_path, path, old_zone, new_zone FROM signal_moved_file ORDER BY path"

@@ -23,9 +23,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config, SharedConfig};
 use crate::meta::computations::{Computation, asleep, awakening, awake};
-use crate::corpus::db::Database;
+use crate::db::Database;
 use crate::meta::mutations::Mutation;
-use crate::db_thread::{self, DbThreadHandle, DbThreadStats};
+use crate::db::write_thread::{self, DbThreadHandle, DbThreadStats};
 
 // Module declarations
 pub(crate) mod cache_thread;
@@ -285,7 +285,7 @@ impl Witch {
             task_counts: HashMap::new(),
             pending_transaction: None,
             pending_mutation_phases: VecDeque::new(),
-            db_thread_handle: db_thread::spawn(),
+            db_thread_handle: write_thread::spawn(),
             worker_stats_shared,
             cache_thread_handle: cache_witch_handle,
             notice_tx,
@@ -636,7 +636,7 @@ impl Witch {
                  {} phase(s) remaining.",
                 stage, mutations.len(), self.pending_mutation_phases.len()
             ));
-            db_thread::wait_for_queue_drain();
+            write_thread::wait_for_queue_drain();
 
             // Extract label from current WorkState before queueing (preserves session label)
             let label = if let WorkState::Working { ref label, .. } = self.work_state {
@@ -818,7 +818,7 @@ impl Witch {
         // data (e.g., DeriveDeployHealthSignals reading library files written by
         // ScanLibraryDirectory, or Awake-phase computations reading Awakening signals).
         if queue_awakening_after_reset || queue_idle_rescan_awakening_after_reset || queue_content_analysis_after_reset || queue_reobservation_after_reset || queue_reconcile_library_after_reset {
-            db_thread::wait_for_queue_drain();
+            write_thread::wait_for_queue_drain();
         }
 
         // Queue follow-up computations AFTER reset to fix off-by-one counting
@@ -1279,7 +1279,7 @@ impl Witch {
     ///
     /// Returns a list of human-readable descriptions of pending migrations.
     pub fn pending_migration_descriptions(&self) -> Vec<String> {
-        use crate::corpus::db::ReadOnlyDb;
+        use crate::db::ReadOnlyDb;
         use crate::meta::mutations::MigrationRegistry;
 
         let db_path = match config::get_db_path() {
@@ -1324,7 +1324,7 @@ impl Witch {
                 return;
             }
         };
-        let read_db = crate::corpus::db::ReadOnlyDb::new(&db);
+        let read_db = crate::db::ReadOnlyDb::new(&db);
 
         let registry = MigrationRegistry::new();
         let current_version = read_db.get_schema_version().unwrap_or(1);
@@ -1460,7 +1460,7 @@ impl Drop for Witch {
         crate::logging::log_general("[WITCH] Closed all rayon thread-local DB connections");
 
         // Step 3: Shut down the DB thread (it will checkpoint and close write connection)
-        crate::db_thread::request_shutdown();
+        crate::db::write_thread::request_shutdown();
         self.db_thread_handle.join();
 
         // Step 5: Shut down the logging thread last so all shutdown messages get logged

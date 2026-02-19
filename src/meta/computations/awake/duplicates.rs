@@ -15,15 +15,15 @@ use crate::meta::computations::helpers::{
     ComputedAggregateSignal, ComputedCorpusSignal,
 };
 use crate::meta::computations::types::ComputationWitness;
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::signals::data::{
     TypedSignalWrite, FingerprintOverlapSignal, MetadataDuplicateSignal, MetadataDuplicateData,
     DuplicateInodeSignal, SubparDuplicateSignal, SubparDuplicateData,
     RedundantDuplicateSignal, RedundantDuplicateData,
     CrossSourceOverlapSignal, CrossSourceOverlapData, CrossSourceTrackPair,
 };
-use crate::corpus::db::ReadOnlyDb;
-use crate::db_thread;
+use crate::db::ReadOnlyDb;
+use crate::db::write_thread;
 
 use super::{Computation, Result};
 
@@ -76,11 +76,11 @@ pub fn execute_detect_fingerprint_overlaps(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::db::queries::files::fingerprint_to_text;
+    use crate::db::queries::files::fingerprint_to_text;
 
     let computation = Computation::DetectFingerprintOverlaps;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -138,7 +138,7 @@ pub fn execute_detect_fingerprint_overlaps(
             "[COMPUTE] DetectFingerprintOverlaps: 0 groups, cleared={}, new={}, updated={}, unchanged={}",
             cleared, new_count, updated, unchanged
         ));
-        db_thread::wait_for_queue_drain();
+        write_thread::wait_for_queue_drain();
         return Result::success(
             computation,
             start.elapsed().as_millis() as u64,
@@ -257,7 +257,7 @@ pub fn execute_detect_fingerprint_overlaps(
     // Wait for all FingerprintOverlap signals to be written before spawning
     // dependent computations. This ensures AnalyzeFingerprintOverlaps and
     // ClusterDirectoryOverlaps see the fresh signal data.
-    db_thread::wait_for_queue_drain();
+    write_thread::wait_for_queue_drain();
 
     // Spawn dependent computations that read FingerprintOverlap signals
     Result::success(
@@ -282,7 +282,7 @@ pub fn execute_detect_duplicate_inodes(
 ) -> Result {
     let computation = Computation::DetectDuplicateInodes;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -349,7 +349,7 @@ pub fn execute_detect_metadata_duplicates(
 ) -> Result {
     let computation = Computation::DetectMetadataDuplicates;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -731,7 +731,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 ) -> Result {
     let computation = Computation::AnalyzeFingerprintOverlaps;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(
@@ -1021,9 +1021,9 @@ pub fn execute_analyze_fingerprint_overlaps(
 
 /// Cluster audio files by duration within tolerance.
 fn cluster_by_duration(
-    audio_files: &[crate::corpus::db::types::AudioFile],
+    audio_files: &[crate::db::types::AudioFile],
     tolerance_ms: i64,
-) -> Vec<Vec<&crate::corpus::db::types::AudioFile>> {
+) -> Vec<Vec<&crate::db::types::AudioFile>> {
     if audio_files.is_empty() {
         return Vec::new();
     }
@@ -1032,8 +1032,8 @@ fn cluster_by_duration(
     let mut sorted: Vec<_> = audio_files.iter().collect();
     sorted.sort_by_key(|af| af.audio.duration_ms.unwrap_or(0));
 
-    let mut clusters: Vec<Vec<&crate::corpus::db::types::AudioFile>> = Vec::new();
-    let mut current_cluster: Vec<&crate::corpus::db::types::AudioFile> = vec![sorted[0]];
+    let mut clusters: Vec<Vec<&crate::db::types::AudioFile>> = Vec::new();
+    let mut current_cluster: Vec<&crate::db::types::AudioFile> = vec![sorted[0]];
     let mut cluster_start_duration = sorted[0].audio.duration_ms.unwrap_or(0);
 
     for audio_file in sorted.iter().skip(1) {
@@ -1082,7 +1082,7 @@ pub fn execute_detect_cross_source_overlaps(
 ) -> Result {
     let computation = Computation::DetectCrossSourceOverlaps;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(

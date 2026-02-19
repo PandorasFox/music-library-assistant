@@ -316,7 +316,7 @@ mod tests {
 // use std::os::unix::fs::MetadataExt;
 //
 // use crate::config::Config;
-// use crate::corpus::db::Database;
+// use crate::db::Database;
 // use crate::corpus::health::library::{
 //     get_configured_library_names, get_deployable_corpus_tracks, walk_library_files,
 // };

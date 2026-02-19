@@ -3,7 +3,7 @@
 //! Handles all actions from the ManualReview modal: stash confirmation,
 //! tag editor launch, group navigation, and transaction management.
 
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::decisions::{DecisionKey, DecisionSource};
 use crate::ui::{manual_review_modal, tag_editor, ActiveView};
 use crate::ui::manual_review_modal::types;

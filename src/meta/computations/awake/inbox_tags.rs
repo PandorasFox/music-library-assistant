@@ -11,11 +11,11 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::corpus::health::normalization::{
     normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
 };
-use crate::db_thread;
+use crate::db::write_thread;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{ComputedAggregateSignal, reconcile_aggregate_signals};
 use crate::meta::computations::types::ComputationWitness;
@@ -42,7 +42,7 @@ pub fn execute_detect_inbox_tag_canonicity(
 ) -> Result {
     let computation = Computation::DetectInboxTagCanonicity;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(

@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::corpus::db::types::{OobSyncDirection, OobSyncFile};
+use crate::meta::views::{OobSyncDirection, OobSyncFile};
 use crate::ui::bulk_selection::BulkSelectionState;
 use crate::ui::filter_popup::FilterCondition;
 use crate::ui::widgets::{ButtonRects, FocusPane};

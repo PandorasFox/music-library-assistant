@@ -19,8 +19,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::corpus::db::types::{DeployStatus, InboxOverviewData, InsightsData};
-use crate::corpus::db::{Database, ReadOnlyDb};
+use crate::meta::views::{DeployStatus, InboxOverviewData, InsightsData};
+use crate::db::{Database, ReadOnlyDb};
 
 // ============================================================================
 // Cache Thread Protocol

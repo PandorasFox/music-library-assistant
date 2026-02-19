@@ -13,11 +13,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::signals::data::{
     InconsistentAlbumArtistSignal, InboxTagCanonicitySignal, TagCanonicitySignal,
 };
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::corpus::paths;

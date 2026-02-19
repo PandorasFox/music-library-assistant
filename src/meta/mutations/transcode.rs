@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::corpus::db::types::Zone;
-use crate::corpus::db::ReadOnlyDb;
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::transcode::{self, TranscodeTarget};
 use crate::witch::MutationExecutionWitness;
@@ -214,9 +214,9 @@ fn execute_transcode_impl(
         ))?;
 
     // Get signal_sender for DB writes
-    use crate::db_thread::{self, FileEntryData};
+    use crate::db::write_thread::{self, FileEntryData};
 
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
     let relative_path_str = relative_new_path.to_string_lossy().to_string();

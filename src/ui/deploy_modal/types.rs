@@ -6,8 +6,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::corpus::db::types::{ConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
-use crate::corpus::db::ReadOnlyDb;
+use crate::meta::views::{ConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
+use crate::db::ReadOnlyDb;
 use anyhow::Result;
 
 /// Directory aggregate for grouped file display.

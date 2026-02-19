@@ -30,7 +30,7 @@ use std::path::Path;
 use crate::meta::signals::data::*;
 use crate::meta::mutations::MutationToken;
 use crate::corpus::paths;
-use crate::db_thread;
+use crate::db::write_thread;
 use crate::witch::MutationExecutionWitness;
 
 // =============================================================================
@@ -432,7 +432,7 @@ pub fn write_file_tags(
     }
 
     // Update file mtime after successful disk write
-    let sender = db_thread::signal_sender()
+    let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized during tag write"))?;
     let resolver = paths::get_resolver();
     let rel_path = resolver

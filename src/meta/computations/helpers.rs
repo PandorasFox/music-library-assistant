@@ -12,8 +12,8 @@ use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
-use crate::corpus::db::ReadOnlyDb;
-use crate::db_thread::{self, SignalWitness};
+use crate::db::ReadOnlyDb;
+use crate::db::write_thread::{self, SignalWitness};
 
 use super::types::ComputationWitness;
 
@@ -182,7 +182,7 @@ pub(crate) fn current_observation_generation() -> u8 {
 /// then queues a typed write if the signal doesn't already exist.
 pub(crate) fn ensure_typed_signal(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     signal: TypedSignalWrite,
     witness: &impl SignalWitness,
 ) {
@@ -196,7 +196,7 @@ pub(crate) fn ensure_typed_signal(
 /// Use when a computation determines the signal should not exist for this inode.
 pub(crate) fn drop_stale_corpus_signal<S: CorpusSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     inode: i64,
     witness: &impl SignalWitness,
 ) {
@@ -259,7 +259,7 @@ impl ComputedCorpusSignal {
 /// Returns (cleared, new, updated, unchanged).
 pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     computed: Vec<ComputedAggregateSignal>,
     witness: &ComputationWitness,
 ) -> (usize, usize, usize, usize) {
@@ -314,7 +314,7 @@ pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
 /// Returns (cleared, new, updated, unchanged).
 pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
-    sender: &db_thread::SignalWriteSender,
+    sender: &write_thread::SignalWriteSender,
     computed: Vec<ComputedCorpusSignal>,
     witness: &ComputationWitness,
 ) -> (usize, usize, usize, usize) {

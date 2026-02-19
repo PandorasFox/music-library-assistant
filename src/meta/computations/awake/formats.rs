@@ -7,10 +7,10 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::helpers::drop_stale_corpus_signal;
-use crate::corpus::db::types::Zone;
+use crate::db::types::Zone;
 use crate::meta::signals::data::{ShitFormatSignal, TypedSignalWrite};
-use crate::corpus::db::ReadOnlyDb;
-use crate::db_thread;
+use crate::db::ReadOnlyDb;
+use crate::db::write_thread;
 
 use super::{Computation, Result};
 
@@ -36,7 +36,7 @@ pub fn execute_detect_shit_formats(
 ) -> Result {
     let computation = Computation::DetectShitFormats;
 
-    let sender = match db_thread::signal_sender() {
+    let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
         None => {
             return Result::failure(

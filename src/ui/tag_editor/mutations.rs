@@ -223,7 +223,8 @@ pub fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], _a
     if ops.is_empty() {
         Vec::new()
     } else {
-        vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus })]
+        let zone = audio_files.first().map(|f| f.entry.zone).unwrap_or(Zone::Corpus);
+        vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone })]
     }
 }
 

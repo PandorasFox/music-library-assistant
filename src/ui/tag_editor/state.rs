@@ -161,6 +161,12 @@ impl UnifiedTagEditorState {
         source: TagEditorSource,
         group_context: Option<GroupContext>,
     ) -> Self {
+        // All files must belong to the same zone — tag mutations are per-zone.
+        debug_assert!(
+            audio_files.windows(2).all(|w| w[0].entry.zone == w[1].entry.zone),
+            "Tag editor opened with files from mixed zones"
+        );
+
         let total_items = audio_files.len();
 
         // Load per-file tag fields from disk

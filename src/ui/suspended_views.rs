@@ -80,8 +80,8 @@ impl App {
             ActiveView::TagCanonicityResolution { clusters, .. } => {
                 SuspendedView::TagCanonicityReload { clusters }
             }
-            ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
-                SuspendedView::CompoundTagSplitReload { clusters, safe_mode }
+            ActiveView::CompoundTagSplit { clusters, safe_mode, zone, .. } => {
+                SuspendedView::CompoundTagSplitReload { clusters, safe_mode, zone }
             }
             view => SuspendedView::Direct(view),
         }
@@ -99,8 +99,8 @@ impl App {
             SuspendedView::TagCanonicityReload { clusters } => {
                 self.load_current_cluster_signal_with_clusters(clusters)
             }
-            SuspendedView::CompoundTagSplitReload { clusters, safe_mode } => {
-                self.load_current_compound_split_signal_with_clusters(clusters, safe_mode)
+            SuspendedView::CompoundTagSplitReload { clusters, safe_mode, zone } => {
+                self.load_current_compound_split_signal_with_clusters(clusters, safe_mode, zone)
             }
         }
     }

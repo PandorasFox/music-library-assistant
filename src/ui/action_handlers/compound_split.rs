@@ -17,24 +17,45 @@ impl App {
     /// If `safe_only` is true, loads only signals where all split parts exist in corpus.
     /// If `tag_filter` is Some, only loads signals for that specific tag name.
     pub(in crate::ui) fn start_compound_split_resolution(&mut self, safe_only: bool, tag_filter: Option<&str>) {
+        self.start_compound_split_resolution_for_zone(safe_only, tag_filter, Zone::Corpus);
+    }
+
+    /// Start compound tag split resolution modal for a given zone.
+    pub(in crate::ui) fn start_compound_split_resolution_for_zone(
+        &mut self,
+        safe_only: bool,
+        tag_filter: Option<&str>,
+        zone: Zone,
+    ) {
         // Load compound signal groups filtered by safety classification and tag
         let tag_filter_owned = tag_filter.map(|s| s.to_string());
-        let groups = self.cache.query(move |db| {
-            db.get_compound_signal_groups_by_safety(safe_only, tag_filter_owned.as_deref())
-                .unwrap_or_default()
-        }).recv();
+        let groups = if zone == Zone::Inbox {
+            self.cache.query(move |db| {
+                db.get_inbox_compound_signal_groups().unwrap_or_default()
+            }).recv()
+        } else {
+            self.cache.query(move |db| {
+                db.get_compound_signal_groups_by_safety(safe_only, tag_filter_owned.as_deref())
+                    .unwrap_or_default()
+            }).recv()
+        };
+
+        if groups.is_empty() {
+            self.status_message = Some("No compound tag signals to resolve".to_string());
+            return;
+        }
 
         // Store groups for cluster navigation
         let clusters = compound_split_v2::CompoundSplitClustersV2::new(groups);
 
         // Start transaction ONCE for entire modal
-        let mode_str = if safe_only { "safe" } else { "review" };
+        let mode_str = if zone == Zone::Inbox { "inbox" } else if safe_only { "safe" } else { "review" };
         let _ = self.witch.start_transaction(&format!("Compound tag split ({})", mode_str));
 
         // Load the first group into modal data
         let first_group = clusters.all_groups()[0].clone();
         let data = self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, &db)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, &db, zone)
         }).recv();
 
         let data = match data {
@@ -50,8 +71,8 @@ impl App {
         // Get group info from clusters
         let (group_index, total_groups) = (clusters.current_index(), clusters.total());
 
-        let state = compound_split_v2::CompoundSplitStateV2::new(data, safe_only, group_index, total_groups);
-        self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode: safe_only };
+        let state = compound_split_v2::CompoundSplitStateV2::new(data, safe_only, group_index, total_groups, zone);
+        self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode: safe_only, zone };
     }
 
     /// Handle compound tag split modal actions (v2).
@@ -103,8 +124,8 @@ impl App {
     /// to match the health modal's current file selection.
     fn launch_tag_editor_from_compound_split(&mut self, mode: tag_editor::TagEditorMode) {
         // Extract data from current view
-        let (inodes, decision_key, decision_label, file_cursor_inode) =
-            if let ActiveView::CompoundTagSplit { ref state, ref clusters, .. } = self.view {
+        let (inodes, decision_key, decision_label, file_cursor_inode, zone) =
+            if let ActiveView::CompoundTagSplit { ref state, ref clusters, zone, .. } = self.view {
                 let inodes: Vec<i64> = state.data.files.iter().map(|f| f.inode).collect();
                 let decision_key = DecisionKey::new(DecisionSource::CompoundSplit, clusters.current_index().to_string());
                 let label = format!(
@@ -114,14 +135,14 @@ impl App {
                 );
                 let cursor_inode = state.data.files.get(state.file_cursor)
                     .map(|f| f.inode);
-                (inodes, decision_key, label, cursor_inode)
+                (inodes, decision_key, label, cursor_inode, zone)
             } else {
                 return;
             };
 
         // Query audio files by inodes
         let audio_files = self.cache.query(move |db| {
-            db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
+            db.get_audio_files_by_inodes(&inodes, zone)
                 .unwrap_or_default()
         }).recv();
 
@@ -328,10 +349,10 @@ impl App {
     /// Returns true if successfully loaded, false if failed (caller should handle fallback).
     pub(in crate::ui) fn load_current_compound_split_signal(&mut self) -> bool {
         // Extract cluster info from current view
-        let (group, group_index, total, safe_mode) = match &self.view {
-            ActiveView::CompoundTagSplit { clusters, safe_mode, .. } => {
+        let (group, group_index, total, safe_mode, zone) = match &self.view {
+            ActiveView::CompoundTagSplit { clusters, safe_mode, zone, .. } => {
                 match clusters.current_group() {
-                    Some(g) => (g.clone(), clusters.current_index(), clusters.total(), *safe_mode),
+                    Some(g) => (g.clone(), clusters.current_index(), clusters.total(), *safe_mode, *zone),
                     None => return false,
                 }
             }
@@ -339,7 +360,7 @@ impl App {
         };
 
         let data = self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db, zone)
         }).recv();
 
         let Some(data) = data else {
@@ -353,6 +374,7 @@ impl App {
             safe_mode,
             group_index,
             total,
+            zone,
         );
 
         // Back-fill UI state from staged decision if one exists for this cluster
@@ -376,6 +398,7 @@ impl App {
         &mut self,
         clusters: compound_split_v2::CompoundSplitClustersV2,
         safe_mode: bool,
+        zone: Zone,
     ) -> bool {
         let group = match clusters.current_group() {
             Some(g) => g.clone(),
@@ -385,7 +408,7 @@ impl App {
         let (group_index, total) = (clusters.current_index(), clusters.total());
 
         let data = self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db, zone)
         }).recv();
 
         let Some(data) = data else {
@@ -399,6 +422,7 @@ impl App {
             safe_mode,
             group_index,
             total,
+            zone,
         );
 
         // Back-fill UI state from staged decision if one exists for this cluster
@@ -407,7 +431,7 @@ impl App {
             state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
         }
 
-        self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode };
+        self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode, zone };
         true
     }
 }

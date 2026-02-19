@@ -74,14 +74,18 @@ impl CompoundSplitDataV2 {
     /// Loads the compound entry from the first inode's signal data, then
     /// loads file info for ALL inodes in the group. This lets the operator
     /// decide once per unique compound value, seeing all affected files.
-    pub fn from_compound_group(group: &CompoundGroup, read_db: &ReadOnlyDb) -> Option<Self> {
+    pub fn from_compound_group(group: &CompoundGroup, read_db: &ReadOnlyDb, zone: Zone) -> Option<Self> {
         if group.inodes.is_empty() {
             return None;
         }
 
-        // Load compound entry from the first inode's signal
-        let first_signal = read_db.get_compound_tag_signal(group.inodes[0]).ok()??;
-        let c = first_signal.compounds.iter()
+        // Load compound entry from the first inode's signal (dispatch by zone)
+        let first_compounds = if zone == Zone::Inbox {
+            read_db.get_inbox_compound_tag_signal(group.inodes[0]).ok()??.compounds
+        } else {
+            read_db.get_compound_tag_signal(group.inodes[0]).ok()??.compounds
+        };
+        let c = first_compounds.iter()
             .find(|c| c.tag_name == group.tag_name && c.compound_value == group.compound_value)?;
         let compound = CompoundEntry {
             tag_name: c.tag_name.clone(),
@@ -96,7 +100,7 @@ impl CompoundSplitDataV2 {
 
         for &inode in &group.inodes {
             if let Ok(Some(audio_file)) =
-                read_db.get_audio_file_by_inode(inode, crate::db::types::Zone::Corpus)
+                read_db.get_audio_file_by_inode(inode, zone)
             {
                 let path = audio_file.path();
                 let filename = Path::new(path)
@@ -164,6 +168,9 @@ pub struct CompoundSplitStateV2 {
     /// Loaded data (immutable during interaction)
     pub data: CompoundSplitDataV2,
 
+    /// Zone for file lookups and tag mutations
+    pub zone: Zone,
+
     /// Editable split parts (initialized from data.compound.split_parts)
     pub edited_parts: Vec<String>,
 
@@ -219,12 +226,14 @@ impl CompoundSplitStateV2 {
         is_safe_mode: bool,
         group_index: usize,
         total_groups: usize,
+        zone: Zone,
     ) -> Self {
         let edited_parts = data.compound.split_parts.clone();
         let selected_files: HashSet<usize> = (0..data.files.len()).collect();
 
         Self {
             data,
+            zone,
             edited_parts,
             selected_files,
             part_cursor: 0,
@@ -437,7 +446,7 @@ impl CompoundSplitStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus })]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: self.zone })]
         }
     }
 }

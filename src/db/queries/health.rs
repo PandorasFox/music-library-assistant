@@ -88,6 +88,11 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Failed to query compound tag signal: {}", e))
     }
 
+    pub fn get_inbox_compound_tag_signal(&self, inode: i64) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>> {
+        crate::meta::signals::data::InboxCompoundTagSignal::query_by_inode(&self.conn, inode)
+            .map_err(|e| anyhow::anyhow!("Failed to query inbox compound tag signal: {}", e))
+    }
+
     pub fn get_cross_source_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
         crate::meta::signals::data::CrossSourceOverlapSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query cross source overlap signals: {}", e))
@@ -174,6 +179,80 @@ impl Database {
                     if compound.tag_name != filter {
                         continue;
                     }
+                }
+
+                let key = (compound.tag_name.clone(), compound.compound_value.clone());
+                let entry = group_map.entry(key.clone());
+                use std::collections::hash_map::Entry;
+                match entry {
+                    Entry::Vacant(v) => {
+                        v.insert(vec![inode]);
+                        group_order.push(key);
+                    }
+                    Entry::Occupied(mut o) => {
+                        let inodes = o.get_mut();
+                        if !inodes.contains(&inode) {
+                            inodes.push(inode);
+                        }
+                    }
+                }
+            }
+        }
+
+        let results = group_order
+            .into_iter()
+            .filter_map(|key| {
+                let inodes = group_map.remove(&key)?;
+                Some(CompoundGroup {
+                    tag_name: key.0,
+                    compound_value: key.1,
+                    inodes,
+                })
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get inbox compound tag signal groups aggregated by (tag_name, compound_value).
+    ///
+    /// Simplified version for inbox zone: no safe_only or tag_filter (inbox is small).
+    /// Groups where the compound value has been marked canonical are excluded.
+    pub fn get_inbox_compound_signal_groups(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
+        use std::collections::HashMap;
+        use crate::meta::signals::data::{CompoundTagEntry as TypedEntry, CompoundGroup};
+
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, data FROM signal_inbox_compound_tag ORDER BY discovered_at DESC"
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((inode, blob))
+        })?;
+
+        let mut group_order: Vec<(String, String)> = Vec::new();
+        let mut group_map: HashMap<(String, String), Vec<i64>> = HashMap::new();
+
+        for row in rows {
+            let (inode, blob) = row?;
+
+            let compounds: Vec<TypedEntry> = match bincode::deserialize(&blob) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if compounds.is_empty() {
+                continue;
+            }
+
+            for compound in &compounds {
+                // Skip canonical values
+                if self.is_canonical_tag(&compound.tag_name, &compound.compound_value).unwrap_or(false) {
+                    continue;
                 }
 
                 let key = (compound.tag_name.clone(), compound.compound_value.clone());

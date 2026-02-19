@@ -304,9 +304,10 @@ impl App {
         let total = worker.total;
 
         // Load compound split data from the group via cache thread
+        // Progressive worker only used for corpus compound splits (Ctrl+A in safe mode)
         let group_clone = group.clone();
         let data = match self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group_clone, &db)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group_clone, &db, crate::db::types::Zone::Corpus)
         }).recv() {
             Some(d) => d,
             None => {
@@ -328,6 +329,7 @@ impl App {
             is_safe_mode,
             idx,
             total,
+            crate::db::types::Zone::Corpus,
         );
         let mutations = state.mutations();
 

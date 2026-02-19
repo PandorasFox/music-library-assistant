@@ -72,7 +72,8 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
                     InboxInsightAction::LaunchIntake
                     | InboxInsightAction::LaunchCorpusMatchResolution
                     | InboxInsightAction::LaunchInboxTagCanonicity
-                    | InboxInsightAction::LaunchOrganize => " \u{23CE}",
+                    | InboxInsightAction::LaunchOrganize
+                    | InboxInsightAction::LaunchInboxCompoundSplit => " \u{23CE}",
                     InboxInsightAction::Informational => "",
                 }
             };

@@ -1706,6 +1706,22 @@ impl CorpusSignalStore for InboxCompoundTagSignal {
     }
 }
 
+impl InboxCompoundTagSignal {
+    pub fn query_by_inode(conn: &Connection, inode: i64) -> Result<Option<Self>> {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT inode, path, data FROM signal_inbox_compound_tag WHERE inode = ?1",
+            rusqlite::params![inode],
+            |row| {
+                let blob: Vec<u8> = row.get(2)?;
+                let compounds: Vec<CompoundTagEntry> = bincode::deserialize(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                Ok(Self { inode: row.get(0)?, path: row.get(1)?, compounds })
+            },
+        ).optional()
+    }
+}
+
 impl AggregateSignalStore for EmbeddedDiscNumberSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_embedded_disc_number (
         key TEXT PRIMARY KEY,

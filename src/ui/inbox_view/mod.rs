@@ -43,6 +43,8 @@ pub enum InboxAction {
     LaunchInboxTagCanonicity,
     /// Launch inbox organize workflow
     LaunchOrganize,
+    /// Launch inbox compound tag split resolution
+    LaunchInboxCompoundSplit,
 }
 
 /// What action an inbox bucket entry triggers on Enter.
@@ -56,6 +58,8 @@ pub enum InboxInsightAction {
     LaunchInboxTagCanonicity,
     /// Launch inbox organize workflow
     LaunchOrganize,
+    /// Launch inbox compound tag split resolution
+    LaunchInboxCompoundSplit,
     /// Informational only, no action
     Informational,
 }
@@ -127,7 +131,7 @@ impl InboxViewState {
                 label: "Compound tags".to_string(),
                 count: data.compound_tags,
                 color: Color::LightBlue,
-                action: InboxInsightAction::Informational,
+                action: InboxInsightAction::LaunchInboxCompoundSplit,
             });
         }
 
@@ -187,6 +191,7 @@ impl InboxViewState {
                         InboxInsightAction::LaunchCorpusMatchResolution => InboxAction::LaunchCorpusMatchResolution,
                         InboxInsightAction::LaunchInboxTagCanonicity => InboxAction::LaunchInboxTagCanonicity,
                         InboxInsightAction::LaunchOrganize => InboxAction::LaunchOrganize,
+                        InboxInsightAction::LaunchInboxCompoundSplit => InboxAction::LaunchInboxCompoundSplit,
                         InboxInsightAction::Informational => InboxAction::None,
                     }
                 } else {

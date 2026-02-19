@@ -96,6 +96,7 @@ pub(crate) enum ActiveView {
         state: compound_split_v2::CompoundSplitStateV2,
         clusters: compound_split_v2::CompoundSplitClustersV2,
         safe_mode: bool,
+        zone: crate::db::types::Zone,
     },
 
     // Missing album singles resolution
@@ -209,6 +210,7 @@ pub(crate) enum SuspendedView {
     CompoundTagSplitReload {
         clusters: compound_split_v2::CompoundSplitClustersV2,
         safe_mode: bool,
+        zone: crate::db::types::Zone,
     },
 }
 

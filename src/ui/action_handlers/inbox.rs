@@ -53,6 +53,9 @@ impl App {
             InboxAction::LaunchOrganize => {
                 self.start_inbox_organize();
             }
+            InboxAction::LaunchInboxCompoundSplit => {
+                self.start_compound_split_resolution_for_zone(false, None, crate::db::types::Zone::Inbox);
+            }
         }
     }
 

@@ -303,6 +303,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_compound_tag_signal(inode)
     }
 
+    pub fn get_inbox_compound_tag_signal(&self, inode: i64) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>> {
+        self.db.get_inbox_compound_tag_signal(inode)
+    }
+
     pub fn get_cross_source_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
         self.db.get_cross_source_overlap_signals()
     }
@@ -363,6 +367,11 @@ impl<'a> ReadOnlyDb<'a> {
         tag_filter: Option<&str>,
     ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
         self.db.get_compound_signal_groups_by_safety(safe_only, tag_filter)
+    }
+
+    /// Get inbox compound tag signal groups aggregated by (tag_name, compound_value).
+    pub fn get_inbox_compound_signal_groups(&self) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
+        self.db.get_inbox_compound_signal_groups()
     }
 
     // =========================================================================

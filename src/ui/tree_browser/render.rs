@@ -9,9 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use crate::ui::widgets::control_colors;
 use crate::ui::widgets::CURSOR_STYLE;
 
-use super::entry::TreeEntry;
+use super::entry::{DeployMarker, TreeEntry};
 use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
 
@@ -25,8 +26,51 @@ pub fn render(
     render_corpus_browser(f, area, nav, variant);
 }
 
-/// Render corpus browser layout (filter bar + tree).
+/// Render corpus browser layout: content + hint line.
 fn render_corpus_browser(
+    f: &mut Frame,
+    area: Rect,
+    nav: &mut TreeNavigator,
+    variant: &mut BrowserVariant,
+) {
+    // Carve out 1 line at the bottom for control hints
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(8),    // Content (tree + optional panel)
+            Constraint::Length(1), // Control hints
+        ])
+        .split(area);
+
+    let content_area = outer[0];
+    let hints_area = outer[1];
+
+    // Check if config panel is open for horizontal split
+    let BrowserVariant::CorpusBrowser(ref v) = variant;
+    if v.config_panel.is_some() {
+        // Horizontal split: tree (65%) | config panel (35%)
+        let h_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+            .split(content_area);
+
+        render_corpus_tree(f, h_chunks[0], nav, variant);
+
+        // Render config panel
+        let BrowserVariant::CorpusBrowser(ref v) = variant;
+        if let Some(ref panel) = v.config_panel {
+            panel.render_config_panel(f, h_chunks[1]);
+        }
+    } else {
+        render_corpus_tree(f, content_area, nav, variant);
+    }
+
+    // Render control hints
+    render_hints(f, hints_area, nav, variant);
+}
+
+/// Render the corpus tree area (filter bar + tree pane + overlays).
+fn render_corpus_tree(
     f: &mut Frame,
     area: Rect,
     nav: &mut TreeNavigator,
@@ -101,6 +145,51 @@ fn render_tree_pane(f: &mut Frame, area: Rect, nav: &mut TreeNavigator) {
     f.render_widget(paragraph, area);
 }
 
+/// Render context-sensitive control hints at the bottom.
+fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &BrowserVariant) {
+    let BrowserVariant::CorpusBrowser(ref v) = variant;
+
+    let hints = if v.config_panel.is_some() {
+        // Config panel is open — hints are shown inside the panel itself
+        Line::from(vec![
+            control_colors::nav("^v"),
+            control_colors::text(" nav  "),
+            control_colors::confirm("Enter"),
+            control_colors::text(" edit  "),
+            control_colors::cancel("Esc"),
+            control_colors::text(" close panel"),
+        ])
+    } else {
+        // Standard tree browser hints
+        let cursor_entry = nav.current_entry();
+        let on_source_root = cursor_entry
+            .map(|e| e.deploy_marker == DeployMarker::SourceRoot)
+            .unwrap_or(false);
+        let on_dir = cursor_entry.map(|e| e.is_directory).unwrap_or(false);
+
+        let mut spans = vec![
+            control_colors::nav("^v"),
+            control_colors::text(" nav  "),
+            control_colors::nav("</>"),
+            control_colors::text(" expand  "),
+            control_colors::confirm("Enter"),
+            control_colors::text(if on_dir { " edit dir  " } else { " edit  " }),
+            control_colors::toggle("^F"),
+            control_colors::text(" filter"),
+        ];
+
+        if on_source_root {
+            spans.push(control_colors::text("  "));
+            spans.push(control_colors::edit("C"));
+            spans.push(control_colors::text(" config"));
+        }
+
+        Line::from(spans)
+    };
+
+    f.render_widget(Paragraph::new(hints), area);
+}
+
 /// Render a single tree entry line.
 fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
     let indent = "  ".repeat(entry.depth);
@@ -127,10 +216,10 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
         String::new()
     };
 
-    let deploy_suffix = if entry.is_directory && entry.configured_for_deploy {
-        "  [configured for deployment]"
-    } else {
-        ""
+    let (deploy_suffix, deploy_style) = match entry.deploy_marker {
+        DeployMarker::SourceRoot => ("  [D]", Style::default().fg(Color::Magenta)),
+        DeployMarker::Inherited => ("  [d]", Style::default().fg(Color::DarkGray)),
+        DeployMarker::None => ("", Style::default()),
     };
 
     let base_style = if is_cursor {
@@ -143,7 +232,6 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
 
     let expand_style = Style::default().fg(Color::Yellow);
     let count_style = Style::default().fg(Color::DarkGray);
-    let deploy_style = Style::default().fg(Color::Magenta);
 
     Line::from(vec![
         Span::raw(indent),

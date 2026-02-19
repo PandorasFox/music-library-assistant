@@ -50,7 +50,7 @@ impl App {
             ViewAction::VacuumPrompt(a) => self.handle_vacuum_prompt_action(a, witness.as_ref()),
             ViewAction::ConfigEditor(a) => self.handle_config_editor_action(a, witness.as_ref()),
             ViewAction::Insights(a) => self.handle_insights_action(a),
-            ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a),
+            ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a, witness.as_ref()),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
             ViewAction::Inbox(a) => self.handle_inbox_action(a, witness.as_ref()),
             ViewAction::TabbedTransactionReview(a) => self.handle_tabbed_transaction_review_action(a, witness.as_ref()),
@@ -789,7 +789,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_tree_browser_action(&mut self, action: tree_browser::TreeBrowserAction) {
+    pub(super) fn handle_tree_browser_action(&mut self, action: tree_browser::TreeBrowserAction, witness: Option<&witness::ConfirmationGesture>) {
         match action {
             tree_browser::TreeBrowserAction::None => {}
             tree_browser::TreeBrowserAction::Cancel => {
@@ -816,6 +816,128 @@ impl App {
                     context: FilterPopupContext::CorpusBrowser,
                 });
             }
+            tree_browser::TreeBrowserAction::OpenDirConfig(path) => {
+                self.open_dir_config_panel(path);
+            }
+            tree_browser::TreeBrowserAction::SaveDirConfig => {
+                if let Some(gesture) = witness {
+                    self.save_dir_config(gesture);
+                }
+            }
+            tree_browser::TreeBrowserAction::CloseDirConfig => {
+                self.close_dir_config_panel();
+            }
+        }
+    }
+
+    /// Open a dir config panel for the given absolute source root path.
+    fn open_dir_config_panel(&mut self, abs_path: std::path::PathBuf) {
+        let config = self.config();
+        let corpus_dir = config.corpus_dir();
+
+        // Strip corpus_dir prefix to get relative path
+        let relative = match abs_path.strip_prefix(&corpus_dir) {
+            Ok(r) => r.to_path_buf(),
+            Err(_) => return,
+        };
+
+        // Find matching SourceDir
+        let source = match config.get_source_for_relative_path(&relative) {
+            Some(sd) if sd.path == relative => sd.clone(),
+            _ => return,
+        };
+        drop(config);
+
+        let panel = tree_browser::variants::corpus::DirConfigPanelState {
+            source_path: source.path.clone(),
+            libraries: source.libraries.clone(),
+            can_stash_dupes: source.can_stash_dupes,
+            interior_dupes: source.interior_dupes,
+            orig_libraries: source.libraries.clone(),
+            orig_can_stash_dupes: source.can_stash_dupes,
+            orig_interior_dupes: source.interior_dupes,
+            field_cursor: 0,
+            focus: tree_browser::variants::corpus::PanelFocus::default(),
+            button_cursor: 0,
+            lib_cursor: None,
+            text_input: None,
+        };
+
+        if let super::active_view::ActiveView::CorpusBrowser(ref mut browser) = self.view {
+            browser.set_config_panel(panel);
+        }
+    }
+
+    /// Save dir config edits and stage decision.
+    fn save_dir_config(&mut self, gesture: &witness::ConfirmationGesture) {
+        // Extract panel data from the browser view
+        let (source_path, old_dir, new_dir) = {
+            let panel = match self.view {
+                super::active_view::ActiveView::CorpusBrowser(ref browser) => {
+                    match browser.config_panel() {
+                        Some(p) => p,
+                        None => return,
+                    }
+                }
+                _ => return,
+            };
+
+            if !panel.has_edits() {
+                // No edits, just close
+                self.close_dir_config_panel();
+                return;
+            }
+
+            let old_dir = crate::config::SourceDir {
+                path: panel.source_path.clone(),
+                libraries: panel.orig_libraries.clone(),
+                can_stash_dupes: panel.orig_can_stash_dupes,
+                interior_dupes: panel.orig_interior_dupes,
+            };
+            let new_dir = crate::config::SourceDir {
+                path: panel.source_path.clone(),
+                libraries: panel.libraries.clone(),
+                can_stash_dupes: panel.can_stash_dupes,
+                interior_dupes: panel.interior_dupes,
+            };
+            (panel.source_path.clone(), old_dir, new_dir)
+        };
+
+        let mutation = crate::meta::mutations::Mutation::ApplyDirConfigEdit(
+            crate::meta::mutations::dir_config_edit::ApplyDirConfigEditMutation {
+                source_path: source_path.clone(),
+                old_dir,
+                new_dir,
+            },
+        );
+
+        let key = DecisionKey::new(
+            DecisionSource::DirConfigEdit,
+            source_path.display().to_string(),
+        );
+        let label = format!("Dir config: {}", source_path.display());
+
+        let open_txn = self.open_txn_mode();
+        if !open_txn {
+            let _ = self.witch.start_transaction(&label);
+        }
+        let _ = super::operator_decisions::stage_decision(
+            &mut self.witch,
+            key,
+            &label,
+            vec![mutation],
+            gesture,
+        );
+
+        // Close panel
+        self.close_dir_config_panel();
+        self.after_staging_decisions();
+    }
+
+    /// Close the dir config panel.
+    fn close_dir_config_panel(&mut self) {
+        if let super::active_view::ActiveView::CorpusBrowser(ref mut browser) = self.view {
+            browser.clear_config_panel();
         }
     }
 

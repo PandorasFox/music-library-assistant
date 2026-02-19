@@ -29,19 +29,22 @@ pub fn handle_key(
         return TreeBrowserAction::Cancel;
     }
 
-    // Tab for lateral ring cycling (CorpusBrowser is always in the lateral ring)
-    match key.code {
-        KeyCode::Tab => {
-            return if key.modifiers.contains(KeyModifiers::SHIFT) {
-                TreeBrowserAction::CyclePrev
-            } else {
-                TreeBrowserAction::CycleNext
-            };
+    // Tab for lateral ring cycling — but NOT when variant captures navigation
+    // (config panel uses Tab internally for focus switching)
+    if !variant_captures_nav {
+        match key.code {
+            KeyCode::Tab => {
+                return if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    TreeBrowserAction::CyclePrev
+                } else {
+                    TreeBrowserAction::CycleNext
+                };
+            }
+            KeyCode::BackTab => {
+                return TreeBrowserAction::CyclePrev;
+            }
+            _ => {}
         }
-        KeyCode::BackTab => {
-            return TreeBrowserAction::CyclePrev;
-        }
-        _ => {}
     }
 
     // If variant wants navigation keys, delegate everything to it

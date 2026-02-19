@@ -12,6 +12,7 @@
 //! - **Focus-aware**: Widgets know when they're focused and style accordingly
 
 pub mod control_colors;
+pub mod detail_panel;
 pub mod file_path_list;
 mod layout;
 mod list_click_targets;

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
 
-use super::entry::TreeEntry;
+use super::entry::{DeployMarker, TreeEntry};
 
 /// Filter configuration for entry loading.
 #[derive(Debug, Clone, Copy, Default)]
@@ -135,7 +135,7 @@ impl TreeNavigator {
             let has_children = self.path_has_children(&self.root_path) || self.show_new_dir_entry;
             let item_count = self.count_audio_files(&self.root_path);
 
-            let root_configured = self.is_configured_for_deploy(&self.root_path);
+            let root_marker = self.deploy_marker_for(&self.root_path);
             let mut root_entry = TreeEntry::directory(
                 self.root_path.clone(),
                 root_name,
@@ -143,7 +143,7 @@ impl TreeNavigator {
                 has_children,
                 item_count,
             );
-            root_entry.configured_for_deploy = root_configured;
+            root_entry.deploy_marker = root_marker;
             root_entry.is_expanded = true;
             self.entries.push(root_entry);
 
@@ -331,7 +331,7 @@ impl TreeNavigator {
                     let has_children = self.path_has_children(&path) || self.show_new_dir_entry;
                     let item_count = self.count_audio_files(&path);
                     let mut entry = TreeEntry::directory(path.clone(), name, depth, has_children, item_count);
-                    entry.configured_for_deploy = self.is_configured_for_deploy(&path);
+                    entry.deploy_marker = self.deploy_marker_for(&path);
                     dirs.push(entry);
                 } else if self.filter.include_files && self.is_audio_file(&path) {
                     files.push(TreeEntry::file(path, name, depth));
@@ -463,9 +463,19 @@ impl TreeNavigator {
         &self.root_path
     }
 
-    /// Check if a directory path is under a configured deployment source.
-    fn is_configured_for_deploy(&self, path: &Path) -> bool {
-        self.deploy_source_paths.iter().any(|src| path.starts_with(src))
+    /// Compute deploy marker for a directory path.
+    fn deploy_marker_for(&self, path: &Path) -> DeployMarker {
+        for src in &self.deploy_source_paths {
+            if path == src.as_path() {
+                return DeployMarker::SourceRoot;
+            }
+        }
+        for src in &self.deploy_source_paths {
+            if path.starts_with(src) {
+                return DeployMarker::Inherited;
+            }
+        }
+        DeployMarker::None
     }
 
 }

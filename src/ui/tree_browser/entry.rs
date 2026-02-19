@@ -4,6 +4,17 @@
 
 use std::path::PathBuf;
 
+/// Deploy marker for a tree entry, distinguishing source roots from inherited dirs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeployMarker {
+    /// Not under any configured deployment source.
+    None,
+    /// Exact source directory root — C opens config panel here.
+    SourceRoot,
+    /// Under a source directory (inherited deployment config).
+    Inherited,
+}
+
 /// A single entry in the flattened tree view.
 ///
 /// Represents either a directory or an audio file. The tree is stored as a
@@ -24,8 +35,8 @@ pub struct TreeEntry {
     pub has_children: bool,
     /// Count of audio files in this directory (non-recursive, directories only)
     pub item_count: usize,
-    /// Whether this directory is under a configured deployment source
-    pub configured_for_deploy: bool,
+    /// Deploy marker: None, SourceRoot, or Inherited
+    pub deploy_marker: DeployMarker,
     /// Whether this is a synthetic UI-only entry (e.g., "[+ new directory]")
     pub is_synthetic: bool,
 }
@@ -47,7 +58,7 @@ impl TreeEntry {
             is_expanded: false,
             has_children,
             item_count,
-            configured_for_deploy: false,
+            deploy_marker: DeployMarker::None,
             is_synthetic: false,
         }
     }
@@ -62,7 +73,7 @@ impl TreeEntry {
             is_expanded: false,
             has_children: false,
             item_count: 0,
-            configured_for_deploy: false,
+            deploy_marker: DeployMarker::None,
             is_synthetic: false,
         }
     }
@@ -77,7 +88,7 @@ impl TreeEntry {
             is_expanded: false,
             has_children: false,
             item_count: 0,
-            configured_for_deploy: false,
+            deploy_marker: DeployMarker::None,
             is_synthetic: true,
         }
     }

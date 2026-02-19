@@ -37,6 +37,7 @@ pub enum DecisionSource {
     MissingAlbum,
     ManualReview,
     IntakeIndex,
+    DirConfigEdit,
 }
 
 impl std::fmt::Display for DecisionSource {
@@ -63,6 +64,7 @@ impl std::fmt::Display for DecisionSource {
             Self::MissingAlbum => write!(f, "Missing Album"),
             Self::ManualReview => write!(f, "Manual Review"),
             Self::IntakeIndex => write!(f, "Intake Index"),
+            Self::DirConfigEdit => write!(f, "Dir Config Edit"),
         }
     }
 }

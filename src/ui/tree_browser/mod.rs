@@ -156,4 +156,28 @@ impl TreeBrowserState {
     pub fn selected_path(&self) -> Option<&std::path::Path> {
         self.navigator.current_entry().map(|e| e.path.as_path())
     }
+
+    // =========================================================================
+    // Config Panel
+    // =========================================================================
+
+    /// Set the config panel state and switch focus to it.
+    pub fn set_config_panel(&mut self, panel: variants::corpus::DirConfigPanelState) {
+        let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
+        v.config_panel = Some(panel);
+        v.set_focus_config_panel();
+    }
+
+    /// Clear the config panel and return focus to tree.
+    pub fn clear_config_panel(&mut self) {
+        let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
+        v.config_panel = None;
+        v.set_focus_tree();
+    }
+
+    /// Get a reference to the config panel state, if open.
+    pub fn config_panel(&self) -> Option<&variants::corpus::DirConfigPanelState> {
+        let BrowserVariant::CorpusBrowser(ref v) = self.variant;
+        v.config_panel.as_ref()
+    }
 }

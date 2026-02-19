@@ -26,6 +26,7 @@ use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
 use super::album_art::EmbedAlbumArtMutation;
 use super::config_edit::ApplyConfigEditsMutation;
+use super::dir_config_edit::ApplyDirConfigEditMutation;
 
 // ============================================================================
 // TagOp - Incremental Tag Operations
@@ -326,6 +327,9 @@ pub enum Mutation {
     // ========================================================================
     /// Apply edited config to disk (comment-preserving KDL modification).
     ApplyConfigEdits(ApplyConfigEditsMutation),
+
+    /// Apply a source directory config edit to dirs.kdl.
+    ApplyDirConfigEdit(ApplyDirConfigEditMutation),
 }
 
 impl Mutation {
@@ -356,6 +360,7 @@ impl Mutation {
             Mutation::EmitExpectedMissingTag(m) => Some(m),
             Mutation::EmbedAlbumArt(m) => Some(m),
             Mutation::ApplyConfigEdits(m) => Some(m),
+            Mutation::ApplyDirConfigEdit(m) => Some(m),
             Mutation::DbMigration { .. } => None,
         }
     }
@@ -423,7 +428,8 @@ impl Mutation {
             | Mutation::EmitExpectedOverlap(_)
             | Mutation::EmitExpectedDuplicate(_)
             | Mutation::EmitExpectedMissingTag(_)
-            | Mutation::ApplyConfigEdits(_) => None,
+            | Mutation::ApplyConfigEdits(_)
+            | Mutation::ApplyDirConfigEdit(_) => None,
         }
     }
 
@@ -538,6 +544,9 @@ impl Mutation {
 
             // Config edits: no corpus directories affected
             Mutation::ApplyConfigEdits(_) => {}
+
+            // Dir config edits: no corpus directories affected
+            Mutation::ApplyDirConfigEdit(_) => {}
         }
 
         // Deduplicate directories

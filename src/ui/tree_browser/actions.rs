@@ -28,4 +28,13 @@ pub enum TreeBrowserAction {
 
     /// Open filter popup (Ctrl+F)
     OpenFilter,
+
+    /// Open directory config panel (C on source root)
+    OpenDirConfig(PathBuf),
+
+    /// Save dir config edits (Enter on Save button)
+    SaveDirConfig,
+
+    /// Close dir config panel (Esc or Discard)
+    CloseDirConfig,
 }

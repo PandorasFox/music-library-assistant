@@ -3,7 +3,7 @@
 //! Each variant provides a distinct, purpose-tuned mode for the tree browser.
 //! Currently only CorpusBrowser exists - DirectorySelector was removed as vestigial.
 
-mod corpus;
+pub mod corpus;
 
 pub use corpus::CorpusBrowserVariant;
 

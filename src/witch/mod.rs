@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config, SharedConfig};
-use crate::meta::computations::{Computation, asleep, awakening, awake};
+use crate::meta::computations::{Computation, observation, derivation, analysis};
 use crate::db::Database;
 use crate::meta::mutations::Mutation;
 use crate::db::write_thread::{self, DbThreadHandle, DbThreadStats};
@@ -201,7 +201,7 @@ pub struct Witch {
     /// Accumulated from ScanLibraryDirectory results in tick().
     /// Consumed by transition_to_completed() when awakening first drains,
     /// which queues ReconcileLibraryFiles with this data.
-    observed_library_files: Vec<awakening::ObservedLibraryFile>,
+    observed_library_files: Vec<derivation::ObservedLibraryFile>,
 
     /// Whether library reconciliation has completed in the current awakening cycle.
     /// Used for two-stage awakening transition:
@@ -435,7 +435,7 @@ impl Witch {
 
         // Queue corpus walk
         self.queue_computation_with_label(
-            Computation::Asleep(asleep::Computation::WalkCorpus {
+            Computation::Observation(observation::Computation::WalkCorpus {
                 root: resolver.corpus_dir(),
                 zone: "corpus".to_string(),
                 force_check,
@@ -447,7 +447,7 @@ impl Witch {
         let inbox_dir = resolver.inbox_dir();
         if inbox_dir.is_dir() {
             self.queue_computation_with_label(
-                Computation::Asleep(asleep::Computation::WalkCorpus {
+                Computation::Observation(observation::Computation::WalkCorpus {
                     root: inbox_dir,
                     zone: "inbox".to_string(),
                     force_check,
@@ -459,7 +459,7 @@ impl Witch {
         // Queue legacy library walk if enabled
         if self.legacy_enabled {
             self.queue_computation_with_label(
-                Computation::Asleep(asleep::Computation::WalkCorpus {
+                Computation::Observation(observation::Computation::WalkCorpus {
                     root: resolver.libraries_dir().join("legacy"),
                     zone: "legacy".to_string(),
                     force_check,
@@ -663,7 +663,7 @@ impl Witch {
         let mut queue_reobservation_after_reset = false;
         // Flag to queue ReconcileLibraryFiles after awakening stage 1
         let mut queue_reconcile_library_after_reset = false;
-        let mut reconcile_library_observed: Option<Vec<awakening::ObservedLibraryFile>> = None;
+        let mut reconcile_library_observed: Option<Vec<derivation::ObservedLibraryFile>> = None;
 
         // Extract session counters before transitioning
         let session_processed = match &self.work_state {
@@ -835,7 +835,7 @@ impl Witch {
         if queue_reconcile_library_after_reset {
             if let Some(observed) = reconcile_library_observed {
                 self.queue_computation_with_label(
-                    Computation::Awakening(awakening::Computation::ReconcileLibraryFiles {
+                    Computation::Derivation(derivation::Computation::ReconcileLibraryFiles {
                         observed_files: observed,
                     }),
                     Some("Reconciling library files".to_string()),
@@ -864,14 +864,14 @@ impl Witch {
         ));
 
         self.queue_computation_with_label(
-            Computation::Awakening(awakening::Computation::DeriveCorpusSignals {
+            Computation::Derivation(derivation::Computation::DeriveCorpusSignals {
                 observed_inodes: observed_corpus,
             }),
             Some("Deriving corpus signals".to_string()),
         );
 
         self.queue_computation_with_label(
-            Computation::Awakening(awakening::Computation::DeriveInboxSignals {
+            Computation::Derivation(derivation::Computation::DeriveInboxSignals {
                 observed_inodes: observed_inbox,
             }),
             Some("Deriving inbox signals".to_string()),
@@ -879,7 +879,7 @@ impl Witch {
 
         // Directory checks + library walks
         self.queue_computation_with_label(
-            Computation::Awakening(awakening::Computation::ScheduleSecondLevelDerivations),
+            Computation::Derivation(derivation::Computation::ScheduleSecondLevelDerivations),
             Some("Computing directory signals".to_string()),
         );
     }
@@ -940,7 +940,7 @@ impl Witch {
 
         // Queue corpus walk (mtime-optimized)
         self.queue_computation_with_label(
-            Computation::Asleep(asleep::Computation::WalkCorpus {
+            Computation::Observation(observation::Computation::WalkCorpus {
                 root: resolver.corpus_dir(),
                 zone: "corpus".to_string(),
                 force_check: false,
@@ -952,7 +952,7 @@ impl Witch {
         let inbox_dir = resolver.inbox_dir();
         if inbox_dir.is_dir() {
             self.queue_computation_with_label(
-                Computation::Asleep(asleep::Computation::WalkCorpus {
+                Computation::Observation(observation::Computation::WalkCorpus {
                     root: inbox_dir,
                     zone: "inbox".to_string(),
                     force_check: false,
@@ -977,14 +977,14 @@ impl Witch {
         ));
 
         self.queue_computation_with_label(
-            Computation::Awakening(awakening::Computation::DeriveCorpusSignals {
+            Computation::Derivation(derivation::Computation::DeriveCorpusSignals {
                 observed_inodes: observed_corpus,
             }),
             Some("Deriving corpus signals".to_string()),
         );
 
         self.queue_computation_with_label(
-            Computation::Awakening(awakening::Computation::DeriveInboxSignals {
+            Computation::Derivation(derivation::Computation::DeriveInboxSignals {
                 observed_inodes: observed_inbox,
             }),
             Some("Deriving inbox signals".to_string()),
@@ -1011,7 +1011,7 @@ impl Witch {
 
         // Re-walk corpus (mtime-optimized)
         self.queue_computation_with_label(
-            Computation::Asleep(asleep::Computation::WalkCorpus {
+            Computation::Observation(observation::Computation::WalkCorpus {
                 root: resolver.corpus_dir(),
                 zone: "corpus".to_string(),
                 force_check: false,
@@ -1023,7 +1023,7 @@ impl Witch {
         let inbox_dir = resolver.inbox_dir();
         if inbox_dir.is_dir() {
             self.queue_computation_with_label(
-                Computation::Asleep(asleep::Computation::WalkCorpus {
+                Computation::Observation(observation::Computation::WalkCorpus {
                     root: inbox_dir,
                     zone: "inbox".to_string(),
                     force_check: false,
@@ -1035,7 +1035,7 @@ impl Witch {
         // Re-walk legacy library if enabled (mtime-optimized)
         if self.legacy_enabled {
             self.queue_computation_with_label(
-                Computation::Asleep(asleep::Computation::WalkCorpus {
+                Computation::Observation(observation::Computation::WalkCorpus {
                     root: resolver.libraries_dir().join("legacy"),
                     zone: "legacy".to_string(),
                     force_check: false,
@@ -1062,7 +1062,7 @@ impl Witch {
 
         // Queue the orchestrator computation that will spawn all detection computations
         self.queue_computation_with_label(
-            Computation::Awake(awake::Computation::ScheduleContentAnalysis { scope }),
+            Computation::Analysis(analysis::Computation::ScheduleContentAnalysis { scope }),
             Some("Analyzing metadata".to_string()),
         );
     }

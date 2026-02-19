@@ -4,9 +4,9 @@
 //! - `ComputationWitness` - Proof of computation execution context
 //!
 //! Phase-specific computation enums and result types are in:
-//! - `asleep/mod.rs` - Asleep phase (corpus observation)
-//! - `awakening/mod.rs` - Awakening phase (first-level derivations)
-//! - `awake/mod.rs` - Awake phase (full-corpus analysis)
+//! - `observation/mod.rs` - Observation phase (corpus observation)
+//! - `derivation/mod.rs` - Derivation phase (first-level derivations)
+//! - `analysis/mod.rs` - Analysis phase (full-corpus analysis)
 
 // ============================================================================
 // ComputationWitness - Proof of Computation Execution Context

@@ -1,14 +1,14 @@
-//! Asleep-phase computations: Corpus observation.
+//! Observation-phase computations: Corpus observation.
 //!
-//! These computations run during the "Asleep" (eye Closed) phase at startup.
+//! These computations run during the Observation phase at startup.
 //! They observe the corpus filesystem state without making any inferences
 //! about index correctness. Their purpose is pure file discovery.
 //!
 //! ## Phase Boundary Enforcement
 //!
-//! The `Result` type's `spawn` field can ONLY contain `asleep::Computation`.
-//! This is enforced at compile time - attempting to spawn an Awakening or
-//! Awake computation from an Asleep executor will fail to compile.
+//! The `Result` type's `spawn` field can ONLY contain `observation::Computation`.
+//! This is enforced at compile time - attempting to spawn a Derivation or
+//! Analysis computation from an Observation executor will fail to compile.
 //!
 //! ## Computations
 //!
@@ -27,13 +27,13 @@ use std::path::PathBuf;
 pub use executors::*;
 
 // ============================================================================
-// Asleep Computation Enum
+// Observation Computation Enum
 // ============================================================================
 
-/// A computation that runs during the Asleep (eye Closed) phase.
+/// A computation that runs during the Observation phase.
 ///
 /// These computations observe the corpus filesystem state. They can only
-/// spawn other Asleep computations.
+/// spawn other Observation computations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Computation {
     /// Phase 1: Walk corpus directory tree to collect file state.
@@ -122,12 +122,12 @@ impl Computation {
 }
 
 // ============================================================================
-// Asleep Result
+// Observation Result
 // ============================================================================
 
-/// Result of executing an Asleep-phase computation.
+/// Result of executing an Observation-phase computation.
 ///
-/// The `spawn` field can ONLY contain `asleep::Computation`. This is the
+/// The `spawn` field can ONLY contain `observation::Computation`. This is the
 /// compile-time enforcement mechanism for phase boundaries.
 #[derive(Debug)]
 pub struct Result {
@@ -135,7 +135,7 @@ pub struct Result {
     pub success: bool,
     pub error: Option<String>,
     pub duration_ms: u64,
-    /// Follow-up computations - ONLY Asleep computations allowed.
+    /// Follow-up computations - ONLY Observation computations allowed.
     pub spawn: Vec<Computation>,
     /// Corpus inodes observed on disk during this computation (inode → relative path).
     pub observed_corpus_inodes: HashMap<i64, String>,

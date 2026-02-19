@@ -143,7 +143,7 @@ pub fn execute_derive_deploy_health_signals(
     sender.clear_aggregate_by_key_prefix::<LibraryLeftoverSignal>(&leftover_prefix, witness);
     sender.clear_aggregate_by_key_prefix::<LibraryStaleSignal>(&stale_prefix, witness);
 
-    // Query library file data from Awakening phase
+    // Query library file data from Derivation phase
     let library_scan_entries = match read_only_db.get_library_files(library_name) {
         Ok(entries) => entries,
         Err(e) => {

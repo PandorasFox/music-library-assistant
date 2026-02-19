@@ -28,7 +28,7 @@ pub fn execute_schedule_content_analysis(
         scope, run_all
     ));
 
-    // Note: OOB tag change classification is now handled in Asleep phase by VerifyTags
+    // Note: OOB tag change classification is now handled in Observation phase by VerifyTags
     //
     // AnalyzeFingerprintOverlaps and ClusterDirectoryOverlaps are NOT spawned here.
     // They depend on FingerprintOverlap signals written by DetectFingerprintOverlaps,

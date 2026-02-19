@@ -1,14 +1,14 @@
-//! Awakening-phase computations: First-level derivations.
+//! Derivation-phase computations: First-level derivations.
 //!
-//! These computations run during the "Awakening" phase after Asleep completes.
+//! These computations run during the Derivation phase after Observation completes.
 //! They derive first-level signals by comparing corpus observations (FileInCorpus)
 //! against the index to produce: UnindexedFile, MissingFile, HealthyFile.
 //!
 //! ## Phase Boundary Enforcement
 //!
-//! The `Result` type's `spawn` field can ONLY contain `awakening::Computation`.
-//! This is enforced at compile time - attempting to spawn an Asleep or
-//! Awake computation from an Awakening executor will fail to compile.
+//! The `Result` type's `spawn` field can ONLY contain `derivation::Computation`.
+//! This is enforced at compile time - attempting to spawn an Observation or
+//! Analysis computation from a Derivation executor will fail to compile.
 //!
 //! ## Computations
 //!
@@ -48,13 +48,13 @@ pub struct ObservedLibraryFile {
 }
 
 // ============================================================================
-// Awakening Computation Enum
+// Derivation Computation Enum
 // ============================================================================
 
-/// A computation that runs during the Awakening phase.
+/// A computation that runs during the Derivation phase.
 ///
 /// These computations derive first-level signals from corpus observations.
-/// They can only spawn other Awakening computations.
+/// They can only spawn other Derivation computations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Computation {
     /// Schedule second-level signal derivations.
@@ -68,7 +68,7 @@ pub enum Computation {
     /// - disk_only (disk - indexed) → InboxUnindexed signals
     /// - both (disk ∩ indexed) → InboxHealthy signals
     DeriveInboxSignals {
-        /// Inbox inodes observed on disk during the Asleep phase (inode → relative path).
+        /// Inbox inodes observed on disk during the Observation phase (inode → relative path).
         /// Accumulated by the Witch from ScanCorpusDirectory results.
         observed_inodes: HashMap<i64, String>,
     },
@@ -80,7 +80,7 @@ pub enum Computation {
     /// - index_only (indexed - disk) → MissingFile signals
     /// - both (disk ∩ indexed) → check OOB, emit HealthyFile or spawn verification
     DeriveCorpusSignals {
-        /// Corpus inodes observed on disk during the Asleep phase (inode → relative path).
+        /// Corpus inodes observed on disk during the Observation phase (inode → relative path).
         /// Accumulated by the Witch from ScanCorpusDirectory results.
         observed_inodes: HashMap<i64, String>,
     },
@@ -111,7 +111,7 @@ pub enum Computation {
     /// Scan a single library directory.
     ///
     /// Collects (path, inode) pairs and stores them in files table (source='library').
-    /// Deploy health derivation happens in Awake phase.
+    /// Deploy health derivation happens in Analysis phase.
     ScanLibraryDirectory {
         directory: PathBuf,
         library_name: String,
@@ -189,12 +189,12 @@ impl Computation {
 }
 
 // ============================================================================
-// Awakening Result
+// Derivation Result
 // ============================================================================
 
-/// Result of executing an Awakening-phase computation.
+/// Result of executing a Derivation-phase computation.
 ///
-/// The `spawn` field can ONLY contain `awakening::Computation`. This is the
+/// The `spawn` field can ONLY contain `derivation::Computation`. This is the
 /// compile-time enforcement mechanism for phase boundaries.
 #[derive(Debug)]
 pub struct Result {
@@ -202,7 +202,7 @@ pub struct Result {
     pub success: bool,
     pub error: Option<String>,
     pub duration_ms: u64,
-    /// Follow-up computations - ONLY Awakening computations allowed.
+    /// Follow-up computations - ONLY Derivation computations allowed.
     pub spawn: Vec<Computation>,
     /// Library files observed on disk during ScanLibraryDirectory.
     /// Accumulated by the Witch and consumed by ReconcileLibraryFiles.

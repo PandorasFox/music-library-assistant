@@ -18,9 +18,9 @@
 //!
 //! Computations are organized into three phases with compile-time enforced boundaries:
 //!
-//! - **Asleep** (`asleep/`) - Corpus observation (WalkCorpus, ScanCorpusDirectory, etc.)
-//! - **Awakening** (`awakening/`) - First-level derivations (DeriveDirectorySignals, etc.)
-//! - **Awake** (`awake/`) - Full-corpus analysis (DetectFingerprintDuplicates, etc.)
+//! - **Observation** (`observation/`) - Corpus observation (WalkCorpus, ScanCorpusDirectory, etc.)
+//! - **Derivation** (`derivation/`) - First-level derivations (DeriveDirectorySignals, etc.)
+//! - **Analysis** (`analysis/`) - Full-corpus analysis (DetectFingerprintDuplicates, etc.)
 //!
 //! Each phase has its own `Computation` enum and `Result` type. The `Result::spawn`
 //! field can ONLY contain computations from the same phase - this is enforced at
@@ -31,18 +31,18 @@
 //! - `types.rs` - ComputationWitness (shared across phases)
 //! - `stats.rs` - Thread-local performance tracking
 //! - `helpers.rs` - Shared utility functions
-//! - `asleep/` - Asleep phase computations
-//! - `awakening/` - Awakening phase computations
-//! - `awake/` - Awake phase computations
+//! - `observation/` - Observation phase computations
+//! - `derivation/` - Derivation phase computations
+//! - `analysis/` - Analysis phase computations
 
 // Module declarations
 mod types;
 pub mod traits;
 mod stats;
 mod helpers;
-pub mod asleep;
-pub mod awakening;
-pub mod awake;
+pub mod observation;
+pub mod derivation;
+pub mod analysis;
 
 // Public re-exports
 pub use types::ComputationWitness;
@@ -64,18 +64,18 @@ use stats::{ensure_thread_id, record_task_stats};
 /// are enforced at the point where computations SPAWN other computations.
 #[derive(Debug, Clone)]
 pub enum Computation {
-    Asleep(asleep::Computation),
-    Awakening(awakening::Computation),
-    Awake(awake::Computation),
+    Observation(observation::Computation),
+    Derivation(derivation::Computation),
+    Analysis(analysis::Computation),
 }
 
 impl Computation {
     /// Get a human-readable label for this computation.
     pub fn label(&self) -> &'static str {
         match self {
-            Computation::Asleep(c) => c.label(),
-            Computation::Awakening(c) => c.label(),
-            Computation::Awake(c) => c.label(),
+            Computation::Observation(c) => c.label(),
+            Computation::Derivation(c) => c.label(),
+            Computation::Analysis(c) => c.label(),
         }
     }
 }
@@ -93,57 +93,57 @@ pub struct ComputationResult {
     pub success: bool,
     pub error: Option<String>,
     pub duration_ms: u64,
-    /// Asleep computations to spawn
-    pub spawn_asleep: Vec<asleep::Computation>,
-    /// Awakening computations to spawn
-    pub spawn_awakening: Vec<awakening::Computation>,
-    /// Awake computations to spawn
-    pub spawn_awake: Vec<awake::Computation>,
+    /// Observation computations to spawn
+    pub spawn_observation: Vec<observation::Computation>,
+    /// Derivation computations to spawn
+    pub spawn_derivation: Vec<derivation::Computation>,
+    /// Analysis computations to spawn
+    pub spawn_analysis: Vec<analysis::Computation>,
     /// Corpus inodes observed on disk during this computation (inode → relative path).
     pub observed_corpus_inodes: HashMap<i64, String>,
     /// Inbox inodes observed on disk during this computation (inode → relative path).
     pub observed_inbox_inodes: HashMap<i64, String>,
     /// Library files observed on disk during ScanLibraryDirectory.
-    pub observed_library_files: Vec<awakening::ObservedLibraryFile>,
+    pub observed_library_files: Vec<derivation::ObservedLibraryFile>,
 }
 
 impl ComputationResult {
-    fn from_asleep(result: asleep::Result) -> Self {
+    fn from_observation(result: observation::Result) -> Self {
         Self {
             success: result.success,
             error: result.error,
             duration_ms: result.duration_ms,
-            spawn_asleep: result.spawn,
-            spawn_awakening: Vec::new(),
-            spawn_awake: Vec::new(),
+            spawn_observation: result.spawn,
+            spawn_derivation: Vec::new(),
+            spawn_analysis: Vec::new(),
             observed_corpus_inodes: result.observed_corpus_inodes,
             observed_inbox_inodes: result.observed_inbox_inodes,
             observed_library_files: Vec::new(),
         }
     }
 
-    fn from_awakening(result: awakening::Result) -> Self {
+    fn from_derivation(result: derivation::Result) -> Self {
         Self {
             success: result.success,
             error: result.error,
             duration_ms: result.duration_ms,
-            spawn_asleep: Vec::new(),
-            spawn_awakening: result.spawn,
-            spawn_awake: Vec::new(),
+            spawn_observation: Vec::new(),
+            spawn_derivation: result.spawn,
+            spawn_analysis: Vec::new(),
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: result.observed_library_files,
         }
     }
 
-    fn from_awake(result: awake::Result) -> Self {
+    fn from_analysis(result: analysis::Result) -> Self {
         Self {
             success: result.success,
             error: result.error,
             duration_ms: result.duration_ms,
-            spawn_asleep: Vec::new(),
-            spawn_awakening: Vec::new(),
-            spawn_awake: result.spawn,
+            spawn_observation: Vec::new(),
+            spawn_derivation: Vec::new(),
+            spawn_analysis: result.spawn,
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),
@@ -153,14 +153,14 @@ impl ComputationResult {
     /// Get all spawned computations as unified Computation enums.
     pub fn all_spawned(&self) -> Vec<Computation> {
         let mut result = Vec::new();
-        for c in &self.spawn_asleep {
-            result.push(Computation::Asleep(c.clone()));
+        for c in &self.spawn_observation {
+            result.push(Computation::Observation(c.clone()));
         }
-        for c in &self.spawn_awakening {
-            result.push(Computation::Awakening(c.clone()));
+        for c in &self.spawn_derivation {
+            result.push(Computation::Derivation(c.clone()));
         }
-        for c in &self.spawn_awake {
-            result.push(Computation::Awake(c.clone()));
+        for c in &self.spawn_analysis {
+            result.push(Computation::Analysis(c.clone()));
         }
         result
     }
@@ -197,9 +197,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
         };
 
         let compute_result = match computation {
-            Computation::Asleep(c) => ComputationResult::from_asleep(c.execute(&ctx)),
-            Computation::Awakening(c) => ComputationResult::from_awakening(c.execute(&ctx)),
-            Computation::Awake(c) => ComputationResult::from_awake(c.execute(&ctx)),
+            Computation::Observation(c) => ComputationResult::from_observation(c.execute(&ctx)),
+            Computation::Derivation(c) => ComputationResult::from_derivation(c.execute(&ctx)),
+            Computation::Analysis(c) => ComputationResult::from_analysis(c.execute(&ctx)),
         };
 
         // Log timing (only on first access when connection is opened, and only if timing instrumentation enabled)
@@ -221,9 +221,9 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             success: false,
             error: Some(format!("DB access failed: {}", e)),
             duration_ms: start.elapsed().as_millis() as u64,
-            spawn_asleep: Vec::new(),
-            spawn_awakening: Vec::new(),
-            spawn_awake: Vec::new(),
+            spawn_observation: Vec::new(),
+            spawn_derivation: Vec::new(),
+            spawn_analysis: Vec::new(),
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),

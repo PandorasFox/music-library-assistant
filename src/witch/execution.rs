@@ -28,7 +28,7 @@ use std::os::unix::fs::MetadataExt;
 use std::time::Instant;
 
 use crate::config;
-use crate::meta::computations::{Computation, awakening, with_read_only_db};
+use crate::meta::computations::{Computation, derivation, with_read_only_db};
 use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::meta::mutations::{Mutation, PendingSignal};
@@ -392,12 +392,12 @@ fn apply_post_execution(
         };
         let abs = resolver.resolve(&rel);
         if paths::is_corpus_path(&rel) {
-            spawned.push(Computation::Awakening(
-                awakening::Computation::UpdateCorpusFileSignals { path: abs }
+            spawned.push(Computation::Derivation(
+                derivation::Computation::UpdateCorpusFileSignals { path: abs }
             ));
         } else if paths::is_library_path(&rel) {
-            spawned.push(Computation::Awakening(
-                awakening::Computation::UpdateLibraryFileSignals { path: abs }
+            spawned.push(Computation::Derivation(
+                derivation::Computation::UpdateLibraryFileSignals { path: abs }
             ));
         }
     }

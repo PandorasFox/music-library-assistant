@@ -1,14 +1,14 @@
-//! Awake-phase computations: Full-corpus analysis.
+//! Analysis-phase computations: Full-corpus analysis.
 //!
-//! These computations run during the "Awake" phase after Awakening completes.
+//! These computations run during the Analysis phase after Derivation completes.
 //! They perform full-corpus-scope analysis: duplicate detection, tag analysis,
 //! deploy health derivation. These require complete corpus awareness.
 //!
 //! ## Phase Boundary Enforcement
 //!
-//! The `Result` type's `spawn` field can ONLY contain `awake::Computation`.
-//! This is enforced at compile time - attempting to spawn an Asleep or
-//! Awakening computation from an Awake executor will fail to compile.
+//! The `Result` type's `spawn` field can ONLY contain `analysis::Computation`.
+//! This is enforced at compile time - attempting to spawn an Observation or
+//! Derivation computation from an Analysis executor will fail to compile.
 //!
 //! ## Computations
 //!
@@ -29,7 +29,7 @@
 //! - `DetectDeployConflicts` - Bulk detection of deploy path collisions
 //! - `DeriveDeployHealthSignals` - Derive library health signals from scan data
 //!
-//! Note: OOB tag change classification is now handled in the Asleep phase by
+//! Note: OOB tag change classification is now handled in the Observation phase by
 //! `VerifyTags` which directly emits OutOfBandTagSync, OutOfBandTagConflict,
 //! or MtimeOnlyMismatch signals.
 
@@ -57,13 +57,13 @@ pub use inbox_matches::*;
 pub use inbox_tags::*;
 
 // ============================================================================
-// Awake Computation Enum
+// Analysis Computation Enum
 // ============================================================================
 
-/// A computation that runs during the Awake phase.
+/// A computation that runs during the Analysis phase.
 ///
 /// These computations perform full-corpus-scope analysis. They can only
-/// spawn other Awake computations.
+/// spawn other Analysis computations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Computation {
     /// Schedule all content analysis computations.
@@ -277,12 +277,12 @@ impl Computation {
 }
 
 // ============================================================================
-// Awake Result
+// Analysis Result
 // ============================================================================
 
-/// Result of executing an Awake-phase computation.
+/// Result of executing an Analysis-phase computation.
 ///
-/// The `spawn` field can ONLY contain `awake::Computation`. This is the
+/// The `spawn` field can ONLY contain `analysis::Computation`. This is the
 /// compile-time enforcement mechanism for phase boundaries.
 #[derive(Debug)]
 pub struct Result {
@@ -290,7 +290,7 @@ pub struct Result {
     pub success: bool,
     pub error: Option<String>,
     pub duration_ms: u64,
-    /// Follow-up computations - ONLY Awake computations allowed.
+    /// Follow-up computations - ONLY Analysis computations allowed.
     pub spawn: Vec<Computation>,
 }
 

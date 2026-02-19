@@ -31,9 +31,9 @@ src/
 │       ├── types.rs                # ComputationWitness sealed module
 │       ├── helpers.rs              # Signal emission/clearing helpers
 │       ├── stats.rs                # Thread-local stats + read-only DB connections
-│       ├── asleep/                 # Filesystem observation (no inference)
-│       ├── awakening/              # First-level derivations
-│       └── awake/                  # Full-corpus analysis
+│       ├── observation/             # Filesystem observation (no inference)
+│       ├── derivation/             # First-level derivations
+│       └── analysis/               # Full-corpus analysis
 │           ├── schedule.rs         # ScheduleContentAnalysis
 │           ├── duplicates.rs       # Fingerprint overlaps, metadata dupes, cross-source
 │           ├── tags.rs             # Missing tags, canonicalization, compounds

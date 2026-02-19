@@ -1,6 +1,6 @@
-//! Awakening-phase computation executors.
+//! Derivation-phase computation executors.
 //!
-//! These functions implement the actual logic for Awakening computations.
+//! These functions implement the actual logic for Derivation computations.
 
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
@@ -825,13 +825,13 @@ pub fn execute_update_library_file_signals(
     let path_str = relative_path.to_string_lossy().to_string();
 
     // For library files, we check if the file exists and clear any leftover/stale signals
-    // The full library health is recomputed during the Awake phase
+    // The full library health is recomputed during the Analysis phase
     if path.exists() && is_audio_file(path) {
         // File exists - clear any LibraryLeftover/LibraryStale for this path
         clear_library_signals_for_path(&sender, &path_str, witness);
     }
     // If file doesn't exist, LibraryLeftover signals will be created during
-    // the next full library scan in the Awake phase
+    // the next full library scan in the Analysis phase
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

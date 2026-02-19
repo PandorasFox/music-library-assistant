@@ -20,7 +20,7 @@ All mutation code lives in `src/meta/mutations/`:
 Mutations are operator-confirmed changes to the corpus or index. All mutations:
 - Require a `DecisionWitness` (created via `Witch::with_operator_decision()`)
 - Execute in worker threads with write-capable database connections
-- Can spawn follow-up computations (Awakening phase only)
+- Can spawn follow-up computations (Derivation phase only)
 - Can emit or clear signals
 
 ---
@@ -230,7 +230,7 @@ Spawn chaining ensures:
 ### Post-Mutation Signal Lifecycle
 
 All successful mutations that affect file paths:
-1. Spawn awakening-phase computations (`UpdateCorpusFileSignals` or `UpdateLibraryFileSignals`)
+1. Spawn derivation-phase computations (`UpdateCorpusFileSignals` or `UpdateLibraryFileSignals`)
 2. Before recomputation, per-file signals are wiped via `delete_signals_for_path()`
 3. Spawned computations re-derive the current state
 

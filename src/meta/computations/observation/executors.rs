@@ -1,6 +1,6 @@
-//! Asleep-phase computation executors.
+//! Observation-phase computation executors.
 //!
-//! These functions implement the actual logic for Asleep computations.
+//! These functions implement the actual logic for Observation computations.
 
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;

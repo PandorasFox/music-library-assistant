@@ -9,7 +9,7 @@ use rusqlite::params;
 
 use super::Database;
 use crate::db::types::Zone;
-use crate::meta::computations::awake::QualityTier;
+use crate::meta::computations::analysis::QualityTier;
 
 impl Database {
     // ========================================================================
@@ -1265,8 +1265,8 @@ impl Database {
     }
 
     /// Get quality tier for an inode from audio_info (for comparison).
-    fn get_quality_tier(&self, inode: i64) -> Option<crate::meta::computations::awake::QualityTier> {
-        use crate::meta::computations::awake::quality_tier_of;
+    fn get_quality_tier(&self, inode: i64) -> Option<crate::meta::computations::analysis::QualityTier> {
+        use crate::meta::computations::analysis::quality_tier_of;
 
         let mut stmt = self.conn.prepare(
             "SELECT file_type, bitrate_kbps, sample_rate FROM audio_info WHERE inode = ?1"

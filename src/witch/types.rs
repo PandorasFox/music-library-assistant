@@ -391,7 +391,7 @@ pub(super) struct TaskResult {
     /// Inbox inodes observed on disk during this computation (inode → relative path).
     pub observed_inbox_inodes: HashMap<i64, String>,
     /// Library files observed on disk during ScanLibraryDirectory.
-    pub observed_library_files: Vec<crate::meta::computations::awakening::ObservedLibraryFile>,
+    pub observed_library_files: Vec<crate::meta::computations::derivation::ObservedLibraryFile>,
 }
 
 // ============================================================================

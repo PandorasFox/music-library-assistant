@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 // --- Simple signals (all flat columns, no BLOB needed) ---
 
 /// File exists in corpus directory.
-/// Emitted during corpus walk (Asleep phase).
+/// Emitted during corpus walk (Observation phase).
 #[derive(Debug, Clone)]
 pub struct FileInCorpusSignal {
     pub inode: i64,
@@ -49,7 +49,7 @@ pub struct HealthyFileSignal {
 // ============================================================================
 
 /// File exists in inbox directory.
-/// Emitted during inbox walk (Asleep phase).
+/// Emitted during inbox walk (Observation phase).
 #[derive(Debug, Clone)]
 pub struct FileInInboxSignal {
     pub inode: i64,

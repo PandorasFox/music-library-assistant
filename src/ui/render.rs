@@ -35,7 +35,7 @@ pub fn render_app(
     if let ActiveView::Progress { ref screen, ref eye } = app.view {
         // For non-eyeballing phases, provide animated eye frame
         let eye_frame = if screen.uses_closed_eye() {
-            None // Uses its own closed/awakening eye
+            None // Uses its own closed/derivation eye
         } else {
             // Awake phase - use animated eye
             Some(match eye.current_frame() {

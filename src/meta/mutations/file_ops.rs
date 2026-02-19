@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::meta::computations::{Computation, awakening};
+use crate::meta::computations::{Computation, derivation};
 use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::*;
 
@@ -268,7 +268,7 @@ impl MutationExecutor for HardLinkMutation {
     }
 
     fn additional_computations(&self) -> Vec<Computation> {
-        vec![Computation::Awakening(awakening::Computation::UpdateDeploySignals {
+        vec![Computation::Derivation(derivation::Computation::UpdateDeploySignals {
             corpus_path: self.source.clone(),
             library_path: self.destination.clone(),
         })]

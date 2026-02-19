@@ -10,9 +10,9 @@ All computation code lives in `src/meta/computations/`:
 - **Witness**: `types.rs` (ComputationWitness sealed module)
 - **Helpers**: `helpers.rs` (signal emission/clearing helpers)
 - **Stats**: `stats.rs` (thread-local stats + read-only DB connections)
-- **Asleep phase**: `asleep/mod.rs`, `asleep/executors.rs`
-- **Awakening phase**: `awakening/mod.rs`, `awakening/executors.rs`
-- **Awake phase**: `awake/mod.rs`, `awake/schedule.rs`, `awake/duplicates.rs`, `awake/tags.rs`, `awake/deploy.rs`, `awake/formats.rs`, `awake/inbox_matches.rs`
+- **Observation phase**: `observation/mod.rs`, `observation/executors.rs`
+- **Derivation phase**: `derivation/mod.rs`, `derivation/executors.rs`
+- **Analysis phase**: `analysis/mod.rs`, `analysis/schedule.rs`, `analysis/duplicates.rs`, `analysis/tags.rs`, `analysis/deploy.rs`, `analysis/formats.rs`, `analysis/inbox_matches.rs`
 
 ## Phase Overview
 
@@ -20,9 +20,9 @@ MM uses three-phase computations with compile-time enforced boundaries:
 
 | Phase | Purpose | Triggers |
 |-------|---------|----------|
-| **Asleep** | Pure corpus filesystem observation without inference | Startup, periodic eyeball |
-| **Awakening** | First-level derivations comparing observations to index | After Asleep completes |
-| **Awake** | Full-corpus analysis requiring complete awareness | After Awakening completes |
+| **Observation** | Pure corpus filesystem observation without inference | Startup, periodic rescan |
+| **Derivation** | First-level derivations comparing observations to index | After Observation completes |
+| **Analysis** | Full-corpus analysis requiring complete awareness | After Derivation completes |
 
 **Phase Boundary Enforcement**: Each phase has its own `Result` struct with a `spawn: Vec<PhaseComputation>` field that only accepts that phase's computations. Attempting to spawn a computation from a different phase will result in a compile error.
 
@@ -30,7 +30,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 
 ## Computations by Phase
 
-### Asleep Phase
+### Observation Phase
 
 | Computation | Description |
 |-------------|-------------|
@@ -39,7 +39,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | VerifyMtime | Check file modification times for changes |
 | VerifyTags | Verify disk tags match indexed tags, emit classification signals |
 
-### Awakening Phase
+### Derivation Phase
 
 | Computation | Description |
 |-------------|-------------|
@@ -52,7 +52,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | ScanLibraryDirectory | Scan library directory, return observed files to Witch |
 | ReconcileLibraryFiles | Reconcile observed library files against DB (set reconciliation) |
 
-### Awake Phase
+### Analysis Phase
 
 | Computation | Description |
 |-------------|-------------|
@@ -80,17 +80,17 @@ MM uses three-phase computations with compile-time enforced boundaries:
 
 ## Computation Signal Matrix
 
-### Asleep Phase Computations
+### Observation Phase Computations
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
 | WalkCorpus | ScanCorpusDirectory × N (propagates `force_check`) | — | — |
-| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus (corpus zone), FileInInbox (inbox zone) | — | Also indexes directory entry (is_dir=1) in files table with read guard (skips write if entry already matches by zone+inode+mtime). Returns observed inodes to the Witch via Result (accumulated in tick(), consumed by queue_awakening_computations()). |
+| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus (corpus zone), FileInInbox (inbox zone) | — | Also indexes directory entry (is_dir=1) in files table with read guard (skips write if entry already matches by zone+inode+mtime). Returns observed inodes to the Witch via Result (accumulated in tick(), consumed by queue_derivation_computations()). |
 | VerifyMtime | VerifyTags (if mtime differs) | — | — |
 | VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) |
 | VerifyAudio | — | CorruptFile | CorruptFile (if audio valid) |
 
-### Awakening Phase Computations
+### Derivation Phase Computations
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
@@ -102,9 +102,9 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | UpdateDeploySignals | — | DeployedHealthy | DeployReady, LibraryLeftover, LibraryStale |
 | WalkLibrary | ScanLibraryDirectory × N | — | — |
 | ScanLibraryDirectory | — | — | — | Returns observed library files to the Witch via Result (accumulated in tick()). No direct DB writes. |
-| ReconcileLibraryFiles | — | — | — | Set reconciliation: compares observed files against DB. Upserts new/changed files, deletes stale files, skips unchanged. Queued by the Witch after awakening stage 1 drains (two-stage awakening transition). |
+| ReconcileLibraryFiles | — | — | — | Set reconciliation: compares observed files against DB. Upserts new/changed files, deletes stale files, skips unchanged. Queued by the Witch after derivation stage 1 drains (two-stage derivation transition). |
 
-### Awake Phase Computations
+### Analysis Phase Computations
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|

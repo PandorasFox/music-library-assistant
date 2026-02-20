@@ -529,6 +529,19 @@ impl MigrationRegistry {
             },
         });
 
+        // v17→v18: Create signal_path_tag_mismatch table
+        registry.register(Migration {
+            from_version: 17,
+            to_version: 18,
+            description: "Create signal_path_tag_mismatch table for filename-tag schema mismatch detection",
+            apply: |db| {
+                use crate::meta::signals::store::CorpusSignalStore;
+                use crate::meta::signals::data::PathTagMismatchSignal;
+                db.conn().execute_batch(PathTagMismatchSignal::TABLE_SQL)?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

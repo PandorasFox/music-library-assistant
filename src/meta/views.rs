@@ -63,6 +63,8 @@ pub struct TagSquashBucket {
     pub missing_album_single_count: usize,
     /// Albums with disc number embedded in the ALBUM tag
     pub embedded_disc_number_count: usize,
+    /// Files where filename-derived tags don't match embedded tags
+    pub path_tag_mismatch_count: usize,
 }
 
 /// Entry for tag squash signals (grouped by tag name)

@@ -65,7 +65,7 @@ fn render_insights_list(f: &mut Frame, area: Rect, state: &mut InsightsViewState
     y = corpus_y;
 
     let (placeholder_items, placeholder_y) = bucket_items_with_targets(
-        "Similar Tag Issues",
+        "Tag health",
         &state.cached_entries.placeholder,
         FocusedBucket::Placeholder,
         &state.focused_bucket,
@@ -713,6 +713,26 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             lines.push(Line::from(Span::styled(
                 "Extract to DISCNUMBER + clean ALBUM.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
+        InsightType::PathTagMismatch => {
+            lines.push(Line::from(Span::styled(
+                "Filename Tag Schema Issues",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Files where tags derived from the",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "filename path don't match embedded",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "tag values.",
+                Style::default().fg(text_color),
             )));
         }
 

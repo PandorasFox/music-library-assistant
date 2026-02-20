@@ -56,6 +56,7 @@ impl Database {
         total += LibraryStaleSignal::count(&self.conn).unwrap_or(0);
         total += EmbeddableAlbumArtSignal::count(&self.conn).unwrap_or(0);
         total += EmbeddedDiscNumberSignal::count(&self.conn).unwrap_or(0);
+        total += PathTagMismatchSignal::count(&self.conn).unwrap_or(0);
         total
     }
 
@@ -576,6 +577,8 @@ impl Database {
 
         let embedded_disc_number_count = self.count_signal_type("embedded_disc_number")?;
 
+        let path_tag_mismatch_count = self.count_signal_type("path_tag_mismatch")?;
+
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
             subpar_duplicate_count,
@@ -586,6 +589,7 @@ impl Database {
             embeddable_album_art,
             missing_album_single_count,
             embedded_disc_number_count,
+            path_tag_mismatch_count,
         })
     }
 
@@ -735,6 +739,7 @@ impl Database {
             "inbox_missing_tag" => InboxMissingTagSignal::count(&self.conn)?,
             "inbox_compound_tag" => InboxCompoundTagSignal::count(&self.conn)?,
             "embedded_disc_number" => EmbeddedDiscNumberSignal::count(&self.conn)?,
+            "path_tag_mismatch" => PathTagMismatchSignal::count(&self.conn)?,
             _ => 0,
         };
         Ok(count)

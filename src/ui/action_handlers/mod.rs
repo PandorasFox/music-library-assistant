@@ -399,6 +399,9 @@ impl App {
                     Some(insights_view::InsightAction::LaunchEmbeddedDiscNumberResolution) => {
                         self.status_message = Some("Not yet implemented".to_string());
                     }
+                    Some(insights_view::InsightAction::LaunchPathTagMismatchResolution) => {
+                        self.status_message = Some("Not yet implemented".to_string());
+                    }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         self.status_message = Some("Not yet implemented".to_string());
                     }
@@ -817,14 +820,15 @@ impl App {
         };
 
         // Find exact matching SourceDir, or use defaults for new entry
-        let (libraries, can_stash_dupes, interior_dupes) =
+        let (libraries, can_stash_dupes, interior_dupes, path_schema) =
             match config.get_source_for_relative_path(&relative) {
                 Some(sd) if sd.path == relative => {
-                    (sd.libraries.clone(), sd.can_stash_dupes, sd.interior_dupes)
+                    (sd.libraries.clone(), sd.can_stash_dupes, sd.interior_dupes,
+                     sd.path_schema.as_ref().map(|s| s.template.clone()))
                 }
                 _ => {
                     // Defaults for a new (unconfigured) directory
-                    (vec![], true, true)
+                    (vec![], true, true, None)
                 }
             };
         drop(config);
@@ -834,9 +838,11 @@ impl App {
             libraries: libraries.clone(),
             can_stash_dupes,
             interior_dupes,
+            path_schema: path_schema.clone(),
             orig_libraries: libraries,
             orig_can_stash_dupes: can_stash_dupes,
             orig_interior_dupes: interior_dupes,
+            orig_path_schema: path_schema,
             field_cursor: 0,
             focus: tree_browser::variants::corpus::PanelFocus::default(),
             button_cursor: 0,
@@ -874,12 +880,14 @@ impl App {
                 libraries: panel.orig_libraries.clone(),
                 can_stash_dupes: panel.orig_can_stash_dupes,
                 interior_dupes: panel.orig_interior_dupes,
+                path_schema: panel.orig_path_schema.as_ref().and_then(|t| crate::config::parse_path_schema(t).ok()),
             };
             let new_dir = crate::config::SourceDir {
                 path: panel.source_path.clone(),
                 libraries: panel.libraries.clone(),
                 can_stash_dupes: panel.can_stash_dupes,
                 interior_dupes: panel.interior_dupes,
+                path_schema: panel.path_schema.as_ref().and_then(|t| crate::config::parse_path_schema(t).ok()),
             };
             (panel.source_path.clone(), old_dir, new_dir)
         };

@@ -143,6 +143,7 @@ pub enum InsightType {
     EmbeddableAlbumArt,
     MissingAlbumSingle,
     EmbeddedDiscNumber,
+    PathTagMismatch,
     // Other bucket - dynamic entries identified by index
     OtherSignal { index: usize },
 }
@@ -176,6 +177,7 @@ impl InsightType {
             | InsightType::InconsistentAlbumArtist
             | InsightType::MissingAlbumSingle
             | InsightType::EmbeddedDiscNumber
+            | InsightType::PathTagMismatch
             | InsightType::OtherSignal { .. } => None,
         }
     }
@@ -220,6 +222,8 @@ pub enum InsightAction {
     LaunchMissingAlbumSingleResolution,
     /// Launch embedded disc number resolution
     LaunchEmbeddedDiscNumberResolution,
+    /// Launch path-tag schema mismatch resolution
+    LaunchPathTagMismatchResolution,
     /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available
@@ -369,6 +373,18 @@ impl BucketEntry {
             color: if count > 0 { Color::Yellow } else { Color::DarkGray },
             rank: 0,
             action: InsightAction::LaunchEmbeddedDiscNumberResolution,
+        }
+    }
+
+    /// Create path-tag mismatch entry
+    fn path_tag_mismatch(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::PathTagMismatch,
+            label: "Filename tag schema issues".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            rank: 0,
+            action: InsightAction::LaunchPathTagMismatchResolution,
         }
     }
 
@@ -570,6 +586,11 @@ impl CachedBucketEntries {
         // Embedded disc numbers
         if bucket.embedded_disc_number_count > 0 {
             entries.push(BucketEntry::embedded_disc_number(bucket.embedded_disc_number_count));
+        }
+
+        // Path-tag schema mismatches
+        if bucket.path_tag_mismatch_count > 0 {
+            entries.push(BucketEntry::path_tag_mismatch(bucket.path_tag_mismatch_count));
         }
 
         // Embeddable album art at bottom
@@ -984,6 +1005,7 @@ mod tests {
                 embeddable_album_art: 0,
                 missing_album_single_count: 0,
                 embedded_disc_number_count: 0,
+                path_tag_mismatch_count: 0,
             },
             bucket_other: OtherSignalsBucket {
                 entries: vec![],

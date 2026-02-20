@@ -12,6 +12,12 @@ If you still want a flat albumartist/album/track library-presentation of your mu
 
 recording soon(tm)
 
+## Project State
+
+This software is best described as being in the late-beta stage, where I'm mostly doing new feature work. The underlying systems (mutations engine, work queueing, subsystem threading, transaction system) have been finalized and polished, with most work being done at the UI business-logic level now. Feel free to give it a try :)
+
+I'm still experimenting with some UI systems and patterns (making information panes toggle-able? marquee-style scrolling on long paths to make them fit on one line?) to balance information verbosity & availability with UI readability and coherency as my next main focus as I add new trivial signals & computations for various tag comprehensions.
+
 ## Installation
 
 ```bash
@@ -32,40 +38,7 @@ The binary will be at `target/release/mm`.
 
 ## Configuration
 
-MM requires a config file at `$XDG_CONFIG_HOME/mm/config.kdl` (or `~/.config/mm/config.kdl`):
-
-There will, eventually, be a built-in config editor + first-time setup wizard. For now, though: woe, config file be upon ye.
-
-```kdl
-// Archive root - corpus/, libraries/, and stash/ are derived subdirectories
-root "/path/to/your/archive"
-
-// Define source directories and their library deployment targets
-// Paths are relative to <root>/corpus/
-dir "web/releases/bandcamp" {
-    library "music"
-}
-
-dir "physical/vinyls" {
-    library "music"
-}
-
-// Configure behavior (all have sensible defaults)
-opinions {
-    // Capture lossy formats (MP3, M4A, etc.) to FLAC instead of transcoding to Opus
-    // lossy-shit-formats-to-flac true
-
-    startup {
-        // force-check-all-files false
-    }
-
-    fingerprint-matching {
-        // duration-tolerance-percent 10.0
-    }
-}
-```
-
-See `config.kdl.example` for a complete example with additional options.
+MM has a built-in config editor application config. Directory-level configs are also handled inside the directory browser :)
 
 ## Usage
 
@@ -86,11 +59,15 @@ All corpus-mutating operations are tracked as composable, reversible algebraic c
 
 All corpus-mutation operations *must* be confirmed via a user's Enter keypress. This is enforced at compile-time thanks to some clever Rust sealed trait usage.
 
-## Disclaimer & Architecture
+## Disclaimer
 
 I leverage claude for this project because I have mild dyslexia and struggle with the writing-side - I can and have written thousands of lines of Rust before, but it melts my brain. Doing rigorous design work followed by code review, testing, and integration/cleanup verification is necessary in all of this, but I've still found it to ultimately be more effective than hand-writing everything. Writing broken code and throwing it out is something I can both do by hand, and with a tool, with the main difference being where in the process I spend my time.
 
 After all, the problem spaces of "reason about metadata tags, calculate levenshtein distances, apply bulk compute" are both largely solved, and things I can do in my sleep after 5 years of youtube cdn ops work.
+
+Overall, I've found this project to be pretty wonderful for exercising my design and code review habits, as it's in a domain space I'm intimately familiar with, and this is largely all code I _have_ written before in some form or another.
+
+## Architecture
 
 This software has been designed at the systems level alongside rust's type system with this in mind:
 

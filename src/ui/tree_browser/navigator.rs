@@ -71,6 +71,9 @@ pub struct TreeNavigator {
     /// Absolute paths of primary zone directories (corpus, inbox, stash).
     /// Top-level entries not in this set are dimmed.
     primary_zone_paths: Vec<PathBuf>,
+    /// Directories that don't exist on disk yet but should appear in the tree.
+    /// Used by the inbox organize workflow for directories planned but not yet created.
+    pending_dirs: Vec<PathBuf>,
 }
 
 impl TreeNavigator {
@@ -98,6 +101,7 @@ impl TreeNavigator {
             deploy_source_paths,
             show_new_dir_entry: false,
             primary_zone_paths,
+            pending_dirs: Vec::new(),
         };
         nav.load_initial();
         nav
@@ -253,6 +257,26 @@ impl TreeNavigator {
         }
     }
 
+    /// Register a directory that doesn't exist on disk yet but should appear in the tree.
+    ///
+    /// If the parent is currently expanded, refreshes its children to include the new entry.
+    pub fn add_pending_dir(&mut self, path: PathBuf) {
+        if self.pending_dirs.contains(&path) {
+            return;
+        }
+        self.pending_dirs.push(path.clone());
+
+        // If the parent is currently expanded, refresh its children to pick up the new entry
+        if let Some(parent) = path.parent() {
+            let parent = parent.to_path_buf();
+            if let Some(idx) = self.entries.iter().position(|e| e.path == parent && e.is_expanded) {
+                self.collapse_at(idx);
+                self.entries[idx].is_expanded = true;
+                self.load_children_at(idx);
+            }
+        }
+    }
+
     /// Navigate to a specific path, expanding ancestors as needed.
     pub fn navigate_to_path(&mut self, target: &Path) {
         // Build path from root to target
@@ -370,6 +394,30 @@ impl TreeNavigator {
                 }
             }
         }
+
+        // Include pending directories that are direct children of this parent
+        for pending in &self.pending_dirs {
+            if pending.parent() == Some(parent) {
+                let already_present = dirs.iter().any(|d| d.path == *pending);
+                if !already_present {
+                    let name = pending.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let has_children = self.show_new_dir_entry;
+                    let mut entry = TreeEntry::directory(pending.clone(), name, depth, has_children, 0);
+                    entry.deploy_marker = self.deploy_marker_for(pending);
+                    if is_root_parent && !self.primary_zone_paths.is_empty()
+                        && !self.primary_zone_paths.iter().any(|z| z == pending)
+                    {
+                        entry.is_dimmed = true;
+                    }
+                    dirs.push(entry);
+                }
+            }
+        }
+
+        // Sort directories by name so pending dirs interleave correctly
+        dirs.sort_by(|a, b| a.name.cmp(&b.name));
 
         // Optionally prepend synthetic "[+ new directory]" entry
         let mut result = Vec::new();

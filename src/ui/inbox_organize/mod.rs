@@ -304,10 +304,12 @@ impl InboxOrganizeState {
                 match self.popup_selection {
                     EmplaceOption::EmplaceDirectory => {
                         self.generate_emplace_directory_mutations();
+                        self.register_pending_dest();
                         self.advance_to_next_dir()
                     }
                     EmplaceOption::EmplaceFiles => {
                         self.generate_emplace_files_mutations();
+                        self.register_pending_dest();
                         self.advance_to_next_dir()
                     }
                     EmplaceOption::Skip => {
@@ -320,6 +322,18 @@ impl InboxOrganizeState {
                 }
             }
             _ => InboxOrganizeAction::None,
+        }
+    }
+
+    // =========================================================================
+    // Pending Directory Tracking
+    // =========================================================================
+
+    /// If the selected destination doesn't exist on disk yet, register it as a
+    /// pending directory in the tree navigator so it appears for subsequent groups.
+    fn register_pending_dest(&mut self) {
+        if !self.selected_dest.exists() {
+            self.corpus_navigator.add_pending_dir(self.selected_dest.clone());
         }
     }
 

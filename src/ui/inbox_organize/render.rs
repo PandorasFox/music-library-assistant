@@ -194,9 +194,15 @@ fn render_emplace_popup(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
         .map(|d| d.dir_path.to_string_lossy().to_string())
         .unwrap_or_else(|| "?".to_string());
 
-    let dest_name = state.selected_dest.file_name()
+    let root = state.corpus_navigator.root_path();
+    let root_name = root.file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| state.selected_dest.to_string_lossy().to_string());
+        .unwrap_or_else(|| "corpus".to_string());
+    let dest_display = match state.selected_dest.strip_prefix(root) {
+        Ok(rel) if rel.as_os_str().is_empty() => root_name,
+        Ok(rel) => format!("{}/{}", root_name, rel.display()),
+        Err(_) => state.selected_dest.to_string_lossy().to_string(),
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -230,7 +236,7 @@ fn render_emplace_popup(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("  Into:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("corpus/{}", dest_name), Style::default().fg(Color::Cyan)),
+            Span::styled(dest_display, Style::default().fg(Color::Cyan)),
         ])),
         content_chunks[1],
     );

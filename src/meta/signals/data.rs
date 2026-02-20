@@ -245,6 +245,41 @@ pub struct CompoundTagEntry {
     pub matching_parts: Vec<String>,
 }
 
+/// File's path disagrees with its tags according to a configured path-tag schema.
+#[derive(Debug, Clone)]
+pub struct PathTagMismatchSignal {
+    pub inode: i64,
+    pub path: String,
+    /// Serialized as bincode BLOB.
+    pub data: PathTagMismatchData,
+}
+
+/// Bincode-serialized payload for PathTagMismatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathTagMismatchData {
+    pub source_dir: String,
+    pub schema_template: String,
+    pub mismatch_kind: PathMismatchKind,
+}
+
+/// The kind of path-tag mismatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PathMismatchKind {
+    /// Path doesn't match the schema's expected structure at all.
+    StructureMismatch { description: String },
+    /// Path matches the structure but extracted values differ from DB tags.
+    ValueMismatch { mismatches: Vec<PathTagValueMismatch> },
+}
+
+/// A single tag value mismatch between path-extracted value and DB value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathTagValueMismatch {
+    pub tag_name: String,
+    pub path_value: String,
+    /// None = tag missing from DB entirely.
+    pub db_value: Option<String>,
+}
+
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
 #[derive(Debug, Clone)]
@@ -631,6 +666,7 @@ pub enum TypedSignalWrite {
     OutOfBandTagConflict(OutOfBandTagConflictSignal),
     SubparDuplicate(SubparDuplicateSignal),
     CompoundTag(CompoundTagSignal),
+    PathTagMismatch(PathTagMismatchSignal),
     // Aggregate signals (semantic-keyed)
     CanonicalTag(CanonicalTagSignal),
     LibraryLeftover(LibraryLeftoverSignal),
@@ -679,6 +715,7 @@ impl TypedSignalWrite {
             Self::OutOfBandTagConflict(s) => s.insert(conn),
             Self::SubparDuplicate(s) => s.insert(conn),
             Self::CompoundTag(s) => s.insert(conn),
+            Self::PathTagMismatch(s) => s.insert(conn),
             Self::CanonicalTag(s) => s.insert(conn),
             Self::LibraryLeftover(s) => s.insert(conn),
             Self::LibraryStale(s) => s.insert(conn),
@@ -726,6 +763,7 @@ impl TypedSignalWrite {
             Self::OutOfBandTagConflict(s) => OutOfBandTagConflictSignal::exists(conn, s.inode),
             Self::SubparDuplicate(s) => SubparDuplicateSignal::exists(conn, s.inode),
             Self::CompoundTag(s) => CompoundTagSignal::exists(conn, s.inode),
+            Self::PathTagMismatch(s) => PathTagMismatchSignal::exists(conn, s.inode),
             Self::CanonicalTag(s) => CanonicalTagSignal::exists(conn, &s.key),
             Self::LibraryLeftover(s) => LibraryLeftoverSignal::exists(conn, &s.key),
             Self::LibraryStale(s) => LibraryStaleSignal::exists(conn, &s.key),
@@ -784,6 +822,11 @@ impl TypedSignalWrite {
             }
             Self::CompoundTag(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.compounds) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::PathTagMismatch(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }
             }

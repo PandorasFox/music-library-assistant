@@ -123,8 +123,9 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     }
 
     fn recomputation_scope(&self) -> RecomputationScope {
-        // Deploy/duplicate computations depend on source dir config
-        RecomputationScope::FILES | RecomputationScope::DEPLOY
+        // Deploy/duplicate computations depend on source dir config.
+        // TAGS included because path-tag schema analysis depends on both tags and files.
+        RecomputationScope::FILES | RecomputationScope::DEPLOY | RecomputationScope::TAGS
     }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
@@ -151,6 +152,15 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                 "Interior dupes",
                 old.interior_dupes,
                 new.interior_dupes,
+            ));
+        }
+        let old_schema = old.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
+        let new_schema = new.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
+        if old_schema != new_schema {
+            diffs.push(DiffEntry::new(
+                "Path schema",
+                old_schema,
+                new_schema,
             ));
         }
 

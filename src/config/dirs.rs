@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::fs;
 use super::types::SourceDir;
+use super::path_schema::parse_path_schema;
 use mm_utils::get_config_dir;
 
 /// Parse dirs.kdl into a Vec<SourceDir>.
@@ -36,6 +37,7 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                 libraries: Vec::new(),
                 can_stash_dupes: true,
                 interior_dupes: true,
+                path_schema: None,
             };
 
             if let Some(children) = node.children() {
@@ -56,6 +58,21 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                         "interior-dupes" => {
                             if let Some(entry) = child.entries().first() {
                                 source.interior_dupes = entry.value().as_bool().unwrap_or(true);
+                            }
+                        }
+                        "path-schema" => {
+                            if let Some(entry) = child.entries().first() {
+                                if let Some(template) = entry.value().as_string() {
+                                    match parse_path_schema(template) {
+                                        Ok(schema) => source.path_schema = Some(schema),
+                                        Err(e) => {
+                                            crate::logging::log_general(format!(
+                                                "[CONFIG] Warning: invalid path-schema for {:?}: {}",
+                                                source.path, e
+                                            ));
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -87,6 +104,9 @@ fn serialize_dirs_kdl(dirs: &[SourceDir]) -> String {
         }
         if !dir.interior_dupes {
             out.push_str("    interior-dupes false\n");
+        }
+        if let Some(ref schema) = dir.path_schema {
+            out.push_str(&format!("    path-schema \"{}\"\n", schema.template));
         }
         out.push_str("}\n");
     }
@@ -143,16 +163,36 @@ dir "web/releases/indie" {
                 libraries: vec!["music".to_string()],
                 can_stash_dupes: false,
                 interior_dupes: false,
+                path_schema: None,
             },
             SourceDir {
                 path: PathBuf::from("web/releases/indie"),
                 libraries: vec!["music".to_string(), "soundtracks".to_string()],
                 can_stash_dupes: true,
                 interior_dupes: true,
+                path_schema: None,
             },
         ];
 
         let serialized = serialize_dirs_kdl(&dirs);
+        let reparsed = parse_dirs_kdl(&serialized).unwrap();
+        assert_eq!(dirs, reparsed);
+    }
+
+    #[test]
+    fn test_dirs_kdl_round_trip_with_schema() {
+        let dirs = vec![
+            SourceDir {
+                path: PathBuf::from("web/releases/bandcamp"),
+                libraries: vec!["music".to_string()],
+                can_stash_dupes: true,
+                interior_dupes: true,
+                path_schema: Some(parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST - $TITLE").unwrap()),
+            },
+        ];
+
+        let serialized = serialize_dirs_kdl(&dirs);
+        assert!(serialized.contains("path-schema"));
         let reparsed = parse_dirs_kdl(&serialized).unwrap();
         assert_eq!(dirs, reparsed);
     }

@@ -7,6 +7,7 @@ mod performance;
 mod dirs;
 mod parse;
 mod edit;
+pub mod path_schema;
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -26,6 +27,7 @@ pub use types::{
 pub use performance::{init_performance_config, get_worker_thread_count, get_db_cache_kb, is_timing_enabled};
 pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};
 pub use edit::write_config_to_disk;
+pub use path_schema::parse_path_schema;
 
 use parse::parse_kdl_config;
 

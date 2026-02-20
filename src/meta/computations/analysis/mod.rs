@@ -41,6 +41,7 @@ mod formats;
 mod album_art;
 mod inbox_matches;
 mod inbox_tags;
+mod path_schema;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -55,6 +56,7 @@ pub use formats::*;
 pub use album_art::*;
 pub use inbox_matches::*;
 pub use inbox_tags::*;
+pub use path_schema::*;
 
 // ============================================================================
 // Analysis Computation Enum
@@ -197,6 +199,12 @@ pub enum Computation {
     /// "Album Name, Disc 2", extracting disc number and cleaned album.
     /// Emits EmbeddedDiscNumber aggregate signals.
     DetectEmbeddedDiscNumbers,
+
+    /// Detect path-tag mismatches against configured schemas.
+    ///
+    /// For source dirs with path-schema configs, checks whether each file's
+    /// path structure agrees with its DB tags. Emits PathTagMismatch signals.
+    DetectPathTagMismatches,
 }
 
 impl Computation {
@@ -224,6 +232,7 @@ impl Computation {
             Computation::DetectInboxMissingTags => "Detecting inbox missing tags",
             Computation::DetectInboxCompoundTags => "Detecting inbox compound tags",
             Computation::DetectEmbeddedDiscNumbers => "Detecting embedded disc numbers",
+            Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
         }
     }
 
@@ -292,6 +301,9 @@ impl Computation {
             }
             Computation::DetectEmbeddedDiscNumbers => {
                 execute_detect_embedded_disc_numbers(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectPathTagMismatches => {
+                execute_detect_path_tag_mismatches(ctx.read_db, ctx.witness, ctx.start)
             }
         }
     }

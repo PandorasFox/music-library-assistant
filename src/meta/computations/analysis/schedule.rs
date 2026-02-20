@@ -61,6 +61,7 @@ pub fn execute_schedule_content_analysis(
     // Cross-domain: tags OR files
     if run_all || s.touches_any(&[RecomputationScope::TAGS, RecomputationScope::FILES]) {
         spawn.push(Computation::DetectMetadataDuplicates);
+        spawn.push(Computation::DetectPathTagMismatches);
     }
 
     // Deploy-sensitive: files OR deploy OR tags (deploy path depends on tags+files)
@@ -107,7 +108,7 @@ pub fn execute_schedule_content_analysis(
         spawn.push(Computation::DetectInboxCompoundTags);
     }
 
-    let total_possible = 16; // approximate total without library-specific ones
+    let total_possible = 17; // approximate total without library-specific ones
     log_general(format!(
         "[COMPUTE] ScheduleContentAnalysis: spawning {} computations (of ~{} possible)",
         spawn.len(), total_possible

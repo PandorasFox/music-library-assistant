@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
+use super::path_schema::PathTagSchema;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub root: PathBuf,
@@ -327,6 +329,9 @@ pub struct SourceDir {
     /// Whether intra-source duplicates should be flagged (default: true).
     /// When false, duplicate groups entirely within this source are suppressed.
     pub interior_dupes: bool,
+    /// Optional path-tag schema: expected file path structure expressed as tag placeholders.
+    /// When set, files under this source dir are checked for path-tag agreement.
+    pub path_schema: Option<PathTagSchema>,
 }
 
 /// Shared config wrapped in `Arc<RwLock<Config>>` for thread-safe read/write access.
@@ -437,6 +442,22 @@ impl Config {
             .iter()
             .filter(|sd| relative_path.starts_with(&sd.path))
             .max_by_key(|sd| sd.path.as_os_str().len())
+    }
+
+    /// Get the path-tag schema for a relative corpus path.
+    ///
+    /// Walks matching SourceDirs from most specific to least specific.
+    /// Returns the first schema found (child overrides parent).
+    pub fn get_schema_for_relative_path(&self, relative_path: &Path) -> Option<&PathTagSchema> {
+        // Collect all matching source dirs, sorted longest path first.
+        let mut matching: Vec<&SourceDir> = self.source_dirs
+            .iter()
+            .filter(|sd| relative_path.starts_with(&sd.path))
+            .collect();
+        matching.sort_by(|a, b| b.path.as_os_str().len().cmp(&a.path.as_os_str().len()));
+
+        // Return first schema found (most specific wins).
+        matching.iter().find_map(|sd| sd.path_schema.as_ref())
     }
 
     // =========================================================================

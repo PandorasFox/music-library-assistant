@@ -28,6 +28,8 @@ pub enum DetailWidget<'a> {
         cursor: Option<usize>,
         edited: bool,
     },
+    /// Single-line text value, editable with Enter.
+    Text { value: &'a str, edited: bool },
 }
 
 /// A button at the bottom of the panel.
@@ -100,6 +102,19 @@ pub fn render_detail_panel(
                 lines.push(Line::from(vec![
                     Span::styled(format!("{}: ", field.label), label_style),
                     Span::styled(val_str.to_string(), val_style),
+                ]));
+            }
+            DetailWidget::Text { value, edited } => {
+                let val_style = if is_focused {
+                    CURSOR_STYLE
+                } else if *edited {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{}: ", field.label), label_style),
+                    Span::styled(value.to_string(), val_style),
                 ]));
             }
             DetailWidget::StringItems { items, cursor, edited } => {

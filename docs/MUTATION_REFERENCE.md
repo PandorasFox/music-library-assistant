@@ -163,6 +163,7 @@ The EmitExpectedMissingTag mutation is used when an operator confirms that certa
 | Mutation | Spawns Mutations | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|------------------|---------------------|-----------------|-----------------|-------|
 | ApplyConfigEdits | — | — | — | — | Writes edited config to disk via comment-preserving KDL modification. Returns new Config in `TaskResult.config_update` for in-memory update via `Witch::update_shared_config()` |
+| ApplyDirConfigEdit | — | — | — | — | Writes edited source directory config to dirs.kdl. Replaces a single SourceDir entry by matching on path. Fields: libraries, can_stash_dupes, interior_dupes, path_schema. Recomputation scope: FILES \| DEPLOY \| TAGS |
 
 The ApplyConfigEdits mutation is created by the Config Editor view when the operator saves edited config fields. It carries the original KDL text, old config, and new config. On execution, it backs up `config.kdl` to `config.kdl.bak`, then applies field-level edits to the KDL document preserving comments and formatting. The new config is propagated back to the main thread via `TaskResult.config_update`, where `Witch::tick()` updates the `SharedConfig` (Arc<RwLock<Config>>). `is_db_only: false` (writes to filesystem), `signal_clear_scope: None`, `affected_inodes: empty`. No spawned computations or signal effects.
 

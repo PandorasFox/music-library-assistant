@@ -69,12 +69,14 @@ pub struct DirConfigPanelState {
     pub libraries: Vec<String>,
     pub can_stash_dupes: bool,
     pub interior_dupes: bool,
+    pub path_schema: Option<String>,
     // Originals for dirty checking:
     pub orig_libraries: Vec<String>,
     pub orig_can_stash_dupes: bool,
     pub orig_interior_dupes: bool,
+    pub orig_path_schema: Option<String>,
     // UI state:
-    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes
+    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema
     pub field_cursor: usize,
     pub focus: PanelFocus,
     /// 0=Save, 1=Discard
@@ -91,6 +93,7 @@ impl DirConfigPanelState {
         self.libraries != self.orig_libraries
             || self.can_stash_dupes != self.orig_can_stash_dupes
             || self.interior_dupes != self.orig_interior_dupes
+            || self.path_schema != self.orig_path_schema
     }
 
     /// Render the config panel using the detail_panel widget.
@@ -102,6 +105,7 @@ impl DirConfigPanelState {
         let libs_edited = self.libraries != self.orig_libraries;
         let stash_edited = self.can_stash_dupes != self.orig_can_stash_dupes;
         let interior_edited = self.interior_dupes != self.orig_interior_dupes;
+        let schema_edited = self.path_schema != self.orig_path_schema;
 
         // If we're in text input mode, show the input line instead of the list
         let libs_for_display: Vec<String> = if let Some(ref input) = self.text_input {
@@ -117,6 +121,17 @@ impl DirConfigPanelState {
             items
         } else {
             self.libraries.clone()
+        };
+
+        let schema_display = self.path_schema.as_deref().unwrap_or("(none)").to_string();
+        let schema_display_with_cursor = if self.field_cursor == 3 && self.text_input.is_some() {
+            if let Some(ref input) = self.text_input {
+                format!("{}|", input.value())
+            } else {
+                schema_display.clone()
+            }
+        } else {
+            schema_display.clone()
         };
 
         let fields = [
@@ -144,6 +159,13 @@ impl DirConfigPanelState {
                 label: "Interior dupes",
                 widget: DetailWidget::Bool { value: self.interior_dupes, edited: interior_edited },
             },
+            DetailField {
+                label: "Path schema",
+                widget: DetailWidget::Text {
+                    value: &schema_display_with_cursor,
+                    edited: schema_edited,
+                },
+            },
         ];
 
         let buttons = [
@@ -165,6 +187,8 @@ impl DirConfigPanelState {
             Some("Enter select  Up fields")
         } else if self.field_cursor == 0 {
             Some("n add  x del  Enter edit  Tab buttons")
+        } else if self.field_cursor == 3 {
+            Some("Enter edit  Tab buttons")
         } else {
             Some("Enter/Space toggle  Tab buttons")
         };
@@ -379,7 +403,10 @@ impl CorpusBrowserVariant {
             match key.code {
                 KeyCode::Enter => {
                     let value = input.value().to_string();
-                    if !value.is_empty() {
+                    if panel.field_cursor == 3 {
+                        // Path schema text input
+                        panel.path_schema = if value.is_empty() { None } else { Some(value) };
+                    } else if !value.is_empty() {
                         if let Some(cursor) = panel.lib_cursor {
                             if cursor < panel.libraries.len() {
                                 // Editing existing item
@@ -479,7 +506,7 @@ impl CorpusBrowserVariant {
                     } else {
                         panel.field_cursor = 1;
                     }
-                } else if panel.field_cursor < 2 {
+                } else if panel.field_cursor < 3 {
                     panel.field_cursor += 1;
                 }
                 TreeBrowserAction::None
@@ -506,6 +533,14 @@ impl CorpusBrowserVariant {
                     }
                     2 => {
                         panel.interior_dupes = !panel.interior_dupes;
+                    }
+                    3 => {
+                        // Path schema: edit as text
+                        let mut input = TextInputState::new();
+                        if let Some(ref schema) = panel.path_schema {
+                            input.set_value(schema.clone());
+                        }
+                        panel.text_input = Some(input);
                     }
                     _ => {}
                 }

@@ -6,6 +6,8 @@
 //!
 //! This module provides:
 //! - `normalize_tag_name`: Strips separators for canonical comparison
+//! - `compound_tag_name_variants`: Generate separator variants for compound tag names
+//! - `compound_tag_sql_in`: SQL IN clause fragment for compound tag name matching
 //! - `levenshtein_distance`: Edit distance for detecting spelling variants
 //! - `tag_names_match`: Fuzzy matching that handles separators and regional variants
 //! - `find_tag_value`: Look up a tag value with fuzzy name matching
@@ -35,6 +37,47 @@ pub fn normalize_tag_name(name: &str) -> String {
         .chars()
         .filter(|c| !SEPARATORS.contains(c))
         .collect()
+}
+
+/// Generate compound tag name variants for a two-word tag concept.
+///
+/// Given two component words (e.g., "ALBUM" and "ARTIST"), returns the combined
+/// forms with different separators, in priority order: no separator, underscore, space.
+///
+/// These are the three valid separator styles for Vorbis comment field names.
+/// The no-separator form is the Xiph/Vorbis standard convention.
+///
+/// # Example
+///
+/// ```
+/// use mm_utils::tag_names::compound_tag_name_variants;
+///
+/// assert_eq!(
+///     compound_tag_name_variants("ALBUM", "ARTIST"),
+///     vec!["ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST"]
+/// );
+/// ```
+// TODO: replace this with a proper system interface for tag name resolution,
+// so that canonical tag names and their known variants are defined in one place
+// rather than scattered across SQL queries and match arms.
+pub fn compound_tag_name_variants(word1: &str, word2: &str) -> Vec<String> {
+    vec![
+        format!("{}{}", word1, word2),
+        format!("{}_{}", word1, word2),
+        format!("{} {}", word1, word2),
+    ]
+}
+
+/// Format compound tag name variants as a SQL `IN (...)` clause fragment.
+///
+/// Returns a string like `('ALBUMARTIST', 'ALBUM_ARTIST', 'ALBUM ARTIST')` suitable
+/// for embedding in SQL WHERE/ON conditions via `format!()`.
+///
+/// Only safe for compile-time-known word pairs — never use with user input.
+pub fn compound_tag_sql_in(word1: &str, word2: &str) -> String {
+    let variants = compound_tag_name_variants(word1, word2);
+    let quoted: Vec<String> = variants.iter().map(|v| format!("'{}'", v)).collect();
+    format!("({})", quoted.join(", "))
 }
 
 /// Compute Levenshtein edit distance between two strings.

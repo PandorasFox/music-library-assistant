@@ -48,8 +48,12 @@ impl Database {
     pub fn get_album_data_for_collision_detection(
         &self,
     ) -> Result<Vec<(String, String, String, String, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT
+        use mm_utils::tag_names::compound_tag_sql_in;
+
+        let album_artist_in = compound_tag_sql_in("ALBUM", "ARTIST");
+        let catalog_number_in = compound_tag_sql_in("CATALOG", "NUMBER");
+
+        let sql = format!(r#"SELECT
                    album.tag_value as album,
                    COALESCE(album_artist.tag_value, artist.tag_value, '') as artist_context,
                    COALESCE(isrc.tag_value, '') as isrc,
@@ -60,7 +64,7 @@ impl Database {
                INNER JOIN files f ON album.inode = f.inode AND f.zone = 'corpus'
                LEFT JOIN corpus_tags album_artist
                    ON album.inode = album_artist.inode
-                   AND UPPER(album_artist.tag_name) = 'ALBUM_ARTIST'
+                   AND UPPER(album_artist.tag_name) IN {album_artist_in}
                LEFT JOIN corpus_tags artist
                    ON album.inode = artist.inode
                    AND UPPER(artist.tag_name) = 'ARTIST'
@@ -69,7 +73,7 @@ impl Database {
                    AND UPPER(isrc.tag_name) = 'ISRC'
                LEFT JOIN corpus_tags catalog
                    ON album.inode = catalog.inode
-                   AND UPPER(catalog.tag_name) = 'CATALOG_NUMBER'
+                   AND UPPER(catalog.tag_name) IN {catalog_number_in}
                LEFT JOIN corpus_tags year
                    ON album.inode = year.inode
                    AND UPPER(year.tag_name) = 'YEAR'
@@ -78,8 +82,9 @@ impl Database {
                    AND UPPER(date.tag_name) = 'DATE'
                WHERE UPPER(album.tag_name) = 'ALBUM'
                    AND album.tag_value IS NOT NULL
-                   AND album.tag_value != ''"#,
-        )?;
+                   AND album.tag_value != ''"#);
+
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(params![], |row| {
             Ok((

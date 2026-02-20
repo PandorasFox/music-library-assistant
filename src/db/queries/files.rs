@@ -579,11 +579,16 @@ impl Database {
     /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc, year, flag_compilation)>
     #[allow(clippy::type_complexity)]
     pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String, String)>> {
+        use mm_utils::tag_names::compound_tag_sql_in;
+
+        let album_artist_in = compound_tag_sql_in("ALBUM", "ARTIST");
+        let catalog_number_in = compound_tag_sql_in("CATALOG", "NUMBER");
+
         // Only detect inconsistent album artist within corpus files
         // GROUP BY f.inode to collapse multi-value tags (e.g. a file with two
         // artist tags) into one row per inode, preventing cross-product blowup
         // that would make a single file appear as multiple "tracks".
-        let sql = r#"
+        let sql = format!(r#"
             SELECT
                 f.inode,
                 COALESCE(MIN(album.tag_value), '') as album,
@@ -600,9 +605,9 @@ impl Database {
             LEFT JOIN corpus_tags artist
                 ON f.inode = artist.inode AND UPPER(artist.tag_name) = 'ARTIST'
             LEFT JOIN corpus_tags album_artist
-                ON f.inode = album_artist.inode AND UPPER(album_artist.tag_name) = 'ALBUM_ARTIST'
+                ON f.inode = album_artist.inode AND UPPER(album_artist.tag_name) IN {album_artist_in}
             LEFT JOIN corpus_tags catalog
-                ON f.inode = catalog.inode AND UPPER(catalog.tag_name) = 'CATALOGNUMBER'
+                ON f.inode = catalog.inode AND UPPER(catalog.tag_name) IN {catalog_number_in}
             LEFT JOIN corpus_tags isrc
                 ON f.inode = isrc.inode AND UPPER(isrc.tag_name) = 'ISRC'
             LEFT JOIN corpus_tags year
@@ -611,9 +616,9 @@ impl Database {
                 ON f.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'FLAGCOMPILATION'
             WHERE f.is_dir = 0 AND f.zone = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
             GROUP BY f.inode
-        "#;
+        "#);
 
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![], |row| {
             Ok((
                 row.get(0)?,

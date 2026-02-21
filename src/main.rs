@@ -23,6 +23,7 @@ pub const MM_TITLE: &str = "Music Magic (mm beta 8)";
 mod config;
 mod corpus;
 mod db;
+mod external;
 mod logging;
 mod meta;
 mod ui;

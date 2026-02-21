@@ -37,6 +37,8 @@ pub struct Opinions {
     /// Decisions accumulate in a Transaction tab; commit/discard from there.
     /// Default: false.
     pub leave_transactions_open: bool,
+    /// External matching (AcoustID, etc.) configuration.
+    pub external_matching: ExternalMatchingConfig,
 }
 
 
@@ -293,6 +295,24 @@ impl Default for InboxOrganizeOpinions {
     }
 }
 
+/// Configuration for external metadata matching (AcoustID, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalMatchingConfig {
+    /// AcoustID API key. Empty string = disabled.
+    pub acoustid_api_key: String,
+    /// Rate limit: requests per second (default 3).
+    pub requests_per_second: u32,
+}
+
+impl Default for ExternalMatchingConfig {
+    fn default() -> Self {
+        Self {
+            acoustid_api_key: String::new(),
+            requests_per_second: 3,
+        }
+    }
+}
+
 impl Default for Opinions {
     fn default() -> Self {
         Self {
@@ -308,6 +328,7 @@ impl Default for Opinions {
             inbox_organize: InboxOrganizeOpinions::default(),
             idle_rescan_interval_secs: 180,
             leave_transactions_open: false,
+            external_matching: ExternalMatchingConfig::default(),
         }
     }
 }
@@ -332,6 +353,8 @@ pub struct SourceDir {
     /// Optional path-tag schema: expected file path structure expressed as tag placeholders.
     /// When set, files under this source dir are checked for path-tag agreement.
     pub path_schema: Option<PathTagSchema>,
+    /// Whether AcoustID lookups are enabled for this source directory (default: true).
+    pub enable_acoustid: bool,
 }
 
 /// Shared config wrapped in `Arc<RwLock<Config>>` for thread-safe read/write access.

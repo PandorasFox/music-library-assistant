@@ -163,6 +163,13 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                 new_schema,
             ));
         }
+        if old.enable_acoustid != new.enable_acoustid {
+            diffs.push(DiffEntry::new(
+                "Enable AcoustID",
+                old.enable_acoustid,
+                new.enable_acoustid,
+            ));
+        }
 
         diffs
     }

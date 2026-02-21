@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -30,6 +30,7 @@ use crate::db::write_thread::{self, DbThreadHandle, DbThreadStats};
 // Module declarations
 pub(crate) mod cache_thread;
 mod execution;
+pub(crate) mod external_fetch;
 pub mod messages;
 mod transaction;
 mod types;
@@ -224,6 +225,10 @@ pub struct Witch {
 
     /// UI-controlled gate: true only on safe browsing views (lateral ring).
     idle_rescan_eligible: bool,
+
+    /// Handle for the autonomous external fetch thread (AcoustID lookups).
+    /// None when no API key is configured or shared_config not yet available.
+    external_fetch: Option<external_fetch::ExternalFetchHandle>,
 }
 
 impl Witch {
@@ -299,6 +304,7 @@ impl Witch {
             idle_since: None,
             idle_rescan_active: false,
             idle_rescan_eligible: false,
+            external_fetch: None,
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
@@ -590,6 +596,10 @@ impl Witch {
 
         // Check if idle rescan should trigger
         self.maybe_start_idle_rescan();
+
+        // External fetch: drain results and maybe trigger refresh
+        self.drain_external_fetch_results();
+        self.maybe_trigger_external_refresh();
 
         // Emit status update to UI
         let _ = self.notice_tx.send(WitchNotice::StatusUpdate(WorkStatus {
@@ -988,6 +998,151 @@ impl Witch {
                 observed_inodes: observed_inbox,
             }),
             Some("Deriving inbox signals".to_string()),
+        );
+    }
+
+    // =========================================================================
+    // External Fetch Integration
+    // =========================================================================
+
+    /// Drain results from the external fetch thread and write them to the DB.
+    ///
+    /// Called each tick(). Non-blocking: processes whatever results are available.
+    fn drain_external_fetch_results(&mut self) {
+        let results = match self.external_fetch {
+            Some(ref mut handle) => handle.drain_results(),
+            None => return,
+        };
+
+        let sender = match write_thread::signal_sender() {
+            Some(s) => s,
+            None => return,
+        };
+
+        for result in results {
+            match result {
+                external_fetch::FetchResult::Matches {
+                    inode, fingerprint, source, recordings, raw_response,
+                } => {
+                    let now = SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+
+                    for row in &recordings {
+                        sender.insert_external_match(
+                            inode,
+                            fingerprint.clone(),
+                            source.to_key(),
+                            &row.recording_id,
+                            row.confidence,
+                            raw_response.clone(),
+                            now,
+                        );
+                    }
+                    // Clear any retry entry for this inode
+                    sender.delete_external_retry(inode, source.to_key());
+                }
+                external_fetch::FetchResult::NoMatch {
+                    inode, fingerprint, source,
+                } => {
+                    let now = SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+
+                    sender.insert_external_no_match(fingerprint, source.to_key(), now);
+                    // Clear any retry entry for this inode
+                    sender.delete_external_retry(inode, source.to_key());
+                }
+                external_fetch::FetchResult::NeedsRetry {
+                    inode, fingerprint, source, error,
+                } => {
+                    sender.upsert_external_retry(
+                        inode,
+                        fingerprint,
+                        source.to_key(),
+                        &error,
+                    );
+                }
+                external_fetch::FetchResult::BatchDone {
+                    source, processed, matched, no_match, retries,
+                } => {
+                    crate::logging::log_general(format!(
+                        "[FETCH] {} batch done: {} processed, {} matched, {} no-match, {} retries",
+                        source.name(), processed, matched, no_match, retries
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Maybe trigger an external fetch refresh (idle-gated).
+    ///
+    /// Same gate structure as `maybe_start_idle_rescan()` but with additional
+    /// requirement of a configured API key and no active batch.
+    fn maybe_trigger_external_refresh(&mut self) {
+        // Must be idle and fully awake
+        if !self.work_state.is_idle() || self.reasoning_level != ReasoningLevel::Full {
+            return;
+        }
+        if !self.idle_rescan_eligible {
+            return;
+        }
+        // Don't start fetch during idle rescan
+        if self.idle_rescan_active {
+            return;
+        }
+
+        let shared_config = match self.shared_config {
+            Some(ref sc) => sc.clone(),
+            None => return,
+        };
+
+        let (api_key, eligible_dirs) = {
+            let config = shared_config.read().expect("SharedConfig lock poisoned");
+            let key = config.opinions.external_matching.acoustid_api_key.clone();
+            let dirs: Vec<std::path::PathBuf> = config.source_dirs.iter()
+                .filter(|sd| sd.enable_acoustid)
+                .map(|sd| sd.path.clone())
+                .collect();
+            (key, dirs)
+        };
+
+        if api_key.is_empty() || eligible_dirs.is_empty() {
+            return;
+        }
+
+        // Lazy-spawn the fetch thread if needed
+        if self.external_fetch.is_none() {
+            self.external_fetch = Some(external_fetch::ExternalFetchHandle::spawn(shared_config));
+            crate::logging::log_general("[WITCH] Spawned external fetch thread");
+        }
+
+        let handle = self.external_fetch.as_mut().unwrap();
+
+        // Don't stack requests
+        if handle.is_batch_active() {
+            return;
+        }
+
+        // Check idle timer — reuse the idle_since timer with a minimum 30s cooldown
+        if let Some(idle_since) = self.idle_since {
+            if idle_since.elapsed() < Duration::from_secs(30) {
+                return;
+            }
+        } else {
+            return;
+        }
+
+        crate::logging::log_general(format!(
+            "[WITCH] Triggering external fetch for {} eligible dirs",
+            eligible_dirs.len()
+        ));
+
+        handle.request_refresh(
+            crate::meta::external::ExternalSource::AcoustID,
+            eligible_dirs,
         );
     }
 
@@ -1441,11 +1596,17 @@ impl Witch {
 impl Drop for Witch {
     fn drop(&mut self) {
         // Shutdown order is critical for SQLite WAL cleanup:
+        // 0. Shut down external fetch thread (owns a read-only connection)
         // 1. Shut down cache thread (owns a read-only connection)
         // 2. Close thread-local read-only connections on rayon workers
         // 3. Close the Witch's cached read-only connection
         // 4. DB thread checkpoints WAL and closes write connection
         // 5. With all connections closed, SQLite cleans up -wal and -shm files
+
+        // Step 0: Shut down external fetch thread if active.
+        if let Some(ref mut handle) = self.external_fetch {
+            handle.shutdown();
+        }
 
         // Step 1: Shut down cache thread and wait for it to exit.
         // The cache thread owns a read-only DB connection that must close

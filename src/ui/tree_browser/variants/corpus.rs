@@ -70,13 +70,15 @@ pub struct DirConfigPanelState {
     pub can_stash_dupes: bool,
     pub interior_dupes: bool,
     pub path_schema: Option<String>,
+    pub enable_acoustid: bool,
     // Originals for dirty checking:
     pub orig_libraries: Vec<String>,
     pub orig_can_stash_dupes: bool,
     pub orig_interior_dupes: bool,
     pub orig_path_schema: Option<String>,
+    pub orig_enable_acoustid: bool,
     // UI state:
-    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema
+    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema, 4=enable_acoustid
     pub field_cursor: usize,
     pub focus: PanelFocus,
     /// 0=Save, 1=Discard
@@ -94,6 +96,7 @@ impl DirConfigPanelState {
             || self.can_stash_dupes != self.orig_can_stash_dupes
             || self.interior_dupes != self.orig_interior_dupes
             || self.path_schema != self.orig_path_schema
+            || self.enable_acoustid != self.orig_enable_acoustid
     }
 
     /// Render the config panel using the detail_panel widget.
@@ -106,6 +109,7 @@ impl DirConfigPanelState {
         let stash_edited = self.can_stash_dupes != self.orig_can_stash_dupes;
         let interior_edited = self.interior_dupes != self.orig_interior_dupes;
         let schema_edited = self.path_schema != self.orig_path_schema;
+        let acoustid_edited = self.enable_acoustid != self.orig_enable_acoustid;
 
         // If we're in text input mode, show the input line instead of the list
         let libs_for_display: Vec<String> = if let Some(ref input) = self.text_input {
@@ -166,6 +170,10 @@ impl DirConfigPanelState {
                     edited: schema_edited,
                 },
             },
+            DetailField {
+                label: "AcoustID lookup",
+                widget: DetailWidget::Bool { value: self.enable_acoustid, edited: acoustid_edited },
+            },
         ];
 
         let buttons = [
@@ -190,6 +198,7 @@ impl DirConfigPanelState {
         } else if self.field_cursor == 3 {
             Some("Enter edit  Tab buttons")
         } else {
+            // Bool fields: can_stash_dupes, interior_dupes, enable_acoustid
             Some("Enter/Space toggle  Tab buttons")
         };
 
@@ -506,7 +515,7 @@ impl CorpusBrowserVariant {
                     } else {
                         panel.field_cursor = 1;
                     }
-                } else if panel.field_cursor < 3 {
+                } else if panel.field_cursor < 4 {
                     panel.field_cursor += 1;
                 }
                 TreeBrowserAction::None
@@ -541,6 +550,9 @@ impl CorpusBrowserVariant {
                             input.set_value(schema.clone());
                         }
                         panel.text_input = Some(input);
+                    }
+                    4 => {
+                        panel.enable_acoustid = !panel.enable_acoustid;
                     }
                     _ => {}
                 }

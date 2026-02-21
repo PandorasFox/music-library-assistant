@@ -820,15 +820,15 @@ impl App {
         };
 
         // Find exact matching SourceDir, or use defaults for new entry
-        let (libraries, can_stash_dupes, interior_dupes, path_schema) =
+        let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid) =
             match config.get_source_for_relative_path(&relative) {
                 Some(sd) if sd.path == relative => {
                     (sd.libraries.clone(), sd.can_stash_dupes, sd.interior_dupes,
-                     sd.path_schema.as_ref().map(|s| s.template.clone()))
+                     sd.path_schema.as_ref().map(|s| s.template.clone()), sd.enable_acoustid)
                 }
                 _ => {
                     // Defaults for a new (unconfigured) directory
-                    (vec![], true, true, None)
+                    (vec![], true, true, None, true)
                 }
             };
         drop(config);
@@ -839,10 +839,12 @@ impl App {
             can_stash_dupes,
             interior_dupes,
             path_schema: path_schema.clone(),
+            enable_acoustid,
             orig_libraries: libraries,
             orig_can_stash_dupes: can_stash_dupes,
             orig_interior_dupes: interior_dupes,
             orig_path_schema: path_schema,
+            orig_enable_acoustid: enable_acoustid,
             field_cursor: 0,
             focus: tree_browser::variants::corpus::PanelFocus::default(),
             button_cursor: 0,
@@ -881,6 +883,7 @@ impl App {
                 can_stash_dupes: panel.orig_can_stash_dupes,
                 interior_dupes: panel.orig_interior_dupes,
                 path_schema: panel.orig_path_schema.as_ref().and_then(|t| crate::config::parse_path_schema(t).ok()),
+                enable_acoustid: panel.orig_enable_acoustid,
             };
             let new_dir = crate::config::SourceDir {
                 path: panel.source_path.clone(),
@@ -888,6 +891,7 @@ impl App {
                 can_stash_dupes: panel.can_stash_dupes,
                 interior_dupes: panel.interior_dupes,
                 path_schema: panel.path_schema.as_ref().and_then(|t| crate::config::parse_path_schema(t).ok()),
+                enable_acoustid: panel.enable_acoustid,
             };
             (panel.source_path.clone(), old_dir, new_dir)
         };

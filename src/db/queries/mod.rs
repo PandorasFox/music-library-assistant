@@ -7,6 +7,7 @@
 //! - `library_scan`: Library scanning state
 
 pub mod files;
+pub mod external;
 mod health;
 mod library_scan;
 mod metadata;

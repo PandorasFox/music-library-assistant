@@ -542,6 +542,50 @@ impl MigrationRegistry {
             },
         });
 
+        // v18→v19: Create external matching tables (external_matches, external_no_match, external_retry)
+        registry.register(Migration {
+            from_version: 18,
+            to_version: 19,
+            description: "Create external matching tables for AcoustID lookup results",
+            apply: |db| {
+                db.conn().execute_batch(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS external_matches (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        inode INTEGER NOT NULL,
+                        fingerprint BLOB NOT NULL,
+                        source INTEGER NOT NULL,
+                        recording_id TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        raw_response BLOB,
+                        fetched_at INTEGER NOT NULL,
+                        UNIQUE(inode, source, recording_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_external_matches_inode ON external_matches(inode);
+                    CREATE INDEX IF NOT EXISTS idx_external_matches_fp ON external_matches(fingerprint);
+
+                    CREATE TABLE IF NOT EXISTS external_no_match (
+                        fingerprint BLOB NOT NULL,
+                        source INTEGER NOT NULL,
+                        queried_at INTEGER NOT NULL,
+                        PRIMARY KEY (fingerprint, source)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS external_retry (
+                        inode INTEGER NOT NULL,
+                        fingerprint BLOB NOT NULL,
+                        source INTEGER NOT NULL,
+                        failed_at INTEGER NOT NULL,
+                        error TEXT,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (inode, source)
+                    );
+                    "#
+                )?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

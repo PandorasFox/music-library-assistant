@@ -381,6 +381,42 @@ enum DbWriteOp {
     },
 
     // =========================================================================
+    // External Matching Operations (AcoustID fetch thread results)
+    // =========================================================================
+
+    /// Insert an external match result.
+    InsertExternalMatch {
+        inode: i64,
+        fingerprint: Vec<u8>,
+        source: i64,
+        recording_id: String,
+        confidence: f64,
+        raw_response: Option<Vec<u8>>,
+        fetched_at: i64,
+    },
+
+    /// Insert a no-match result for a fingerprint.
+    InsertExternalNoMatch {
+        fingerprint: Vec<u8>,
+        source: i64,
+        queried_at: i64,
+    },
+
+    /// Upsert an external retry entry.
+    UpsertExternalRetry {
+        inode: i64,
+        fingerprint: Vec<u8>,
+        source: i64,
+        error: String,
+    },
+
+    /// Delete an external retry entry (after successful lookup).
+    DeleteExternalRetry {
+        inode: i64,
+        source: i64,
+    },
+
+    // =========================================================================
     // Shutdown
     // =========================================================================
 
@@ -965,6 +1001,81 @@ impl SignalWriteSender {
             computation_type: computation_type.to_string(),
         });
     }
+
+    // =========================================================================
+    // External Matching Operations (fetch thread results — no witness needed)
+    // =========================================================================
+
+    /// Insert an external match result from the fetch thread.
+    ///
+    /// Called by the Witch when draining fetch results, not from computation
+    /// or mutation contexts, so no witness is required.
+    pub fn insert_external_match(
+        &self,
+        inode: i64,
+        fingerprint: Vec<u8>,
+        source: i64,
+        recording_id: &str,
+        confidence: f64,
+        raw_response: Option<Vec<u8>>,
+        fetched_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::InsertExternalMatch {
+            inode,
+            fingerprint,
+            source,
+            recording_id: recording_id.to_string(),
+            confidence,
+            raw_response,
+            fetched_at,
+        });
+    }
+
+    /// Insert a no-match result for a fingerprint.
+    pub fn insert_external_no_match(
+        &self,
+        fingerprint: Vec<u8>,
+        source: i64,
+        queried_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::InsertExternalNoMatch {
+            fingerprint,
+            source,
+            queried_at,
+        });
+    }
+
+    /// Upsert an external retry entry (failed lookup).
+    pub fn upsert_external_retry(
+        &self,
+        inode: i64,
+        fingerprint: Vec<u8>,
+        source: i64,
+        error: &str,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertExternalRetry {
+            inode,
+            fingerprint,
+            source,
+            error: error.to_string(),
+        });
+    }
+
+    /// Delete an external retry entry (after successful lookup).
+    pub fn delete_external_retry(
+        &self,
+        inode: i64,
+        source: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::DeleteExternalRetry {
+            inode,
+            source,
+        });
+    }
 }
 
 // IndexWriteSender has been removed - all operations now go through SignalWriteSender.
@@ -1424,6 +1535,32 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::ClearDirtyInode { inode, computation_type } => {
             with_retry("clear_dirty_inode", computation_type, || {
                 execute_clear_dirty_inode(db, *inode, computation_type)
+            });
+        }
+
+        DbWriteOp::InsertExternalMatch {
+            inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at,
+        } => {
+            with_retry("insert_external_match", recording_id, || {
+                execute_insert_external_match(db, *inode, fingerprint, *source, recording_id, *confidence, raw_response.as_deref(), *fetched_at)
+            });
+        }
+
+        DbWriteOp::InsertExternalNoMatch { fingerprint, source, queried_at } => {
+            with_retry("insert_external_no_match", &source.to_string(), || {
+                execute_insert_external_no_match(db, fingerprint, *source, *queried_at)
+            });
+        }
+
+        DbWriteOp::UpsertExternalRetry { inode, fingerprint, source, error } => {
+            with_retry("upsert_external_retry", error, || {
+                execute_upsert_external_retry(db, *inode, fingerprint, *source, error)
+            });
+        }
+
+        DbWriteOp::DeleteExternalRetry { inode, source } => {
+            with_retry("delete_external_retry", &inode.to_string(), || {
+                execute_delete_external_retry(db, *inode, *source)
             });
         }
 
@@ -2173,6 +2310,93 @@ fn execute_delete_library_file(
     db.conn().execute(
         "DELETE FROM files WHERE zone = 'library' AND path = ?1",
         params![stored_path],
+    )?;
+
+    Ok(())
+}
+
+/// Execute InsertExternalMatch: insert a match from an external API.
+fn execute_insert_external_match(
+    db: &Database,
+    inode: i64,
+    fingerprint: &[u8],
+    source: i64,
+    recording_id: &str,
+    confidence: f64,
+    raw_response: Option<&[u8]>,
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        r#"INSERT OR REPLACE INTO external_matches
+           (inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+        params![inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at],
+    )?;
+
+    Ok(())
+}
+
+/// Execute InsertExternalNoMatch: record that a fingerprint had no results.
+fn execute_insert_external_no_match(
+    db: &Database,
+    fingerprint: &[u8],
+    source: i64,
+    queried_at: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        r#"INSERT OR REPLACE INTO external_no_match
+           (fingerprint, source, queried_at)
+           VALUES (?1, ?2, ?3)"#,
+        params![fingerprint, source, queried_at],
+    )?;
+
+    Ok(())
+}
+
+/// Execute UpsertExternalRetry: record a failed lookup for retry.
+fn execute_upsert_external_retry(
+    db: &Database,
+    inode: i64,
+    fingerprint: &[u8],
+    source: i64,
+    error: &str,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    db.conn().execute(
+        r#"INSERT INTO external_retry (inode, fingerprint, source, failed_at, error, retry_count)
+           VALUES (?1, ?2, ?3, ?4, ?5, 1)
+           ON CONFLICT(inode, source) DO UPDATE SET
+               failed_at = excluded.failed_at,
+               error = excluded.error,
+               retry_count = retry_count + 1"#,
+        params![inode, fingerprint, source, now, error],
+    )?;
+
+    Ok(())
+}
+
+/// Execute DeleteExternalRetry: remove retry entry after successful lookup.
+fn execute_delete_external_retry(
+    db: &Database,
+    inode: i64,
+    source: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        "DELETE FROM external_retry WHERE inode = ?1 AND source = ?2",
+        params![inode, source],
     )?;
 
     Ok(())

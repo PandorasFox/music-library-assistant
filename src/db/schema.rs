@@ -143,6 +143,47 @@ impl Database {
                 value TEXT NOT NULL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- =================================================================
+            -- External Matches (AcoustID, etc.)
+            -- =================================================================
+            -- Matches found via external APIs.
+            -- Multiple rows per fingerprint (re-releases, multiple recordings).
+            -- Keyed by inode for efficient per-file lookup.
+            CREATE TABLE IF NOT EXISTS external_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                inode INTEGER NOT NULL,
+                fingerprint BLOB NOT NULL,
+                source INTEGER NOT NULL,
+                recording_id TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                raw_response BLOB,
+                fetched_at INTEGER NOT NULL,
+                UNIQUE(inode, source, recording_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_matches_inode ON external_matches(inode);
+            CREATE INDEX IF NOT EXISTS idx_external_matches_fp ON external_matches(fingerprint);
+
+            -- Fingerprints queried with no results.
+            -- Presence = "checked, nothing found". Absence = "not yet queried".
+            CREATE TABLE IF NOT EXISTS external_no_match (
+                fingerprint BLOB NOT NULL,
+                source INTEGER NOT NULL,
+                queried_at INTEGER NOT NULL,
+                PRIMARY KEY (fingerprint, source)
+            );
+
+            -- Fingerprints that failed (rate limit, network error) and need retry.
+            -- Fetch thread checks this on wake and re-queues.
+            CREATE TABLE IF NOT EXISTS external_retry (
+                inode INTEGER NOT NULL,
+                fingerprint BLOB NOT NULL,
+                source INTEGER NOT NULL,
+                failed_at INTEGER NOT NULL,
+                error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (inode, source)
+            );
             "#
         ).context("Failed to initialize database schema")?;
 

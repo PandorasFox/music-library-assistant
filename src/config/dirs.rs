@@ -38,6 +38,7 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                 can_stash_dupes: true,
                 interior_dupes: true,
                 path_schema: None,
+                enable_acoustid: true,
             };
 
             if let Some(children) = node.children() {
@@ -58,6 +59,11 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                         "interior-dupes" => {
                             if let Some(entry) = child.entries().first() {
                                 source.interior_dupes = entry.value().as_bool().unwrap_or(true);
+                            }
+                        }
+                        "enable-acoustid" => {
+                            if let Some(entry) = child.entries().first() {
+                                source.enable_acoustid = entry.value().as_bool().unwrap_or(true);
                             }
                         }
                         "path-schema" => {
@@ -104,6 +110,9 @@ fn serialize_dirs_kdl(dirs: &[SourceDir]) -> String {
         }
         if !dir.interior_dupes {
             out.push_str("    interior-dupes false\n");
+        }
+        if !dir.enable_acoustid {
+            out.push_str("    enable-acoustid false\n");
         }
         if let Some(ref schema) = dir.path_schema {
             out.push_str(&format!("    path-schema \"{}\"\n", schema.template));
@@ -164,6 +173,7 @@ dir "web/releases/indie" {
                 can_stash_dupes: false,
                 interior_dupes: false,
                 path_schema: None,
+                enable_acoustid: true,
             },
             SourceDir {
                 path: PathBuf::from("web/releases/indie"),
@@ -171,6 +181,7 @@ dir "web/releases/indie" {
                 can_stash_dupes: true,
                 interior_dupes: true,
                 path_schema: None,
+                enable_acoustid: true,
             },
         ];
 
@@ -188,6 +199,7 @@ dir "web/releases/indie" {
                 can_stash_dupes: true,
                 interior_dupes: true,
                 path_schema: Some(parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST - $TITLE").unwrap()),
+                enable_acoustid: true,
             },
         ];
 

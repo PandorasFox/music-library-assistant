@@ -338,6 +338,33 @@ fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut Duplica
     }
 }
 
+/// Parse external-matching opinions from KDL node
+fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut ExternalMatchingConfig) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "acoustid-api-key" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            opinions.acoustid_api_key = val.to_string();
+                        }
+                    }
+                }
+                "requests-per-second" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.requests_per_second = val as u32;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Parse inbox-organize opinions from KDL node
 fn parse_inbox_organize_opinions(node: &kdl::KdlNode, opinions: &mut InboxOrganizeOpinions) {
     if let Some(children) = node.children() {
@@ -445,6 +472,9 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                         config.opinions.leave_transactions_open = val;
                                     }
                                 }
+                            }
+                            "external-matching" => {
+                                parse_external_matching_opinions(child, &mut config.opinions.external_matching);
                             }
                             _ => {}
                         }

@@ -35,7 +35,7 @@ deployment operations.
 | Stage | Order | Mutations |
 |-------|-------|-----------|
 | Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit |
-| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, ApplyDbTagsToDisk |
+| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, InboxDirToCorpus, ApplyDbTagsToDisk |
 | DiskFlush | 2 | Transcode, EmbedAlbumArt, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
 | DiskDeploy | 3 | HardLink, LibraryMove |
 | *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb *(spawned during execution, never in transactions)* |
@@ -118,6 +118,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | UpdateTrackPath | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Update path in index |
 | Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode to new format |
 | InboxToCorpus | (via dirty inodes) | — | MutableOnly scope signals for inode | Move inbox file to corpus; updates zone from inbox→corpus, migrates inbox_tags→corpus_tags |
+| InboxDirToCorpus | (via dirty inodes) | — | MutableOnly scope signals for all tracked inodes | Move entire inbox directory to corpus via fs::rename; updates zone + migrates tags for each tracked audio file. Non-audio content (covers, booklets) travels with the directory. |
 
 ### Deployment Operations
 

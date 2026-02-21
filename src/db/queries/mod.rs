@@ -666,6 +666,18 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
+    // External Match Queries
+    // =========================================================================
+
+    /// Get external matches for corpus files, for signal derivation.
+    pub fn get_external_matches_for_derivation(
+        &self,
+        source_key: i64,
+    ) -> Result<Vec<external::ExternalMatchRow>> {
+        self.db.get_external_matches_for_derivation(source_key)
+    }
+
+    // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================
 

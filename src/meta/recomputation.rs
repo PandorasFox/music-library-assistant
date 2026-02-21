@@ -32,6 +32,8 @@ impl RecomputationScope {
     pub const DEPLOY: Self = Self(1 << 2);
     /// Inbox state changed (inbox-to-corpus moves, inbox tag edits).
     pub const INBOX: Self = Self(1 << 3);
+    /// External match data arrived (AcoustID lookups completed).
+    pub const EXTERNAL: Self = Self(1 << 4);
 
     /// True if no domains are flagged.
     pub fn is_empty(self) -> bool {

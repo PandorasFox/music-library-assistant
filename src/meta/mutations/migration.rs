@@ -586,6 +586,19 @@ impl MigrationRegistry {
             },
         });
 
+        // v19→v20: Create signal_external_match table for AcoustID match derivation
+        registry.register(Migration {
+            from_version: 19,
+            to_version: 20,
+            description: "Create signal_external_match table for external match signal derivation",
+            apply: |db| {
+                use crate::meta::signals::store::CorpusSignalStore;
+                use crate::meta::signals::data::ExternalMatchSignal;
+                db.conn().execute_batch(ExternalMatchSignal::TABLE_SQL)?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

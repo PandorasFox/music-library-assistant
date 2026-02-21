@@ -42,6 +42,7 @@ mod album_art;
 mod inbox_matches;
 mod inbox_tags;
 mod path_schema;
+mod external_matches;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -57,6 +58,7 @@ pub use album_art::*;
 pub use inbox_matches::*;
 pub use inbox_tags::*;
 pub use path_schema::*;
+pub use external_matches::*;
 
 // ============================================================================
 // Analysis Computation Enum
@@ -205,6 +207,13 @@ pub enum Computation {
     /// For source dirs with path-schema configs, checks whether each file's
     /// path structure agrees with its DB tags. Emits PathTagMismatch signals.
     DetectPathTagMismatches,
+
+    /// Derive external match signals from AcoustID lookup results.
+    ///
+    /// Compares AcoustID recording metadata against corpus tags, emitting
+    /// ExternalMatch signals with classification (ExactMatch, ContentDiff,
+    /// MetadataOnly) and per-tag diffs.
+    DeriveExternalMatches,
 }
 
 impl Computation {
@@ -233,6 +242,7 @@ impl Computation {
             Computation::DetectInboxCompoundTags => "Detecting inbox compound tags",
             Computation::DetectEmbeddedDiscNumbers => "Detecting embedded disc numbers",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
+            Computation::DeriveExternalMatches => "Deriving external match signals",
         }
     }
 
@@ -304,6 +314,9 @@ impl Computation {
             }
             Computation::DetectPathTagMismatches => {
                 execute_detect_path_tag_mismatches(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DeriveExternalMatches => {
+                execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)
             }
         }
     }

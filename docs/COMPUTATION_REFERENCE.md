@@ -12,7 +12,7 @@ All computation code lives in `src/meta/computations/`:
 - **Stats**: `stats.rs` (thread-local stats + read-only DB connections)
 - **Observation phase**: `observation/mod.rs`, `observation/executors.rs`
 - **Derivation phase**: `derivation/mod.rs`, `derivation/executors.rs`
-- **Analysis phase**: `analysis/mod.rs`, `analysis/schedule.rs`, `analysis/duplicates.rs`, `analysis/tags.rs`, `analysis/deploy.rs`, `analysis/formats.rs`, `analysis/inbox_matches.rs`
+- **Analysis phase**: `analysis/mod.rs`, `analysis/schedule.rs`, `analysis/duplicates.rs`, `analysis/tags.rs`, `analysis/deploy.rs`, `analysis/formats.rs`, `analysis/inbox_matches.rs`, `analysis/external_matches.rs`
 
 ## Phase Overview
 
@@ -72,6 +72,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectInboxMissingTags | Detect inbox files missing required tags. Simplified version of DetectMissingTags: no ExpectedMissingTag suppression, no MissingAlbumSingle routing, ALBUM_ARTIST removed from required set when compilation-only. Reuses MissingTagData. Full recompute each cycle |
 | DetectInboxCompoundTags | Single-pass compound tag detection for inbox files. Checks collaboration keywords + per-tag separators, enriches matching_parts against corpus vocabulary. No orchestrator/dirty-inode tracking (inbox is small). Full recompute each cycle |
 | DetectPathTagMismatches | Detect files whose paths don't match their source dir's path-tag schema. Extracts tag values from path structure, compares against DB tags (case-insensitive). Emits per-file PathTagMismatch signals |
+| DeriveExternalMatches | Derive external match signals from AcoustID results. Compares recording metadata (title, artist, album) against corpus tags using raw string equality. Emits per-file ExternalMatch signals with classification and diffs |
 | DetectEmbeddedDiscNumbers | Detect ALBUM tags with embedded disc numbers (e.g., "Album, Disc 2"). Scans both corpus and inbox. Emits EmbeddedDiscNumber aggregate signals |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality tier partitioning |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
@@ -129,6 +130,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectInboxCompoundTags | — | InboxCompoundTag | InboxCompoundTag (per-inode write/clear). Single-pass over inbox healthy inodes. Checks collaboration keywords + per-tag separators, enriches matching_parts against corpus vocabulary. Cleans up signals for inodes no longer healthy |
 | DetectPathTagMismatches | — | PathTagMismatch | PathTagMismatch (via hash-based corpus reconciliation). For each corpus audio file with a matching source dir schema (direct or inherited), strips source dir prefix and extension, runs schema extraction, compares extracted tags against DB tags (case-insensitive). Emits StructureMismatch or ValueMismatch signals |
 | DetectEmbeddedDiscNumbers | — | EmbeddedDiscNumber | EmbeddedDiscNumber (via hash-based aggregate reconciliation). Scans ALBUM tags from corpus_tags and inbox_tags for `,?\s*disc\s+(\d+)\s*$` pattern |
+| DeriveExternalMatches | — | ExternalMatch | ExternalMatch (via hash-based corpus reconciliation). For each corpus inode with AcoustID matches, parses stored raw response JSON, compares recording title/artist/album against corpus tags (raw string equality), classifies as ExactMatch/ContentDiff/MetadataOnly. Triggered by EXTERNAL, TAGS, or FILES scope |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (via hash-based aggregate reconciliation). Skips source pairs with an ExpectedOverlap signal (operator whitelist) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (via hash-based aggregate reconciliation). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale. Masks stale-conflicts: if a stale file's expected path is already occupied by a different inode, no stale signal is emitted (the LibraryMove would always fail). |

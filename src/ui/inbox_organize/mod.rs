@@ -27,7 +27,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config::{InboxOrganizeGranularity, Config};
 use crate::db::ReadOnlyDb;
-use crate::meta::mutations::{Mutation, file_ops::InboxToCorpusMutation};
+use crate::meta::mutations::{Mutation, file_ops::{InboxToCorpusMutation, InboxDirToCorpusMutation, InboxDirTrackedFile}};
 use crate::ui::tree_browser::{EntryFilter, TreeNavigator};
 use crate::ui::widgets::TextInputState;
 
@@ -341,18 +341,31 @@ impl InboxOrganizeState {
     // Mutation Generation
     // =========================================================================
 
-    /// Emplace directory: move `inbox/DirName/` → `corpus/Dest/DirName/`
+    /// Emplace directory: move entire `inbox/DirName/` → `corpus/Dest/DirName/`
+    ///
+    /// Uses a single directory rename so non-audio content (cover images, booklets)
+    /// travels with the audio files.
     fn generate_emplace_directory_mutations(&mut self) {
         let Some(current_dir) = self.directories.get(self.current_dir_idx) else { return };
         let dest_base = self.selected_dest.join(&current_dir.dir_name);
 
-        for file in &current_dir.files {
-            self.accumulated_mutations.push(Mutation::InboxToCorpus(InboxToCorpusMutation {
+        let tracked_files: Vec<InboxDirTrackedFile> = current_dir.files.iter().map(|file| {
+            // Compute each file's corpus path by preserving its relative position
+            // within the inbox directory (important for TopLevel granularity where
+            // files may be in subdirectories).
+            let rel = file.path.strip_prefix(&current_dir.dir_path)
+                .unwrap_or(std::path::Path::new(&file.filename));
+            InboxDirTrackedFile {
                 inode: file.inode,
-                inbox_path: file.path.clone(),
-                corpus_path: dest_base.join(&file.filename),
-            }));
-        }
+                corpus_path: dest_base.join(rel),
+            }
+        }).collect();
+
+        self.accumulated_mutations.push(Mutation::InboxDirToCorpus(InboxDirToCorpusMutation {
+            inbox_dir_path: current_dir.dir_path.clone(),
+            corpus_dir_path: dest_base,
+            tracked_files,
+        }));
     }
 
     /// Emplace files: move individual files → `corpus/Dest/` (flat)

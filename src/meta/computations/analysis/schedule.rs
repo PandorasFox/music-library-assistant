@@ -98,6 +98,11 @@ pub fn execute_schedule_content_analysis(
         }
     }
 
+    // External match derivation: EXTERNAL (new data), TAGS (comparison baseline), FILES (new fingerprints)
+    if run_all || s.touches_any(&[RecomputationScope::EXTERNAL, RecomputationScope::TAGS, RecomputationScope::FILES]) {
+        spawn.push(Computation::DeriveExternalMatches);
+    }
+
     // Inbox computations
     if run_all || s.touches_any(&[RecomputationScope::INBOX, RecomputationScope::FILES]) {
         spawn.push(Computation::DetectInboxCorpusMatches);

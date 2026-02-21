@@ -77,6 +77,25 @@ pub struct InboxToCorpusMutation {
     pub corpus_path: PathBuf,
 }
 
+/// A tracked audio file within an inbox directory being emplaced.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InboxDirTrackedFile {
+    pub inode: i64,
+    pub corpus_path: PathBuf,
+}
+
+/// Move an entire inbox directory into the corpus.
+///
+/// Uses fs::rename on the directory itself so that non-audio content (cover
+/// images, booklets, etc.) travels with the audio files. After the rename,
+/// updates DB records for each tracked audio file within the directory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InboxDirToCorpusMutation {
+    pub inbox_dir_path: PathBuf,
+    pub corpus_dir_path: PathBuf,
+    pub tracked_files: Vec<InboxDirTrackedFile>,
+}
+
 // ============================================================================
 // MutationExecutor Implementations
 // ============================================================================
@@ -388,6 +407,67 @@ impl MutationExecutor for InboxToCorpusMutation {
             path_filename(&self.inbox_path),
             self.inbox_path.display(),
             self.corpus_path.display(),
+        )]
+    }
+}
+
+impl MutationExecutor for InboxDirToCorpusMutation {
+    fn label(&self) -> &'static str { "Inbox dir → Corpus" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+
+        // Step 1: Move the entire directory on disk
+        let result = execute_move(&self.inbox_dir_path, &self.corpus_dir_path)
+            .and_then(|()| {
+                // Step 2: Update DB records for each tracked audio file
+                for tracked in &self.tracked_files {
+                    super::indexing::execute_update_file_path(
+                        ctx.read_db,
+                        "inbox",
+                        tracked.inode,
+                        &tracked.corpus_path,
+                        Some("corpus"),
+                        ctx.witness,
+                    )?;
+                }
+                Ok(())
+            });
+
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::InboxDirToCorpus(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+
+    fn affected_inodes(&self) -> Vec<i64> {
+        self.tracked_files.iter().map(|f| f.inode).collect()
+    }
+
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        vec![self.inbox_dir_path.clone(), self.corpus_dir_path.clone()]
+    }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        let dir_name = path_filename(&self.inbox_dir_path);
+        vec![DiffEntry::new(
+            format!("{}/", dir_name),
+            self.inbox_dir_path.display(),
+            self.corpus_dir_path.display(),
         )]
     }
 }

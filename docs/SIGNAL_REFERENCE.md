@@ -40,6 +40,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | InodeChanged | ScanCorpusDirectory | AcknowledgeInodeChanged | File was replaced (same path, new inode) |
 | ExpectedMissingTag | EmitExpectedMissingTag | — | Operator-confirmed expected missing tag (persistent suppression). Table: `signal_expected_missing_tag`. Suppresses MissingAlbumSingleSignal for this inode in DetectMissingTags |
 | PathTagMismatch | DetectPathTagMismatches | DetectPathTagMismatches | File path doesn't match source dir's path-tag schema. Data (bincode BLOB): `source_dir`, `schema_template`, `mismatch_kind` (StructureMismatch or ValueMismatch with per-tag details). Table: `signal_path_tag_mismatch` (inode PK, path, data BLOB, data_hash) |
+| ExternalMatch | DeriveExternalMatches | DeriveExternalMatches | AcoustID recording metadata compared against corpus tags. Data (bincode BLOB): `source`, `recording_id`, `confidence`, `classification` (ExactMatch/ContentDiff/MetadataOnly), `diffs[]` (per-tag differences), `total_candidates`, `release_id`, `release_group_id`. Table: `signal_external_match` (inode PK, path, data BLOB, data_hash) |
 
 ---
 
@@ -156,7 +157,7 @@ From `CLAUDE.md`:
 
 `DeriveCorpusSignals` includes a GC pass that clears orphaned corpus signals. After computing the known inode universe (disk inodes ∪ indexed inodes), it scans each corpus signal table for inodes outside that universe and deletes them. This catches signals that persist due to mutations that previously failed to return their affected inodes, or any future bugs in the post-mutation signal clearing pipeline.
 
-Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, MissingDirectory, ExpectedMissingTag, PathTagMismatch. FileInCorpus is excluded (it IS the disk observation).
+Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, MissingDirectory, ExternalMatch, ExpectedMissingTag, PathTagMismatch. FileInCorpus is excluded (it IS the disk observation).
 
 ### Good Signals
 - `UnindexedFile` for path X (one file)

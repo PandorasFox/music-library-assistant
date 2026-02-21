@@ -10,6 +10,15 @@ use std::path::Path;
 
 use super::Database;
 
+/// A row from external_matches joined with files, for signal derivation.
+pub struct ExternalMatchRow {
+    pub inode: i64,
+    pub recording_id: String,
+    pub confidence: f64,
+    pub raw_response: Option<Vec<u8>>,
+    pub path: String,
+}
+
 /// A candidate inode for external lookup.
 pub struct ExternalLookupCandidate {
     pub inode: i64,
@@ -18,6 +27,41 @@ pub struct ExternalLookupCandidate {
 }
 
 impl Database {
+    /// Get external matches for corpus files, for signal derivation.
+    ///
+    /// Returns rows ordered by (inode, confidence DESC) so the caller can
+    /// group by inode and take the first per group (highest confidence).
+    pub fn get_external_matches_for_derivation(
+        &self,
+        source_key: i64,
+    ) -> Result<Vec<ExternalMatchRow>> {
+        let mut stmt = self.conn().prepare(
+            r#"SELECT em.inode, em.recording_id, em.confidence, em.raw_response, f.path
+               FROM external_matches em
+               JOIN files f ON em.inode = f.inode
+               WHERE f.zone = 'corpus' AND em.source = ?1
+               ORDER BY em.inode, em.confidence DESC"#,
+        )?;
+
+        let rows = stmt.query_map(params![source_key], |row| {
+            Ok(ExternalMatchRow {
+                inode: row.get(0)?,
+                recording_id: row.get(1)?,
+                confidence: row.get(2)?,
+                raw_response: row.get(3)?,
+                path: row.get(4)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            if let Ok(r) = row {
+                results.push(r);
+            }
+        }
+        Ok(results)
+    }
+
     /// Get corpus inodes needing external lookup for a given source.
     ///
     /// Returns inodes that:

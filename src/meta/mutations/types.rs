@@ -14,7 +14,7 @@ use crate::meta::computations::Computation;
 use crate::meta::signals::data::TypedSignalWrite;
 use crate::corpus::tags::TagSet;
 
-use super::file_ops::{MoveMutation, StashFromZoneMutation, StashLeftoversMutation, HardLinkMutation, LibraryMoveMutation, InboxToCorpusMutation};
+use super::file_ops::{MoveMutation, StashFromZoneMutation, StashLeftoversMutation, HardLinkMutation, LibraryMoveMutation, InboxToCorpusMutation, InboxDirToCorpusMutation};
 use super::indexing::{
     IndexFileFromPathMutation, UpdateFilePathMutation, DropFromIndexMutation,
     DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
@@ -268,6 +268,9 @@ pub enum Mutation {
     /// Move an inbox file into the corpus (zone change + tag migration).
     InboxToCorpus(InboxToCorpusMutation),
 
+    /// Move an entire inbox directory into the corpus (preserves non-audio content).
+    InboxDirToCorpus(InboxDirToCorpusMutation),
+
     // ========================================================================
     // Signal Resolution Operations (struct-backed — see indexing.rs for trait impls)
     // ========================================================================
@@ -341,6 +344,7 @@ impl Mutation {
             Mutation::HardLink(m) => m,
             Mutation::LibraryMove(m) => m,
             Mutation::InboxToCorpus(m) => m,
+            Mutation::InboxDirToCorpus(m) => m,
             Mutation::UpdateFilePath(m) => m,
             Mutation::DropFromIndex(m) => m,
             Mutation::DropDirectoryFromIndex(m) => m,
@@ -405,6 +409,7 @@ impl Mutation {
             | Mutation::StashLeftovers(_)
             | Mutation::HardLink(_)
             | Mutation::LibraryMove(_)
+            | Mutation::InboxDirToCorpus(_)
             | Mutation::AcknowledgeMtimeOnly(_)
             | Mutation::DropDirectoryFromIndex(_)
             | Mutation::EmitCanonicalTag(_)
@@ -460,6 +465,12 @@ impl Mutation {
                 if let Some(parent) = m.corpus_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
+            }
+
+            // Inbox dir-to-corpus: the directory paths themselves
+            Mutation::InboxDirToCorpus(m) => {
+                dirs.push(m.inbox_dir_path.clone());
+                dirs.push(m.corpus_dir_path.clone());
             }
 
             // File operations affect source and destination directories

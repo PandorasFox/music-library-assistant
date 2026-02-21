@@ -1,11 +1,90 @@
-//! AcoustID HTTP client.
+//! AcoustID HTTP client and typed response structures.
 //!
 //! Looks up audio fingerprints against the AcoustID database to identify
 //! recordings. Used by the fetch thread for background metadata enrichment.
 //!
+//! ## Response Types
+//!
+//! AcoustID returns MusicBrainz MBIDs but uses its **own JSON serialization
+//! format** — different field names and nesting from the MusicBrainz API.
+//! We define our own serde structs here rather than using musicbrainz_rs types.
+//!
 //! API docs: https://acoustid.org/webservice
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
+
+// ============================================================================
+// Typed AcoustID Response Structs
+// ============================================================================
+
+/// Top-level AcoustID API response.
+#[derive(Debug, Deserialize)]
+pub struct AcoustIdResponse {
+    pub status: String,
+    pub error: Option<AcoustIdError>,
+    #[serde(default)]
+    pub results: Vec<AcoustIdResult>,
+}
+
+/// AcoustID API error detail.
+#[derive(Debug, Deserialize)]
+pub struct AcoustIdError {
+    pub message: String,
+}
+
+/// One fingerprint match result (may contain multiple recordings).
+#[derive(Debug, Deserialize)]
+pub struct AcoustIdResult {
+    /// Match confidence 0.0–1.0.
+    pub score: f64,
+    #[serde(default)]
+    pub recordings: Vec<AcoustIdRecording>,
+}
+
+/// A MusicBrainz recording returned by AcoustID.
+#[derive(Debug, Deserialize)]
+pub struct AcoustIdRecording {
+    /// MusicBrainz recording MBID.
+    pub id: String,
+    pub title: Option<String>,
+    #[serde(default)]
+    pub artists: Vec<AcoustIdArtist>,
+    /// Present if meta includes +releases.
+    #[serde(default)]
+    pub releases: Vec<AcoustIdRelease>,
+    /// Present if meta includes +releasegroups.
+    #[serde(default)]
+    pub releasegroups: Vec<AcoustIdReleaseGroup>,
+}
+
+/// An artist credit in AcoustID's format.
+#[derive(Debug, Deserialize)]
+pub struct AcoustIdArtist {
+    pub name: String,
+    /// Join phrase between this artist and the next (e.g., " & ", " feat. ").
+    #[serde(default)]
+    pub joinphrase: Option<String>,
+}
+
+/// A MusicBrainz release returned by AcoustID.
+#[derive(Debug, Deserialize)]
+pub struct AcoustIdRelease {
+    /// MusicBrainz release MBID.
+    pub id: String,
+    pub title: Option<String>,
+}
+
+/// A MusicBrainz release group returned by AcoustID.
+#[derive(Debug, Deserialize)]
+pub struct AcoustIdReleaseGroup {
+    /// MusicBrainz release group MBID.
+    pub id: String,
+}
+
+// ============================================================================
+// Client + Outcome Types
+// ============================================================================
 
 /// AcoustID API client.
 pub struct AcoustIDClient {
@@ -71,7 +150,7 @@ impl AcoustIDClient {
             .post("https://api.acoustid.org/v2/lookup")
             .set("Content-Type", "application/x-www-form-urlencoded")
             .send_string(&format!(
-                "client={}&fingerprint={}&duration={}&meta=recordings",
+                "client={}&fingerprint={}&duration={}&meta=recordings+releases+releasegroups",
                 urlencoded(&self.api_key),
                 urlencoded(&fp_encoded),
                 duration_secs,
@@ -95,53 +174,39 @@ impl AcoustIDClient {
             .context("Failed to read AcoustID response body")?;
         let raw = body.as_bytes().to_vec();
 
-        let outcome = parse_acoustid_response(&body)?;
+        let outcome = parse_acoustid_response(&raw)?;
         Ok((outcome, Some(raw)))
     }
 }
 
-/// Parse AcoustID JSON response into a LookupOutcome.
-fn parse_acoustid_response(body: &str) -> Result<LookupOutcome> {
-    let json: serde_json::Value = serde_json::from_str(body)
+// ============================================================================
+// Response Parsing
+// ============================================================================
+
+/// Parse AcoustID JSON response bytes into a typed `AcoustIdResponse`.
+pub fn parse_acoustid_response(body: &[u8]) -> Result<LookupOutcome> {
+    let response: AcoustIdResponse = serde_json::from_slice(body)
         .context("Failed to parse AcoustID JSON response")?;
 
-    let status = json.get("status")
-        .and_then(|s| s.as_str())
-        .unwrap_or("");
-
-    if status == "error" {
-        let message = json.get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown error");
+    if response.status == "error" {
+        let message = response.error
+            .map(|e| e.message)
+            .unwrap_or_else(|| "unknown error".to_string());
         anyhow::bail!("AcoustID API error: {}", message);
     }
 
-    let results = match json.get("results").and_then(|r| r.as_array()) {
-        Some(results) => results,
-        None => return Ok(LookupOutcome::NoMatch),
-    };
-
-    if results.is_empty() {
+    if response.results.is_empty() {
         return Ok(LookupOutcome::NoMatch);
     }
 
     let mut matches = Vec::new();
 
-    for result in results {
-        let score = result.get("score")
-            .and_then(|s| s.as_f64())
-            .unwrap_or(0.0);
-
-        if let Some(recordings) = result.get("recordings").and_then(|r| r.as_array()) {
-            for recording in recordings {
-                if let Some(id) = recording.get("id").and_then(|i| i.as_str()) {
-                    matches.push(MatchRow {
-                        recording_id: id.to_string(),
-                        confidence: score,
-                    });
-                }
-            }
+    for result in &response.results {
+        for recording in &result.recordings {
+            matches.push(MatchRow {
+                recording_id: recording.id.clone(),
+                confidence: result.score,
+            });
         }
     }
 
@@ -150,6 +215,16 @@ fn parse_acoustid_response(body: &str) -> Result<LookupOutcome> {
     } else {
         Ok(LookupOutcome::Matches(matches))
     }
+}
+
+/// Find a specific recording by MBID in a stored AcoustID response.
+///
+/// Used by the signal derivation computation to extract metadata for
+/// the matched recording from the stored raw response JSON.
+pub fn find_recording_in_response<'a>(response: &'a AcoustIdResponse, recording_id: &str) -> Option<&'a AcoustIdRecording> {
+    response.results.iter()
+        .flat_map(|r| r.recordings.iter())
+        .find(|rec| rec.id == recording_id)
 }
 
 /// Minimal URL encoding for form parameters.

@@ -22,14 +22,6 @@ impl ExternalSource {
         self as i64
     }
 
-    /// Reconstruct from SQLite integer key.
-    pub fn from_key(key: i64) -> Option<Self> {
-        match key {
-            1 => Some(ExternalSource::AcoustID),
-            _ => None,
-        }
-    }
-
     /// Human-readable name for logging.
     pub fn name(self) -> &'static str {
         match self {

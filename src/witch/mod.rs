@@ -1072,6 +1072,9 @@ impl Witch {
                         "[FETCH] {} batch done: {} processed, {} matched, {} no-match, {} retries",
                         source.name(), processed, matched, no_match, retries
                     ));
+                    if matched > 0 {
+                        self.session_recomputation_scope |= crate::meta::recomputation::RecomputationScope::EXTERNAL;
+                    }
                 }
             }
         }

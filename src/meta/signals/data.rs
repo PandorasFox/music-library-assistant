@@ -280,6 +280,59 @@ pub struct PathTagValueMismatch {
     pub db_value: Option<String>,
 }
 
+/// External match from AcoustID/MusicBrainz compared against corpus tags.
+/// Inode-keyed, one signal per corpus file with external match data.
+#[derive(Debug, Clone)]
+pub struct ExternalMatchSignal {
+    pub inode: i64,
+    pub path: String,
+    /// Serialized as bincode BLOB.
+    pub data: ExternalMatchData,
+}
+
+/// Bincode-serialized payload for ExternalMatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalMatchData {
+    /// ExternalSource key (e.g., 1 for AcoustID).
+    pub source: u8,
+    /// MusicBrainz recording MBID (best match).
+    pub recording_id: String,
+    /// AcoustID confidence score.
+    pub confidence: f64,
+    /// Overall classification of the match.
+    pub classification: MatchClassification,
+    /// Per-tag differences (non-empty for ContentDiff/MetadataOnly).
+    pub diffs: Vec<ExternalTagDiff>,
+    /// How many recordings matched this fingerprint.
+    pub total_candidates: usize,
+    /// MusicBrainz release MBID (best matching release).
+    pub release_id: Option<String>,
+    /// MusicBrainz release group MBID.
+    pub release_group_id: Option<String>,
+}
+
+/// Classification of how well external metadata matches corpus tags.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MatchClassification {
+    /// All compared tags identical (raw string equality).
+    ExactMatch,
+    /// One or more tags differ.
+    ContentDiff,
+    /// External has metadata for tags absent in corpus.
+    MetadataOnly,
+}
+
+/// A single tag difference between external and corpus data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalTagDiff {
+    /// Tag name (e.g., "TITLE", "ARTIST", "ALBUM").
+    pub tag_name: String,
+    /// Value from external source.
+    pub external_value: String,
+    /// Value from corpus (None if tag absent).
+    pub corpus_value: Option<String>,
+}
+
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
 #[derive(Debug, Clone)]
@@ -667,6 +720,7 @@ pub enum TypedSignalWrite {
     SubparDuplicate(SubparDuplicateSignal),
     CompoundTag(CompoundTagSignal),
     PathTagMismatch(PathTagMismatchSignal),
+    ExternalMatch(ExternalMatchSignal),
     // Aggregate signals (semantic-keyed)
     CanonicalTag(CanonicalTagSignal),
     LibraryLeftover(LibraryLeftoverSignal),
@@ -716,6 +770,7 @@ impl TypedSignalWrite {
             Self::SubparDuplicate(s) => s.insert(conn),
             Self::CompoundTag(s) => s.insert(conn),
             Self::PathTagMismatch(s) => s.insert(conn),
+            Self::ExternalMatch(s) => s.insert(conn),
             Self::CanonicalTag(s) => s.insert(conn),
             Self::LibraryLeftover(s) => s.insert(conn),
             Self::LibraryStale(s) => s.insert(conn),
@@ -764,6 +819,7 @@ impl TypedSignalWrite {
             Self::SubparDuplicate(s) => SubparDuplicateSignal::exists(conn, s.inode),
             Self::CompoundTag(s) => CompoundTagSignal::exists(conn, s.inode),
             Self::PathTagMismatch(s) => PathTagMismatchSignal::exists(conn, s.inode),
+            Self::ExternalMatch(s) => ExternalMatchSignal::exists(conn, s.inode),
             Self::CanonicalTag(s) => CanonicalTagSignal::exists(conn, &s.key),
             Self::LibraryLeftover(s) => LibraryLeftoverSignal::exists(conn, &s.key),
             Self::LibraryStale(s) => LibraryStaleSignal::exists(conn, &s.key),
@@ -826,6 +882,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::PathTagMismatch(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::ExternalMatch(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

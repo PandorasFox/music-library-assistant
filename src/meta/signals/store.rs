@@ -871,6 +871,47 @@ impl CorpusSignalStore for PathTagMismatchSignal {
     }
 }
 
+impl CorpusSignalStore for ExternalMatchSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_external_match (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_external_match";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_external_match (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![self.inode, self.path, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_inode_hashes(conn: &Connection) -> Result<HashMap<i64, i64>> {
+        let mut stmt = conn.prepare("SELECT inode, data_hash FROM signal_external_match")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_external_match WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_external_match WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
 impl CorpusSignalStore for ExpectedMissingTagSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_expected_missing_tag (
         inode INTEGER PRIMARY KEY,
@@ -1844,6 +1885,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(CompoundTagSignal::TABLE_SQL)?;
     conn.execute_batch(ExpectedMissingTagSignal::TABLE_SQL)?;
     conn.execute_batch(PathTagMismatchSignal::TABLE_SQL)?;
+    conn.execute_batch(ExternalMatchSignal::TABLE_SQL)?;
 
     // Inbox file signals
     conn.execute_batch(FileInInboxSignal::TABLE_SQL)?;

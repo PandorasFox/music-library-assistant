@@ -411,7 +411,7 @@ fn render_flag_confirm(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2
         .message(vec![
             Line::from(""),
             Line::from(format!(
-                "Add FLAGCOMPILATION=0 to all {} tracks in this set.",
+                "Add COMPILATION=0 to all {} tracks in this set.",
                 track_count
             )),
             Line::from(""),

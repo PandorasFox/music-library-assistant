@@ -345,7 +345,7 @@ impl TagCanonicalityStateV2 {
     /// the stored mutations and applies them to the modal state.
     pub fn restore_from_mutations(&mut self, mutations: &[Mutation]) {
         // Find ApplyTagOps mutation and extract tag operations for THIS tag only.
-        // Tag editor decisions may contain ops for unrelated tags (e.g. FLAGCOMPILATION)
+        // Tag editor decisions may contain ops for unrelated tags (e.g. COMPILATION)
         // which must not pollute the canonical value or variant selection.
         let ops: Vec<&TagOp> = mutations
             .iter()
@@ -572,7 +572,7 @@ pub enum TagCanonicalityActionV2 {
     OpenTagEditorIndividual,
     /// Open tag editor for current group's files (aggregated mode, Shift+T key)
     OpenTagEditorAggregated,
-    /// Flag all tracks in this group as non-compilation (FLAGCOMPILATION=0)
+    /// Flag all tracks in this group as non-compilation (COMPILATION=0)
     FlagNonCompilation,
     /// Flag all variants in this collision as canonical (suppress future detection)
     FlagCanonical,

@@ -613,7 +613,7 @@ impl Database {
             LEFT JOIN corpus_tags year
                 ON f.inode = year.inode AND UPPER(year.tag_name) = 'YEAR'
             LEFT JOIN corpus_tags flagcomp
-                ON f.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'FLAGCOMPILATION'
+                ON f.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'COMPILATION'
             WHERE f.is_dir = 0 AND f.zone = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
             GROUP BY f.inode
         "#);
@@ -903,3 +903,4 @@ impl Database {
         Ok(inodes)
     }
 }
+    

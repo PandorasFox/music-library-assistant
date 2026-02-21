@@ -62,7 +62,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectMissingTags | Find tracks missing required tags. Routes ALBUM-only-missing (with ARTIST+TITLE) to MissingAlbumSingleSignal; checks ExpectedMissingTag for suppression |
 | DetectMetadataDuplicates | Find tracks with identical tag sets |
 | DetectTagCanonicalizations | Find tag canonicalization opportunities |
-| DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums. Skips groups where any track has `FLAGCOMPILATION=0` |
+| DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums. Skips groups where any track has `COMPILATION=0` |
 | DetectCompoundTagValues | Orchestrator: spawns DetectCompoundTagsForInode for each dirty corpus inode. Parallelizes detection across worker threads. |
 | DetectCompoundTagsForInode | Per-inode: walks the priority-ordered `SplitRule` chain from `TagSplittingOpinions` (separator and collaboration keyword rules). First matching rule wins per tag value. Emits per-file CompoundTag signals. Skips CanonicalTag whitelisted values. |
 | DetectShitFormats | Find files with non-Vorbis containers (MP3, M4A, etc). Uses dirty inode tracking — only checks recently (re)indexed inodes |
@@ -119,7 +119,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (via hash-based reconciliation). Loads `strip_album_format_suffixes` from config for album collision detection. Skips collision groups where any variant has a CanonicalTag signal |
 | DetectCompoundTagValues | DetectCompoundTagsForInode (per inode) | — | CompoundTag (all, before spawning) |
 | DetectCompoundTagsForInode | — | CompoundTag (per-file) | — |
-| DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (via hash-based reconciliation). Groups with `FLAGCOMPILATION=0` on any track are suppressed (no signal emitted) |
+| DetectInconsistentAlbumArtist | — | InconsistentAlbumArtist | InconsistentAlbumArtist (via hash-based reconciliation). Groups with `COMPILATION=0` on any track are suppressed (no signal emitted) |
 | DetectShitFormats | — | ShitFormat | ShitFormat (via dirty inode tracking — only processes recently indexed inodes) |
 | AnalyzeFingerprintOverlaps | — | SubparDuplicate, RedundantDuplicate | SubparDuplicate (via hash-based corpus reconciliation), RedundantDuplicate (via hash-based aggregate reconciliation). Uses enum-based equivalence-class partitioning (QualityTier = FormatClass + metric). Best tier with >1 file → RedundantDuplicate; lower tiers → SubparDuplicate with reason (SubparFormat, SubparBitrate, SubparSampleRate). Re-release elision: album checked before ISRC when catalog numbers absent. Skips fingerprint groups with an ExpectedDuplicate signal (operator whitelist). Skips groups entirely within a single source dir that has `interior-dupes false` in config |
 | DetectEmbeddableAlbumArt | — | EmbeddableAlbumArt | EmbeddableAlbumArt (stale, via set reconciliation) |

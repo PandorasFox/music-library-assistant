@@ -72,30 +72,11 @@ impl App {
         // Start transaction ONCE for entire modal
         let _ = self.witch.start_transaction("Tag canonicalization");
 
-        // Load the first signal into V2 modal data using typed query
-        let first_key = clusters.signal_keys[0].clone();
-        let data = self.cache.query(move |db| {
-            Self::load_typed_signal_data(&first_key, kind, &db)
-        }).recv();
-
-        let data = match data {
-            Some(d) => d,
-            None => {
-                self.status_message = Some("Failed to load signal data".to_string());
-                // Discard the transaction we just started via sealed operator decision handler
-                let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
-                return;
-            }
-        };
-
-        // Get group info from clusters
-        let pre_fill = clusters.pre_fill();
-        let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
-
-        let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
-        let zone = Self::zone_for_kind(kind);
-        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, group_index, total_groups, is_album_artist, zone);
-        self.view = ActiveView::TagCanonicityResolution { state, clusters };
+        // Fire async load for the first signal — tick handler will complete it
+        if !self.start_async_cluster_load(clusters) {
+            self.status_message = Some("Failed to load signal data".to_string());
+            let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
+        }
     }
 
     /// Handle tag canonicity modal actions (three-pane layout).
@@ -278,7 +259,7 @@ impl App {
 
     /// Stage a "flag as non-compilation" decision for the current cluster.
     ///
-    /// Adds FLAGCOMPILATION=0 to all tracks in the current group, which will
+    /// Adds COMPILATION=0 to all tracks in the current group, which will
     /// suppress this group in future inconsistent album artist detection runs.
     fn stage_flag_non_compilation(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx) = match &self.view {
@@ -287,7 +268,7 @@ impl App {
                 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 
                 let ops: Vec<TagOp> = state.data.inodes.iter()
-                    .map(|&inode| TagOp::add_tag(inode, "FLAGCOMPILATION", "0"))
+                    .map(|&inode| TagOp::add_tag(inode, "COMPILATION", "0"))
                     .collect();
 
                 if ops.is_empty() {
@@ -344,93 +325,107 @@ impl App {
         );
     }
 
-    /// Load the signal at the current cluster index into modal state.
-    /// Returns true if successfully loaded, false if failed (caller should handle fallback).
+    /// Fire async load of the signal at the current cluster index.
+    ///
+    /// Extracts clusters from the current `TagCanonicityResolution` view, fires
+    /// a non-blocking query on the cache thread, and transitions to
+    /// `TagCanonicityLoading`. The tick handler will poll for completion.
+    ///
+    /// Returns true if the async load was started, false on error.
     pub(in crate::ui) fn load_current_cluster_signal(&mut self) -> bool {
-        // Extract cluster info from current view
-        let (signal_key, kind, current_index, total) = match &self.view {
-            ActiveView::TagCanonicityResolution { clusters, .. } => {
-                match clusters.current_signal_key() {
-                    Some(key) => (
-                        key.to_string(),
-                        clusters.kind,
-                        clusters.current_index,
-                        clusters.signal_keys.len(),
-                    ),
-                    None => return false,
-                }
-            }
-            _ => return false,
-        };
-
-        let data = self.cache.query(move |db| {
-            Self::load_typed_signal_data(&signal_key, kind, &db)
-        }).recv();
-
-        let data = match data {
-            Some(d) => d,
-            None => {
-                self.status_message = Some("Signal not found".to_string());
+        // Extract clusters from current view (take ownership via replace)
+        let clusters = match std::mem::replace(
+            &mut self.view,
+            ActiveView::Insights(insights_view::InsightsViewState::new()),
+        ) {
+            ActiveView::TagCanonicityResolution { clusters, .. } => clusters,
+            other => {
+                // Put it back if not the right variant
+                self.view = other;
                 return false;
             }
         };
 
-        let pre_fill = matches!(kind, CanonicitySignalKind::TagCanonicity | CanonicitySignalKind::InboxTagCanonicity);
-        let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
-        let zone = Self::zone_for_kind(kind);
-        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist, zone);
-
-        // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
-            state.restore_from_mutations(&decision.mutations);
-            state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
-        }
-
-        // Update state in existing view, or set view if called from restore path
-        if let ActiveView::TagCanonicityResolution { state: ref mut s, .. } = self.view {
-            *s = state;
-        }
-        true
+        self.start_async_cluster_load(clusters)
     }
 
-    /// Load cluster signal using provided clusters (for restoring from SuspendedView).
+    /// Fire async load with provided clusters (for restoring from SuspendedView).
     ///
-    /// Sets the view to TagCanonicityResolution with the provided clusters,
-    /// loading the current signal's state from the database.
+    /// Sets the view to `TagCanonicityLoading` with the pending query.
+    /// The tick handler will poll for completion and transition to Resolution.
     pub(in crate::ui) fn load_current_cluster_signal_with_clusters(&mut self, clusters: TagCanonicityClusters) -> bool {
+        self.start_async_cluster_load(clusters)
+    }
+
+    /// Common helper: fire the cache query and transition to loading state.
+    fn start_async_cluster_load(&mut self, clusters: TagCanonicityClusters) -> bool {
         let signal_key = match clusters.current_signal_key() {
             Some(key) => key.to_string(),
             None => return false,
         };
 
         let kind = clusters.kind;
-        let (current_index, total) = (clusters.current_index, clusters.signal_keys.len());
-
-        let data = self.cache.query(move |db| {
+        let pending = self.cache.query(move |db| {
             Self::load_typed_signal_data(&signal_key, kind, &db)
-        }).recv();
+        });
 
-        let data = match data {
-            Some(d) => d,
-            None => {
-                self.status_message = Some("Signal not found".to_string());
-                return false;
-            }
+        self.view = ActiveView::TagCanonicityLoading { pending, clusters };
+        true
+    }
+
+    /// Called by the tick loop when `TagCanonicityLoading` is active.
+    /// Polls the pending query; on completion, constructs state and transitions
+    /// to `TagCanonicityResolution`.
+    pub(in crate::ui) fn tick_tag_canonicity_loading(&mut self) {
+        // Take the loading view out to get ownership of the pending query
+        let old = std::mem::replace(
+            &mut self.view,
+            ActiveView::Insights(insights_view::InsightsViewState::new()),
+        );
+        let ActiveView::TagCanonicityLoading { pending, clusters } = old else {
+            // Shouldn't happen — put it back
+            self.view = old;
+            return;
         };
 
-        let pre_fill = clusters.pre_fill();
-        let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
-        let zone = Self::zone_for_kind(kind);
-        let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(data, pre_fill, current_index, total, is_album_artist, zone);
+        match pending.try_recv() {
+            Err(still_pending) => {
+                // Not ready yet — put loading state back
+                self.view = ActiveView::TagCanonicityLoading {
+                    pending: still_pending,
+                    clusters,
+                };
+            }
+            Ok(None) => {
+                // Signal not found
+                self.status_message = Some("Signal not found".to_string());
+                self.start_health_view();
+            }
+            Ok(Some(data)) => {
+                // Build the resolved state
+                let kind = clusters.kind;
+                let current_index = clusters.current_index;
+                let total = clusters.signal_keys.len();
+                let pre_fill = clusters.pre_fill();
+                let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
+                let zone = Self::zone_for_kind(kind);
+                let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(
+                    data, pre_fill, current_index, total, is_album_artist, zone,
+                );
 
-        // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::TagCanonicity, current_index.to_string())) {
-            state.restore_from_mutations(&decision.mutations);
-            state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
+                // Back-fill UI state from staged decision if one exists for this cluster
+                if let Some(decision) = self.witch.get_decision(&DecisionKey::new(
+                    DecisionSource::TagCanonicity,
+                    current_index.to_string(),
+                )) {
+                    state.restore_from_mutations(&decision.mutations);
+                    state.pending_tag_edits =
+                        Some(helpers::pending_edits_from_mutations(&decision.mutations));
+                }
+
+                self.view = ActiveView::TagCanonicityResolution { state, clusters };
+            }
         }
-
-        self.view = ActiveView::TagCanonicityResolution { state, clusters };
-        true
     }
 
     /// Load typed signal data by key and kind, returning modal data.
@@ -464,3 +459,4 @@ impl App {
         }
     }
 }
+    

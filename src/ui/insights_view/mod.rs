@@ -752,15 +752,21 @@ impl InsightsViewState {
     /// `handled_sources` is the set of `DecisionSource`s with staged decisions
     /// in the active transaction. Entries whose single-decision source is in
     /// this set are filtered out so the operator sees only unhandled insights.
+    ///
+    /// `cache_stale` is true when `MutationsCompleted` has fired but fresh
+    /// `CacheReady` results haven't arrived yet. Keeps the view greyed-out
+    /// so the operator never sees stale counts on an interactive overlay.
     pub fn update(
         &mut self,
         witch_status: Option<&WorkStatus>,
         insights_data: Option<InsightsData>,
         handled_sources: &HashSet<DecisionSource>,
+        cache_stale: bool,
     ) {
-        let busy = witch_status
-            .map(|s| s.pending > 0)
-            .unwrap_or(false);
+        let busy = cache_stale
+            || witch_status
+                .map(|s| s.pending > 0)
+                .unwrap_or(false);
 
         self.modal = if busy {
             InsightsModal::NotReady_WitchBusy
@@ -1050,7 +1056,7 @@ mod tests {
         let no_handled = HashSet::new();
 
         // No status - should be Ready
-        state.update(None, None, &no_handled);
+        state.update(None, None, &no_handled, false);
         assert_eq!(state.modal, InsightsModal::Ready);
 
         // Pending > 0 - should be busy
@@ -1058,7 +1064,7 @@ mod tests {
             pending: 5,
             ..Default::default()
         };
-        state.update(Some(&busy_status), None, &no_handled);
+        state.update(Some(&busy_status), None, &no_handled, false);
         assert_eq!(state.modal, InsightsModal::NotReady_WitchBusy);
 
         // Pending = 0 - should be ready again
@@ -1066,7 +1072,7 @@ mod tests {
             pending: 0,
             ..Default::default()
         };
-        state.update(Some(&idle_status), None, &no_handled);
+        state.update(Some(&idle_status), None, &no_handled, false);
         assert_eq!(state.modal, InsightsModal::Ready);
     }
 
@@ -1077,14 +1083,14 @@ mod tests {
         let no_handled = HashSet::new();
 
         // Populate with data, no filtering
-        state.update(None, Some(data.clone()), &no_handled);
+        state.update(None, Some(data.clone()), &no_handled, false);
         let corpus_count_before = state.cached_entries.corpus.len();
         assert!(corpus_count_before > 0);
 
         // Now mark MtimeAck as handled — CorpusMtimeOnly should disappear
         let mut handled = HashSet::new();
         handled.insert(DecisionSource::MtimeAck);
-        state.update(None, None, &handled);
+        state.update(None, None, &handled, false);
 
         // Should have one fewer entry
         assert_eq!(state.cached_entries.corpus.len(), corpus_count_before - 1);
@@ -1103,7 +1109,7 @@ mod tests {
         handled.insert(DecisionSource::OobSync);
         handled.insert(DecisionSource::MissingFile);
 
-        state.update(None, Some(data), &handled);
+        state.update(None, Some(data), &handled, false);
 
         // Informational entries (FilesInCorpus, FilesIndexed) should survive
         assert!(state.cached_entries.corpus.iter().any(|e| e.insight_type == InsightType::CorpusFilesInCorpus));
@@ -1117,7 +1123,7 @@ mod tests {
         let no_handled = HashSet::new();
 
         // Populate and select last corpus entry
-        state.update(None, Some(data.clone()), &no_handled);
+        state.update(None, Some(data.clone()), &no_handled, false);
         let last_idx = state.cached_entries.corpus.len() - 1;
         state.bucket_selections[FocusedBucket::Corpus.index()].selected = last_idx;
 
@@ -1133,7 +1139,7 @@ mod tests {
         handled.insert(DecisionSource::ShitFormat);
         handled.insert(DecisionSource::IntakeIndex);
 
-        state.update(None, None, &handled);
+        state.update(None, None, &handled, false);
 
         // Selection should be clamped to new bounds
         let new_count = state.cached_entries.corpus.len();
@@ -1148,17 +1154,17 @@ mod tests {
         let no_handled = HashSet::new();
 
         // Initial populate
-        state.update(None, Some(data), &no_handled);
+        state.update(None, Some(data), &no_handled, false);
         let count_before = state.cached_entries.corpus.len();
 
         // Change handled set without new InsightsData — should still rebuild
         let mut handled = HashSet::new();
         handled.insert(DecisionSource::MtimeAck);
-        state.update(None, None, &handled);
+        state.update(None, None, &handled, false);
         assert_eq!(state.cached_entries.corpus.len(), count_before - 1);
 
         // Discard (empty handled) — should restore
-        state.update(None, None, &no_handled);
+        state.update(None, None, &no_handled, false);
         assert_eq!(state.cached_entries.corpus.len(), count_before);
     }
 

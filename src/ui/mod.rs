@@ -127,6 +127,11 @@ pub(crate) struct App {
 
     /// Locally cached Witch status from StatusUpdate notices.
     pub(super) cached_status: crate::witch::WorkStatus,
+
+    /// Set when `MutationsCompleted` fires (cache invalidated), cleared when
+    /// fresh `CacheReady` results arrive. Views stay greyed-out while true so
+    /// the operator never sees stale counts with an interactive overlay.
+    cache_stale: bool,
 }
 
 impl App {
@@ -154,6 +159,7 @@ impl App {
             vacuum_threshold: 0.0,
             notice_rx,
             cached_status: Default::default(),
+            cache_stale: false,
         }
     }
 
@@ -735,6 +741,7 @@ fn run_app<B: ratatui::backend::Backend>(
                 }
                 crate::witch::WitchNotice::MutationsCompleted => {
                     app.cache.invalidate_all();
+                    app.cache_stale = true;
                 }
                 crate::witch::WitchNotice::Error(msg) => {
                     app.status_message = Some(format!("Task failed: {}", msg));
@@ -749,7 +756,11 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Drain CacheReady results from cache thread → update local cached data
-        for item in app.cache.drain_ready() {
+        let ready_items = app.cache.drain_ready();
+        if !ready_items.is_empty() {
+            app.cache_stale = false;
+        }
+        for item in ready_items {
             match item {
                 crate::witch::cache_thread::CacheReady::Insights(data) => {
                     app.cached_insights = Some(data);
@@ -767,12 +778,14 @@ fn run_app<B: ratatui::backend::Backend>(
         if let ActiveView::Insights(ref mut view) = app.view {
             let insights_data = app.cached_insights.clone();
             let handled = app.witch.handled_decision_sources();
-            view.update(Some(&app.cached_status), insights_data, handled);
+            view.update(Some(&app.cached_status), insights_data, handled, app.cache_stale);
         }
         if let ActiveView::Inbox(ref mut view) = app.view {
             let inbox_data = app.cached_inbox.clone();
             view.update(inbox_data);
-            view.busy = app.cached_status.pending > 0 || app.cached_status.idle_rescan_active;
+            view.busy = app.cached_status.pending > 0
+                || app.cached_status.idle_rescan_active
+                || app.cache_stale;
         }
         if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
             if let Some(ref status) = app.cached_deploy {

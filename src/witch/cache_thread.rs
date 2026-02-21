@@ -137,6 +137,20 @@ impl<T> DbQuery<T> {
     pub(crate) fn recv(self) -> T {
         self.rx.recv().expect("cache thread dropped query sender")
     }
+
+    /// Non-blocking poll for the result.
+    ///
+    /// Returns `Ok(value)` if ready, `Err(self)` if still pending (returns self
+    /// back so you can try again next frame).
+    pub(crate) fn try_recv(self) -> Result<T, Self> {
+        match self.rx.try_recv() {
+            Ok(value) => Ok(value),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Err(self),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("cache thread dropped query sender")
+            }
+        }
+    }
 }
 
 // ============================================================================

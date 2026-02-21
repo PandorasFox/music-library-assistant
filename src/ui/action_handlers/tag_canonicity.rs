@@ -358,7 +358,7 @@ impl App {
     }
 
     /// Common helper: fire the cache query and transition to loading state.
-    fn start_async_cluster_load(&mut self, clusters: TagCanonicityClusters) -> bool {
+    pub(in crate::ui) fn start_async_cluster_load(&mut self, clusters: TagCanonicityClusters) -> bool {
         let signal_key = match clusters.current_signal_key() {
             Some(key) => key.to_string(),
             None => return false,
@@ -459,4 +459,3 @@ impl App {
         }
     }
 }
-    

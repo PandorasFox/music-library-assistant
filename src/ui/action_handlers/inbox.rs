@@ -11,7 +11,7 @@ use crate::ui::active_view::ActiveView;
 use crate::ui::inbox_corpus_match_modal;
 use crate::ui::inbox_organize;
 use crate::ui::startup;
-use crate::ui::{tag_canonicity_v2, CanonicitySignalKind, TagCanonicityClusters};
+use crate::ui::{CanonicitySignalKind, TagCanonicityClusters};
 use super::witness;
 use super::App;
 
@@ -80,33 +80,11 @@ impl App {
         // Start transaction for the modal
         let _ = self.witch.start_transaction("Inbox tag canonicalization");
 
-        // Load the first signal
-        let first_key = clusters.signal_keys[0].clone();
-        let data = self.cache.query(move |db| {
-            db.get_inbox_tag_canonicity_signal(&first_key)
-                .ok()
-                .flatten()
-                .and_then(|signal| {
-                    tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, &db)
-                })
-        }).recv();
-
-        let data = match data {
-            Some(d) => d,
-            None => {
-                self.status_message = Some("Failed to load inbox tag canonicity data".to_string());
-                let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
-                return;
-            }
-        };
-
-        let pre_fill = clusters.pre_fill();
-        let (group_index, total_groups) = (clusters.current_index, clusters.signal_keys.len());
-        let zone = crate::db::types::Zone::Inbox;
-        let state = tag_canonicity_v2::TagCanonicalityStateV2::new(
-            data, pre_fill, group_index, total_groups, false, zone,
-        );
-        self.view = ActiveView::TagCanonicityResolution { state, clusters };
+        // Fire async load for the first signal — tick handler will complete it
+        if !self.start_async_cluster_load(clusters) {
+            self.status_message = Some("Failed to load inbox tag canonicity data".to_string());
+            let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
+        }
     }
 
     /// Start inbox corpus match resolution modal.

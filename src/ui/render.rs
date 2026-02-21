@@ -13,7 +13,7 @@ use ratatui::{
     Frame,
 };
 
-use super::active_view::{ActiveView, ExitConfirmModalState};
+use super::active_view::{ActiveView, ExitConfirmModalState, TagCanonicityClusters};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
@@ -229,6 +229,10 @@ fn render_content(
         ActiveView::TagCanonicityResolution { ref state, .. } => {
             vname = "tag_canonicity_resolution";
             tag_canonicity_v2::render(f, area, state);
+        }
+        ActiveView::TagCanonicityLoading { ref clusters, .. } => {
+            vname = "tag_canonicity_loading";
+            render_canonicity_loading(f, area, clusters);
         }
         ActiveView::CompoundTagSplit { ref state, .. } => {
             vname = "compound_tag_split";
@@ -449,9 +453,50 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::OobSyncResolution(_) => "oob_sync_resolution",
         ActiveView::OobConflictInspection(_) => "oob_conflict_inspection",
         ActiveView::TagCanonicityResolution { .. } => "tag_canonicity_resolution",
+        ActiveView::TagCanonicityLoading { .. } => "tag_canonicity_loading",
         ActiveView::CompoundTagSplit { .. } => "compound_tag_split",
         ActiveView::MissingAlbumSingleResolution(_) => "missing_album_single",
         ActiveView::ManualReview(_) => "manual_review",
         ActiveView::TransactionReview(_) => "transaction_review",
     }
+}
+
+/// Render a simple loading indicator for tag canonicity cluster loading.
+fn render_canonicity_loading(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    clusters: &TagCanonicityClusters,
+) {
+    let group_indicator = format!(
+        "({}/{})",
+        clusters.current_index + 1,
+        clusters.signal_keys.len()
+    );
+
+    let title = format!(" Tag Canonicity {} ", group_indicator);
+
+    let block = Block::default()
+        .title(title)
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let loading = Paragraph::new(Line::from(Span::styled(
+        "Loading...",
+        Style::default().fg(Color::DarkGray),
+    )))
+    .alignment(Alignment::Center);
+
+    // Center vertically
+    let y_offset = inner.height / 2;
+    let centered = ratatui::layout::Rect {
+        x: inner.x,
+        y: inner.y + y_offset,
+        width: inner.width,
+        height: 1,
+    };
+    f.render_widget(loading, centered);
 }

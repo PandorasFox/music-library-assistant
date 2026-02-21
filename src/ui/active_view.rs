@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use crate::witch::cache_thread::DbQuery;
 use crate::ui::{
     compound_split_v2,
     config_editor,
@@ -92,6 +93,11 @@ pub(crate) enum ActiveView {
         state: tag_canonicity_v2::TagCanonicalityStateV2,
         clusters: TagCanonicityClusters,
     },
+    /// Loading state while fetching next cluster signal from cache thread.
+    TagCanonicityLoading {
+        pending: DbQuery<Option<tag_canonicity_v2::TagCanonicalityModalDataV2>>,
+        clusters: TagCanonicityClusters,
+    },
     CompoundTagSplit {
         state: compound_split_v2::CompoundSplitStateV2,
         clusters: compound_split_v2::CompoundSplitClustersV2,
@@ -140,6 +146,7 @@ impl ActiveView {
             Self::OobSyncResolution(_) => Some("OOB Tag Sync"),
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
+            Self::TagCanonicityLoading { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
             Self::ManualReview(s) => Some(s.header_suffix()),

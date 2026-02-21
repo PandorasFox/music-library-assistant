@@ -289,6 +289,7 @@ impl App {
             }
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
+            ActiveView::TagCanonicityLoading { .. } => ViewAction::None,
             ActiveView::ConfigEditor(s) => ViewAction::ConfigEditor(s.handle_key(key)),
             ActiveView::Insights(s) => ViewAction::Insights(s.handle_key(key)),
             ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_key(key)),
@@ -799,6 +800,9 @@ fn run_app<B: ratatui::backend::Backend>(
         }
         if matches!(app.view, ActiveView::ProgressiveWork(_)) {
             app.tick_progressive_worker();
+        }
+        if matches!(app.view, ActiveView::TagCanonicityLoading { .. }) {
+            app.tick_tag_canonicity_loading();
         }
 
         // Flag demand for cached UI data

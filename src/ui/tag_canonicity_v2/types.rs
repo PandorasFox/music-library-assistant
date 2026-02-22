@@ -98,7 +98,7 @@ impl TagCanonicalityModalDataV2 {
         signal: &InconsistentAlbumArtistSignal,
         read_db: &ReadOnlyDb,
     ) -> Option<Self> {
-        let tag_name = "album_artist".to_string();
+        let tag_name = "ALBUMARTIST".to_string();
         let context_label = Some(signal.data.album.clone());
 
         let mut variants: Vec<TagVariantEntry> = signal
@@ -354,7 +354,10 @@ impl TagCanonicalityStateV2 {
                 _ => None,
             })
             .flatten()
-            .filter(|op| op.tag_name.eq_ignore_ascii_case(&self.data.tag_name))
+            .filter(|op| {
+                mm_utils::tag_names::normalize_tag_name(&op.tag_name)
+                    == mm_utils::tag_names::normalize_tag_name(&self.data.tag_name)
+            })
             .collect();
 
         if ops.is_empty() {
@@ -462,6 +465,13 @@ impl TagCanonicalityStateV2 {
     ///
     /// Uses the cached file data from modal initialization.
     /// Returns a single ApplyTagOps mutation containing ops for all affected tracks.
+    ///
+    /// Uses normalized tag name matching to handle compound tag name variants
+    /// (ALBUMARTIST vs ALBUM_ARTIST vs ALBUM ARTIST). For each file:
+    /// - Drops use the actual key form found on that file
+    /// - Adds use the file's preferred key (existing key if single variant, or fallback)
+    /// - Consolidation: when a file has values under multiple variant keys, all are dropped
+    ///   and canonical is added under the fallback key (no-separator form)
     pub fn mutations(&self) -> Vec<Mutation> {
         let canonical = self.canonical_input.value().trim();
         if canonical.is_empty() {
@@ -486,60 +496,73 @@ impl TagCanonicalityStateV2 {
             })
             .collect();
 
+        // The normalized (no-separator) form is the fallback key for new adds / consolidation
+        let fallback_key = mm_utils::tag_names::normalize_tag_name(&self.data.tag_name);
+
         let mut ops = Vec::new();
 
         // For each file, generate TagOps if its current value is a selected variant
         for &inode in &self.data.inodes {
             if let Some((_path, current_tagset)) = track_info.get(&inode) {
-                // Get current values for this tag from the TagSet
-                let current_values: Vec<&str> =
-                    current_tagset.values_for(&self.data.tag_name).collect();
+                // Get current (actual_key, value) pairs via normalized matching
+                let current_pairs = current_tagset.values_for_normalized(&self.data.tag_name);
 
-                // Special case: if tag is MISSING (current_values empty) and "" is selected,
+                // Special case: if tag is MISSING (no pairs) and "" is selected,
                 // treat this as "missing tag needs to be set to canonical".
-                let tag_is_missing = current_values.is_empty();
+                let tag_is_missing = current_pairs.is_empty();
                 let missing_is_selected = selected_variants.contains("");
 
+                // Determine the file's preferred key:
+                // - If exactly one key variant exists, use it (preserve existing form)
+                // - If multiple variant keys exist (consolidation) or none, use fallback
+                let distinct_keys: HashSet<&str> = current_pairs.iter().map(|(k, _)| *k).collect();
+                let preferred_key = if distinct_keys.len() == 1 {
+                    distinct_keys.into_iter().next().unwrap().to_string()
+                } else {
+                    fallback_key.clone()
+                };
+
                 // Find which existing values match selected variants
-                let matching_variants: Vec<&str> = current_values
+                let matching_pairs: Vec<(&str, &str)> = current_pairs
                     .iter()
-                    .filter(|v| selected_variants.contains(*v) && **v != canonical)
+                    .filter(|(_, v)| selected_variants.contains(v) && *v != canonical)
                     .copied()
                     .collect();
 
                 // Skip if no matching variants AND we're not handling a missing tag
-                if matching_variants.is_empty() && !(tag_is_missing && missing_is_selected) {
+                if matching_pairs.is_empty() && !(tag_is_missing && missing_is_selected) {
                     continue;
                 }
 
-                // Generate TagOps for this inode:
-                // - Drop each matching variant
-                // - Add the canonical value (only once, and only if not already present)
-                //
-                // Edge case: if canonical already exists on the file (e.g., file has both
-                // "RIOT" and "RIOT "), we just drop the non-canonical variants.
-                let canonical_already_exists = current_values.contains(&canonical);
+                // Check if canonical value already exists under any variant key
+                let canonical_already_exists = current_pairs.iter().any(|(_, v)| *v == canonical);
                 let mut added_canonical = canonical_already_exists;
 
-                for variant in &matching_variants {
+                for (actual_key, variant_value) in &matching_pairs {
                     if !added_canonical {
-                        // Replace: drop old variant, add canonical
-                        ops.push(TagOp::replace_tag(
-                            inode,
-                            &self.data.tag_name,
-                            *variant,
-                            canonical,
-                        ));
+                        if *actual_key == preferred_key.as_str() {
+                            // Same key form: can use replace directly
+                            ops.push(TagOp::replace_tag(
+                                inode,
+                                *actual_key,
+                                *variant_value,
+                                canonical,
+                            ));
+                        } else {
+                            // Different key form (consolidation): drop old key, add under preferred
+                            ops.push(TagOp::drop_tag(inode, *actual_key, *variant_value));
+                            ops.push(TagOp::add_tag(inode, &preferred_key, canonical));
+                        }
                         added_canonical = true;
                     } else {
                         // Already added canonical (or it already exists), just drop this variant
-                        ops.push(TagOp::drop_tag(inode, &self.data.tag_name, *variant));
+                        ops.push(TagOp::drop_tag(inode, *actual_key, *variant_value));
                     }
                 }
 
                 // If tag was missing and "" was selected, add the canonical value
                 if tag_is_missing && missing_is_selected && !added_canonical {
-                    ops.push(TagOp::add_tag(inode, &self.data.tag_name, canonical));
+                    ops.push(TagOp::add_tag(inode, &preferred_key, canonical));
                 }
             }
         }

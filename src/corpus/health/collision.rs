@@ -84,17 +84,22 @@ pub fn get_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
 }
 
 /// Detect album_artist collisions from the database.
+///
+/// Queries all compound tag name variants (ALBUMARTIST, ALBUM_ARTIST, ALBUM ARTIST)
+/// and merges results, since different files may use different separator conventions.
 pub fn get_album_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
-    let values = db.get_distinct_tag_values("album_artist")?;
-
-    // Group by normalized key
+    // Query all separator variants and merge — files may use ALBUMARTIST or ALBUM_ARTIST
     let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
-    for (value, count) in values {
-        let normalized = normalize_album_artist(&value);
-        buckets
-            .entry(normalized)
-            .or_default()
-            .insert(value, count);
+    for variant in mm_utils::tag_names::compound_tag_name_variants("ALBUM", "ARTIST") {
+        let values = db.get_distinct_tag_values(&variant)?;
+        for (value, count) in values {
+            let normalized = normalize_album_artist(&value);
+            *buckets
+                .entry(normalized)
+                .or_default()
+                .entry(value)
+                .or_insert(0) += count;
+        }
     }
 
     // Convert buckets with multiple variants to collisions

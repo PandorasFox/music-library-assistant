@@ -258,6 +258,19 @@ impl TagSet {
             .map(|(_, v)| v.as_str())
     }
 
+    /// Get all values for a key, matching by normalized tag name (strips separators + uppercases).
+    ///
+    /// Returns `(actual_key, value)` pairs so callers know which exact key form the file uses.
+    /// This correctly matches `ALBUMARTIST` ≈ `ALBUM_ARTIST` ≈ `ALBUM ARTIST`.
+    pub fn values_for_normalized(&self, key: &str) -> Vec<(&str, &str)> {
+        let normalized = mm_utils::tag_names::normalize_tag_name(key);
+        self.tags
+            .iter()
+            .filter(|(k, _)| mm_utils::tag_names::normalize_tag_name(k) == normalized)
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect()
+    }
+
     /// Get the first value for a key (case-insensitive).
     ///
     /// For single-value fields, this is THE value.
@@ -1311,5 +1324,43 @@ mod tests {
         assert!(tags.contains("artist", "Foo"));
         assert!(tags.contains("title", "Bar"));
         assert!(!tags.contains("metadata_block_picture", "base64data"));
+    }
+
+    // =========================================================================
+    // values_for_normalized tests
+    // =========================================================================
+
+    #[test]
+    fn test_values_for_normalized_single_variant() {
+        let tags = TagSet::new(vec![
+            ("ALBUMARTIST".to_string(), "Test Artist".to_string()),
+            ("TITLE".to_string(), "Song".to_string()),
+        ]);
+        let results = tags.values_for_normalized("album_artist");
+        assert_eq!(results, vec![("ALBUMARTIST", "Test Artist")]);
+    }
+
+    #[test]
+    fn test_values_for_normalized_multi_variant() {
+        // File has both ALBUMARTIST and ALBUM_ARTIST (the bug scenario)
+        let tags = TagSet::new(vec![
+            ("ALBUMARTIST".to_string(), "Artist A".to_string()),
+            ("ALBUM_ARTIST".to_string(), "Artist B".to_string()),
+        ]);
+        let results = tags.values_for_normalized("ALBUMARTIST");
+        assert_eq!(results.len(), 2);
+        // Both variants should be found
+        assert!(results.contains(&("ALBUMARTIST", "Artist A")));
+        assert!(results.contains(&("ALBUM_ARTIST", "Artist B")));
+    }
+
+    #[test]
+    fn test_values_for_normalized_no_match() {
+        let tags = TagSet::new(vec![
+            ("ARTIST".to_string(), "Test".to_string()),
+            ("ALBUM".to_string(), "Album".to_string()),
+        ]);
+        let results = tags.values_for_normalized("album_artist");
+        assert!(results.is_empty());
     }
 }

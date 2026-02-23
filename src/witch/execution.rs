@@ -75,7 +75,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     let loaded_config = config::load_config().ok();
     let stash_root = loaded_config.as_ref().map(|c| c.stash_dir());
 
-    let session_id = mutation.label();
+    let session_id: &str = &label;
 
     // Execute mutation via MutationExecutor trait dispatch.
     // All writes go through write_thread::signal_sender() (fire-and-forget).

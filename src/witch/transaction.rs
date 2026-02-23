@@ -284,6 +284,14 @@ impl super::Witch {
             phases.iter().map(|(s, m)| format!("{:?}({})", s, m.len())).collect::<Vec<_>>()
         ));
 
+        // Generate a timestamped session label so tag_edit_history rows from this
+        // transaction are grouped into a unique session (not one giant "Tag edit" bucket).
+        let session_label = format!(
+            "{} @ {}",
+            txn.label,
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+
         // Queue first phase immediately, stash remainder for drain-and-advance
         if let Some((stage, mutations)) = phases.pop_front() {
             crate::logging::log_mutation(format!(
@@ -291,7 +299,7 @@ impl super::Witch {
                 stage, mutations.len()
             ));
             self.pending_mutation_phases = phases;
-            self.queue_mutations_internal(mutations, Some(txn.label));
+            self.queue_mutations_internal(mutations, Some(session_label));
         }
 
         Ok(())

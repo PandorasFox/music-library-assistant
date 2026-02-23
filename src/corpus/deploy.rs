@@ -43,8 +43,9 @@ fn sanitize_path_component(s: &str) -> String {
 /// Or: `{album_artist}/{title}.{ext}` for singles (no album)
 /// Or: `[no album artist]/...` if missing album_artist
 ///
-/// Tags should be provided as a HashMap with lowercase keys.
-/// Recognized tags: `album_artist`, `artist`, `album`, `title`, `track_number`, `disc_number`
+/// Tags should be provided as a HashMap with UPPERCASE keys (as stored in DB).
+/// All lookups use `find_tag_in_map` for normalized matching so compound tag
+/// name variants are handled: ALBUMARTIST ≈ ALBUM_ARTIST, TRACKNUMBER ≈ TRACK_NUMBER.
 pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String, String>) -> PathBuf {
     // Get extension from original path, preserving compound .LOSSY.flac extension
     let ext = if file_path.ends_with(".LOSSY.flac") {
@@ -61,21 +62,20 @@ pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String,
             .to_string()
     };
 
-    // Determine album artist (prefer album_artist, fallback to artist)
-    let album_artist = tags
-        .get("ALBUM_ARTIST")
-        .or_else(|| tags.get("ARTIST"))
-        .map(|s| s.as_str())
+    // All tag lookups use find_tag_in_map for normalized matching so that
+    // compound tag name variants are handled (ALBUMARTIST ≈ ALBUM_ARTIST, etc.)
+    let album_artist = find_tag_in_map(tags, "albumartist")
+        .or_else(|| find_tag_in_map(tags, "artist"))
         .unwrap_or("[no album artist]");
 
-    if let Some(album) = tags.get("ALBUM") {
+    if let Some(album) = find_tag_in_map(tags, "album") {
         // Full path: {album_artist}/{album}/{track}. {title}.{ext}
         let mut path = PathBuf::new();
         path.push(sanitize_path_component(album_artist));
         path.push(sanitize_path_component(album));
 
-        let filename = if let Some(title) = tags.get("TITLE") {
-            if let Some(track_num_str) = tags.get("TRACK_NUMBER") {
+        let filename = if let Some(title) = find_tag_in_map(tags, "title") {
+            if let Some(track_num_str) = find_tag_in_map(tags, "tracknumber") {
                 if let Ok(track_num) = track_num_str.parse::<i32>() {
                     // When disc_number is present, prefix track with disc to
                     // disambiguate multi-disc releases (e.g. "1-01. Title.ext")
@@ -113,7 +113,7 @@ pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String,
         let mut path = PathBuf::new();
         path.push(sanitize_path_component(album_artist));
 
-        let filename = if let Some(title) = tags.get("TITLE") {
+        let filename = if let Some(title) = find_tag_in_map(tags, "title") {
             format!("{}.{}", sanitize_path_component(title), ext)
         } else {
             Path::new(file_path)

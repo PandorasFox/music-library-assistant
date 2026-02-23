@@ -165,12 +165,13 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     // Apply structured post-execution pipeline
     let spawn = apply_post_execution(&mutation, success, &pending_signals, &discovered_inodes, &witness);
 
-    // Extract config update for ApplyConfigEdits mutations
+    // Extract config update for config-modifying mutations.
+    // Both ApplyConfigEdits and ApplyDirConfigEdit carry the new Config in-band.
     let config_update = if success {
-        if let Mutation::ApplyConfigEdits(ref m) = &mutation {
-            Some(m.new_config.clone())
-        } else {
-            None
+        match &mutation {
+            Mutation::ApplyConfigEdits(ref m) => Some(m.new_config.clone()),
+            Mutation::ApplyDirConfigEdit(ref m) => Some(m.new_config.clone()),
+            _ => None,
         }
     } else {
         None

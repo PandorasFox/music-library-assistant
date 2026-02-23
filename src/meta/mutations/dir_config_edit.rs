@@ -14,6 +14,9 @@ use crate::meta::recomputation::RecomputationScope;
 use super::traits::{MutationContext, MutationExecutor};
 
 /// Mutation that applies a single source directory config edit to dirs.kdl.
+///
+/// Carries the full resulting `Config` so the Witch can update `SharedConfig`
+/// in-memory after successful execution (same pattern as `ApplyConfigEdits`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyDirConfigEditMutation {
     /// Which source dir was edited (relative path within corpus).
@@ -22,6 +25,8 @@ pub struct ApplyDirConfigEditMutation {
     pub old_dir: SourceDir,
     /// The new config with edits applied.
     pub new_dir: SourceDir,
+    /// Full config with the dir edit applied, for SharedConfig update.
+    pub new_config: crate::config::Config,
 }
 
 impl PartialEq for ApplyDirConfigEditMutation {
@@ -123,9 +128,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     }
 
     fn recomputation_scope(&self) -> RecomputationScope {
-        // Deploy/duplicate computations depend on source dir config.
-        // TAGS included because path-tag schema analysis depends on both tags and files.
-        RecomputationScope::FILES | RecomputationScope::DEPLOY | RecomputationScope::TAGS
+        dir_config_recomputation_scope(&self.old_dir, &self.new_dir)
     }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
@@ -173,4 +176,31 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
 
         diffs
     }
+}
+
+/// Compute minimal recomputation scope by diffing which SourceDir fields changed.
+fn dir_config_recomputation_scope(old: &SourceDir, new: &SourceDir) -> RecomputationScope {
+    let mut scope = RecomputationScope::EMPTY;
+
+    // DEPLOY: which libraries this source deploys to
+    if old.libraries != new.libraries {
+        scope |= RecomputationScope::DEPLOY;
+    }
+
+    // FILES: duplicate detection behavior, fingerprinting
+    if old.can_stash_dupes != new.can_stash_dupes
+        || old.interior_dupes != new.interior_dupes
+        || old.enable_acoustid != new.enable_acoustid
+    {
+        scope |= RecomputationScope::FILES;
+    }
+
+    // TAGS: path-tag schema analysis
+    let old_schema = old.path_schema.as_ref().map(|s| s.template.as_str());
+    let new_schema = new.path_schema.as_ref().map(|s| s.template.as_str());
+    if old_schema != new_schema {
+        scope |= RecomputationScope::TAGS;
+    }
+
+    scope
 }

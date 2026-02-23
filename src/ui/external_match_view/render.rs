@@ -63,11 +63,15 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
     {
         let selected = state.cursor == nav_index;
         let (status_label, status_color) = if !state.has_api_key {
-            ("No API Key", Color::Red)
+            ("No API Key".to_string(), Color::Red)
         } else if state.fetch_active {
-            ("Active", Color::Yellow)
+            if let Some(ref p) = state.fetch_progress {
+                (format!("{}/{}", p.processed, p.total), Color::Yellow)
+            } else {
+                ("Active".to_string(), Color::Yellow)
+            }
         } else {
-            ("Idle", Color::Green)
+            ("Idle".to_string(), Color::Green)
         };
 
         let marker = if selected { "▸ " } else { "  " };
@@ -82,7 +86,7 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
         lines.push(Line::from(vec![
             Span::styled(marker, label_style),
             Span::styled("Fetch AcoustID Data  ", label_style),
-            Span::styled(status_label, Style::default().fg(status_color)),
+            Span::styled(format!("{:<12}", status_label), Style::default().fg(status_color)),
         ]));
         nav_index += 1;
     }
@@ -237,31 +241,13 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
         Line::from(Span::raw("")),
     ];
 
-    // Status
-    let (status_text, status_color) = if !state.has_api_key {
-        ("No API Key", Color::Red)
-    } else if state.fetch_active {
-        ("Active", Color::Yellow)
-    } else {
-        ("Idle", Color::Green)
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(status_text, Style::default().fg(status_color)),
-    ]));
-
-    // API key status
-    let key_text = if state.has_api_key { "configured" } else { "not configured" };
-    let key_color = if state.has_api_key { Color::Green } else { Color::Red };
-    lines.push(Line::from(vec![
-        Span::styled("API Key: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(key_text, Style::default().fg(key_color)),
-    ]));
-
-    lines.push(Line::from(Span::raw("")));
-
     if !state.has_api_key {
+        // No API key configured
+        lines.push(Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("No API Key", Style::default().fg(Color::Red)),
+        ]));
+        lines.push(Line::from(Span::raw("")));
         lines.push(Line::from(Span::styled(
             "Configure an AcoustID API key",
             Style::default().fg(Color::DarkGray),
@@ -271,11 +257,67 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         )));
     } else if state.fetch_active {
-        lines.push(Line::from(Span::styled(
-            "Batch in progress...",
-            Style::default().fg(Color::Yellow),
-        )));
+        // Active batch with progress
+        if let Some(ref p) = state.fetch_progress {
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("Active ({}/{})", p.processed, p.total),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+            lines.push(Line::from(Span::raw("")));
+            lines.push(Line::from(vec![
+                Span::styled("  Matched:    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>5}", p.matched), Style::default().fg(Color::Green)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  No match:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>5}", p.no_match), Style::default().fg(Color::White)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Retries:    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>5}", p.retries), Style::default().fg(Color::Yellow)),
+            ]));
+            lines.push(Line::from(Span::raw("")));
+            // Braille progress bar
+            lines.push(Line::from(render_braille_bar(p.processed, p.total)));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Active", Style::default().fg(Color::Yellow)),
+            ]));
+        }
     } else {
+        // Idle — show last-batch summary if available
+        lines.push(Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Idle", Style::default().fg(Color::Green)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("API Key: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("configured", Style::default().fg(Color::Green)),
+        ]));
+
+        if let Some(ref p) = state.fetch_progress {
+            if p.total > 0 {
+                lines.push(Line::from(Span::raw("")));
+                lines.push(Line::from(Span::styled(
+                    format!("Last batch: {} processed", p.total),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(vec![
+                    Span::styled("  Matched: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{}", p.matched), Style::default().fg(Color::Green)),
+                    Span::styled("  No match: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{}", p.no_match), Style::default().fg(Color::White)),
+                    Span::styled("  Retries: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{}", p.retries), Style::default().fg(Color::Yellow)),
+                ]));
+            }
+        }
+
+        lines.push(Line::from(Span::raw("")));
         lines.push(Line::from(Span::styled(
             "Press Enter to start lookup.",
             Style::default().fg(HINT_COLOR),
@@ -283,6 +325,44 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+/// Render a braille progress bar as a vector of Spans.
+///
+/// Uses the same braille style as the startup progress screen:
+/// ⠸ (left bracket), ⠿ (filled), ⠁ (spinner), spaces (empty), ⠇ (right bracket).
+fn render_braille_bar(processed: usize, total: usize) -> Vec<Span<'static>> {
+    const BAR_WIDTH: usize = 20;
+
+    if total == 0 {
+        return vec![Span::styled(
+            format!("  ⠸{}⠇", " ".repeat(BAR_WIDTH)),
+            Style::default().fg(Color::DarkGray),
+        )];
+    }
+
+    let ratio = (processed as f32 / total as f32).min(1.0);
+    let pct = (ratio * 100.0).round() as u32;
+    let filled = ((ratio * BAR_WIDTH as f32) as usize).min(BAR_WIDTH.saturating_sub(1));
+    let empty = BAR_WIDTH.saturating_sub(filled + 1);
+
+    let spinner = if processed < total { '⠁' } else { '⠿' };
+
+    let bar = format!(
+        "  ⠸{}{}{}⠇  {}%",
+        "⠿".repeat(filled),
+        spinner,
+        " ".repeat(empty),
+        pct,
+    );
+
+    let bar_color = if processed >= total {
+        Color::Green
+    } else {
+        Color::Rgb(241, 92, 153) // #f15c99 — same accent as startup bar
+    };
+
+    vec![Span::styled(bar, Style::default().fg(bar_color))]
 }
 
 fn render_untagged_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {

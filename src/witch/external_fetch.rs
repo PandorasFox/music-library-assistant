@@ -40,6 +40,16 @@ enum FetchRequest {
     Shutdown,
 }
 
+/// Snapshot of batch progress, sent after each item to the Witch.
+#[derive(Debug, Clone, Default)]
+pub struct FetchProgress {
+    pub total: usize,
+    pub processed: usize,
+    pub matched: usize,
+    pub no_match: usize,
+    pub retries: usize,
+}
+
 /// Result from fetch thread back to the Witch.
 pub enum FetchResult {
     /// Match(es) found for an inode.
@@ -63,6 +73,8 @@ pub enum FetchResult {
         source: ExternalSource,
         error: String,
     },
+    /// Intermediate progress snapshot — sent after each item during batch.
+    Progress(FetchProgress),
     /// Batch complete — thread going back to sleep.
     BatchDone {
         source: ExternalSource,
@@ -282,11 +294,21 @@ fn process_refresh(
 
     let client = AcoustIDClient::new(api_key);
     let rate_interval = Duration::from_millis(1000 / requests_per_second.max(1) as u64);
+    let total_items = work_queue.len();
 
     let mut processed = 0usize;
     let mut matched = 0usize;
     let mut no_match_count = 0usize;
     let mut retry_count = 0usize;
+
+    // Send initial progress so the UI immediately shows queue size
+    let _ = result_tx.send(FetchResult::Progress(FetchProgress {
+        total: total_items,
+        processed: 0,
+        matched: 0,
+        no_match: 0,
+        retries: 0,
+    }));
 
     while let Some(item) = work_queue.pop_front() {
         let start = Instant::now();
@@ -340,6 +362,14 @@ fn process_refresh(
         }
 
         processed += 1;
+
+        let _ = result_tx.send(FetchResult::Progress(FetchProgress {
+            total: total_items,
+            processed,
+            matched,
+            no_match: no_match_count,
+            retries: retry_count,
+        }));
 
         // Rate limit: sleep for remainder of interval
         let elapsed = start.elapsed();

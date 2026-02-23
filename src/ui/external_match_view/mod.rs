@@ -63,6 +63,8 @@ pub(crate) struct ExternalMatchesViewState {
     pub fetch_active: bool,
     /// Whether an AcoustID API key is configured
     pub has_api_key: bool,
+    /// Latest fetch progress snapshot from the Witch
+    pub fetch_progress: Option<crate::witch::external_fetch::FetchProgress>,
 }
 
 // ============================================================================
@@ -77,6 +79,7 @@ impl ExternalMatchesViewState {
             scroll: 0,
             fetch_active,
             has_api_key,
+            fetch_progress: None,
         }
     }
 

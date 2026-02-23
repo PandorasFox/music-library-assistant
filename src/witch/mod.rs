@@ -229,6 +229,10 @@ pub struct Witch {
     /// Handle for the autonomous external fetch thread (AcoustID lookups).
     /// None when no API key is configured or shared_config not yet available.
     external_fetch: Option<external_fetch::ExternalFetchHandle>,
+
+    /// Latest progress snapshot from the external fetch thread.
+    /// Updated each tick from Progress results; cleared when a new batch starts.
+    fetch_progress: Option<external_fetch::FetchProgress>,
 }
 
 impl Witch {
@@ -305,6 +309,7 @@ impl Witch {
             idle_rescan_active: false,
             idle_rescan_eligible: false,
             external_fetch: None,
+            fetch_progress: None,
         };
 
         // DEBUG: Verify initialization (only when timing enabled)
@@ -1065,9 +1070,20 @@ impl Witch {
                         &error,
                     );
                 }
+                external_fetch::FetchResult::Progress(p) => {
+                    self.fetch_progress = Some(p);
+                }
                 external_fetch::FetchResult::BatchDone {
                     source, processed, matched, no_match, retries,
                 } => {
+                    // Store final snapshot so last-batch summary stays visible
+                    self.fetch_progress = Some(external_fetch::FetchProgress {
+                        total: processed,
+                        processed,
+                        matched,
+                        no_match,
+                        retries,
+                    });
                     crate::logging::log_general(format!(
                         "[FETCH] {} batch done: {} processed, {} matched, {} no-match, {} retries",
                         source.name(), processed, matched, no_match, retries
@@ -1138,6 +1154,9 @@ impl Witch {
             return;
         }
 
+        // Clear stale progress from last batch
+        self.fetch_progress = None;
+
         crate::logging::log_general(format!(
             "[WITCH] Triggering external fetch for {} eligible dirs",
             eligible_dirs.len()
@@ -1195,6 +1214,9 @@ impl Witch {
             return;
         }
 
+        // Clear stale progress from last batch
+        self.fetch_progress = None;
+
         crate::logging::log_general(format!(
             "[WITCH] Manual external fetch requested for {} eligible dirs",
             eligible_dirs.len()
@@ -1209,6 +1231,11 @@ impl Witch {
     /// Whether an external AcoustID fetch batch is currently active.
     pub fn is_external_fetch_active(&self) -> bool {
         self.external_fetch.as_ref().map_or(false, |h| h.is_batch_active())
+    }
+
+    /// Latest progress snapshot from the external fetch thread.
+    pub fn external_fetch_progress(&self) -> Option<&external_fetch::FetchProgress> {
+        self.fetch_progress.as_ref()
     }
 
     /// Whether an AcoustID API key is configured.

@@ -274,6 +274,23 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     false),
             ],
         },
+        // Group 12: External Matching
+        ConfigGroup {
+            name: "External Matching",
+            collapsed: false,
+            fields: vec![
+                field("AcoustID API key", "API key for AcoustID fingerprint lookups (empty = disabled)",
+                    ConfigValue::String(ops.external_matching.acoustid_api_key.clone()),
+                    ConfigValue::String(defaults.external_matching.acoustid_api_key.clone()),
+                    source_for(ops.external_matching.acoustid_api_key == defaults.external_matching.acoustid_api_key, "acoustid-api-key"),
+                    false),
+                field("Requests per second", "Rate limit for AcoustID API calls",
+                    ConfigValue::UintU32(ops.external_matching.requests_per_second),
+                    ConfigValue::UintU32(defaults.external_matching.requests_per_second),
+                    source_for(ops.external_matching.requests_per_second == defaults.external_matching.requests_per_second, "requests-per-second"),
+                    false),
+            ],
+        },
     ]
 }
 
@@ -392,6 +409,12 @@ fn apply_field(config: &mut Config, group_name: &str, field: &ConfigField) {
         }
         ("Advanced", "Leave transactions open") => {
             if let ConfigValue::Bool(v) = &field.value { config.opinions.leave_transactions_open = *v; }
+        }
+        ("External Matching", "AcoustID API key") => {
+            if let ConfigValue::String(v) = &field.value { config.opinions.external_matching.acoustid_api_key = v.clone(); }
+        }
+        ("External Matching", "Requests per second") => {
+            if let ConfigValue::UintU32(v) = &field.value { config.opinions.external_matching.requests_per_second = *v; }
         }
         _ => {} // Unknown fields are ignored
     }

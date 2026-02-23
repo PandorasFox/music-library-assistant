@@ -401,23 +401,31 @@ impl Database {
     }
 
     /// Get inodes that have any of the given tag values for a specific tag name.
+    ///
+    /// Uses normalized tag name matching (strips separators like `_`, `-`, ` `, `.`)
+    /// so that compound tag variants match: "album_artist" ≈ "ALBUMARTIST" ≈ "ALBUM_ARTIST".
     pub fn get_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
         if values.is_empty() {
             return Ok(Vec::new());
         }
 
+        // Normalize the tag name in Rust (strip separators + uppercase) and compare
+        // against the same normalization applied to the DB column in SQL.
+        let normalized_tag_name = mm_utils::tag_names::normalize_tag_name(tag_name);
+
         let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
         let sql = format!(
             r#"SELECT DISTINCT ct.inode FROM corpus_tags ct
                INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
-               WHERE UPPER(ct.tag_name) = UPPER(?1) AND ct.tag_value IN ({})"#,
+               WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ct.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?1
+               AND ct.tag_value IN ({})"#,
             placeholders.join(",")
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
 
         let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 1);
-        params.push(&tag_name);
+        params.push(&normalized_tag_name);
         for v in values {
             params.push(v);
         }

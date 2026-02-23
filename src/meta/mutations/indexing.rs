@@ -1270,14 +1270,16 @@ pub fn execute_emit_canonical_tag(
     let sender = write_thread::signal_sender()
         .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
 
-    // Key format: "{tag_name}:{tag_value}" (e.g., "artist:Rinse & Repeat")
-    let canonical_key = format!("{}:{}", tag_name, canonical_value);
+    // Key uses normalized tag name (strip separators + uppercase) so that lookups
+    // match regardless of compound variant: "album_artist" ≈ "ALBUMARTIST".
+    let normalized_tag_name = mm_utils::tag_names::normalize_tag_name(tag_name);
+    let canonical_key = format!("{}:{}", normalized_tag_name, canonical_value);
 
     // Emit CanonicalTag signal via typed path
     sender.write_typed_signal(
         TypedSignalWrite::CanonicalTag(CanonicalTagSignal {
             key: canonical_key,
-            tag_name: tag_name.to_string(),
+            tag_name: normalized_tag_name.clone(),
             canonical_value: canonical_value.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
         }),

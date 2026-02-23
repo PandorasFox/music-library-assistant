@@ -599,6 +599,37 @@ impl MigrationRegistry {
             },
         });
 
+        // v20→v21: Add classification column to inbox corpus match signals
+        //
+        // Quality classification (better/equivalent/subpar) is now computed at
+        // signal emission time and stored as a SQL column for efficient filtering.
+        // Existing signals are deleted so DetectInboxCorpusMatches recomputes
+        // them with the new classification field (both column and bincode blob).
+        registry.register(Migration {
+            from_version: 20,
+            to_version: 21,
+            description: "Add classification column to signal_inbox_corpus_match, clear for recomputation",
+            apply: |db| {
+                let conn = db.conn();
+
+                // Add the classification column (idempotent)
+                add_column_if_missing(
+                    conn,
+                    "signal_inbox_corpus_match",
+                    "classification",
+                    "TEXT NOT NULL DEFAULT 'equivalent'",
+                )?;
+
+                // Delete all existing rows — bincode format changed (added
+                // classification field) and the new column needs to be populated
+                // by the computation. DetectInboxCorpusMatches will rebuild them
+                // on next cycle.
+                conn.execute("DELETE FROM signal_inbox_corpus_match", [])?;
+
+                Ok(())
+            },
+        });
+
         registry
     }
 

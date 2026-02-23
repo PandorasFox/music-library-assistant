@@ -9,7 +9,6 @@ use rusqlite::params;
 
 use super::Database;
 use crate::db::types::Zone;
-use crate::meta::computations::analysis::QualityTier;
 
 impl Database {
     // ========================================================================
@@ -57,6 +56,7 @@ impl Database {
         total += EmbeddableAlbumArtSignal::count(&self.conn).unwrap_or(0);
         total += EmbeddedDiscNumberSignal::count(&self.conn).unwrap_or(0);
         total += PathTagMismatchSignal::count(&self.conn).unwrap_or(0);
+        total += ExternalMatchSignal::count(&self.conn).unwrap_or(0);
         total
     }
 
@@ -390,18 +390,24 @@ impl Database {
 
     /// Get inbox files eligible for organizing into the corpus.
     ///
-    /// "Organizable" = has InboxHealthySignal AND is NOT referenced by
-    /// InboxCorpusMatchSignal or InboxTagCanonicitySignal.
+    /// "Organizable" = has InboxHealthySignal AND:
+    /// - has NO InboxCorpusMatchSignal, OR
+    /// - has InboxCorpusMatchSignal classified as 'better' (inbox is higher quality)
+    /// AND is NOT referenced by InboxTagCanonicitySignal.
     ///
-    /// SQL handles the healthy/corpus-match exclusion. Tag canonicity exclusion
-    /// is done in Rust because inbox_inodes are stored in a bincode BLOB.
+    /// Tag canonicity exclusion is done in Rust because inbox_inodes are
+    /// stored in a bincode BLOB.
     pub fn get_organizable_inbox_files(&self) -> Result<Vec<(i64, String)>> {
         use crate::meta::signals::data::InboxTagCanonicityData;
 
-        // Step 1: Get healthy inodes NOT in corpus match table (SQL)
+        // Step 1: Get healthy inodes that either have no corpus match,
+        // or have a corpus match classified as 'better' (inbox outranks corpus)
         let mut stmt = self.conn.prepare(
             "SELECT h.inode, h.path FROM signal_inbox_healthy h
-             WHERE h.inode NOT IN (SELECT inode FROM signal_inbox_corpus_match)"
+             WHERE h.inode NOT IN (
+                 SELECT inode FROM signal_inbox_corpus_match
+                 WHERE classification != 'better'
+             )"
         )?;
         let candidates: Vec<(i64, String)> = stmt.query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?))
@@ -579,6 +585,8 @@ impl Database {
 
         let path_tag_mismatch_count = self.count_signal_type("path_tag_mismatch")?;
 
+        let external_match_count = self.count_signal_type("external_match")?;
+
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
             subpar_duplicate_count,
@@ -590,6 +598,7 @@ impl Database {
             missing_album_single_count,
             embedded_disc_number_count,
             path_tag_mismatch_count,
+            external_match_count,
         })
     }
 
@@ -696,6 +705,59 @@ impl Database {
         Ok(OtherSignalsBucket { entries })
     }
 
+    /// Get external match entries for operator review.
+    ///
+    /// Returns entries where classification is ContentDiff or MetadataOnly
+    /// (ExactMatch signals don't need action). Sorted by path.
+    pub fn get_external_match_review_entries(&self) -> Result<Vec<crate::meta::views::ExternalMatchReviewEntry>> {
+        use crate::meta::views::{ExternalMatchReviewEntry, ExternalMatchClassificationView, ExternalMatchDiffView};
+        use crate::meta::signals::data::{ExternalMatchData, MatchClassification};
+
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path, data FROM signal_external_match ORDER BY path"
+        )?;
+
+        let mut results = Vec::new();
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((inode, path, blob))
+        })?;
+
+        for row in rows {
+            let (inode, path, blob) = row?;
+            let data: ExternalMatchData = match bincode::deserialize(&blob) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            // Skip ExactMatch (no action needed)
+            let classification = match data.classification {
+                MatchClassification::ExactMatch => continue,
+                MatchClassification::ContentDiff => ExternalMatchClassificationView::ContentDiff,
+                MatchClassification::MetadataOnly => ExternalMatchClassificationView::MetadataOnly,
+            };
+
+            let diffs = data.diffs.into_iter().map(|d| ExternalMatchDiffView {
+                tag_name: d.tag_name,
+                external_value: d.external_value,
+                corpus_value: d.corpus_value,
+            }).collect();
+
+            results.push(ExternalMatchReviewEntry {
+                inode,
+                path,
+                confidence: data.confidence,
+                recording_id: data.recording_id,
+                classification,
+                diffs,
+            });
+        }
+
+        Ok(results)
+    }
+
     /// Count signals of a specific type using typed tables.
     fn count_signal_type(&self, signal_type: &str) -> Result<usize> {
         use crate::meta::signals::data::*;
@@ -740,6 +802,7 @@ impl Database {
             "inbox_compound_tag" => InboxCompoundTagSignal::count(&self.conn)?,
             "embedded_disc_number" => EmbeddedDiscNumberSignal::count(&self.conn)?,
             "path_tag_mismatch" => PathTagMismatchSignal::count(&self.conn)?,
+            "external_match" => ExternalMatchSignal::count(&self.conn)?,
             _ => 0,
         };
         Ok(count)
@@ -1213,15 +1276,15 @@ impl Database {
     /// Get all inbox corpus match entries with quality classification.
     ///
     /// Reads InboxCorpusMatch signals, deserializes bincode BLOB data,
-    /// looks up quality info for both inbox and corpus files via audio_info,
-    /// and classifies each entry as Superior/Equivalent/Inferior.
+    /// and reads the pre-computed classification from the signal. Quality
+    /// strings are still looked up from audio_info for display purposes.
     ///
-    /// `bitrate_fuzz_percent` applies a tolerance when comparing bitrates:
-    /// files with the same format class and sample rate whose bitrates differ
-    /// by less than this percentage are treated as equivalent.
-    pub fn get_inbox_corpus_match_entries(&self, bitrate_fuzz_percent: f64) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
+    /// `bitrate_fuzz_percent` is no longer used for classification (now
+    /// pre-computed at signal emission time) but kept in the signature
+    /// for API compatibility.
+    pub fn get_inbox_corpus_match_entries(&self, _bitrate_fuzz_percent: f64) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
         use crate::meta::views::{InboxCorpusMatchEntry, CorpusMatchDetail, MatchClassification};
-        use crate::meta::signals::data::InboxCorpusMatchData;
+        use crate::meta::signals::data::{InboxCorpusMatchData, CorpusMatchQuality};
 
         let mut stmt = self.conn.prepare(
             "SELECT inode, path, data FROM signal_inbox_corpus_match ORDER BY path"
@@ -1247,70 +1310,24 @@ impl Database {
                 continue;
             }
 
-            // Look up inbox file quality
+            // Read pre-computed classification from signal data
+            let classification = match match_data.classification {
+                CorpusMatchQuality::Better => MatchClassification::Better,
+                CorpusMatchQuality::Equivalent => MatchClassification::Equivalent,
+                CorpusMatchQuality::Subpar => MatchClassification::Subpar,
+            };
+
+            // Look up quality strings for display only
             let inbox_quality = self.get_quality_string(inbox_inode);
-            let inbox_tier = self.get_quality_tier(inbox_inode);
 
-            // Build corpus match details
-            let mut corpus_details = Vec::new();
-            let mut best_corpus_tier: Option<QualityTier> = None;
-
-            for cm in &match_data.corpus_matches {
-                let corpus_quality = self.get_quality_string(cm.corpus_inode);
-                let corpus_tier = self.get_quality_tier(cm.corpus_inode);
-
-                if let Some(ct) = corpus_tier {
-                    match best_corpus_tier {
-                        None => best_corpus_tier = Some(ct),
-                        Some(ref best) => {
-                            if ct > *best {
-                                best_corpus_tier = Some(ct);
-                            }
-                        }
-                    }
-                }
-
-                corpus_details.push(CorpusMatchDetail {
+            let corpus_details: Vec<CorpusMatchDetail> = match_data.corpus_matches.iter().map(|cm| {
+                CorpusMatchDetail {
                     _corpus_inode: cm.corpus_inode,
                     corpus_path: cm.corpus_path.clone(),
-                    corpus_quality,
+                    corpus_quality: self.get_quality_string(cm.corpus_inode),
                     similarity: cm.similarity,
-                });
-            }
-
-            // Classify: compare inbox quality tier against best corpus tier,
-            // applying bitrate fuzz for same-format same-samplerate comparisons.
-            let classification = match (inbox_tier, best_corpus_tier) {
-                (Some(inbox_t), Some(corpus_t)) => {
-                    if inbox_t.format_class == corpus_t.format_class
-                        && inbox_t.sample_rate == corpus_t.sample_rate
-                        && bitrate_fuzz_percent > 0.0
-                    {
-                        // Same format class + sample rate: apply bitrate fuzz
-                        let max_br = inbox_t.bitrate.max(corpus_t.bitrate) as f64;
-                        let diff = (inbox_t.bitrate - corpus_t.bitrate).unsigned_abs() as f64;
-                        if max_br > 0.0 && (diff / max_br * 100.0) <= bitrate_fuzz_percent {
-                            MatchClassification::Equivalent
-                        } else {
-                            use std::cmp::Ordering;
-                            match Ord::cmp(&inbox_t, &corpus_t) {
-                                Ordering::Greater => MatchClassification::Better,
-                                Ordering::Equal => MatchClassification::Equivalent,
-                                Ordering::Less => MatchClassification::Subpar,
-                            }
-                        }
-                    } else {
-                        use std::cmp::Ordering;
-                        match Ord::cmp(&inbox_t, &corpus_t) {
-                            Ordering::Greater => MatchClassification::Better,
-                            Ordering::Equal => MatchClassification::Equivalent,
-                            Ordering::Less => MatchClassification::Subpar,
-                        }
-                    }
                 }
-                // If we can't determine quality, default to Equivalent (safe to stash)
-                _ => MatchClassification::Equivalent,
-            };
+            }).collect();
 
             results.push(InboxCorpusMatchEntry {
                 inbox_inode,
@@ -1350,22 +1367,6 @@ impl Database {
             }
             Err(_) => "Unknown".to_string(),
         }
-    }
-
-    /// Get quality tier for an inode from audio_info (for comparison).
-    fn get_quality_tier(&self, inode: i64) -> Option<crate::meta::computations::analysis::QualityTier> {
-        use crate::meta::computations::analysis::quality_tier_of;
-
-        let mut stmt = self.conn.prepare(
-            "SELECT file_type, bitrate_kbps, sample_rate FROM audio_info WHERE inode = ?1"
-        ).ok()?;
-
-        stmt.query_row(params![inode], |row| {
-            let file_type: String = row.get(0)?;
-            let bitrate: Option<i32> = row.get(1)?;
-            let sample_rate: Option<i32> = row.get(2)?;
-            Ok(quality_tier_of(&file_type, bitrate, sample_rate))
-        }).ok()
     }
 
     // ========================================================================

@@ -2,7 +2,8 @@
 //!
 //! Compares inbox files against corpus files by fingerprint similarity
 //! (reusing the same threshold and duration tolerance as duplicate detection).
-//! Emits InboxCorpusMatchSignal for inbox files that have corpus matches.
+//! Emits InboxCorpusMatchSignal for inbox files that have corpus matches,
+//! including a pre-computed quality classification (Better/Equivalent/Subpar).
 
 use std::time::Instant;
 
@@ -12,11 +13,12 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::db::types::Zone;
 use crate::meta::signals::data::{
     TypedSignalWrite, InboxCorpusMatchSignal, InboxCorpusMatchData, InboxCorpusMatch,
+    CorpusMatchQuality,
 };
 use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
 
-use super::duplicates::fingerprint_similarity;
+use super::duplicates::{fingerprint_similarity, quality_tier_of};
 use super::{Computation, Result};
 
 /// Execute DetectInboxCorpusMatches — find inbox files that match corpus files
@@ -57,6 +59,7 @@ pub fn execute_detect_inbox_corpus_matches(
 
     let similarity_threshold = config.opinions.duplicate_analysis.fingerprint_similarity_threshold;
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
+    let bitrate_fuzz_percent = config.opinions.quality_resolution.inbox_bitrate_fuzz_percent;
 
     // Get all inbox audio files with fingerprints
     let inbox_audio = match read_only_db.get_all_audio_files(Zone::Inbox) {
@@ -166,12 +169,64 @@ pub fn execute_detect_inbox_corpus_matches(
 
         if !corpus_matches.is_empty() {
             let inode = inbox_file.inode();
+
+            // Classify inbox quality relative to best corpus match
+            let inbox_tier = quality_tier_of(
+                &inbox_file.audio.file_type,
+                inbox_file.audio.bitrate_kbps,
+                inbox_file.audio.sample_rate,
+            );
+
+            let best_corpus_tier = corpus_matches.iter()
+                .filter_map(|cm| {
+                    // Look up the corpus file's audio info from the sorted vec
+                    corpus_fingerprinted.iter()
+                        .find(|cf| cf.inode() == cm.corpus_inode)
+                        .map(|cf| quality_tier_of(
+                            &cf.audio.file_type,
+                            cf.audio.bitrate_kbps,
+                            cf.audio.sample_rate,
+                        ))
+                })
+                .max();
+
+            let classification = match best_corpus_tier {
+                Some(corpus_tier) => {
+                    // Apply bitrate fuzz for same-format, same-samplerate comparisons
+                    if inbox_tier.format_class == corpus_tier.format_class
+                        && inbox_tier.sample_rate == corpus_tier.sample_rate
+                        && bitrate_fuzz_percent > 0.0
+                    {
+                        let max_br = inbox_tier.bitrate.max(corpus_tier.bitrate) as f64;
+                        let diff = (inbox_tier.bitrate - corpus_tier.bitrate).unsigned_abs() as f64;
+                        if max_br > 0.0 && (diff / max_br * 100.0) <= bitrate_fuzz_percent {
+                            CorpusMatchQuality::Equivalent
+                        } else {
+                            match inbox_tier.cmp(&corpus_tier) {
+                                std::cmp::Ordering::Greater => CorpusMatchQuality::Better,
+                                std::cmp::Ordering::Equal => CorpusMatchQuality::Equivalent,
+                                std::cmp::Ordering::Less => CorpusMatchQuality::Subpar,
+                            }
+                        }
+                    } else {
+                        match inbox_tier.cmp(&corpus_tier) {
+                            std::cmp::Ordering::Greater => CorpusMatchQuality::Better,
+                            std::cmp::Ordering::Equal => CorpusMatchQuality::Equivalent,
+                            std::cmp::Ordering::Less => CorpusMatchQuality::Subpar,
+                        }
+                    }
+                }
+                // No quality info for corpus matches — default to Equivalent (safe to stash)
+                None => CorpusMatchQuality::Equivalent,
+            };
+
             computed.push(ComputedCorpusSignal::new(
                 inode,
                 TypedSignalWrite::InboxCorpusMatch(InboxCorpusMatchSignal {
                     inode,
                     path: inbox_file.path().to_string(),
-                    data: InboxCorpusMatchData { corpus_matches },
+                    classification,
+                    data: InboxCorpusMatchData { corpus_matches, classification },
                 }),
             ));
         }

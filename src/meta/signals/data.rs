@@ -72,12 +72,40 @@ pub struct InboxHealthySignal {
     pub path: String,
 }
 
+/// Quality classification of an inbox file relative to its corpus matches.
+///
+/// Computed at signal emission time by comparing quality tiers (format class,
+/// bitrate, sample rate). Stored both in the bincode BLOB and as a SQL column
+/// for efficient query filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CorpusMatchQuality {
+    /// Inbox file is better quality than all corpus matches — should be organized in.
+    Better,
+    /// Same quality tier as best corpus match — safe to stash.
+    Equivalent,
+    /// Inbox file is lower quality — safe to stash.
+    Subpar,
+}
+
+impl CorpusMatchQuality {
+    /// SQL column value for this classification.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Better => "better",
+            Self::Equivalent => "equivalent",
+            Self::Subpar => "subpar",
+        }
+    }
+}
+
 /// Inbox file has fingerprint+duration match against corpus file(s).
 /// Likely a duplicate — operator can stash the inbox copy.
 #[derive(Debug, Clone)]
 pub struct InboxCorpusMatchSignal {
     pub inode: i64,
     pub path: String,
+    /// Pre-computed quality classification relative to best corpus match.
+    pub classification: CorpusMatchQuality,
     /// Serialized as bincode BLOB.
     pub data: InboxCorpusMatchData,
 }
@@ -87,6 +115,8 @@ pub struct InboxCorpusMatchSignal {
 pub struct InboxCorpusMatchData {
     /// Corpus inodes that match this inbox file.
     pub corpus_matches: Vec<InboxCorpusMatch>,
+    /// Pre-computed quality classification (also stored as SQL column).
+    pub classification: CorpusMatchQuality,
 }
 
 /// A single corpus file matching an inbox file.

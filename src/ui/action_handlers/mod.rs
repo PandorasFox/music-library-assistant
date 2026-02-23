@@ -17,6 +17,8 @@ mod inbox;
 mod manual_review;
 mod oob_resolution;
 mod simple_resolutions;
+mod external_match;
+mod history;
 mod tag_canonicity;
 pub(crate) mod witness;
 
@@ -58,6 +60,7 @@ impl App {
             ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
             ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
             ViewAction::Deploy(a) => self.handle_deploy_action(a, witness.as_ref()),
+            ViewAction::ExternalMatches(a) => self.handle_external_matches_action(a),
             ViewAction::MissingFileResolution(a) => self.handle_missing_file_preview_action(a, witness.as_ref()),
             ViewAction::MissingDirectoryResolution(a) => self.handle_missing_directory_preview_action(a, witness.as_ref()),
             ViewAction::CorruptFileResolution(a) => self.handle_corrupt_file_preview_action(a, witness.as_ref()),
@@ -74,6 +77,8 @@ impl App {
             ViewAction::CompoundTagSplit(a) => self.handle_compound_split_action(a, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => self.handle_missing_album_single_action(a, witness.as_ref()),
             ViewAction::ManualReview(a) => self.handle_manual_review_action(a, witness.as_ref()),
+            ViewAction::ExternalMatchReview(a) => self.handle_external_match_review_action(a, witness.as_ref()),
+            ViewAction::History(a) => self.handle_history_action(a, witness.as_ref()),
             ViewAction::TransactionReview(a) => self.handle_transaction_review_action(a, witness.as_ref()),
         }
     }
@@ -896,11 +901,30 @@ impl App {
             (panel.source_path.clone(), old_dir, new_dir)
         };
 
+        // Construct the full new Config with the dir edit applied,
+        // so the Witch can update SharedConfig in-memory after execution.
+        let new_config = {
+            let mut cfg = self.config().clone();
+            let mut found = false;
+            for sd in &mut cfg.source_dirs {
+                if sd.path == source_path {
+                    *sd = new_dir.clone();
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                cfg.source_dirs.push(new_dir.clone());
+            }
+            cfg
+        };
+
         let mutation = crate::meta::mutations::Mutation::ApplyDirConfigEdit(
             crate::meta::mutations::dir_config_edit::ApplyDirConfigEditMutation {
                 source_path: source_path.clone(),
                 old_dir,
                 new_dir,
+                new_config,
             },
         );
 

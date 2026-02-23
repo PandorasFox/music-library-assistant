@@ -1149,6 +1149,76 @@ impl Witch {
         );
     }
 
+    /// Manually trigger an external fetch (operator-initiated, bypasses idle gates).
+    ///
+    /// Unlike `maybe_trigger_external_refresh()`, this does not check idle timer
+    /// or `idle_rescan_eligible`. Still requires an API key, eligible dirs, and
+    /// no active batch.
+    pub fn request_external_fetch(&mut self) {
+        let shared_config = match self.shared_config {
+            Some(ref sc) => sc.clone(),
+            None => {
+                crate::logging::log_general("[WITCH] External fetch: no config available");
+                return;
+            }
+        };
+
+        let (api_key, eligible_dirs) = {
+            let config = shared_config.read().expect("SharedConfig lock poisoned");
+            let key = config.opinions.external_matching.acoustid_api_key.clone();
+            let dirs: Vec<std::path::PathBuf> = config.source_dirs.iter()
+                .filter(|sd| sd.enable_acoustid)
+                .map(|sd| sd.path.clone())
+                .collect();
+            (key, dirs)
+        };
+
+        if api_key.is_empty() {
+            crate::logging::log_general("[WITCH] External fetch: no API key configured");
+            return;
+        }
+        if eligible_dirs.is_empty() {
+            crate::logging::log_general("[WITCH] External fetch: no eligible directories");
+            return;
+        }
+
+        // Lazy-spawn the fetch thread if needed
+        if self.external_fetch.is_none() {
+            self.external_fetch = Some(external_fetch::ExternalFetchHandle::spawn(shared_config));
+            crate::logging::log_general("[WITCH] Spawned external fetch thread");
+        }
+
+        let handle = self.external_fetch.as_mut().unwrap();
+
+        if handle.is_batch_active() {
+            crate::logging::log_general("[WITCH] External fetch: batch already active");
+            return;
+        }
+
+        crate::logging::log_general(format!(
+            "[WITCH] Manual external fetch requested for {} eligible dirs",
+            eligible_dirs.len()
+        ));
+
+        handle.request_refresh(
+            crate::meta::external::ExternalSource::AcoustID,
+            eligible_dirs,
+        );
+    }
+
+    /// Whether an external AcoustID fetch batch is currently active.
+    pub fn is_external_fetch_active(&self) -> bool {
+        self.external_fetch.as_ref().map_or(false, |h| h.is_batch_active())
+    }
+
+    /// Whether an AcoustID API key is configured.
+    pub fn has_acoustid_api_key(&self) -> bool {
+        self.shared_config.as_ref().map_or(false, |sc| {
+            let config = sc.read().expect("SharedConfig lock poisoned");
+            !config.opinions.external_matching.acoustid_api_key.is_empty()
+        })
+    }
+
     /// Queue re-observation computations (WalkCorpus) for re-awakening after mutations.
     ///
     /// Similar to `queue_observing_computations` but for re-awakening cycles.

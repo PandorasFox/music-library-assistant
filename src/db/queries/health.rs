@@ -585,8 +585,6 @@ impl Database {
 
         let path_tag_mismatch_count = self.count_signal_type("path_tag_mismatch")?;
 
-        let external_match_count = self.count_signal_type("external_match")?;
-
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
             subpar_duplicate_count,
@@ -598,7 +596,6 @@ impl Database {
             missing_album_single_count,
             embedded_disc_number_count,
             path_tag_mismatch_count,
-            external_match_count,
         })
     }
 
@@ -705,19 +702,26 @@ impl Database {
         Ok(OtherSignalsBucket { entries })
     }
 
-    /// Get external match entries for operator review.
+    /// Load all external match entries, bucketed for the External Matches lateral view.
     ///
-    /// Returns entries where classification is ContentDiff or MetadataOnly
-    /// (ExactMatch signals don't need action). Sorted by path.
-    pub fn get_external_match_review_entries(&self) -> Result<Vec<crate::meta::views::ExternalMatchReviewEntry>> {
-        use crate::meta::views::{ExternalMatchReviewEntry, ExternalMatchClassificationView, ExternalMatchDiffView};
+    /// Reads `signal_external_match`, skips ExactMatch, splits MetadataOnly entries
+    /// into `untagged_entries` and ContentDiff entries into confidence-tier buckets.
+    pub fn get_external_matches_data(&self) -> Result<crate::meta::views::ExternalMatchesData> {
+        use crate::meta::views::{
+            ExternalMatchReviewEntry, ExternalMatchClassificationView, ExternalMatchDiffView,
+            ExternalMatchesData, ConfidenceTier, ConfidenceBucket,
+        };
         use crate::meta::signals::data::{ExternalMatchData, MatchClassification};
+        use std::collections::HashMap;
 
         let mut stmt = self.conn.prepare(
             "SELECT inode, path, data FROM signal_external_match ORDER BY path"
         )?;
 
-        let mut results = Vec::new();
+        let mut untagged_entries = Vec::new();
+        // Tier -> Vec<entry>
+        let mut tier_map: HashMap<ConfidenceTier, Vec<ExternalMatchReviewEntry>> = HashMap::new();
+
         let rows = stmt.query_map(params![], |row| {
             let inode: i64 = row.get(0)?;
             let path: String = row.get(1)?;
@@ -732,7 +736,6 @@ impl Database {
                 Err(_) => continue,
             };
 
-            // Skip ExactMatch (no action needed)
             let classification = match data.classification {
                 MatchClassification::ExactMatch => continue,
                 MatchClassification::ContentDiff => ExternalMatchClassificationView::ContentDiff,
@@ -745,17 +748,49 @@ impl Database {
                 corpus_value: d.corpus_value,
             }).collect();
 
-            results.push(ExternalMatchReviewEntry {
+            let entry = ExternalMatchReviewEntry {
                 inode,
                 path,
                 confidence: data.confidence,
                 recording_id: data.recording_id,
                 classification,
                 diffs,
-            });
+            };
+
+            match classification {
+                ExternalMatchClassificationView::MetadataOnly => {
+                    untagged_entries.push(entry);
+                }
+                ExternalMatchClassificationView::ContentDiff => {
+                    let tier = ConfidenceTier::from_confidence(entry.confidence);
+                    tier_map.entry(tier).or_default().push(entry);
+                }
+            }
         }
 
-        Ok(results)
+        // Build confidence buckets in tier order, omitting empty tiers
+        let confidence_buckets: Vec<ConfidenceBucket> = ConfidenceTier::ALL.iter()
+            .filter_map(|&tier| {
+                let entries = tier_map.remove(&tier)?;
+                let total = entries.len();
+                let content_diff_count = entries.iter()
+                    .filter(|e| e.classification == ExternalMatchClassificationView::ContentDiff)
+                    .count();
+                let metadata_only_count = total - content_diff_count;
+                Some(ConfidenceBucket {
+                    tier,
+                    total,
+                    content_diff_count,
+                    metadata_only_count,
+                    entries,
+                })
+            })
+            .collect();
+
+        Ok(ExternalMatchesData {
+            untagged_entries,
+            confidence_buckets,
+        })
     }
 
     /// Count signals of a specific type using typed tables.
@@ -1172,13 +1207,18 @@ impl Database {
 
     /// Check if a CanonicalTag signal exists for this tag_name:tag_value.
     ///
+    /// Uses normalized tag name in the key (strips separators + uppercases) so that
+    /// lookups match regardless of compound tag name variant:
+    /// "ALBUMARTIST:value" ≈ "album_artist:value" ≈ "ALBUM_ARTIST:value".
+    ///
     /// Used to skip compound tag detection for operator-confirmed canonical values.
     /// For example, if "artist:Rinse & Repeat" is marked canonical, we shouldn't
     /// flag it for splitting even though it contains " & ".
     pub fn is_canonical_tag(&self, tag_name: &str, tag_value: &str) -> Result<bool> {
         use crate::meta::signals::data::CanonicalTagSignal;
         use crate::meta::signals::store::AggregateSignalStore;
-        let key = format!("{}:{}", tag_name, tag_value);
+        let normalized = mm_utils::tag_names::normalize_tag_name(tag_name);
+        let key = format!("{}:{}", normalized, tag_value);
         Ok(CanonicalTagSignal::exists(&self.conn, &key).unwrap_or(false))
     }
 
@@ -1261,7 +1301,8 @@ impl Database {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            if compounds.iter().any(|c| c.tag_name == tag_name && c.compound_value == compound_value) {
+            let normalized = mm_utils::tag_names::normalize_tag_name(tag_name);
+            if compounds.iter().any(|c| mm_utils::tag_names::normalize_tag_name(&c.tag_name) == normalized && c.compound_value == compound_value) {
                 inodes.push(inode);
             }
         }

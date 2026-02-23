@@ -31,10 +31,13 @@ pub mod corrupt_file_modal;
 pub mod deploy_modal;
 pub mod directory_cluster_modal;
 pub mod embed_album_art_modal;
+pub mod external_match_modal;
+pub mod external_match_view;
 pub mod eye;
 pub mod manual_review_modal;
 pub mod filter_popup;
 pub mod helpers;
+pub mod history_view;
 pub mod inbox_corpus_match_modal;
 pub mod inbox_organize;
 pub mod inbox_view;
@@ -106,6 +109,8 @@ pub(crate) struct App {
     pub(super) cached_insights: Option<crate::meta::views::InsightsData>,
     pub(super) cached_inbox: Option<crate::meta::views::InboxOverviewData>,
     pub(super) cached_deploy: Option<crate::meta::views::DeployStatus>,
+    pub(super) cached_history: Option<crate::meta::views::EditHistoryData>,
+    pub(super) cached_external_matches: Option<crate::meta::views::ExternalMatchesData>,
 
     // Filter popup overlay (Ctrl+F in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
@@ -152,6 +157,8 @@ impl App {
             cached_insights: None,
             cached_inbox: None,
             cached_deploy: None,
+            cached_history: None,
+            cached_external_matches: None,
             filter_overlay: None,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
@@ -324,6 +331,7 @@ impl App {
             }
             ActiveView::UnifiedTagEditor(s) => ViewAction::UnifiedTagEditor(s.handle_key(key)),
             ActiveView::Deploy(s) => ViewAction::Deploy(s.handle_key(key)),
+            ActiveView::ExternalMatches(s) => ViewAction::ExternalMatches(s.handle_key(key)),
             ActiveView::MissingFileResolution(s) => ViewAction::MissingFileResolution(s.handle_key(key)),
             ActiveView::MissingDirectoryResolution(s) => ViewAction::MissingDirectoryResolution(s.handle_key(key)),
             ActiveView::CorruptFileResolution(s) => ViewAction::CorruptFileResolution(s.handle_key(key)),
@@ -336,6 +344,8 @@ impl App {
             ActiveView::MovedFileAcknowledge(s) => ViewAction::MovedFileAcknowledge(s.handle_key(key)),
             ActiveView::OobSyncResolution(s) => ViewAction::OobSyncResolution(s.handle_key(key)),
             ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_key(key)),
+            ActiveView::ExternalMatchReview(s) => ViewAction::ExternalMatchReview(s.handle_key(key)),
+            ActiveView::History(s) => ViewAction::History(s.handle_key(key)),
             ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_key(key)),
             ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_key(key)),
             ActiveView::MissingAlbumSingleResolution(s) => ViewAction::MissingAlbumSingleResolution(s.handle_key(key)),
@@ -419,6 +429,24 @@ impl App {
         }
     }
 
+    /// Start the history lateral view.
+    pub(super) fn start_history_view(&mut self) {
+        self.last_lateral_view = widgets::LateralView::History;
+        self.view = ActiveView::History(history_view::HistoryViewState::new());
+    }
+
+    /// Start the external matches lateral view.
+    pub(super) fn start_external_matches_view(&mut self) {
+        self.last_lateral_view = widgets::LateralView::ExternalMatches;
+        let fetch_active = self.witch.is_external_fetch_active();
+        let has_api_key = self.witch.has_acoustid_api_key();
+        let mut state = external_match_view::ExternalMatchesViewState::new(fetch_active, has_api_key);
+        if let Some(ref data) = self.cached_external_matches {
+            state.update(data.clone());
+        }
+        self.view = ActiveView::ExternalMatches(state);
+    }
+
     /// Start the lateral view identified by the given variant.
     pub(super) fn start_lateral_view(&mut self, view: widgets::LateralView) {
         match view {
@@ -426,9 +454,11 @@ impl App {
             widgets::LateralView::Search => self.start_tag_search(),
             widgets::LateralView::Files => self.start_corpus_browser(),
             widgets::LateralView::Health => self.start_health_view(),
+            widgets::LateralView::History => self.start_history_view(),
             widgets::LateralView::Inbox => self.start_inbox_view(),
             widgets::LateralView::Transaction => self.start_tabbed_transaction_review(),
             widgets::LateralView::Deploy => self.start_deploy_view(),
+            widgets::LateralView::ExternalMatches => self.start_external_matches_view(),
         }
     }
 
@@ -715,6 +745,7 @@ fn run_app<B: ratatui::backend::Backend>(
             ActiveView::Insights(_)
             | ActiveView::CorpusBrowser(_)
             | ActiveView::TagSearch(_)
+            | ActiveView::History(_)
             | ActiveView::Inbox(_)
             | ActiveView::TabbedTransactionReview(_)
         );
@@ -772,6 +803,12 @@ fn run_app<B: ratatui::backend::Backend>(
                 crate::witch::cache_thread::CacheReady::DeployStatus(data) => {
                     app.cached_deploy = Some(data);
                 }
+                crate::witch::cache_thread::CacheReady::EditHistory(data) => {
+                    app.cached_history = Some(data);
+                }
+                crate::witch::cache_thread::CacheReady::ExternalMatches(data) => {
+                    app.cached_external_matches = Some(data);
+                }
             }
         }
 
@@ -787,6 +824,15 @@ fn run_app<B: ratatui::backend::Backend>(
             view.busy = app.cached_status.pending > 0
                 || app.cached_status.idle_rescan_active
                 || app.cache_stale;
+        }
+        if let ActiveView::History(ref mut view) = app.view {
+            view.update(app.cached_history.clone());
+        }
+        if let ActiveView::ExternalMatches(ref mut view) = app.view {
+            if let Some(ref data) = app.cached_external_matches {
+                view.update(data.clone());
+            }
+            view.fetch_active = app.witch.is_external_fetch_active();
         }
         if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
             if let Some(ref status) = app.cached_deploy {
@@ -813,6 +859,12 @@ fn run_app<B: ratatui::backend::Backend>(
         }
         if matches!(app.view, ActiveView::Inbox(_)) {
             app.cache.want_inbox();
+        }
+        if matches!(app.view, ActiveView::History(_)) {
+            app.cache.want_history();
+        }
+        if matches!(app.view, ActiveView::ExternalMatches(_)) {
+            app.cache.want_external_matches();
         }
 
         let draw_start = std::time::Instant::now();

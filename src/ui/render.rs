@@ -18,7 +18,8 @@ use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
 use super::{
-    compound_split_v2, config_editor, filter_popup, inbox_view, insights_view, manual_review_modal,
+    compound_split_v2, config_editor, external_match_modal, filter_popup, inbox_view,
+    insights_view, manual_review_modal,
     oob_conflict_modal, oob_sync_modal, progressive_worker, tag_canonicity_v2,
     tabbed_transaction_review, transaction_review,
 };
@@ -197,6 +198,14 @@ fn render_content(
             vname = "health";
             insights_view::render_insights_view(f, area, view);
         }
+        ActiveView::History(ref state) => {
+            vname = "history";
+            super::history_view::render::render(f, area, state);
+        }
+        ActiveView::ExternalMatches(ref state) => {
+            vname = "external_matches";
+            super::external_match_view::render::render(f, area, state);
+        }
         ActiveView::Inbox(ref state) => {
             vname = "inbox";
             inbox_view::render_inbox_view(f, area, state);
@@ -245,6 +254,10 @@ fn render_content(
         ActiveView::OobConflictInspection(ref mut state) => {
             vname = "oob_conflict_inspection";
             oob_conflict_modal::render(f, area, state);
+        }
+        ActiveView::ExternalMatchReview(ref mut state) => {
+            vname = "external_match_review";
+            external_match_modal::render(f, area, state);
         }
         ActiveView::MovedFileAcknowledge(ref mut state) => {
             vname = "moved_file_acknowledge";
@@ -430,6 +443,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::VacuumPrompt(_) => "vacuum_prompt",
         ActiveView::ConfigEditor(_) => "config_editor",
         ActiveView::Insights(_) => "health",
+        ActiveView::History(_) => "history",
         ActiveView::Inbox(_) => "inbox",
         ActiveView::TabbedTransactionReview(_) => "tabbed_transaction_review",
         ActiveView::CorpusBrowser(_) => "corpus_browser",
@@ -452,6 +466,8 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::MovedFileAcknowledge(_) => "moved_file_acknowledge",
         ActiveView::OobSyncResolution(_) => "oob_sync_resolution",
         ActiveView::OobConflictInspection(_) => "oob_conflict_inspection",
+        ActiveView::ExternalMatches(_) => "external_matches",
+        ActiveView::ExternalMatchReview(_) => "external_match_review",
         ActiveView::TagCanonicityResolution { .. } => "tag_canonicity_resolution",
         ActiveView::TagCanonicityLoading { .. } => "tag_canonicity_loading",
         ActiveView::CompoundTagSplit { .. } => "compound_tag_split",

@@ -92,6 +92,114 @@ pub struct CompoundTagEntry {
 // Aliases for compatibility
 pub type PlaceholderBucket = TagSquashBucket;
 
+// ============================================================================
+// External Match Review Types
+// ============================================================================
+
+/// An external match entry ready for operator review.
+#[derive(Debug, Clone)]
+pub struct ExternalMatchReviewEntry {
+    pub inode: i64,
+    pub path: String,
+    /// AcoustID confidence score.
+    pub confidence: f64,
+    /// Recording MBID.
+    pub recording_id: String,
+    /// Overall match classification.
+    pub classification: ExternalMatchClassificationView,
+    /// Per-tag differences.
+    pub diffs: Vec<ExternalMatchDiffView>,
+}
+
+/// Classification for UI layer (mirrors signal MatchClassification minus ExactMatch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalMatchClassificationView {
+    ContentDiff,
+    MetadataOnly,
+}
+
+/// Per-tag diff for UI layer.
+#[derive(Debug, Clone)]
+pub struct ExternalMatchDiffView {
+    pub tag_name: String,
+    pub external_value: String,
+    pub corpus_value: Option<String>,
+}
+
+// ============================================================================
+// External Matches View Data Types
+// ============================================================================
+
+/// Confidence tier for bucketing external matches by AcoustID confidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConfidenceTier {
+    /// confidence == 1.0
+    Perfect,
+    /// 0.99 ≤ confidence < 1.0
+    VeryHigh,
+    /// 0.95 ≤ confidence < 0.99
+    High,
+    /// 0.90 ≤ confidence < 0.95
+    Medium,
+    /// confidence < 0.90
+    Low,
+}
+
+impl ConfidenceTier {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Perfect => "100%",
+            Self::VeryHigh => "99%+",
+            Self::High => "95%+",
+            Self::Medium => "90%+",
+            Self::Low => "< 90%",
+        }
+    }
+
+    pub fn from_confidence(c: f64) -> Self {
+        if c >= 1.0 {
+            Self::Perfect
+        } else if c >= 0.99 {
+            Self::VeryHigh
+        } else if c >= 0.95 {
+            Self::High
+        } else if c >= 0.90 {
+            Self::Medium
+        } else {
+            Self::Low
+        }
+    }
+
+    /// Ordered list of all tiers from highest to lowest confidence.
+    pub const ALL: [ConfidenceTier; 5] = [
+        ConfidenceTier::Perfect,
+        ConfidenceTier::VeryHigh,
+        ConfidenceTier::High,
+        ConfidenceTier::Medium,
+        ConfidenceTier::Low,
+    ];
+}
+
+/// A confidence bucket with counts by classification.
+#[derive(Debug, Clone)]
+pub struct ConfidenceBucket {
+    pub tier: ConfidenceTier,
+    pub total: usize,
+    pub content_diff_count: usize,
+    pub metadata_only_count: usize,
+    /// Entries in this bucket (for launching the review modal).
+    pub entries: Vec<ExternalMatchReviewEntry>,
+}
+
+/// Data for the External Matches lateral view (loaded via cache thread).
+#[derive(Debug, Clone, Default)]
+pub struct ExternalMatchesData {
+    /// MetadataOnly entries at any confidence (untagged files bucket).
+    pub untagged_entries: Vec<ExternalMatchReviewEntry>,
+    /// ContentDiff entries bucketed by confidence tier.
+    pub confidence_buckets: Vec<ConfidenceBucket>,
+}
+
 /// Bucket 3: Other signals (sorted by magnitude)
 #[derive(Debug, Clone, Default)]
 pub struct OtherSignalsBucket {
@@ -364,6 +472,36 @@ pub struct DeployStatus {
     pub needs_action: bool,
     /// Per-library file counts: (library_name, file_count).
     pub library_file_counts: Vec<(String, usize)>,
+}
+
+// ============================================================================
+// Edit History View Data Types
+// ============================================================================
+
+/// Summary of one edit session for the History list.
+#[derive(Debug, Clone)]
+pub struct EditSessionSummary {
+    pub session_id: String,
+    pub earliest_at: String,
+    pub edit_count: usize,
+    pub inode_count: usize,
+}
+
+/// Single edit record within a session.
+#[derive(Debug, Clone)]
+pub struct EditRecord {
+    pub id: i64,
+    pub inode: i64,
+    pub field_name: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub edited_at: String,
+}
+
+/// Data payload for the History view cache refresh.
+#[derive(Debug, Clone, Default)]
+pub struct EditHistoryData {
+    pub sessions: Vec<EditSessionSummary>,
 }
 
 /// A file with a MovedFile signal (same inode, different path).

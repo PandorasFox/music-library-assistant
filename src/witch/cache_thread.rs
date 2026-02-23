@@ -19,7 +19,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::meta::views::{DeployStatus, InboxOverviewData, InsightsData};
+use crate::meta::views::{DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData};
 use crate::db::{Database, ReadOnlyDb};
 
 // ============================================================================
@@ -34,6 +34,10 @@ pub(crate) enum CacheRequest {
     WantInbox,
     /// UI wants fresh deploy status (throttled).
     WantDeploy,
+    /// UI wants fresh edit history data (throttled).
+    WantHistory,
+    /// UI wants fresh external matches data (throttled).
+    WantExternalMatches,
     /// Invalidate all cached data (force re-query on next want).
     InvalidateAll,
     /// Execute a one-shot query on the read-only connection.
@@ -49,6 +53,8 @@ pub(crate) enum CacheReady {
     Insights(InsightsData),
     InboxOverview(InboxOverviewData),
     DeployStatus(DeployStatus),
+    EditHistory(EditHistoryData),
+    ExternalMatches(ExternalMatchesData),
 }
 
 // ============================================================================
@@ -77,6 +83,16 @@ impl CacheHandle {
     /// Signal demand for deploy status (throttled by cache thread).
     pub(crate) fn want_deploy(&self) {
         let _ = self.request_tx.send(CacheRequest::WantDeploy);
+    }
+
+    /// Signal demand for edit history data (throttled by cache thread).
+    pub(crate) fn want_history(&self) {
+        let _ = self.request_tx.send(CacheRequest::WantHistory);
+    }
+
+    /// Signal demand for external matches data (throttled by cache thread).
+    pub(crate) fn want_external_matches(&self) {
+        let _ = self.request_tx.send(CacheRequest::WantExternalMatches);
     }
 
     /// Invalidate all cached data. Next want_* call will force a re-query.
@@ -187,24 +203,34 @@ struct ThrottleState {
     insights_wanted: bool,
     inbox_wanted: bool,
     deploy_wanted: bool,
+    history_wanted: bool,
+    external_matches_wanted: bool,
     insights_at: Option<Instant>,
     inbox_at: Option<Instant>,
     deploy_at: Option<Instant>,
+    history_at: Option<Instant>,
+    external_matches_at: Option<Instant>,
 }
 
 impl ThrottleState {
     const INSIGHTS_THROTTLE: Duration = Duration::from_secs(30);
     const INBOX_THROTTLE: Duration = Duration::from_secs(15);
     const DEPLOY_THROTTLE: Duration = Duration::from_secs(15);
+    const HISTORY_THROTTLE: Duration = Duration::from_secs(30);
+    const EXTERNAL_MATCHES_THROTTLE: Duration = Duration::from_secs(15);
 
     fn new() -> Self {
         Self {
             insights_wanted: false,
             inbox_wanted: false,
             deploy_wanted: false,
+            history_wanted: false,
+            external_matches_wanted: false,
             insights_at: None,
             inbox_at: None,
             deploy_at: None,
+            history_at: None,
+            external_matches_at: None,
         }
     }
 
@@ -212,10 +238,14 @@ impl ThrottleState {
         self.insights_at = None;
         self.inbox_at = None;
         self.deploy_at = None;
+        self.history_at = None;
+        self.external_matches_at = None;
         // Set wanted so next cycle refreshes everything
         self.insights_wanted = true;
         self.inbox_wanted = true;
         self.deploy_wanted = true;
+        self.history_wanted = true;
+        self.external_matches_wanted = true;
     }
 
     fn should_refresh_insights(&self) -> bool {
@@ -231,6 +261,16 @@ impl ThrottleState {
     fn should_refresh_deploy(&self) -> bool {
         self.deploy_wanted && self.deploy_at
             .map_or(true, |t| t.elapsed() >= Self::DEPLOY_THROTTLE)
+    }
+
+    fn should_refresh_history(&self) -> bool {
+        self.history_wanted && self.history_at
+            .map_or(true, |t| t.elapsed() >= Self::HISTORY_THROTTLE)
+    }
+
+    fn should_refresh_external_matches(&self) -> bool {
+        self.external_matches_wanted && self.external_matches_at
+            .map_or(true, |t| t.elapsed() >= Self::EXTERNAL_MATCHES_THROTTLE)
     }
 }
 
@@ -329,6 +369,12 @@ fn process_request(
         CacheRequest::WantDeploy => {
             throttle.deploy_wanted = true;
         }
+        CacheRequest::WantHistory => {
+            throttle.history_wanted = true;
+        }
+        CacheRequest::WantExternalMatches => {
+            throttle.external_matches_wanted = true;
+        }
         CacheRequest::InvalidateAll => {
             throttle.invalidate_all();
             // Run an immediate refresh cycle
@@ -388,6 +434,22 @@ fn run_refreshes(
         if let Ok(data) = read_db.get_deploy_status() {
             throttle.deploy_at = Some(Instant::now());
             let _ = ready_tx.send(CacheReady::DeployStatus(data));
+        }
+    }
+
+    if throttle.should_refresh_history() {
+        throttle.history_wanted = false;
+        if let Ok(sessions) = read_db.get_edit_sessions() {
+            throttle.history_at = Some(Instant::now());
+            let _ = ready_tx.send(CacheReady::EditHistory(EditHistoryData { sessions }));
+        }
+    }
+
+    if throttle.should_refresh_external_matches() {
+        throttle.external_matches_wanted = false;
+        if let Ok(data) = read_db.get_external_matches_data() {
+            throttle.external_matches_at = Some(Instant::now());
+            let _ = ready_tx.send(CacheReady::ExternalMatches(data));
         }
     }
 }

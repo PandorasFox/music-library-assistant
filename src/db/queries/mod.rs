@@ -669,6 +669,11 @@ impl<'a> ReadOnlyDb<'a> {
     // External Match Queries
     // =========================================================================
 
+    /// Get external matches data bucketed for the External Matches lateral view.
+    pub fn get_external_matches_data(&self) -> Result<crate::meta::views::ExternalMatchesData> {
+        self.db.get_external_matches_data()
+    }
+
     /// Get external matches for corpus files, for signal derivation.
     pub fn get_external_matches_for_derivation(
         &self,
@@ -729,6 +734,20 @@ impl<'a> ReadOnlyDb<'a> {
     /// Returns a map of stored_path → (inode, mtime_secs, mtime_nanos, file_size).
     pub fn get_library_file_metadata(&self) -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>> {
         self.db.get_library_file_metadata()
+    }
+
+    // =========================================================================
+    // Edit History Queries
+    // =========================================================================
+
+    /// Get all edit sessions, most recent first.
+    pub fn get_edit_sessions(&self) -> Result<Vec<crate::meta::views::EditSessionSummary>> {
+        self.db.get_edit_sessions()
+    }
+
+    /// Get all edits within a single session.
+    pub fn get_session_edits(&self, session_id: &str) -> Result<Vec<crate::meta::views::EditRecord>> {
+        self.db.get_session_edits(session_id)
     }
 
     // =========================================================================

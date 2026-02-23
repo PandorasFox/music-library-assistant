@@ -14,8 +14,11 @@ use crate::ui::{
     deploy_modal,
     directory_cluster_modal,
     embed_album_art_modal,
+    external_match_modal,
+    external_match_view,
     eye::Eye,
     filter_popup,
+    history_view,
     inbox_corpus_match_modal,
     inbox_organize,
     inbox_view,
@@ -54,11 +57,13 @@ pub(crate) enum ActiveView {
     // Lateral view ring
     ConfigEditor(config_editor::ConfigEditorState),
     Insights(insights_view::InsightsViewState),
+    History(history_view::HistoryViewState),
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
     Inbox(inbox_view::InboxViewState),
     TabbedTransactionReview(tabbed_transaction_review::TabbedTransactionReviewState),
     Deploy(deploy_modal::DeployViewState),
+    ExternalMatches(external_match_view::ExternalMatchesViewState),
 
     // Progress (non-interactive, owns eye animation)
     Progress {
@@ -87,6 +92,7 @@ pub(crate) enum ActiveView {
     MovedFileAcknowledge(moved_file_modal::MovedFileState),
     OobSyncResolution(oob_sync_modal::OobSyncState),
     OobConflictInspection(oob_conflict_modal::OobConflictState),
+    ExternalMatchReview(external_match_modal::ExternalMatchReviewState),
 
     // Resolution flows (companion state bundled)
     TagCanonicityResolution {
@@ -123,11 +129,13 @@ impl ActiveView {
             Self::VacuumPrompt(_) => Some("Database Compaction"),
             Self::ConfigEditor(_) => Some("Config Editor"),
             Self::Insights(_) => Some("Corpus Insights"),
+            Self::History(_) => Some("Edit History"),
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
             Self::Inbox(_) => Some("Inbox"),
             Self::TabbedTransactionReview(_) => Some("Transaction"),
             Self::Deploy(_) => Some("Deploy"),
+            Self::ExternalMatches(_) => Some("External Matches"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),
@@ -145,6 +153,7 @@ impl ActiveView {
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
             Self::OobSyncResolution(_) => Some("OOB Tag Sync"),
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
+            Self::ExternalMatchReview(_) => Some("External Match Review"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
             Self::TagCanonicityLoading { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
@@ -177,6 +186,7 @@ impl ActiveView {
             Self::MovedFileAcknowledge(s) => s.selected_path(),
             Self::OobSyncResolution(s) => s.selected_path(),
             Self::OobConflictInspection(s) => s.selected_path(),
+            Self::ExternalMatchReview(s) => s.selected_path(),
             Self::Deploy(s) => s.selected_path(),
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(s) => s.selected_path(),
@@ -194,9 +204,11 @@ impl ActiveView {
             Self::TagSearch(_) => Some(LateralView::Search),
             Self::CorpusBrowser(_) => Some(LateralView::Files),
             Self::Insights(_) => Some(LateralView::Health),
+            Self::History(_) => Some(LateralView::History),
             Self::Inbox(_) => Some(LateralView::Inbox),
             Self::TabbedTransactionReview(_) => Some(LateralView::Transaction),
             Self::Deploy(_) => Some(LateralView::Deploy),
+            Self::ExternalMatches(_) => Some(LateralView::ExternalMatches),
             _ => None,
         }
     }
@@ -238,6 +250,7 @@ pub(crate) enum ViewAction {
     Inbox(inbox_view::InboxAction),
     TabbedTransactionReview(tabbed_transaction_review::TabbedTransactionReviewAction),
     Deploy(deploy_modal::DeployAction),
+    ExternalMatches(external_match_view::ExternalMatchesAction),
     ExitConfirm(ExitConfirmAction),
     IntakeConfirmation(startup::IntakeConfirmationAction),
     UnifiedTagEditor(tag_editor::UnifiedTagEditorAction),
@@ -253,6 +266,8 @@ pub(crate) enum ViewAction {
     MovedFileAcknowledge(moved_file_modal::MovedFileAction),
     OobSyncResolution(oob_sync_modal::OobSyncAction),
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
+    ExternalMatchReview(external_match_modal::ExternalMatchReviewAction),
+    History(history_view::HistoryAction),
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
     MissingAlbumSingleResolution(missing_album_modal::MissingAlbumAction),

@@ -227,6 +227,21 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
     }
 
+    // --- External Matching ---
+    let old_em = &old_config.opinions.external_matching;
+    let new_em = &new_config.opinions.external_matching;
+    if new_em.acoustid_api_key != old_em.acoustid_api_key
+        || new_em.requests_per_second != old_em.requests_per_second
+    {
+        let block = ensure_child_block(opinions_doc, "external-matching");
+        if new_em.acoustid_api_key != old_em.acoustid_api_key {
+            set_or_create_string_node(block, "acoustid-api-key", &new_em.acoustid_api_key);
+        }
+        if new_em.requests_per_second != old_em.requests_per_second {
+            set_or_create_int_node(block, "requests-per-second", new_em.requests_per_second as i64);
+        }
+    }
+
     // --- Performance ---
     let old_p = &old_config.opinions.performance;
     let new_p = &new_config.opinions.performance;

@@ -169,6 +169,10 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
     // Inbox Organize
     cmp!(debug "Inbox organize granularity", o.inbox_organize.directory_granularity, n.inbox_organize.directory_granularity);
 
+    // External Matching
+    cmp!("AcoustID API key", &o.external_matching.acoustid_api_key, &n.external_matching.acoustid_api_key);
+    cmp!("AcoustID requests/sec", o.external_matching.requests_per_second, n.external_matching.requests_per_second);
+
     // Performance
     cmp!(opt "Worker threads", o.performance.worker_threads, n.performance.worker_threads);
     cmp!("DB cache (MB)", o.performance.db_cache_mb, n.performance.db_cache_mb);

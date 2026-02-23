@@ -1804,12 +1804,21 @@ fn execute_index_audio_file(
     // Convert fingerprint to BLOB if present
     let fp_blob: Option<Vec<u8>> = audio_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
 
-    // Insert or replace audio_info row
+    // Upsert audio_info row.
+    // IMPORTANT: Must use ON CONFLICT DO UPDATE (not INSERT OR REPLACE) because
+    // REPLACE triggers DELETE+INSERT which cascades to tag_edit_history via FK.
     tx.execute(
         r#"
-        INSERT OR REPLACE INTO audio_info
+        INSERT INTO audio_info
         (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures, needs_tag_flush)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
+        ON CONFLICT(inode) DO UPDATE SET
+            file_type = excluded.file_type,
+            duration_ms = excluded.duration_ms,
+            bitrate_kbps = excluded.bitrate_kbps,
+            sample_rate = excluded.sample_rate,
+            fingerprint = excluded.fingerprint,
+            has_pictures = excluded.has_pictures
         "#,
         params![
             file_data.inode,
@@ -2044,12 +2053,20 @@ fn execute_update_track_path_with_metadata(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get::<_, i32>(4).unwrap_or(0))),
         )?;
 
-    // Insert new audio_info with new file_type
+    // Upsert new audio_info with new file_type.
+    // Must use ON CONFLICT DO UPDATE (not REPLACE) to avoid CASCADE on tag_edit_history.
     tx.execute(
         r#"
-        INSERT OR REPLACE INTO audio_info
+        INSERT INTO audio_info
         (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures, needs_tag_flush)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
+        ON CONFLICT(inode) DO UPDATE SET
+            file_type = excluded.file_type,
+            duration_ms = excluded.duration_ms,
+            bitrate_kbps = excluded.bitrate_kbps,
+            sample_rate = excluded.sample_rate,
+            fingerprint = excluded.fingerprint,
+            has_pictures = excluded.has_pictures
         "#,
         params![new_inode, new_file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures],
     )?;

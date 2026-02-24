@@ -433,8 +433,8 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_corrupt_file_paths()
     }
 
-    /// Get shit format files (path, file_type).
-    pub fn get_shit_format_files(&self) -> Result<Vec<(String, String)>> {
+    /// Get shit format files (inode, signal_path, file_type).
+    pub fn get_shit_format_files(&self) -> Result<Vec<(i64, String, String)>> {
         self.db.get_shit_format_files()
     }
 

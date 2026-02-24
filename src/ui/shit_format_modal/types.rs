@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use crate::db::ReadOnlyDb;
+use crate::db::types::Zone;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::transcode::TranscodeMutation;
 use crate::corpus::paths;
@@ -99,14 +100,12 @@ impl ShitFormatModalData {
         let mut lossless_files = Vec::new();
         let mut lossy_files = Vec::new();
 
-        for (corpus_path, file_type) in shit_format_files {
-            // Get audio file info for this path
-            let audio_file = match read_db.get_audio_file_by_path(&corpus_path)? {
-                Some(af) => af,
-                None => continue, // Signal refers to non-existent file, skip
+        for (inode, _signal_path, file_type) in shit_format_files {
+            // Look up current path by inode (signal path may be stale after corpus reorganization)
+            let corpus_path = match read_db.get_audio_file_by_inode(inode, Zone::Corpus)? {
+                Some(af) => af.path().to_string(),
+                None => continue, // File no longer in corpus, skip
             };
-
-            let inode = audio_file.inode();
 
             let entry = ShitFormatEntry {
                 corpus_path,

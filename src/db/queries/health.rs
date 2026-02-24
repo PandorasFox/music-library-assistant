@@ -1124,22 +1124,21 @@ impl Database {
     // Shit Format Resolution Queries
     // ========================================================================
 
-    /// Get all corpus paths with ShitFormat signals.
+    /// Get all ShitFormat signals with their inodes.
     ///
-    /// Returns (path, file_type) for each shit_format signal.
-    /// Both values are typed columns in the signal_shit_format table.
-    /// Used by the shit format resolution modal.
-    /// ShitFormat signals are keyed by inode with path in metadata.
-    pub fn get_shit_format_files(&self) -> Result<Vec<(String, String)>> {
+    /// Returns (inode, signal_path, file_type) for each shit_format signal.
+    /// The signal_path may be stale if files were reorganized after signal emission;
+    /// callers should look up the current path via inode from the files table.
+    pub fn get_shit_format_files(&self) -> Result<Vec<(i64, String, String)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, file_type FROM signal_shit_format ORDER BY path"
+            "SELECT inode, path, file_type FROM signal_shit_format ORDER BY path"
         )?;
 
         let results = stmt
             .query_map(params![], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
             })?
-            .collect::<rusqlite::Result<Vec<(String, String)>>>()?;
+            .collect::<rusqlite::Result<Vec<(i64, String, String)>>>()?;
 
         Ok(results)
     }
